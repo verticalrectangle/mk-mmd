@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+dist/
+build/
+
+# mk working data
+.mk/
+.dev/
+
+# Licensed or copyrighted material never goes into this public repository:
+# models, motions, props, audio, lyrics, reference clips, renders.
+*.pmx
+*.pmd
+*.vmd
+*.vpd
+*.x
+*.blend
+*.blend1
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.jpg
+*.jpeg
+*.tga
+*.dds
+*.bmp
+*.psd
+*.zip
+*.rar
+*.7z
+renders/
+assets/
+audio/
+lyrics*
+*.lyrics.*
