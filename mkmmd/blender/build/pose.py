@@ -269,36 +269,108 @@ def _finger_quats(arm, smap, side, preset):
     return out
 
 
+def _pole_angle(arm, base, fore, fold):
+    """The IK pole angle (radians) that makes this arm's elbow point at its pole. Blender measures it about the line from
+    the chain root to the target, from the root bone's X axis, and rigs roll that axis differently on the two sides (MMD
+    rigs mirror it), so one fixed angle sends one elbow the wrong way. The angle returned is the one under which the pose
+    the solver starts from (the rest arm with the forearm folded by `fold`, an armature-space rotation about the elbow:
+    `_prebend`) solves with the pole where that elbow points: the elbow then points at the pole in every pose."""
+    bones = arm.data.bones
+    root = bones[base]
+    head, tail = root.head_local, root.tail_local
+    knee = bones[fore].head_local
+    hand = knee + fold @ (bones[fore].tail_local - knee)
+    reach = hand - head
+    axis = reach.normalized()
+    bend = (knee - head) - axis * (knee - head).dot(axis)
+    pole = knee + bend.normalized() * reach.length
+    projected = reach.cross(pole - head).cross(tail - head)
+    x_axis = root.matrix_local.to_3x3().col[0]
+    angle = x_axis.angle(projected)
+    return -angle if x_axis.cross(projected).dot(tail - head) > 0 else angle
+
+
+TWIST_SHARE = 0.5          # share of the hand's roll the forearm twist bone takes (the wrist takes the rest)
+
+
 def _arm_ik(ctx, m, smap, side):
-    """IK on the wrist through the twist bones (chain up to the upper arm). Returns (target, pole) empties."""
+    """The arm rig. The goal empty `<name>_hand.<side>` is the wrist bone's tail and orientation. A position-only IK on
+    the forearm (chain up to the upper arm) puts the forearm's tail where the goal says the wrist's head is and bends the
+    elbow toward the pole (`_pole_angle`: the pole is where the elbow points, on either side of any rig); the wrist copies
+    the goal's rotation; the forearm twist bone, when the rig has one, rolls TWIST_SHARE of the way with the hand.
+    (A single IK that also matched the hand's rotation let the solver swing the elbow away from the pole.)
+    Returns (goal, pole, [(bone, constraint name), ...]): the constraints whose influence the settle ramps up."""
     arm = m.arm
+    bones = arm.data.bones
     wrist, upper = smap[f"wrist.{side}"], smap[f"arm.{side}"]
-    n, b = 1, arm.pose.bones[wrist]
+    fore = smap.get(f"elbow.{side}") or arm.pose.bones[wrist].parent.name
+    n, b = 1, arm.pose.bones[fore]
     while b.parent is not None and b.name != upper:
         b = b.parent
         n += 1
     if b.name != upper:
-        raise BuildError(f"{m.name}: {wrist} does not hang from {upper}")
+        raise BuildError(f"{m.name}: {fore} does not hang from {upper}")
     coll = collection("Rig")
     tgt = bpy.data.objects.new(f"{m.name}_hand.{side}", None)
     pole = bpy.data.objects.new(f"{m.name}_elbow.{side}", None)
-    for o, size in ((tgt, 0.05), (pole, 0.04)):
+    reach = bpy.data.objects.new(f"{m.name}_wrist.{side}", None)
+    for o, size in ((tgt, 0.05), (pole, 0.04), (reach, 0.02)):
         o.empty_display_size = size
         coll.objects.link(o)
     tgt.rotation_mode = "QUATERNION"
-    c = arm.pose.bones[wrist].constraints.new("IK")
+    wrist_rest = bones[wrist].matrix_local.to_3x3().normalized()     # armature space: the offsets below are too
+    reach.parent = tgt                                 # where the forearm's tail goes: rigid with the hand's goal
+    reach.location = wrist_rest.inverted() @ (bones[fore].tail_local - bones[wrist].tail_local)
+    c = arm.pose.bones[fore].constraints.new("IK")
     c.name = "mk_arm_ik"
-    c.target, c.pole_target = tgt, pole
-    c.pole_angle = math.radians(-90)
+    c.target, c.pole_target = reach, pole
+    fold, local_fold = _prebend(arm, fore)
+    c.pole_angle = _pole_angle(arm, upper, fore, fold)
     c.chain_count = n
-    c.use_rotation = True
-    c.orient_weight = 1.0
+    c.use_rotation = False
     c.iterations = 500
-    for tw in (f"arm_twist.{side}", f"wrist_twist.{side}"):
-        if tw in smap:
-            tb = arm.pose.bones[smap[tw]]
-            tb.lock_ik_x = tb.lock_ik_z = True
-    return tgt, pole
+    cons = [(fore, c.name)]
+    r = arm.pose.bones[wrist].constraints.new("COPY_ROTATION")
+    r.name = "mk_hand_rot"
+    r.target = tgt
+    r.owner_space = r.target_space = "WORLD"
+    cons.append((wrist, r.name))
+    if f"arm_twist.{side}" in smap:
+        tb = arm.pose.bones[smap[f"arm_twist.{side}"]]
+        tb.lock_ik_x = tb.lock_ik_z = True
+    twist = smap.get(f"wrist_twist.{side}")
+    if twist and twist != fore:
+        aim = bpy.data.objects.new(f"{m.name}_twist.{side}", None)
+        aim.empty_display_size = 0.02
+        coll.objects.link(aim)
+        aim.parent = tgt                               # where the twist bone's X axis points when it follows the hand
+        x_twist = bones[twist].matrix_local.to_3x3().col[0]
+        aim.location = reach.location + (wrist_rest.inverted() @ x_twist) * 0.2
+        t = arm.pose.bones[twist].constraints.new("LOCKED_TRACK")
+        t.name = "mk_forearm_twist"
+        t.target = aim
+        t.lock_axis, t.track_axis = "LOCK_Y", "TRACK_X"
+        t.influence = TWIST_SHARE
+        cons.append((twist, t.name))
+    return tgt, pole, cons, (fore, local_fold)
+
+
+PREBEND_DEG = 20.0         # the forearm's starting fold for the IK solver
+
+
+def _prebend(arm, fore):
+    """(armature-space rotation, local quaternion) folding the forearm bone PREBEND_DEG toward the model's front
+    (armature -Y). The IK solver starts from the pose it is given, and from a straight rest arm it bends the elbow
+    whichever way the solve drifts: started folded the way an elbow folds, it keeps that fold, so the pole decides alone
+    where the elbow points."""
+    b = arm.data.bones[fore]
+    along = (b.tail_local - b.head_local).normalized()
+    axis = along.cross(Vector((0.0, -1.0, 0.0)))
+    if axis.length < 1e-6:                             # a forearm pointing straight ahead at rest: fold it up
+        axis = along.cross(Vector((0.0, 0.0, 1.0)))
+    B = b.matrix_local.to_3x3().normalized()
+    q = Quaternion(axis.normalized(), math.radians(PREBEND_DEG)).to_matrix()
+    return q, (B.inverted() @ q @ B).to_quaternion()
 
 
 def palm_normal(arm, smap, side):
@@ -594,6 +666,7 @@ def run(ctx):
         hp = spec.get("hips") or {}
         hip_move = m.root.matrix_world.to_3x3().normalized() @ Vector(hp.get("shift", (0.0, 0.0, 0.0)))   # her frame -> world
         hip_turn = _q((0, 0, 1), float(hp.get("yaw", 0.0))) @ _q((0, 1, 0), float(hp.get("roll", 0.0)))   # the armature's axes
+        centre = Vector()                                  # the hips' offset (world) at the end of the settle, for perform
         if seat:
             hips = (_world_head(arm, smap["leg.L"]) + _world_head(arm, smap["leg.R"])) / 2
             off = seat["hip"] - hips + hip_move
@@ -601,9 +674,11 @@ def run(ctx):
             K.key_bone_arm(arm, smap["lower_body"], [f0, f1], [Quaternion(), hip_turn @ _q((1, 0, 0), -seat["pelvis"])],
                            interp="BEZIER")
             info["hip_offset"] = [round(v, 4) for v in off]
+            centre = off
         elif hp:
             if hip_move.length > 0.0:
                 K.key_bone_locs(arm, smap["center"], [f0, f1], [(0, 0, 0), tuple(hip_move)])
+                centre = hip_move
             if hp.get("roll") or hp.get("yaw"):
                 K.key_bone_arm(arm, smap["lower_body"], [f0, f1], [Quaternion(), hip_turn], interp="BEZIER")
             info["hips"] = {k: hp[k] for k in hp}
@@ -613,7 +688,7 @@ def run(ctx):
                              (float(spec.get("lean_share", 0.6)), float(spec.get("turn_share", 0.6))))
         for sem, q in base.items():
             K.key_bone_arm(arm, smap[sem], [f0, f1], [Quaternion(), q], interp="BEZIER")
-        m.base = {"spine": base, "chain": chain}
+        m.base = {"spine": base, "chain": chain, "center": centre, "feet": {}}
         # feet on the floor / pedals (leg IK bones move to the ankle targets)
         feet = spec.get("feet", "seat" if seat else None)
         if feet == "seat" and not seat:
@@ -658,6 +733,7 @@ def run(ctx):
                 z_rest = rest.z
                 goal = Vector((tgt.x, tgt.y, z_rest))
                 K.key_bone_locs(arm, ik, [f0, f1], [(0, 0, 0), tuple(goal - rest)])
+                m.base["feet"][s] = goal - rest
         for s, deg in (spec.get("toes") or {}).items():          # foot yaw about the vertical through the ankle (L and R)
             if smap.get(f"leg_ik.{s}") and float(deg):
                 K.key_bone_arm(arm, smap[f"leg_ik.{s}"], [f0, f1], [Quaternion(), _q((0, 0, 1), float(deg))], interp="BEZIER")
@@ -675,7 +751,7 @@ def run(ctx):
             h = hands.get(side)
             if not h:
                 continue
-            tgt, pole = _arm_ik(ctx, m, smap, side)
+            tgt, pole, cons, (fore, bend) = _arm_ik(ctx, m, smap, side)
             m.ik[side] = (tgt, pole)
             wrist = smap[f"wrist.{side}"]
             sh = _world_head(arm, smap[f"arm.{side}"])
@@ -683,8 +759,10 @@ def run(ctx):
             gp, gu = _grip_card(ctx, h)
             if h.get("pole") is not None:
                 pole.location = targets.point(ctx, h["pole"])
-            elif gu is not None and gu.get("type") in ("neck", "strum"):
-                pole.location = sh - up * 0.40 + back * 0.08       # a guitarist's elbow hangs under the shoulder
+            elif gu is not None and gu.get("type") == "strum":     # a strumming elbow: out to the side, over the body's edge
+                pole.location = sh + out_dir * 0.45 + back * 0.12 - up * 0.08
+            elif gu is not None and gu.get("type") == "neck":      # a fretting elbow hangs under the shoulder
+                pole.location = sh + out_dir * 0.15 + back * 0.08 - up * 0.40
             else:
                 pole.location = sh + out_dir * 0.45 + back * 0.25 - up * 0.30
             pole_w = pole.location.copy()
@@ -739,9 +817,12 @@ def run(ctx):
                 rots.append(tuple(Ml.to_quaternion()))
             K.key_vec(tgt, "location", frames, locs, interp=interp)
             K.key_vec(tgt, "rotation_quaternion", frames, K.continuous(rots), interp=interp)
-            c = arm.pose.bones[wrist].constraints["mk_arm_ik"]
-            K.key_prop(arm, f'pose.bones["{wrist}"].constraints["mk_arm_ik"].influence', [f0, f1], [0.0, 1.0])
-            c.influence = 1.0
+            for bone, cname in cons:                       # the rig takes over from the rest pose over the settle
+                c = arm.pose.bones[bone].constraints[cname]
+                full = c.influence
+                K.key_prop(arm, f'pose.bones["{bone}"].constraints["{cname}"].influence', [f0, f1], [0.0, full])
+                c.influence = full
+            K.key_bone_quats(arm, fore, [f0, f1], [(1, 0, 0, 0), tuple(bend)], interp="BEZIER")
             fp = h.get("fingers")
             if grip:
                 seq, prev = [(f1, grip["bones"])], grip["bones"]

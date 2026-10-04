@@ -90,6 +90,113 @@ def test_an_empty_pose_table_is_reported_not_skipped_in_silence(make):
     code, out = make("[pose.mq]\n", until="pose")
     assert code == 0 and any("pose.mq: the table is empty" in w for w in warnings(out))
 
+ELBOWS = """[pose.mq]
+feet = "floor"
+[pose.mq.hands.L]
+at = {{ cast = "mq", point = [0.08, -0.24, 0.95] }}
+pole = {{ cast = "mq", point = [{x}, {y}, {z}] }}
+[pose.mq.hands.R]
+at = {{ cast = "mq", point = [-0.08, -0.24, 0.95] }}
+pole = {{ cast = "mq", point = [-{x}, {y}, {z}] }}
+"""
+
+
+def _bend(shoulder, elbow, wrist, pole):
+    """Degrees between where the elbow bends and where the pole is, both seen across the shoulder-wrist line."""
+    import numpy as np
+    s, e, w, p = (np.asarray(v, float) for v in (shoulder, elbow, wrist, pole))
+    axis = (w - s) / np.linalg.norm(w - s)
+    across = [(v - s) - axis * float((v - s) @ axis) for v in (e, p)]
+    a, b = (v / np.linalg.norm(v) for v in across)
+    return float(np.degrees(np.arccos(np.clip(a @ b, -1.0, 1.0))))
+
+
+def test_both_elbows_point_at_their_own_poles_whatever_the_rig_rolls(make, capsys):
+    """The IK pole angle depends on the roll of the arm bones, which MMD rigs mirror between the sides: one fixed angle
+    sent one elbow the wrong way (a driver's elbows met in front of her chest). Mirrored poles give mirrored elbows."""
+    for pole in ([0.5, 0.05, 0.75], [0.45, 0.0, 1.35]):                       # out and down; out and up (chicken wings)
+        code, out = make(ELBOWS.format(x=pole[0], y=pole[1], z=pole[2]), until="pose")
+        assert code == 0, out.get("error")
+        expr = "[list(bone(b).head) for b in ('arm.L', 'elbow.L', 'wrist.L', 'arm.R', 'elbow.R', 'wrist.R')]"
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "80", "--project", str(make.root)], capsys)
+        assert code == 0, q
+        sl, el, wl, sr, er, wr = q["values"][0]
+        left = _bend(sl, el, wl, pole)
+        right = _bend(sr, er, wr, [-pole[0], pole[1], pole[2]])
+        assert left < 20.0 and right < 20.0, (pole, left, right)
+
+BODY = """[pose.mq]
+feet = "floor"
+[perform.mq]
+bounce = { depth = 0.05, beats = [1.0], decay = 0.1 }
+kick = { foot = "L", height = 0.2, back = 0.0, beats = [1.0], decay = 0.1 }
+rise = [[1.4, 0.0], [1.9, 0.1]]
+"""
+
+
+def test_bounce_dips_the_hips_on_the_beat_with_the_feet_planted_kick_lifts_one_foot_rise_lifts_all(make, capsys):
+    code, out = make(BODY, until="perform")
+    assert code == 0, out.get("error")
+    expr = "[bone('center').head.z, bone('ankle.L').head.z, bone('ankle.R').head.z]"
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "49,61,73,88", "--project", str(make.root)],
+                  capsys)                                         # t 0.6 (still), 1.0 (the beat), 1.4, 1.9 (risen)
+    assert code == 0, q
+    still, beat, before, risen = q["values"]
+    assert beat[0] - still[0] == pytest.approx(-0.05, abs=0.004)   # the hips dip on the beat ...
+    assert beat[2] - still[2] == pytest.approx(0.0, abs=0.002)     # ... the planted foot stays put ...
+    assert beat[1] - still[1] == pytest.approx(0.2, abs=0.01)      # ... the kicking foot goes up
+    for k in range(3):
+        assert risen[k] - before[k] == pytest.approx(0.1, abs=0.006)    # rise lifts hips and feet alike
+
+
+TRAFFIC = """
+[[set]]
+name = "road"
+kind = "test_road"
+length = 120.0
+curve = 0.0
+
+[[prop]]
+name = "car"
+card = "library:car_mockup"
+
+[[prop]]
+name = "other"
+card = "library:car_mockup"
+
+[[vehicle]]
+prop = "car"
+path = "road:road"
+lane = "R1"
+speed = 20.0
+at = 40.0
+
+[[vehicle]]
+prop = "other"
+path = "road:road"
+lane = "L1"
+speed = 25.0
+meet = { vehicle = "car", t = 1.5 }
+leave = true
+"""
+
+
+def test_an_oncoming_car_meets_ours_when_asked_faces_the_other_way_and_is_hidden_off_the_road(make, capsys):
+    code, out = make(TRAFFIC, with_cast=False)
+    assert code == 0, out.get("error")
+    expr = ("[list(obj('car').loc), list(obj('other').loc), list(bpy.data.objects['car'].matrix_world.col[1])[:3], "
+            "list(bpy.data.objects['other'].matrix_world.col[1])[:3], bpy.data.objects['other'].hide_render]")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "1,76", "--project", str(make.root)], capsys)
+    assert code == 0, q
+    early, meet = q["values"]
+    assert early[4] is True                                       # t -1: 132.5 m along a 120 m road: not on it yet, hidden
+    car, other, y_car, y_other, hidden = meet
+    assert hidden is False
+    import numpy as np
+    gap = np.asarray(other) - np.asarray(car)
+    assert np.linalg.norm(gap) == pytest.approx(3.6, abs=0.05)    # alongside: the width of a lane apart, side by side
+    assert float(np.dot(y_car, y_other)) == pytest.approx(-1.0, abs=0.01)    # nose to nose: it drives the other way
+
 
 # ---------------------------------------------------------------- the per-member tables
 def test_tables_of_no_cast_member_and_unknown_keys_are_build_errors(make):
