@@ -1,4 +1,5 @@
 """Projects: a folder with an mk.toml (see docs/design.md: Project file)."""
+import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +62,39 @@ class Project:
             if o.name == name:
                 return o
         raise ProjectError(f"no output named {name!r} in {self.root / FILENAME} (have {[o.name for o in self.outputs]})")
+
+    # ---------------------------------------------------------------- cast, colliders, tracks
+    @property
+    def cast(self):
+        return list(self.data.get("cast", []))
+
+    def cast_member(self, name=None):
+        """A [[cast]] entry (name, armature, rig, asset). With no name, the only member."""
+        cast = self.cast
+        if name is None:
+            if len(cast) == 1:
+                return cast[0]
+            raise ProjectError(f"{len(cast)} cast members in {self.root / FILENAME}: say which one (cast = \"...\")")
+        for c in cast:
+            if c.get("name") == name:
+                return c
+        raise ProjectError(f"no cast member {name!r} (have {[c.get('name') for c in cast]})")
+
+    def colliders(self, spec):
+        """A list of collider specs, inline or by the name of a [colliders] set."""
+        if isinstance(spec, str):
+            sets = self.data.get("colliders", {})
+            if spec not in sets:
+                raise ProjectError(f"no collider set {spec!r} in [colliders] (have {sorted(sets)})")
+            return list(sets[spec])
+        return list(spec or [])
+
+    def track(self, name):
+        """tracks/<name>.json: {"frames": [...], "<channel>": [one value per frame], ...}."""
+        p = self.root / "tracks" / f"{name}.json"
+        if not p.exists():
+            raise ProjectError(f"track {name!r} not found ({p})")
+        return json.loads(p.read_text(encoding="utf-8"))
 
     def to_job(self):
         """What the Blender side gets: plain data only."""

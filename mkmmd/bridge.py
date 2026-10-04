@@ -12,7 +12,7 @@ from pathlib import Path
 from . import config as CFG
 
 ROOT = Path(__file__).resolve().parent.parent          # the folder that contains the mkmmd package
-READONLY_OPS = {"ping", "list", "q", "look", "sample"}  # safe to run on a shared `mk serve` process
+READONLY_OPS = {"ping", "list", "q", "sample", "visibility"}  # leave the scene as they found it: safe on `mk serve`
 
 BOOT = ("import sys; sys.path.insert(0, {root!r}); "
         "from mkmmd.blender import runtime; runtime.main()")

@@ -25,9 +25,16 @@ mk doctor
 ## First commands
 
 ```sh
-mk q scene.blend --list bones                      # every bone, with its PMX and semantic names
-mk q scene.blend 'bone("head").head' --frames 1:100   # where the head is, frame by frame
+mk inspect model.pmx                                 # what the model is: bones, chains, expressions, quirks
+mk assets add model.pmx --kind model --author NAME   # register it (and its rig.json) in ~/mk-assets
+mk q scene.blend --list bones                        # every bone, with its PMX and semantic names
+mk q scene.blend 'bone("head").head' --frames 1:100  # where the head is, frame by frame
+mk check                                             # the project's checks (mk.toml), exit 1 on failure
+mk look --frames 200,400 --sheet                     # look at the cut in every output aspect
 ```
+
+[docs/AGENTS.md](docs/AGENTS.md) is the playbook for working with mk; [docs/design.md](docs/design.md) holds the
+contracts.
 
 Licensed or copyrighted material (models, motions, music, lyrics, reference clips, renders) never goes into this
 repository; projects keep it in their own folders and in the local asset library.

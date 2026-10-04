@@ -38,8 +38,11 @@ blender -b SCENE.blend -y --python-exit-code 3 --python-expr BOOT -- job.json re
 - `result.json`: `{"ok": bool, "data": ..., "error": str, "trace": str, "seconds": float}`
 - Blender-side handlers register with `@runtime.op("name")` in `mkmmd/blender/ops_*.py`.
 - The Blender log of every job goes to `~/.cache/mk/jobs/<id>/blender.log`; it is kept when a job fails.
-- `mk serve SCENE.blend` keeps one Blender alive on a Unix socket. The bridge uses it automatically for read-only
-  ops (`q`, `list`, `look`, `sample`) on that scene, which matters for big files.
+- `mk serve SCENE.blend` keeps one Blender alive on a Unix socket. The bridge uses it automatically for the ops that
+  leave the scene as they found it (`ping`, `list`, `q`, `sample`, `visibility`), which matters for big files. Ops
+  that change scene state (`look` hides objects, removes markers, adds a camera) always get a fresh Blender.
+- `sample` is how numbers leave Blender: one pass over a set of frames writes posed bone and object matrices, rest
+  matrices, expression values, the active camera and resolved colliders to an `.npz`; checks and solvers work on that.
 
 ## Conventions
 
@@ -87,42 +90,68 @@ size = [1080, 1920]
 name = "16x9"
 size = [1920, 1080]
 
+[[cast]]                # who is in the scene
+name = "reisen"
+armature = "Reisen_arm" # the armature object in the .blend
+asset = "miy_reisen"    # registry slug (its rig.json); or rig = "path/to/model.rig.json"
+
+[credits]
+assets = ["miy_reisen"] # everything else the credits must name (audio, props, motions)
+
+[colliders]            # named sets of scene collision shapes, see Colliders
+cafe = [{ type = "box", object = "ChairColBack", rnd = 0.012 }, { type = "floor", z = 0.0 }]
+
 [[check]]               # see Checks
 name = "back hair is calm"
 metric = "jitter"
-args = { family = "hair" }
+args = { family = "back_hair" }
+frames = "181:918"      # optional, default: the clip
 max = 0.5
 ```
 
+Project-specific reference data that only the project can compute (where a nib should be, when a hand writes) goes
+to `tracks/<name>.json`: `{"frames": [...], "<channel>": [one value per frame (number, vector or null)], ...}`.
+Checks refer to channels as `track:<name>.<channel>`.
+
 ## Model description: `rig.json` (schema 1)
 
-Written by `mk inspect MODEL.pmx`, stored next to the asset registry (`<assets>/rigs/<slug>.rig.json`). Bone names
-are the Blender names mmd_tools gives on import (left/right prefixes become `.L`/`.R` suffixes); `jp` keeps the
-original PMX name.
+Written by `mk inspect MODEL.pmx` (or `mk assets add`), stored in the asset library as `<assets>/rigs/<slug>.rig.json`.
+Bone names are the Blender names mmd_tools gives on import (left/right prefixes become `.L`/`.R` suffixes); `jp`
+keeps the original PMX name. Positions are in armature space (metres at the import scale); body geometry is in its
+bone's rest frame, so it follows the bone wherever the model is placed and posed.
 
 ```jsonc
 {
   "schema": 1,
   "source": {"path": "...pmx", "sha1": "...", "name_j": "...", "name_e": "..."},
   "scale": 0.08,
+  "comment": "the PMX comment (author notes), first 4000 characters",
   "map": {"head": "頭", "wrist.R": "手首.R", "index2.L": "人指２.L", ...},   // semantic -> Blender bone
-  "missing": ["upper_body2", "arm_twist.L", ...],                           // standard bones not found
-  "bones": {"頭": {"jp": "頭", "parent": "首", "head": [x, y, z], "tail": [x, y, z], "deform": true}, ...},
-  "fingers": {"index.L": ["人指１.L", "人指２.L", "人指３.L"], ...},
-  "chains": [                                                               // physics-driven bone chains
-    {"family": "hair", "root": "後髪1", "anchor": "頭", "bones": ["後髪1", ...], "body_radius": [0.072, ...]}
-  ],
-  "bodies": [{"bone": "頭", "shape": "sphere", "size": [..], "group": 0, "dynamic": false}, ...],
-  "morphs": {"blink": "まばたき", "a": "あ", "i": "い", "u": "う", "e": "え", "o": "お", "smile": "笑い", ...},
-  "morph_list": [{"name": "まばたき", "panel": "eye"}, ...],
-  "measure": {"height": 1.62, "eye_height": 1.48, "arm": 0.52, "forearm": 0.24, "hand": 0.17, "leg": 0.78,
-              "hip_height": 0.83, "shoulder_width": 0.33},
-  "quirks": ["vertex groups that are not bones: mmd_edge_scale, mmd_vertex_order", ...]
+  "missing": ["upper_body3", ...], "missing_required": [],                  // standard bones not found
+  "bones": {"頭": {"jp": "頭", "parent": "首", "head": [x, y, z], "tail": [x, y, z], "deform": true,
+                  "helper": false}, ...},                                    // helper: mmd_tools _dummy_/_shadow_
+  "fingers": {"index.L": ["人指１.L", "人指２.L", "人指３.L", "人差指先.L"], ...},
+  "bodies": [{"name": "...", "bone": "頭", "shape": "sphere", "size": [..], "type": 0, "group": 0,
+              "no_collide": [1, 2], "loc": [..], "quat": [..],
+              "geom": {"kind": "sphere", "c": [..], "R": 0.1}}, ...],       // capsule: a b R; box: M half
+  "chains": [{"family": "back_hair", "root": "後髪1", "anchor": "頭", "bones": ["後髪1", ...],
+              "parents": [-1, 0, ...], "ends": [[x, y, z], ...], "body_radius": [0.072, ...],
+              "branching": false, "locked_joints": 14, "length": 1.009}],
+  "morphs": {"blink": "まばたき", "a": "あ", "i": "い", "smile_eyes": "笑い", ...},   // semantic -> morph
+  "morph_list": [{"name": "まばたき", "panel": "eye", "kind": "vertex", "shape_key": true}, ...],
+  "measure": {"top": 1.71, "eye_height": 1.32, "upper_arm": 0.21, "forearm": 0.17, "hand": 0.17,
+              "thigh": 0.34, "shin": 0.34, "hip_height": 0.78, "shoulder_width": 0.18, ...},
+  "quirks": ["...: 2 vertex groups are not bones (mmd_edge_scale, mmd_vertex_order); skip them ...", ...],
+  "stats": {"bones": 370, "bodies": 212, "dynamic_bodies": 188, "joints": 355, "chains": 25, ...}
 }
 ```
 
-Chain families are inferred from bone names (`hair`, `bangs`, `side_hair`, `back_hair`, `ears`, `tail`, `skirt`,
-`breasts`, `ribbon`, `sleeve`, `accessory`, `other`). Projects tune the secondary-motion solver per family.
+A chain is every bone driven by a dynamic rigid body, grouped from each root that hangs from a non-simulated bone
+(the anchor). `ends` are the rest segment ends: the head of the simulated child, or for a leaf its tail when the
+chain is connected (mmd_tools gives unconnected bones a default 0.08 m tail, so then the leaf continues its chain's
+last direction). `length` runs along the bone heads. Families come from bone names (`bangs`, `side_hair`,
+`back_hair`, `twintail`, `braid`, `hair`, `ears`, `tail`, `skirt`, `breasts`, `ribbon`, `sleeve`, `coat`,
+`accessory`, `other`); projects tune the secondary-motion solver per family.
 
 ## Prop card (schema 1)
 
@@ -151,29 +180,70 @@ next to the files in the asset library.
 
 ## Asset registry
 
-`<assets>/registry.json`: a list of entries, one per model, motion, prop, audio file or reference clip.
+`<assets>/registry.json`: a list of entries, one per model, motion, prop, vehicle, audio file, reference clip,
+texture or font.
 
 ```jsonc
 {"slug": "miy_reisen", "kind": "model", "path": "/abs/path/model.pmx", "name": "Reisen Udongein Inaba",
- "author": "Miy", "source_url": "...", "license": "...", "restrictions": "...", "credit": "Model: Miy",
- "rig": "rigs/miy_reisen.rig.json", "tags": ["touhou"], "extra": {...}}
+ "author": "Miy", "source_url": "...", "license": "...", "restrictions": "...", "credit": "Reisen model: Miy",
+ "rig": "rigs/miy_reisen.rig.json", "tags": ["touhou"], "readmes": ["/abs/path/readme.txt"], "extra": {...}}
 ```
 
-`mk assets credits` builds a CREDITS file from the entries a project uses.
+mk never guesses a license. New entries are `unreviewed` and keep the paths of the readme files found next to the
+asset; someone who has read them fills in `license`, `restrictions` and `credit`. `mk assets credits` builds the
+credits from the project's cast and `[credits] assets` and exits 1 while any of them is unreviewed.
+
+## Colliders
+
+Scene collision shapes for the secondary-motion solver and the `penetration` check, as specs (inline or a named
+`[colliders]` set). Shapes ride on their source; rounded edges (`rnd`, m) keep contact smooth.
+
+| Spec | Shape |
+|---|---|
+| `{type = "box", object = O, rnd}` | O's mesh bounds (scaled), riding on O |
+| `{type = "cylinder", object = O, R?, half_h?, center?, rnd}` | about O's local Z through its origin (R, half height default to the bounds) |
+| `{type = "cylinder", center = [x, y, z], R, half_h, rnd}` | vertical, fixed in the world |
+| `{type = "capsule", object = O, a, b, R}` | segment a-b in O's axes (metres) |
+| `{type = "sphere", object = O, c?, R?}` | on O |
+| `{type = "capsule", bone = B, to = B2, R, armature?}` | from B's head to B2's head, riding on B |
+| `{type = "fingers", radius = {thumb, index, middle, ring, little, palm}?, sides?, armature?}` | every finger segment and three palm capsules (wrist to index1, middle1, little1) |
+| `{type = "floor", z}` | the ground plane |
+
+The model's own bodies (rig.json `bodies`) collide too. A chain skips a body it already overlaps in the rest pose
+(the author's intended overlaps); within `anchor_free` (0.25 m) of its root it also skips the body it hangs from and
+every pair the PMX collision masks exclude.
 
 ## Checks
 
 A check is a named metric with a threshold. Metrics compute from sampled data or renders and return numbers; `mk
-check` prints every result and exits 1 if any fails.
+check` prints every result and exits 1 if any fails. All sampled metrics of one run share a single Blender pass over
+the union of their frames.
 
 ```jsonc
 {"name": "back hair is calm", "metric": "jitter", "value": 0.38, "max": 0.5, "ok": true, "detail": {...}}
 ```
 
-Metrics: `jitter` (secondary motion shake vs motion, per family), `penetration` (points inside shapes), `contact`
-(distance between tracked points), `foot_slide`, `joint_limits`, `flicker` (rendered frame strips), `palette`
-(near-black share, distance to palette), `framing` (subject inside each output's safe area), `occlusion`,
-`camera_inside`.
+| Metric | Value | Notes |
+|---|---|---|
+| `jitter` | median jerk / median speed of chain points in the head's frame | calm hair < 0.5; Bullet hair on a seated model ~1.4; `static` flag when a chain barely moves (the ratio is then float32 noise) |
+| `contact` | largest distance (mm) between two points (expressions or tracks) where `when` holds | `component = "z"` for a signed axis difference |
+| `penetration` | deepest chain point inside a body or collider (mm) | measured on the baked bones, i.e. what renders |
+| `foot_slide` | 95th percentile horizontal speed of planted feet (mm/frame) | |
+| `joint_limits` | worst excess over a limit (deg) | elbow fold-through and in-plane hyperextension, knees, wrists, neck, spine; limits calibrated on professional MMD dances |
+| `framing` | smallest margin to each output's safe area | per output aspect through the active camera; matches Blender's projection |
+| `occlusion` | largest share of subject points hidden from the camera | ray casts; the subject's own meshes do not count |
+| `camera_inside` | frames with the camera inside a closed mesh | |
+| `flicker` | worst frame's 99th percentile of temporal luma noise | on rendered frames |
+| `palette` | near-black share (or median distance to a palette) | on rendered frames; `rose-pine-moon`, `rose-pine`, `rose-pine-dawn` built in |
+
+`mk check --list` prints every metric's arguments.
+
+## Looking
+
+`mk look` renders views without touching the file: the cut (scene camera with its timeline markers) per output
+aspect, named cameras, or orbit presets around any target expression relative to a cast member's facing. It writes
+one JPEG per view, aspect and frame, plus optional contact sheets, strips, A/B pairs against another scene and
+framing guides.
 
 ## Cache
 
