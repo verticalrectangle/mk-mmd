@@ -321,11 +321,15 @@ soft toe so nothing is black, halation from blurred highlights, vignette, grain)
 
 `mk timeline analyze` turns the clip's song span into `audio/timeline.json`: `bpm`, `beat_s`, `beats`, `downbeats`,
 `grid` (a constant-tempo fit when the beats are that steady), per-frame `vocal_db`, `energy_db`, `drums_db`, and
-`lines[].words[]` with `start`, `end`, `voiced_end`, `ctc_start`, `whisper` (seconds from clip time 0). Beats come
-from the kick and snare bands of the Demucs drum stem (hi-hats would double the tempo) with a dynamic-programming
-tracker; downbeats from kick accents. Words come from a lyrics file (one sung line per line) or from Whisper's
-transcription, aligned with wav2vec2 CTC on the vocal stem and snapped to sung onsets. Lines and words are numbered
-from 1; tools refer to words as `(line, word)` and never print their text.
+`lines[].words[]` with `start`, `end`, `voiced_end`, `ctc_start`, `whisper` (seconds from clip time 0). The analysis
+runs on the span padded with `--context` seconds of song on each side (default 20, clamped to the file) and is then
+shifted and cropped: a short clip alone can read the bar phase half a bar off or merge lines. Beats come from the kick
+and snare bands of the Demucs drum stem (hi-hats would double the tempo) with a dynamic-programming tracker;
+downbeats from kick accents plus harmonic change (chords change on beat 1; kicks alone cannot tell beat 1 from beat
+3). Words come from a lyrics file (one sung line per line) or from Whisper's transcription, aligned with wav2vec2 CTC
+on the vocal stem and snapped to sung onsets; Whisper's line breaks are then corrected on the song's line grid (line
+starts recur every one or two bars: merged lines are split at the grid, mid-line breaks merged). Lines and words are
+numbered from 1; tools refer to words as `(line, word)` and never print their text.
 
 ## Cache
 

@@ -35,6 +35,8 @@ def add(sub):
     a.add_argument("--no-words", action="store_true")
     a.add_argument("--model", default="large-v3")
     a.add_argument("--language", default="en")
+    a.add_argument("--context", type=float, default=20.0,
+                   help="seconds of song analysed on each side of the clip for tempo, bar phase and lines (default 20)")
     a.add_argument("--out")
     add_project_arg(a)
     sh = s.add_parser("show", help="summarise a timeline (numbers only)")
@@ -70,7 +72,7 @@ def run(args):
     from ..timeline.analyze import analyse, summary
     cache = (proj.mk_dir / "cache" / "timeline") if proj else CFG.cache_dir() / "timeline"
     tl = analyse(audio, start, duration, fps, str(cache), words=not args.no_words, lyrics=args.lyrics,
-                 whisper_model=args.model, language=args.language, log=lambda *a: None)
+                 whisper_model=args.model, language=args.language, context=args.context, log=lambda *a: None)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(tl, ensure_ascii=False, indent=1), encoding="utf-8")
     emit({"out": str(out), **summary(tl)})

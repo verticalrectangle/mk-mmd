@@ -43,6 +43,25 @@ def test_downbeat_phase_follows_the_kick():
     assert (first + ph) % 4 == 2 and contrast > 1.5
 
 
+def test_chord_changes_pick_the_bar_start_when_kicks_are_ambiguous():
+    sr, period, offset = S.SR, 0.5, 0.25
+    beats = offset + period * np.arange(24)
+    roots = [220.0, 261.63, 329.63, 392.0]
+    x = np.zeros(int((beats[-1] + period) * sr), np.float32)
+    for k, b in enumerate(beats):                      # the chord changes on beats with k % 4 == 2
+        f = roots[((k - 2) // 4) % len(roots)]
+        t = np.arange(int(period * sr)) / sr
+        i = int(b * sr)
+        x[i:i + len(t)] += (0.3 * np.sin(2 * np.pi * f * t)).astype(np.float32)
+    kick = np.zeros(int(len(x) / sr / S.HOP) + 10)
+    for k, b in enumerate(beats):
+        if k % 2 == 0:                                 # kicks on beats 1 and 3 alike
+            kick[int(round(b / S.HOP))] = 1.0
+    ph_kick, _ = S.downbeat_phase(beats, kick)
+    harm = S.harmonic_change(S.chroma_per_beat(x, beats))
+    ph, contrast = S.downbeat_phase(beats, kick, harm=harm)
+    assert ph_kick in (0, 2) and ph == 2 and contrast > 1.5
+
 def test_voicing_detects_a_pitched_tone_not_noise():
     sr = S.SR
     t = np.arange(sr) / sr
@@ -79,3 +98,17 @@ def test_resplit_periodic_leaves_no_fragment_at_the_end():
     merged = [w(15.2, 15.5), w(16.0, 17.0), w(19.0, 19.3), w(20.0, 21.6), w(22.3, 22.7)]
     out = resplit_periodic(base + [{"words": merged}])
     assert [ln["start"] for ln in out][-2:] == [15.2, 19.0] and len(out[-1]["words"]) == 3
+
+
+def test_resplit_periodic_moves_a_boundary_whisper_put_mid_line():
+    from mkmmd.timeline.words import resplit_periodic
+
+    def w(s):
+        return {"start": s, "voiced_end": s + 0.3}
+    good = [{"words": [w(1.1 + 3.77 * i + 0.25 * k) for k in range(5)]} for i in range(5)]
+    # line 6 swallowed the first words of line 7, whose remainder was merged with line 8
+    l6 = [w(19.95 + 0.4 * k) for k in range(6)] + [w(23.84 + 0.25 * k) for k in range(4)]
+    l78 = [w(24.83), w(25.0), w(25.43), w(27.68), w(27.81), w(28.07), w(28.51), w(29.2)]
+    out = resplit_periodic(good + [{"words": l6}, {"words": l78}])
+    assert [round(ln["start"], 2) for ln in out][-3:] == [19.95, 23.84, 27.68]
+    assert [len(ln["words"]) for ln in out][-3:] == [6, 7, 5]

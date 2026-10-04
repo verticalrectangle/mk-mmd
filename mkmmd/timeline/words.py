@@ -75,36 +75,64 @@ def lines_from_whisper(segments, pause=0.45):
     return [[w[0] for w in ln] for ln in lines]
 
 
-def resplit_periodic(lines, long_factor=1.5, tolerance=0.35):
-    """Aligned lines ({"words": [{start, voiced_end, ...}]}): sung lines start at a regular period (often every one
-    or two bars). p = the median interval between consecutive line starts; a line lasting more than long_factor x p
-    is split at the word starting nearest each expected start s0 + k p (within tolerance x p). Returns new lines."""
+def resplit_periodic(lines, long_factor=1.15, snap=0.15, share=0.6):
+    """Aligned lines ({"words": [{start, voiced_end, ...}]}): sung lines usually start on a regular grid (every one or
+    two bars), while Whisper's segments merge lines or break them in the middle. The grid: period p = the median
+    interval between line starts, phase from the start most others agree with (refined on those). It is trusted when
+    at least `share` of the starts lie within snap x p of it; then (1) a line longer than long_factor x p is split at the
+    words starting within snap x p of each grid start inside it, and (2) a line starting off the grid in the same grid
+    slot as the previous line is merged into it. Lines keep at least two words. Without a trusted grid the lines come
+    back unchanged. Returns new lines with start / end."""
     lines = [ln for ln in lines if ln["words"]]
-    starts = [ln["words"][0]["start"] for ln in lines]
+    starts = np.array([ln["words"][0]["start"] for ln in lines], float)
     if len(starts) < 3:
         return lines
     p = float(np.median(np.diff(starts)))
-    out = []
+    if p <= 0:
+        return lines
+
+    def resid(g):
+        r = (starts - g) / p
+        return np.abs(r - np.round(r)) * p
+
+    g0 = max(starts, key=lambda g: int((resid(g) <= snap * p).sum()))
+    on = resid(g0) <= snap * p
+    if on.mean() < share:
+        return lines
+    r = (starts[on] - g0) / p
+    g0 += float(np.median((r - np.round(r)) * p))
+
+    def slot(t):                                        # a start a little before its grid line belongs to it
+        return int(np.floor((t - g0) / p + snap))
+
+    def off_grid(t):
+        r = (t - g0) / p
+        return abs(r - round(r)) * p > snap * p
+
+    def end_of(w):
+        return w["voiced_end"] if "voiced_end" in w else w["end"]
+
+    pieces = []
     for ln in lines:
         ws = ln["words"]
-        s0, dur = ws[0]["start"], ws[-1]["voiced_end"] - ws[0]["start"]
-        if dur <= long_factor * p:
-            out.append(ln)
+        if end_of(ws[-1]) - ws[0]["start"] <= long_factor * p:
+            pieces.append(ws)
             continue
-        cuts, k = [], 1
-        end = ws[-1]["voiced_end"]
-        while s0 + k * p <= end - 0.5 * p:                    # a new line needs at least half a period left
-            want = s0 + k * p
+        cuts = []
+        for k in range(slot(ws[0]["start"]) + 1, slot(ws[-1]["start"]) + 1):
+            want = g0 + k * p
             j = min(range(1, len(ws)), key=lambda i: abs(ws[i]["start"] - want))
-            prev = cuts[-1] if cuts else 0
-            if abs(ws[j]["start"] - want) <= tolerance * p and j - prev >= 2 and len(ws) - j >= 2:
+            if abs(ws[j]["start"] - want) <= snap * p and j - (cuts[-1] if cuts else 0) >= 2 and len(ws) - j >= 2:
                 cuts.append(j)
-            k += 1
-        for a, b in zip([0] + cuts, cuts + [len(ws)]):
-            out.append({"words": ws[a:b]})
-    for ln in out:
-        ln["start"], ln["end"] = ln["words"][0]["start"], ln["words"][-1]["voiced_end"]
-    return out
+        pieces += [ws[a:b] for a, b in zip([0] + cuts, cuts + [len(ws)])]
+    merged = []
+    for ws in pieces:
+        s = ws[0]["start"]
+        if merged and off_grid(s) and slot(s) == slot(merged[-1][0]["start"]):
+            merged[-1] = merged[-1] + ws
+        else:
+            merged.append(ws)
+    return [{"words": ws, "start": ws[0]["start"], "end": end_of(ws[-1])} for ws in merged]
 
 
 def lines_from_file(path):

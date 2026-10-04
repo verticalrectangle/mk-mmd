@@ -115,14 +115,50 @@ def fit_grid(beats, max_resid_ms=35.0):
     return period, phase, float(np.abs(resid).max() * 1000)
 
 
-def downbeat_phase(beats, kick_env, hop_s=HOP, per_bar=4):
-    """Which of the `per_bar` beat phases carries the strongest kick accents (0..per_bar-1) and its contrast."""
+def chroma_per_beat(x, beats, sr=SR, fmin=55.0, fmax=2000.0, n=16384):
+    """(len(beats), 12) unit pitch-class profiles of the audio from each beat to the next (magnitude spectrum folded
+    onto 12 semitone classes between fmin and fmax; the last beat's row is zero)."""
+    beats = np.asarray(beats, float)
+    f = np.fft.rfftfreq(n, 1 / sr)
+    sel = (f >= fmin) & (f <= fmax)
+    pc = (np.round(12 * np.log2(f[sel] / 440.0)) % 12).astype(int)
+    out = np.zeros((len(beats), 12))
+    for k in range(len(beats) - 1):
+        a, b = max(int(beats[k] * sr), 0), min(int(beats[k + 1] * sr), len(x))
+        seg = x[a:min(b, a + n)]
+        if len(seg) < 512:
+            continue
+        mag = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), n))
+        c = np.bincount(pc, weights=mag[sel], minlength=12)
+        out[k] = c / (np.linalg.norm(c) + 1e-12)
+    return out
+
+
+def harmonic_change(chroma):
+    """Per beat: how much the pitch content changes as that beat starts (1 - cosine to the previous beat's profile)."""
+    nov = np.zeros(len(chroma))
+    ok = (np.linalg.norm(chroma[1:], axis=1) > 0) & (np.linalg.norm(chroma[:-1], axis=1) > 0)
+    nov[1:][ok] = 1.0 - np.einsum("ij,ij->i", chroma[1:][ok], chroma[:-1][ok])
+    return nov
+
+
+def downbeat_phase(beats, kick_env, hop_s=HOP, per_bar=4, harm=None, w_harm=1.0):
+    """Which of the `per_bar` beat phases starts the bar (0..per_bar-1) and how clearly. Kick accents alone cannot tell
+    beat 1 from beat 3 in a rock beat (both are kicked); chords change on beat 1, so `harm` (per-beat harmonic change,
+    see harmonic_change) breaks the tie. Each cue is scored relative to its own mean, then summed."""
     idx = np.clip(np.round(np.asarray(beats) / hop_s).astype(int), 0, len(kick_env) - 1)
     val = np.array([kick_env[max(0, i - 2):i + 3].max() for i in idx])
-    means = [val[p::per_bar].mean() if len(val[p::per_bar]) else 0.0 for p in range(per_bar)]
-    best = int(np.argmax(means))
-    rest = [m for i, m in enumerate(means) if i != best]
-    return best, float(means[best] / (np.mean(rest) + 1e-9))
+
+    def rel(v):
+        m = np.array([v[p::per_bar].mean() if len(v[p::per_bar]) else 0.0 for p in range(per_bar)])
+        return m / (m.mean() + 1e-9)
+
+    score = rel(val)
+    if harm is not None and len(harm) == len(val) and np.asarray(harm).max() > 0:
+        score = score + w_harm * rel(np.asarray(harm, float))
+    best = int(np.argmax(score))
+    rest = [m for i, m in enumerate(score) if i != best]
+    return best, float(score[best] / (np.mean(rest) + 1e-9))
 
 
 def voicing(voc, rel_db, sr=SR, hop_s=HOP, f_lo=90.0, f_hi=1000.0, ac_min=0.5, db_min=-42.0):
