@@ -62,6 +62,39 @@ def import_model(path, physics):
     return root, arm, meshes, new
 
 
+def relink_textures(meshes, folder):
+    """Images whose files are missing: find a file with the same name (any case) under the model's folder and point
+    the image at it (packs often move textures into subfolders the PMX does not mention). Returns (relinked, still
+    missing) names."""
+    index = {}
+    for d, _dirs, files in os.walk(folder):
+        for f in files:
+            index.setdefault(f.lower(), os.path.join(d, f))
+    fixed, missing = [], []
+    seen = set()
+    for m in meshes:
+        for slot in m.material_slots:
+            mat = slot.material
+            if not mat or not mat.use_nodes:
+                continue
+            for node in mat.node_tree.nodes:
+                img = getattr(node, "image", None)
+                if img is None or img.name in seen or img.source != "FILE":
+                    continue
+                seen.add(img.name)
+                path = bpy.path.abspath(img.filepath)
+                if os.path.exists(path):
+                    continue
+                hit = index.get(os.path.basename(path.replace("\\", "/")).lower())
+                if hit:
+                    img.filepath = hit
+                    img.reload()
+                    fixed.append(img.name)
+                else:
+                    missing.append(img.name)
+    return fixed, missing
+
+
 def run(ctx):
     coll = collection("Cast")
     out = {}
@@ -90,6 +123,8 @@ def run(ctx):
         if rig and rig.get("source", {}).get("sha1") and rig["source"].get("path") and \
                 os.path.abspath(rig["source"]["path"]) != os.path.abspath(pmx):
             ctx.log(f"cast {name}: rig.json was made from {rig['source']['path']}, the model is {pmx}")
-        out[name] = {"armature": arm.name, "meshes": len(meshes), "physics": physics, "rig": bool(rig)}
+        fixed, missing = relink_textures(meshes, os.path.dirname(pmx))
+        out[name] = {"armature": arm.name, "meshes": len(meshes), "physics": physics, "rig": bool(rig),
+                     "textures_relinked": fixed, "textures_missing": missing}
         ctx.log("cast", name, arm.name)
     return out

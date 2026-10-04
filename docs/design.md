@@ -253,11 +253,15 @@ in order and each reads its own sections:
 | Stage | Sections | Does |
 |---|---|---|
 | scene | `[scene]` (`start`, `end`, `settle_frames`) | empty scene, fps, frame range including the pre-roll before `frame0` |
+| sets | `[[set]]` (`name`, `kind`, `at`, `yaw`, builder keys) | library set builders (sky, roads, tunnels, skylines, rooms) with their paths, surfaces and lights |
 | props | `[[prop]]` (`name`, `card`, `at`, `yaw`, `parent`, `slots`) | library props (`library:car_mockup`, `library:chair`) or card files; their use points and colliders |
+| vehicles | `[[vehicle]]` (`prop`, `path`, `lane`, `speed`, `at`, `roll`, `pitch`, `wheelbase`, `steer_ratio`) | a prop drives a set path's lane: position and heading per frame, body roll and pitch, wheels spinning, the steering wheel turning with the curvature |
 | cast | `[[cast]]` (`name`, `asset` or `pmx`, `armature`, `at`, `yaw`, `parent`, `physics`) | models imported without Bullet (`physics = "mk"`), named, placed |
-| pose | `[pose.<cast>]` | sit on a prop's seat, feet on targets (leg IK), lean / turn / head, arm IK to points, edges and moving keys, finger presets; `[[prop]] attach = "cast:bone"` puts props on bones |
+| pose | `[pose.<cast>]` | sit on a prop's seat, feet on targets (leg IK), lean / turn / head, arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets; `[[prop]] attach = "cast:bone"` puts props on bones |
 | motion | `[[motion.<cast>]]` | VMDs on NLA strips: source range, scale or `retime = "beats"`, body masks, blends |
 | perform | `[perform.<cast>]` | gaze events over an idle target, breathing, sway, nod, beat bob, startles, blinks, lids, expressions, lip sync, twitches |
+| shots | `[[shot]]` | the cut, see Shots |
+| lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure |
 | sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys |
 | save | | the `.blend` |
 
@@ -272,6 +276,43 @@ Targets anywhere in the build spec are `[x, y, z]` (world), `{prop = "car", poin
 
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python and are cached in `<project>/.mk/cache/`
 by a hash of their inputs.
+
+## Shots
+
+`[[shot]]` (`name`, `from`, `to` in clip seconds) makes one camera per output aspect (`<shot>@<output>`), keyed on
+every frame: `mount` (a prop, set or object the camera rides), `at` (in the mount's frame), `look` (any target),
+`lens`, `roll`, `lag` (operator lag in seconds, applied in the mount's frame so a camera in a car lags the subject,
+not the road), `shake` (handheld, degrees), `keys = [{t, at, look, lens}]` for moves, `dof = {focus, fstop}`, and
+`frame = {subject, fill, solve}` to solve the lens (or dolly) per aspect so the subject fills that share of the
+frame height. `[shot.aspect.<output>]` overrides any key for one aspect. Timeline markers cut between shots; the
+scene keeps the shot table in `scene["mk_shots"]`, and `mk look` / `mk render` point the markers at each aspect's
+cameras before rendering it.
+
+## Palettes
+
+`[look] palette` picks a named palette (`rose-pine-moon`, `rose-pine`, `rose-pine-dawn`), `[look.slots]` overrides
+slots. Slots: base, surface, overlay, muted, subtle, text, love, gold, rose, pine, foam, iris, hl_low, hl_med,
+hl_high. Sets, props, lights and the grade colour by slot, never by hard-coded values.
+
+## Rendering and post
+
+`mk render --preset draft|preview|final` renders each output's cut to `<project>/renders/<preset>/<output>/
+<frame>.png`. Frames are claimed with an empty file first, so a stopped render resumes and `--jobs N` Blender
+processes share the frames; a disk check refuses to start when the frames would not fit.
+
+`mk post` grades the frames (`[post]`: contrast around a pivot, saturation, split toning, a palette floor with a
+soft toe so nothing is black, halation from blurred highlights, vignette, grain) and encodes
+`<project>/out/<name>_<output>[_<preset>].mp4` with `[audio]` (`file`, `start` = song seconds at clip time 0).
+
+## Timeline
+
+`mk timeline analyze` turns the clip's song span into `audio/timeline.json`: `bpm`, `beat_s`, `beats`, `downbeats`,
+`grid` (a constant-tempo fit when the beats are that steady), per-frame `vocal_db`, `energy_db`, `drums_db`, and
+`lines[].words[]` with `start`, `end`, `voiced_end`, `ctc_start`, `whisper` (seconds from clip time 0). Beats come
+from the kick and snare bands of the Demucs drum stem (hi-hats would double the tempo) with a dynamic-programming
+tracker; downbeats from kick accents. Words come from a lyrics file (one sung line per line) or from Whisper's
+transcription, aligned with wav2vec2 CTC on the vocal stem and snapped to sung onsets. Lines and words are numbered
+from 1; tools refer to words as `(line, word)` and never print their text.
 
 ## Cache
 

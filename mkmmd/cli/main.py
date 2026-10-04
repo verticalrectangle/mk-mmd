@@ -7,7 +7,7 @@ from .. import __version__
 from ..bridge import BlenderError
 from .common import RUNTIME, USAGE, UsageError, emit
 
-COMMANDS = ["assets", "build", "check", "doctor", "inspect", "look", "q", "serve"]
+COMMANDS = ["assets", "build", "check", "doctor", "inspect", "look", "post", "q", "render", "serve", "timeline"]
 
 
 def build_parser():

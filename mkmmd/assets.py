@@ -37,13 +37,19 @@ def read_text(path):
     return raw.decode("utf-8", errors="replace")
 
 
-def find_readmes(path, stop=None):
-    """Readme-like text files next to an asset and in its parent folders (up to `stop`)."""
+def find_readmes(path, stop=None, depth=2):
+    """Readme-like text files next to an asset, in its subfolders (`depth` levels: packs often keep them in a
+    readmes/ folder) and in its parent folders up to `stop`."""
     p = Path(path).resolve()
     here = p.parent if p.is_file() else p
     stop = Path(stop).resolve() if stop else here
     out = []
-    for d in [here] + list(here.parents):
+    for f in sorted(here.rglob("*")):
+        if f.is_file() and f.suffix.lower() in README_EXT and len(f.relative_to(here).parts) <= depth + 1:
+            out.append(f)
+    for d in list(here.parents):
+        if here == stop:
+            break
         out += sorted(f for f in d.iterdir() if f.is_file() and f.suffix.lower() in README_EXT)
         if d == stop or d == d.parent:
             break
