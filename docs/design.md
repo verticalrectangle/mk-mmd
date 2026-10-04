@@ -554,7 +554,8 @@ A `[[shot]] at` takes a list or a dict target only (no strings); a list of three
 (default the clip's last frame, `frame0 + round(duration * fps) - 1`) and `settle_frames` (24: the character eases from its rest
 pose into the base pose over these pre-roll frames, the hair settles in the same time). The stage clears the scene, sets fps and
 the frame range, takes the render size from the first `[[output]]`, selects EEVEE Next and metric units and removes timeline
-markers.
+markers. The scene's custom property `mk_frame0` is the frame of clip second 0: library props whose drivers run on the song's
+clock (`heart`) and that key events at clip seconds (`meteor`, `airplane`) read it.
 
 ### Sets
 
@@ -570,6 +571,7 @@ Colours are palette slot names or `#hex` (and `"slot:slot:t"` mixes two); builde
 | `night_sky` | the scene's world: a gradient dome, a city glow, thin lit clouds, stars, the moon with its halo and an optional moonlight, EEVEE ray tracing; nothing spatial (the sky is in world angles, `at` and `yaw` do not turn it) |
 | `highway` | a divided night highway along a centre line, built to scale (3 km and more) from a few merged meshes: lanes as card paths, lamps with baked spill, gantries and billboards as `use.surface`, tunnels, trees, wet asphalt |
 | `skyline` | a distant night city (an arc or a band of buildings with shader-lit windows, glow, beacons) around the set root |
+| `hills` | layered ridges on the horizon: curtains round `center` (x, y) at each layer's `distance`, rolling ridge lines up to `height` (`seed`, `rough` 0..1), an `arc` = [from, to] degrees (azimuth from +X toward +Y) that can leave a city's direction open; flat colours (`color`, "base") pulled toward the horizon haze by `haze` (rising with distance), so they read as silhouettes whatever lights the scene |
 | `cafe_room` | the rainy corner café: a window with rain and fog, the street behind it, lightning rigs, a pendant lamp, the room lights; its animatable state is custom properties on the set root |
 | `bedroom_80s` | an 80s bedroom at night: striped wallpaper, parquet, trim, a door, a window with a half-raised venetian blind and a lit city behind it, a neon tube; a shell only, the furniture is props |
 
@@ -587,7 +589,7 @@ strength 1.0, haze 0.1}` or `false`); `clouds` (`{cover 0.4, softness 0.5, opaci
 |---|---|
 | Centre line | `points` (control points of a Catmull-Rom spline) or a gently winding road from `seed` (0), `length` (2000), `turn_deg` (12), `leg` (250), `z` (0) |
 | Cross-section | `lanes` (2, with the path), `oncoming` (= lanes; 0 = one-way), `lane_width` (3.6), `shoulder` (2.5), `inner_shoulder` (0.9), `divided` (true), `median` (3.0), `drive` ("right" or "left"), `dash` ([3.0, 12.0]: paint, period). Lanes are named `fwd1..` (with the path) and `opp1..`, 1 being next to the median |
-| Roadside | `drop` (0.6), `guardrails` (true), `barrier` (true), `ds` (3: station spacing), `trees` (`{density 9 per 100 m per side, seed, near 11, far 70, height [6, 14], pine 0.6}` or `false`) |
+| Roadside | `drop` (0.6), `guardrails` (true), `barrier` (true), `ds` (3: station spacing), `trees` (`{density 9 per 100 m per side, seed, near 11, far 70, height [6, 14], pine 0.6}` or `false`); `studs` (`true` or `{spacing 12, size 0.11, strength 2.4}`: retroreflective studs on the lane lines, white, and on the median-side edges, gold); `overpasses` (`[{s, clearance 5.5, width 11, deck 1.0, overhang 14, parapet 1.0, lamp 450, name}]`: road bridges with gold strip lights along both fascias and a real warm lamp under the deck over each carriageway; lamp poles near a deck are dropped); `signs` (`[{s, side "right", size [3.4, 1.8], height 2.2, offset, name}]`: boards on two posts, each a `use.surface` `<name>_panel`); `markers` (`true` or `{every 160, first 40, side "right"}`: mile-marker plates); `pylons` (`true` or `{side "left", offset 60, spacing 200, first 40, height 34, light 40}`: a power line, lattice towers with three sagging cables and a blinking red light on each); `masts` (`[{s, offset -120, height 95, lights 4, light 60, name}]`: radio masts with blinking red lights). Built by `mkmmd/blender/library/sets/roadside.py` |
 | Lamps | `lamps` (`{spacing 40, first 20, height 9, arm 3.2, layout "auto" / "outer" / "left" / "right" / "stagger", power 5000, strength 1500, halo 4, halo_strength 2, haze 10, haze_strength 0.035, core 0.42, core_strength 40, soft 1.1, soft_strength 7}` or `false`) |
 | Real lights | `lights` (`{every 4, range [s0, s1], max 16, power, reach 90, shadow false, specular 0.5}`): every n-th lamp gets a real spot, the others are lit by baked light (`spill` vertex attribute) |
 | Signs | `gantries` (`[{s, panels 2, panel [4.2, 2.4], clearance 5.6, span "forward" or "full", name}]`), `billboards` (`[{s, side, offset, size [12, 5], height 6, angle 12, name}]`); each panel is an object `<set>_<name>_panel<j>` and a card `use.surface` (`gantry1_panel1`, `billboard1_panel`) |
@@ -643,7 +645,7 @@ out of). The architecture is tagged `mk_form_exempt`. `mk look` orbit views clip
 |---|---|
 | `name` | the prop's name (unique); its root empty and the prefix of its objects |
 | `card` | as above |
-| `at`, `yaw`, `rot` | world position (default the origin); rotation about Z in degrees, or `rot = [rx, ry, rz]` (overrides `yaw`) |
+| `at`, `yaw`, `rot` | world position (default the origin); rotation about Z in degrees, or `rot = [rx, ry, rz]` (overrides `yaw`). `at` may be a point beside a set's path, `{path = "road:road", s, offset, z}` (as a target): then `yaw` turns the prop from facing the traffic that comes along the path (0: its front, -Y, looks back down the road at the cars coming) |
 | `parent` | an object the root is parented to (it must exist: props are built in order) |
 | `slots` | `{slot: "#hex"}` colour overrides, and the builder's non-colour options (below); ignored, with a warning, for a PMX prop |
 | `card_extra` | a table merged over the card: tables key by key, lists of entries with a `name` by name (a known name replaces, a new one is appended, an empty list clears), anything else replaces |
@@ -664,6 +666,10 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `convertible_80s` | an 80s convertible (Dodge 600 proportions, top folded), left-hand drive with the driver on +X, forward -Y: two seats, wheels, steering, a dash with `SPEED_GRID` / `BAR_GRAPH` surfaces and a cassette. Roles in `slots`: `body`, `lower`, `stripe`, `trim`, `rubber`, `interior`, `display`, `headlamp`, `taillamp`, `glass`, `wheel`, `boot`. Animatable root properties (key with `[[key]]`): `lamps` (0..1, with a warm-up flicker), `brake`, `tails` (0.35), `dash_on`, `tape` (0 held out, 1 pushed in), `bars`, `visors` (0 flipped up, the default, 1 down). Card `use`: `sit` driver / passenger, `feet`, `grip` `wheel`, `rest` `sill_L` / `sill_R`, `look` (`road`, `mirror`, `dash`, `cassette`, `headlamp_L` / `_R`, `tail`), `surface` (`speed`, `bars`, `cluster`, `radio`, `cassette_label`, `plate_front`, `plate_rear`), `anchor`; `wheels` and `steering` for the [vehicles stage](#vehicles) |
 | `electric_guitar` | an 80s Strat-type electric, upright on its tail (Z up along the strings, face toward -Y, origin at the saddle line). Roles in `slots`: `body`, `pickguard`, `neck`, `fretboard`, `hardware`, `strings`, `knobs`, `strap`, `cable`, `pick`, `inlay`, `dark`. Card: `use.grip` `neck` and `strum`, `use.anchor`, `use.look`, `use.wear`, hidden colliders; see [Playing a worn guitar](#playing-a-worn-guitar) |
 | `hearts` | a field of puffy hearts that rise and sway around a point, animated by drivers on the frame (see below) |
+| `heart` | one big puffy heart that pounds on the song's beat (a bump on the beat and a smaller one after it) and bursts into a ring of little hearts every few beats; options `size` (0.2), `bpm`, `start` (a clip second on a beat), `beat` (0.25: the swell), `burst` (8 hearts), `every` (4 beats), `reach` (0.45 m), `burst_size`, `turn`, colour `heart` ("love"), `glow`. Drivers on the frame and the scene's `mk_frame0`; objects `<name>_heart`, `<name>_burst<i>` tagged `mk_heart` (silhouette accents: `accent = ["prop:mk_heart"]`); with `attach` it rides a chest |
+| `traffic_car` | an 80s car or truck for night traffic: `body` "sedan", "wagon" or "semi" (a cab-over tractor and a box trailer whose sides are `use.surface` `left` / `right`), colours `paint`, `trailer`, `glass`, `lamp`, `tail`, `marker`, emissions `lamps` (30), `tails` (9), `markers` (3.5), `beams` (real headlight spots: `beam_power` 900 W, `beam_angle` 55, `beam_tilt` 5). Faces -Y, origin under the middle; the card lists the wheels and beams, so a `[[vehicle]]` drives it |
+| `neon_sign` | a roadside motel / diner sign: a tall pole, a rounded board ringed by a neon tube and a smaller board under it, both `use.surface` (`face`, `sub`) for glowing [[text]]; options `width` (3.2), `tall` (1.5), `height` (6.5), `sub` ([2.0, 0.55], [] none), colours `board`, `neon`, `sub_neon`, `pole`, `glow` (7) |
+| `meteor`, `airplane` | sky events at clip seconds, seen from the root: a shooting star (`t`, `dur`, `from` / `to` [azimuth, elevation] of its head, `length`, `color`, `strength`, `distance` 2500) and an airliner's lights crossing (`t0`, `t1`, `from`, `to`, `lights`, colours `red`, `green`, `white` (a strobe), `strength`, `distance` 3000). Keyed at build from `mk_frame0` |
 | `bedroom_desk` | an 80s writing desk, 1.20 x 0.60 x 0.74 m, three drawers; options `edge` (slot of the band round the top, "pine"), `drawers` (three slots, "foam,love,gold"); `use.rest` `top` and `front` |
 | `desk_chair` | a chrome cantilever chair with padded seat and back; seats a character exactly as `cafe_chair` does; options `upholstery` ("iris"), `accent` ("love") |
 | `desk_lamp` | a spring-arm desk lamp that owns a warm spot light; options `paint` (slot or `#hex`, "love"), `power`; root properties `power` (60 W) and `on` (0..1: key it to switch the lamp); yaw aims it (0 looks toward -Y) |
@@ -723,9 +729,12 @@ against the vehicle as it stands at the first frame and then rides it.
 |---|---|
 | `prop` | the driving `[[prop]]` (required). Its root is keyed on every frame, so its own `at`, `yaw` and `rot` are replaced; give it no `parent` |
 | `path` | `"<set>:<path>"` (required): a `[[set]]` name and a path of that set's card (the `highway` and `test_road` sets have `road`) |
-| `lane` | a lane name of the path (`fwd1`, `opp1` ... on a highway, 1 = next to the median; `R1`, `L1` on `test_road`) or metres to the left of the centreline, negative to the right (default 0) |
-| `speed` | m/s: a number, or `[[t, v], ...]` on clip seconds, linear between the keys and held before the first and after the last (default 20) |
+| `lane` | a lane name of the path (`fwd1`, `opp1` ... on a highway, 1 = next to the median; `R1`, `L1` on `test_road`) or metres to the left of the centreline, negative to the right (default 0). A lane whose card `dir` is -1 (an oncoming lane) is driven against the path: the vehicle faces the other way, its roll and steering mirrored |
+| `dir` | with a numeric `lane`: 1 drives with the path, -1 against it (default 1) |
+| `speed` | m/s, the vehicle's own speed (positive whichever way it drives): a number, or `[[t, v], ...]` on clip seconds, linear between the keys and held before the first and after the last (default 20) |
 | `at` | arc length in metres at clip time 0 (default 0) |
+| `meet` | `{vehicle, t, ahead = 0}` instead of `at`: alongside that vehicle (an earlier `[[vehicle]]`) at clip time `t`, plus `ahead` metres further along the path. Traffic timed to the cut: an oncoming car passing in a close-up, a truck overtaken in a side shot |
+| `leave` | `true`: the vehicle may run off the path's ends (traffic coming and going). There it waits at the end, hidden from the render (`hide_render` keys) with everything under its root, headlight beams included. Without it a vehicle that leaves the path is a build error |
 | `height` | metres above the path (default 0) |
 | `roll` | degrees of body roll per g of lateral acceleration (speed² × curvature), leaning out of the turn (default 1.2) |
 | `pitch` | degrees of body pitch per g of longitudinal acceleration: the nose rises under acceleration and dives under braking (default 0.8) |
@@ -837,9 +846,12 @@ and `point` 80, 95, 65 / 25, 35, 40 (`mkmmd/core/fingers.py`). The rotations tur
 
 #### Hands
 
-`[pose.<cast>.hands.L]` and `.R` put an arm on a target by IK on the wrist through the twist bones up to the upper arm (the
-Blender IK constraint `mk_arm_ik`, rotation weight 1, pole angle -90 degrees). Two empties in the collection `Rig` carry the goal
-and the elbow pole, `<cast>_hand.<L|R>` and `<cast>_elbow.<L|R>`: the names checks and `[[key]]` address. A hand needs one of
+`[pose.<cast>.hands.L]` and `.R` put an arm on a target. The goal empty `<cast>_hand.<L|R>` (collection `Rig`) is the wrist bone's
+tail and orientation: a position-only IK on the forearm (`mk_arm_ik`, chain up to the upper arm, its target a child of the goal
+at the wrist's head) bends the elbow toward the pole empty `<cast>_elbow.<L|R>`, the wrist copies the goal's rotation
+(`mk_hand_rot`) and the forearm twist bone, when the rig has one, rolls half way with the hand (`mk_forearm_twist`). The IK's pole
+angle is solved per arm from its rest pose, with the forearm pre-folded 20 degrees toward the front (the solver starts from that
+fold), so the elbow points at the pole on either side of any rig. These empties are the names checks and `[[key]]` address. A hand needs one of
 `at`, `rest`, `grip` or `keys`. The goals of a seated character ride with its seat prop; a standing character's stay in the world
 unless `ride` says otherwise. The wrist goal is keyed at the end of the settle (and at the keys' times), the influence eases
 in over the settle.
@@ -849,7 +861,7 @@ in over the settle.
 | `at` | where the wrist joint goes: a [target](#targets). The hand points along `dir` with the palm toward `palm` |
 | `dir` | `[x, y, z]` world direction the hand points along, wrist to fingertips (default straight ahead of the character) |
 | `palm` | `[x, y, z]` world direction the palm faces: the hand rolls about `dir` to match (default the least rotation from rest; `[0, 0, -1]`, palm down, for `rest`) |
-| `pole` | a target the elbow bends toward. Default, from the shoulder: 0.45 m outward, 0.25 m behind and 0.30 m below it; for a hand on a guitar's `neck` or `strum` point, 0.40 m below and 0.08 m behind it |
+| `pole` | a target the elbow points at (on either side of any rig: the IK's pole angle is solved per arm from its rest pose). Default, from the shoulder: 0.45 m outward, 0.25 m behind and 0.30 m below it; for a hand on a guitar's `strum` point, 0.45 m outward, 0.12 m behind and 0.08 m below (a strumming forearm drapes over the body's edge); on its `neck`, 0.15 m outward, 0.08 m behind and 0.40 m below |
 | `rest` | `"prop:use"`: a `use.rest` point of a prop the hand lies on, an edge (`a`, `b`) or a plane (`center`); the palm faces `palm`, the heading is `dir` (default forward and slightly outward) |
 | `along` | `rest` on an edge: 0..1 along it (default 0.5) |
 | `offset` | `rest` on a plane: `[x, y, z]` metres from its centre, in the prop's frame (default 0) |
@@ -1050,7 +1062,10 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `startle` | `[t, ...]`: at each time the upper body jolts backward (4.5 degrees, settling with a 0.35 s time constant) |
 | `lean`, `turn`, `tilt` | `[[t, deg], ...]`: extra upper-body forward lean, turn toward the left and sideways tilt toward the left over time, smoothstep-eased between the keys, held before the first and after the last, on top of the pose's base: a reach that leans in and settles back, a head on a shoulder. Hand targets still hold, except hands whose pose `ride` is a chest bone, which go with it. The first key's value holds from the start of the pre-roll: begin with a `[0, 0]` key to start from the base |
 | `head_tilt` | `[[t, deg], ...]`: the head rolls toward the left on top of the gaze, keyed the same way |
-| `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0}`: a periodic sideways lean of the upper body (like `tilt`) and roll of the head (like `head_tilt`) toward the left: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed tilts; unlike them it goes on at any clip time, so a dreamy sway survives a re-cut |
+| `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0, axis = "side"}`: a periodic sway of the upper body and of the head: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed ones; `axis` `"side"` leans the body (like `tilt`) and rolls the head (like `head_tilt`) toward the left, `"front"` leans the body forward (like `lean`) and nods the head, `"turn"` twists the body (like `turn`) and shakes the head. Unlike the keys it goes on at any clip time, so a dreamy sway survives a re-cut; a squirm seen side-on is a fast `turn` (a swing a beat) |
+| `bounce` | `{depth = 0.03, beats = [t, ...], timeline, downbeat_accent = 1.6, from, to, attack = 0.05, decay = 0.16}`: the hips (the `center` bone) dip `depth` m on each beat (downbeats weighted), the feet planted, so the knees pump; `from`, `to` (clip seconds) limit it |
+| `rise` | `[[t, metres], ...]`: the whole body, feet too, lifts by that much (eased between keys): she floats |
+| `kick` | `{foot = "L", height = 0.12, back = 0.08, hold = 0, beats, timeline, downbeat_accent, from, to, attack = 0.06, decay = 0.18}`: that foot flicks up and back on the beats; `hold` (0..1) keeps it that share of the way up between them (a foot kicked up behind a lovestruck girl) |
 
 #### Face and mouth
 
@@ -1102,6 +1117,8 @@ guitar](#playing-a-worn-guitar)).
 | `lead`, `follow` | seconds of run-up before the first string and of follow-through after the last (default 0.09 each) |
 | `approach`, `retreat` | seconds the hand takes from rest to the first stroke and from the last stroke back to rest (default 0.3 each) |
 | `share` | the share of the sideways travel that the hand makes by turning about the wrist, about an axis along the strings; the rest is made by moving the hand (default 0.6) |
+| `kick` | degrees: on every accented stroke the guitar's neck kicks up that far (the prop turns about its face normal through its origin and eases back; the hands ride it). In the first table of a hand |
+| `windmill` | `[t, ...]`: before the down stroke nearest each time (within 0.12 s) the pick hand swings a full circle, over `windmill_dur` seconds (0.5): its goal turns once about an axis through the shoulder along the guitar's face normal and comes down onto the strings at the strike, which then plays as planned. In the first table of a hand; read it in a front or three-quarter view (side-on the circle is edge-on) |
 | `sigma` | half the width of the six strings at the strum centre, metres (default taken from the card's strings, 0.0225 without a `neck` point) |
 | `timeline` | the timeline JSON with `onsets`, `beats` and `downbeats` (default `audio/timeline.json`) |
 

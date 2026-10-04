@@ -363,3 +363,27 @@ def expressions(L, i, fps, hw):
         "s": f"max({sz}*amount*pin*smoothstep(0,1,({lf}-age)/max(fade,0.001)),{_n(MIN_SCALE)})",
     }
     return {k: e[k] for k in CHANNELS}
+
+
+# ============================================================================================ library:heart (one pounding heart)
+def beat_phase(per_beats=None):
+    """The song clock's phase, 0..1 over one beat (or over `per_beats` beats, the name of a root property), as a driver
+    expression of the frame and the heart root's properties f0 (frame of clip second 0), fps, start (a clip second on a beat)
+    and bpm."""
+    div = f"/{per_beats}" if per_beats else ""
+    return f"fmod(((frame-f0)/fps-start)*bpm/60{div}+1000,1)"
+
+
+def heartbeat_expressions(i, n, turn):
+    """Driver expressions of library:heart: the big heart's scale (`big`: a bump on the beat and one 60 % of it a quarter
+    beat later, by `beat`), and little heart `i` of `n` in the burst: x, z (it flies out along its spoke, `turn` degrees
+    round, easing out over `every` beats to `reach`) and its scale (`bk`: it pops in, then shrinks as it flies)."""
+    P, B = beat_phase(), beat_phase("every")
+    out = {"big": f"size*(1+beat*(max(0,1-abs({P}-0.03)/0.09)+0.6*max(0,1-abs({P}-0.27)/0.09)))"}
+    if n:
+        a = math.radians(turn) + 2.0 * math.pi * i / n
+        cx, cz = round(math.sin(a), 5), round(math.cos(a), 5)
+        out["x"] = f"{cx}*reach*(1-pow(1-{B},3))"
+        out["z"] = f"{cz}*reach*(1-pow(1-{B},3))"
+        out["s"] = f"max({MIN_SCALE},bk*min(1,{B}*12)*(1-{B}))"
+    return out

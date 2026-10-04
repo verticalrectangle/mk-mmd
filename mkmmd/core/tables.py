@@ -30,11 +30,14 @@ PERFORM = {
     "glance": ("t", "at", "dur", "pitch", "rise", "fall", "blink"), "head_share": None,
     "head_limits": tuple(PF.HEAD_LIMITS), "neck_share": None, "eye_max": None, "breath": ("per_min", "deg"),
     "sway": ("deg", "period"), "nod": ("deg", "period"), "bob": ("deg", "timeline", "beats", "downbeat_accent"),
-    "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "rock": ("deg", "period", "phase"),
-    "head_rock": ("deg", "period", "phase"), "blink": ("per_min", "seed", "extra"), "lids": None,
+    "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "rock": ("deg", "period", "phase", "axis"),
+    "head_rock": ("deg", "period", "phase", "axis"), "blink": ("per_min", "seed", "extra"), "lids": None,
     "sing": ("timeline", "lines", "mouth", "lead", "voice"), "expressions": ("morph", "keys"),
     "twitch": ("bones", "family", "t", "deg", "axis", "dur"),
-    "strum": ("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent") + tuple(strum.DEFAULTS),
+    "bounce": ("depth", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"), "rise": None,
+    "kick": ("foot", "height", "back", "hold", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"),
+    "strum": ("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "kick", "windmill",
+              "windmill_dur") + tuple(strum.DEFAULTS),
 }
 
 SIM = {k: None for k in ("families", "params", "colliders", "props", "fingers", "floor", "wind", "use_masks", "anchor_free",

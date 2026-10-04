@@ -29,6 +29,14 @@ ValueError. Keys (defaults):
               m), shadow (false), specular (0.5)}. Every other lamp is lit by baked light (`spill` vertex attribute on
               road, roadside, rails, trees), so a long road costs nothing in the renderer and the pools of light match
               the real ones in strength and shape (a 126 degree spot, blend 0.7).
+  Roadside   (mkmmd/blender/library/sets/roadside.py) studs = true | {spacing (12), size (0.11), strength (2.4)}: road
+              studs on the lane lines (white) and the median-side edges (gold); overpasses = [{s, clearance (5.5), width
+              (11), deck (1.0), overhang (14), parapet (1.0), name}]: bridges over the road (lamp poles near them are
+              dropped); signs = [{s, side ("right"), size [3.4, 1.8], height (2.2: under the board), offset, name}]:
+              boards on two posts, each a `use.surface` `<name>_panel`; markers = true | {every (160), first (40), side}:
+              mile-marker plates; pylons = true | {side ("left"), offset (60), spacing (200), first (40), height (34),
+              light (40)}: a power line with blinking red lights; masts = [{s, offset (-120), height (95), lights (4),
+              light (60), name}]: radio masts with blinking red lights.
   Signs       gantries = [{s, panels (2), panel [4.2, 2.4], clearance (5.6), span ("forward"|"full"), name}],
               billboards = [{s, side ("right"|"left"), offset (m from the centerline to the board centre, default
               half the road + 11), size [12, 5], height (6: m under the board), angle (12: degrees turned toward the
@@ -60,6 +68,7 @@ from . import nightgeo as G
 from . import nightkit as K
 from . import register
 from . import roadgeo as R
+from . import roadside as RS
 
 DEFAULTS = {
     "seed": 0, "length": 2000.0, "turn_deg": 12.0, "leg": 250.0, "z": 0.0, "points": None,
@@ -68,6 +77,7 @@ DEFAULTS = {
     "drop": 0.6, "guardrails": True, "barrier": True, "ds": 3.0,
     "lamps": {}, "lights": {}, "gantries": [], "billboards": [], "tunnels": [], "tunnel": {}, "wet": 0.7,
     "haze": {}, "slots": {}, "floor": 0.32, "trees": {}, "gloss": 1.3,
+    "studs": False, "overpasses": [], "signs": [], "markers": False, "pylons": False, "masts": [],
 }
 LAMP = {"spacing": 40.0, "first": 20.0, "height": 9.0, "arm": 3.2, "layout": "auto", "power": 5000.0,
         "strength": 1500.0, "halo": 4.0, "halo_strength": 2.0, "haze": 10.0, "haze_strength": 0.035,
@@ -269,6 +279,18 @@ class Highway:
         for i, b in enumerate(self.c["billboards"]):
             if not self.in_tunnel(b["s"]):
                 self.billboard(i, b)
+        if self.c["studs"]:
+            RS.studs(self, self.c["studs"], s)
+        if self.c["overpasses"]:
+            RS.overpasses(self, self.c["overpasses"])
+        if self.c["signs"]:
+            RS.signs(self, self.c["signs"])
+        if self.c["markers"]:
+            RS.markers(self, self.c["markers"])
+        if self.c["pylons"]:
+            RS.pylons(self, self.c["pylons"])
+        if self.c["masts"]:
+            RS.masts(self, self.c["masts"])
         for i, t in enumerate(self.tunnels):
             self.tunnel(i, t)
         if self.tree_cfg:
@@ -297,6 +319,15 @@ class Highway:
             return
         L = self.lamp
         lay = R.lamp_layout(self.sec, self.length, L["layout"], L["spacing"], L["first"], self.ranges)
+        clear = RS.lamp_exclusion(self.c)                 # no pole and no arm through an overpass deck
+        if clear and len(lay["s"]):
+            keep = {"": ~G.in_ranges(np.asarray(lay["s"]), clear, 0.0)}
+            if "pole_s" in lay:
+                keep["pole_"] = ~G.in_ranges(np.asarray(lay["pole_s"]), clear, 0.0)
+            for k, v in list(lay.items()):
+                m = keep["pole_"] if k.startswith("pole_") and "pole_" in keep else keep[""]
+                if hasattr(v, "__len__") and len(v) == len(m):
+                    lay[k] = np.asarray(v)[m]
         self.layout = lay
         n = len(lay["s"])
         if not n:

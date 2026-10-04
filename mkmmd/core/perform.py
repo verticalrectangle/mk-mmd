@@ -130,8 +130,9 @@ def rock(ts, period=4.0, deg=3.0, phase=0.0):
     return math.radians(deg) * np.sin(2 * math.pi * np.asarray(ts, float) / period + phase)
 
 
-def beat_bob(ts, beats, deg=1.5, attack=0.06, decay=0.22, accent=None):
-    """Head nod (rad) on the beats: a quick dip after each beat, easing back; accent (per beat weight) scales it."""
+def beat_pulse(ts, beats, attack=0.06, decay=0.22, accent=None):
+    """A pulse on each beat (0..1 times the beat's `accent` weight): a quick rise ending on the beat, an exponential fall
+    after it. Overlapping pulses take the larger."""
     ts = np.asarray(ts, float)
     out = np.zeros(len(ts))
     for i, b in enumerate(beats):
@@ -143,7 +144,12 @@ def beat_bob(ts, beats, deg=1.5, attack=0.06, decay=0.22, accent=None):
         uu = u[m]
         shape = smooth((uu + attack) / attack) * np.exp(-np.maximum(uu, 0.0) / decay)
         out[m] = np.maximum(out[m], a * shape)
-    return math.radians(deg) * out
+    return out
+
+
+def beat_bob(ts, beats, deg=1.5, attack=0.06, decay=0.22, accent=None):
+    """Head nod (rad) on the beats: a quick dip after each beat, easing back; accent (per beat weight) scales it."""
+    return math.radians(deg) * beat_pulse(ts, beats, attack, decay, accent)
 
 
 def startles(ts, times, deg=4.5, tau=0.35):

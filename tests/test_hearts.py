@@ -486,3 +486,46 @@ def test_negative_frames_are_fine():
     for i in range(L.count):
         got, env = _run(HR.expressions(L, i, 30, 0.57), HR.DEFAULTS, -300)
         assert 0.0 <= env["age"] < HR.life(HR.DEFAULTS, L)[i] and 0.0 <= env["u"] < 1.0
+
+
+# ---------------------------------------------------------------- library:heart (one pounding heart on the song's beat)
+BEAT = {"f0": 61.0, "fps": 30.0, "bpm": 120.0, "start": 2.0, "beat": 0.3, "every": 4.0, "reach": 0.4, "size": 0.2, "bk": 0.06}
+FN = {"fmod": math.fmod, "pow": pow, "max": max, "min": min, "abs": abs}
+
+
+def _eval(expr, t):
+    """A heart driver expression at clip second t, as Blender evaluates it (frame = f0 + t * fps)."""
+    return eval(expr, {"__builtins__": {}}, {**FN, **BEAT, "frame": BEAT["f0"] + t * BEAT["fps"]})   # noqa: S307
+
+
+def test_the_heart_swells_on_every_beat_and_once_more_just_after_it():
+    big = HR.heartbeat_expressions(0, 0, 0.0)["big"]
+    beat = 60.0 / BEAT["bpm"]
+    for k in range(-1, 6):                                       # beats before and after `start` alike
+        on = BEAT["start"] + k * beat
+        peak, after, rest = _eval(big, on + 0.03 * beat), _eval(big, on + 0.27 * beat), _eval(big, on + 0.6 * beat)
+        assert peak == pytest.approx(BEAT["size"] * (1 + BEAT["beat"]), rel=1e-6)
+        assert after == pytest.approx(BEAT["size"] * (1 + 0.6 * BEAT["beat"]), rel=1e-6)
+        assert rest == pytest.approx(BEAT["size"])
+
+
+def test_a_burst_leaves_from_the_heart_on_the_bar_and_reaches_out_shrinking_away():
+    bar = BEAT["every"] * 60.0 / BEAT["bpm"]
+    n = 8
+    for i in range(n):
+        ex = HR.heartbeat_expressions(i, n, 0.0)
+        a = 2 * math.pi * i / n
+        x = lambda t: _eval(ex["x"], t)                          # noqa: E731
+        z = lambda t: _eval(ex["z"], t)                          # noqa: E731
+        s = lambda t: _eval(ex["s"], t)                          # noqa: E731
+        t0 = BEAT["start"] + bar
+        assert math.hypot(x(t0 + 1e-4), z(t0 + 1e-4)) < 0.01 and s(t0 + 1e-4) < 0.01      # born at the centre, tiny
+        mid, late = t0 + 0.3 * bar, t0 + 0.97 * bar
+        assert math.atan2(x(mid), z(mid)) == pytest.approx(math.atan2(math.sin(a), math.cos(a)), abs=1e-3)   # along its spoke
+        assert math.hypot(x(late), z(late)) == pytest.approx(BEAT["reach"], rel=0.01)   # out at `reach` by the next bar
+        assert s(mid) > s(late) and s(mid) > 0.5 * BEAT["bk"]    # popped in, shrinking as it flies
+
+
+def test_heart_expressions_are_short_enough_for_blender():
+    for i in range(12):
+        assert all(len(e) <= HR.MAX_EXPR for e in HR.heartbeat_expressions(i, 12, 15.0).values())

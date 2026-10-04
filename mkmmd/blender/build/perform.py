@@ -152,14 +152,156 @@ def _strum(ctx, name, m, specs):
         rots = K.continuous(rots)
         if float(np.dot(rots[0], np.array(q0))) < 0:
             rots = -rots
+        mills = []
+        if first.get("windmill"):
+            locs, rots, mills = _windmill(ctx, m, side, prop, n, fr, locs, rots, strokes,
+                                          [float(t) for t in first["windmill"]], float(first.get("windmill_dur", 0.5)), where)
         K.key_vec(tgt, "location", fr, locs, interp="LINEAR", replace=False)
         K.key_vec(tgt, "rotation_quaternion", fr, rots, interp="LINEAR", replace=False)
         down = sum(1 for s in strokes if s.dir > 0)
         out[side] = {"strokes": len(strokes), "down": down, "up": len(strokes) - down, "frames": [int(fr[0]), int(fr[-1])],
                      "sigma_mm": round(sigma * 1e3, 1), "turn_share": share, "first": [round(s.t, 3) for s in strokes[:6]],
                      "max_u_mm": round(float(np.abs(P["u"]).max()) * 1e3, 1)}
+        if mills:
+            out[side]["windmills"] = mills
+        if first.get("kick"):
+            out[side]["kick"] = _neck_kick(ctx, prop, n, [s.t for s in strokes if s.accent], float(first["kick"]))
         ctx.log("strum", name, side, json.dumps(out[side]))
     return out
+
+
+def _windmill(ctx, m, side, prop, normal, fr, locs, rots, strokes, times, dur, where):
+    """A windmill: over the `dur` seconds before a down stroke (the one nearest each time in `times`) the pick hand swings a
+    full circle. Its goal (position and orientation as at that strike) turns once about an axis through the shoulder along
+    the guitar's face normal, coming down onto the strings at the strike, which then plays as planned; the arm IK follows.
+    The circle eases in from wherever the strumming has the hand. `locs`, `rots` are the goals of the frames `fr` in the
+    prop's frame. Returns (locs, rots, [strike times])."""
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    sc.frame_set(int(ctx.start + ctx.settle))
+    dg = bpy.context.evaluated_depsgraph_get()
+    ae = m.arm.evaluated_get(dg)
+    shoulder_w = ae.matrix_world @ ae.pose.bones[S.semantic_map(m.arm)[f"arm.{side}"]].head
+    Mp = prop.root.evaluated_get(dg).matrix_world.copy()
+    sc.frame_set(keep)
+    centre = np.array(Mp.inverted() @ shoulder_w)
+    up_l = np.array(Mp.to_3x3().normalized().inverted() @ Vector((0.0, 0.0, 1.0)))
+    axis = Vector(normal).normalized()
+    L, Q = np.array(locs, float), np.array(rots, float)
+    ts = np.array([ctx.time(f) for f in fr])
+    done = []
+    for tw in times:
+        downs = [s for s in strokes if s.dir > 0 and abs(s.t - tw) <= 0.12]
+        if not downs:
+            raise BuildError(f"{where}: windmill {tw}: no down stroke within 0.12 s of it (the strike it comes down on)")
+        t_s = min(downs, key=lambda s: abs(s.t - tw)).t
+        j = int(np.argmin(np.abs(ts - t_s)))
+        p_s, q_s = L[j].copy(), Quaternion(Q[j])
+
+        def turned(th):
+            R = Quaternion(axis, th)
+            return centre + np.array(R @ Vector(p_s - centre)), R @ q_s
+
+        sign = 1.0 if float((turned(-0.25)[0] - p_s) @ up_l) > 0 else -1.0     # the hand comes down onto the strings
+        t0 = t_s - dur
+        for k in np.where((ts >= t0) & (ts <= ts[j]))[0]:
+            r = min((ts[k] - t0) / dur, 1.0)
+            p, q = turned(-sign * 2.0 * math.pi * (1.0 - r ** 1.6))      # slow out of the strumming, fast down onto the strike
+            w = min(1.0, r / 0.15)
+            w = w * w * (3.0 - 2.0 * w)
+            L[k] = L[k] * (1.0 - w) + p * w
+            Q[k] = np.array(Quaternion(Q[k]).slerp(q, w))
+        done.append(round(float(t_s), 3))
+    return [tuple(v) for v in L], K.continuous([tuple(q) for q in Q]), done
+
+
+def _neck_kick(ctx, prop, normal, times, deg):
+    """The guitar's neck kicks up on the accented strokes: the prop's root turns `deg` about the face normal (through its
+    origin) on each, easing back. The hands ride the prop, so they go with it."""
+    root = prop.root
+    if root.rotation_mode != "QUATERNION":
+        q = root.matrix_basis.to_quaternion()
+        root.rotation_mode = "QUATERNION"
+        root.rotation_quaternion = q
+    q_base = root.rotation_quaternion.copy()
+    nl = Vector(normal).normalized()
+    Rw = root.matrix_world.to_3x3().normalized()
+    rise = (Rw @ (Quaternion(nl, 0.1) @ Vector((0.0, 0.0, 1.0)))).z - (Rw @ Vector((0.0, 0.0, 1.0))).z
+    sign = 1.0 if rise > 0 else -1.0                   # the neck (+z of the prop) goes up
+    ts = np.array([ctx.time(f) for f in ctx.frames])
+    pulse = PF.beat_pulse(ts, times, 0.04, 0.2)
+    rots = [tuple(q_base @ Quaternion(nl, sign * math.radians(deg) * float(p))) for p in pulse]
+    K.key_vec(root, "rotation_quaternion", ctx.frames, K.continuous(rots), interp="LINEAR")
+    return {"accents": len(times), "deg": deg}
+
+
+def _beat_marks(ctx, b, where):
+    """(beat times, per-beat weights) of a table with `beats = [...]` (weights 1) or a `timeline` (default
+    audio/timeline.json): its beats, the downbeats weighted `downbeat_accent` (1.6)."""
+    if "beats" in b:
+        return [float(x) for x in b["beats"]], None
+    beats, downbeats = TL.beats(ctx.timeline(b, where))
+    downs = set(round(x, 3) for x in downbeats)
+    return beats, [float(b.get("downbeat_accent", 1.6)) if round(x, 3) in downs else 1.0 for x in beats]
+
+
+def _window(ts, b, ease=0.15):
+    """1 inside a table's `from`..`to` (clip seconds; open when missing), easing in and out over `ease` seconds."""
+    lo, hi = float(b.get("from", -1e9)), float(b.get("to", 1e9))
+    return PF.smooth((ts - lo) / ease + 1.0) * PF.smooth((hi - ts) / ease + 1.0)
+
+
+def _body(ctx, name, m, spec, ts, frames, settle):
+    """bounce, rise and kick: the hips (the `center` bone) and the feet (the leg IK bones) move on top of the offsets the
+    pose stage gave them (eased in over the settle like them). `bounce` dips the hips on the beats while the feet stay
+    planted (the knees bend: a punk's pump); `rise = [[t, metres], ...]` lifts the whole body, feet too (she floats);
+    `kick` flicks one foot up and back on the beats, `hold` of the way lifted between them. Returns report numbers."""
+    bn, rs, kk = spec.get("bounce"), spec.get("rise"), spec.get("kick")
+    if not (bn or rs or kk):
+        return {}
+    arm = m.arm
+    smap = S.semantic_map(arm)
+    W = arm.matrix_world.to_3x3().normalized()
+    up_w, back_w = W @ Vector((0.0, 0.0, 1.0)), W @ Vector((0.0, 1.0, 0.0))
+    base = m.base or {}
+    centre0 = Vector(base.get("center", (0.0, 0.0, 0.0)))
+    feet0 = {s: Vector(v) for s, v in (base.get("feet") or {}).items()}
+    lift, dip, info = np.zeros(len(ts)), np.zeros(len(ts)), {}
+    if bn:
+        beats, acc = _beat_marks(ctx, bn, f"perform.{name}.bounce")
+        dip = float(bn.get("depth", 0.03)) * _window(ts, bn) * PF.beat_pulse(
+            ts, beats, float(bn.get("attack", 0.05)), float(bn.get("decay", 0.16)), acc)
+        info["bounce_mm"] = round(float(dip.max()) * 1000, 1)
+    if rs:
+        lift = PF.eased_keys(ts, rs)
+        info["rise_mm"] = round(float(np.abs(lift).max()) * 1000, 1)
+    kick_side, kick = None, None
+    if kk:
+        kick_side = kk.get("foot", "L")
+        if kick_side not in ("L", "R"):
+            raise BuildError(f"perform.{name}.kick: foot = \"L\" or \"R\", not {kick_side!r}")
+        beats, acc = _beat_marks(ctx, kk, f"perform.{name}.kick")
+        hold = float(kk.get("hold", 0.0))
+        pulse = np.minimum(PF.beat_pulse(ts, beats, float(kk.get("attack", 0.06)), float(kk.get("decay", 0.18)), acc), 1.5)
+        kick = (hold + (1.0 - hold) * pulse) * _window(ts, kk)
+        reach = up_w * float(kk.get("height", 0.12)) + back_w * float(kk.get("back", 0.08))
+        info["kick"] = {"foot": kick_side, "peak_mm": round(float(kick.max()) * reach.length * 1000, 1)}
+    centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i])) for i, s in enumerate(settle)]
+    K.key_bone_locs(arm, smap["center"], frames, centre, interp="LINEAR")
+    if rs or kk:
+        for side in ("L", "R"):
+            ik = smap.get(f"leg_ik.{side}")
+            if not ik:
+                continue
+            f0 = feet0.get(side, Vector())
+            vals = []
+            for i, s in enumerate(settle):
+                v = f0 * float(s) + up_w * float(lift[i])
+                if side == kick_side:
+                    v = v + reach * float(kick[i])
+                vals.append(tuple(v))
+            K.key_bone_locs(arm, ik, frames, vals, interp="LINEAR")
+    return info
 
 
 def run(ctx):
@@ -227,22 +369,34 @@ def run(ctx):
         bob = np.zeros(len(ts))
         if spec.get("bob"):
             b = spec["bob"]
-            if "beats" in b:
-                beats, accent = b["beats"], None
-            else:
-                tl = ctx.timeline(b, f"perform.{name}.bob")
-                beats, downbeats = TL.beats(tl)
-                downs = set(round(x, 3) for x in downbeats)
-                accent = [b.get("downbeat_accent", 1.6) if round(x, 3) in downs else 1.0 for x in beats]
+            beats, accent = _beat_marks(ctx, b, f"perform.{name}.bob")
             bob = PF.beat_bob(ts, beats, b.get("deg", 1.5), accent=accent)
         startle = PF.startles(ts, spec.get("startle", []))
         lean_x = np.radians(PF.eased_keys(ts, spec.get("lean", [])))
         turn_x = np.radians(PF.eased_keys(ts, spec.get("turn", [])))
-        rk, hrk = spec.get("rock") or {}, spec.get("head_rock") or {}
-        tilt_x = (np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
-                  + PF.rock(ts, rk.get("period", 4.0), rk.get("deg", 0.0), rk.get("phase", 0.0)))
-        head_tilt_x = (np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
-                       + PF.rock(ts, hrk.get("period", 4.0), hrk.get("deg", 0.0), hrk.get("phase", 0.0)))
+        tilt_x = np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
+        head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
+        head_pitch_x, head_yaw_x = np.zeros(len(ts)), np.zeros(len(ts))
+        for key, table in (("rock", spec.get("rock") or {}), ("head_rock", spec.get("head_rock") or {})):
+            if not table:
+                continue
+            swing = PF.rock(ts, table.get("period", 4.0), table.get("deg", 0.0), table.get("phase", 0.0))
+            axis = table.get("axis", "side")
+            if axis not in ("side", "front", "turn"):
+                raise BuildError(f"perform.{name}.{key}: axis = \"side\", \"front\" or \"turn\", not {axis!r}")
+            if key == "rock":
+                if axis == "side":
+                    tilt_x = tilt_x + swing
+                elif axis == "front":
+                    lean_x = lean_x + swing
+                else:
+                    turn_x = turn_x + swing
+            elif axis == "side":
+                head_tilt_x = head_tilt_x + swing
+            elif axis == "front":
+                head_pitch_x = head_pitch_x + swing
+            else:
+                head_yaw_x = head_yaw_x + swing
         k_head = float(spec.get("head_share", 0.7))
         k_neck = float(spec.get("neck_share", 0.35))
         head_limits = spec.get("head_limits")
@@ -269,9 +423,10 @@ def run(ctx):
             aim = PF.clamp_look(tuple((Dh_base @ fwd).normalized()), tuple((Dh_base @ up).normalized()), tuple(look),
                                 k_head, head_limits)
             R_full = (Dh_base @ fwd).rotation_difference(look if aim is None else Vector(aim))
-            pitch = Quaternion(lat, nod[i] + bob[i] - math.radians(lift[i]))
+            pitch = Quaternion(lat, nod[i] + bob[i] + head_pitch_x[i] - math.radians(lift[i]))
             Dn = Quaternion().slerp(R_full, k_head * k_neck) @ Dn_base
-            Dh = Quaternion(back, head_tilt_x[i]) @ pitch @ Quaternion().slerp(R_full, k_head) @ Dh_base
+            Dh = (Quaternion(up, head_yaw_x[i]) @ Quaternion(back, head_tilt_x[i]) @ pitch
+                  @ Quaternion().slerp(R_full, k_head) @ Dh_base)
             R_eye = (Dh @ fwd).rotation_difference((Vector(look_eye[i]) - eye_pos).normalized())
             if R_eye.angle > eye_max:
                 R_eye = Quaternion().slerp(R_eye, eye_max / R_eye.angle)
@@ -287,6 +442,7 @@ def run(ctx):
                 loc = [tuple((Ri @ q.to_matrix() @ R).to_quaternion()) for q in qs]
                 K.key_bone_quats(arm, b, frames, loc, interp="LINEAR")
         info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames)}
+        info.update(_body(ctx, name, m, spec, ts, frames, settle))
         # ---- face: blinks + lids
         bl = spec.get("blink", {})
         blink_m = _morph(m, "blink")

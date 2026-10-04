@@ -28,7 +28,7 @@ from mathutils import Euler, Vector
 from ...core import place as PL
 from ...core import propcard as PC
 from ..library import props as LIB
-from . import BuildError, collection
+from . import BuildError, collection, targets
 from . import place as PLACE
 from . import pmxprop as PMX
 from . import form_warn as FORM
@@ -165,9 +165,21 @@ def _parent(root, spec, name):
         root.parent = par
 
 
-def _explicit(root, spec):
-    root.location = Vector(spec.get("at", (0.0, 0.0, 0.0)))
+def _explicit(ctx, root, spec):
+    """`at` = [x, y, z] (world) and `yaw` / `rot` (deg); or `at` = {path = "set:path", s, offset, z} (a point beside a set's
+    path, targets.path_point), and then `yaw` turns the prop from facing the traffic that comes along the path (yaw 0: its
+    front, -Y, looks back along the path at the cars coming)."""
+    at = spec.get("at", (0.0, 0.0, 0.0))
     rx, ry, rz = spec.get("rot", (0.0, 0.0, spec.get("yaw", 0.0)))
+    if isinstance(at, dict):
+        if "path" not in at:
+            raise BuildError(f"prop {spec['name']!r}: `at` is [x, y, z] or {{path = \"set:path\", s, offset, z}}")
+        root.location = targets.path_point(ctx, at)
+        set_name, _, path_name = at["path"].partition(":")
+        head = float(ctx.sets[set_name].path(path_name).heading(np.array([float(at.get("s", 0.0))]))[0])
+        rz = float(rz) + math.degrees(head) - 90.0
+    else:
+        root.location = Vector(at)
     root.rotation_euler = Euler((math.radians(float(rx)), math.radians(float(ry)), math.radians(float(rz))))
 
 
@@ -184,7 +196,7 @@ def _prop(ctx, coll, placer, spec):
     _measure(prop)
     res = None
     if spec.get("place") is None:
-        _explicit(root, spec)
+        _explicit(ctx, root, spec)
     else:
         res = placer.solve(prop, dict(spec["place"]), who, default_yaw=float(spec.get("yaw", 0.0)))
         placer.apply(root, res)
