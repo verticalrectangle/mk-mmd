@@ -13,12 +13,20 @@ For agents (and people) driving `mk`. Every command prints JSON; exit codes are 
    license; if a readme only links a page, record the link and say so.
 3. **Set up the project.** An `mk.toml` with `[project]` (fps, frame0, duration, blend), one `[[output]]` per
    aspect, the `[[cast]]`, collider sets and the checks that define "done" (see the example below).
-4. **Build, then measure.** `mk check` runs every check in one Blender pass. Fix what fails; never loosen a
-   threshold to make a check pass without saying why.
-5. **Look.** Numbers miss things. `mk look --frames ... --sheet` for the cut in every aspect; `mk look --view
+   `mk timeline analyze` turns the song span into `audio/timeline.json` (beats, downbeats, loudness, word timings by
+   `(line, word)`); `mk timeline show` prints its numbers. Pick shot boundaries on downbeats from it.
+4. **Measure real people (optional, for performances).** `mk ref search "woman singing in car"`, `mk ref add ID...`,
+   `mk ref track`, `mk ref measure` give blink, gaze, nod, sway and mouth numbers shaped like `[perform.<cast>]`, each
+   with a confidence; `mk ref sheet` shows what was tracked; `mk ref clean` frees the disk. Prefer front-on or
+   three-quarter clips (side-view faces are rarely found), read `qc.warnings`, and treat values with low `n` as
+   hints.
+5. **Build, then measure.** `mk build`, then `mk check` runs every check in one Blender pass. Fix what fails; never
+   loosen a threshold to make a check pass without saying why.
+6. **Look.** Numbers miss things. `mk look --frames ... --sheet` for the cut in every aspect; `mk look --view
    front,left,back --target 'bone("wrist.R").head' --dist 0.4` to inspect a detail from all sides. Look at the
    images before claiming anything about how a shot looks.
-6. Repeat 4-5 until checks pass and the sheets look right.
+7. Repeat 5-6 until checks pass and the sheets look right, then `mk render --preset draft`, `mk post --preset
+   draft`, and the final render once the draft is approved.
 
 ## Asking questions of a scene
 

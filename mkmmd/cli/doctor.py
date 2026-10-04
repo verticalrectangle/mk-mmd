@@ -38,7 +38,8 @@ def run(args):
     for tool, required in (("ffmpeg", True), ("ffprobe", True), ("espeak-ng", False)):
         path = shutil.which(tool)
         items.append(_item(tool, path, path or "not on PATH", required))
-    for mod, required in (("numpy", True), ("scipy", True), ("cv2", True), ("PIL", True), ("numba", False)):
+    for mod, required in (("numpy", True), ("scipy", True), ("cv2", True), ("PIL", True), ("numba", False),
+                          ("mediapipe", False), ("torch", False), ("demucs", False), ("faster_whisper", False)):
         try:
             m = importlib.import_module(mod)
             items.append(_item(f"python:{mod}", True, getattr(m, "__version__", "ok"), required))

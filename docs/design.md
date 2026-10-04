@@ -15,6 +15,9 @@ This document is the contract between the parts. Change it together with the cod
 | solvers | `mkmmd.solvers` | the CLI only | numpy, scipy, numba (optional) |
 | blender | `mkmmd.blender` | Blender only | bpy, mathutils, `mkmmd.core` |
 | cli | `mkmmd.cli` | the CLI only | everything except bpy |
+| ref | `mkmmd.ref` | the CLI only | numpy, scipy, opencv; MediaPipe with the `ref` extra |
+| timeline | `mkmmd.timeline` | the CLI only | numpy; torch, torchaudio, demucs, faster-whisper with the `timeline` extra |
+| post | `mkmmd.post` | the CLI only | numpy, opencv, pillow |
 
 Rules:
 
@@ -317,4 +320,9 @@ from 1; tools refer to words as `(line, word)` and never print their text.
 ## Cache
 
 `<project>/.mk/cache/<op>/<key>.{json,npz}` where `key` is a SHA-256 of the op's inputs (arguments, input-file
-fingerprints, solver version). Changing hair settings re-runs only the hair; nothing else is recomputed.
+fingerprints, solver version). Changing hair settings re-runs only the hair; nothing else is recomputed. Timeline
+stems are cached by a hash of the audio span (`<project>/.mk/cache/timeline/stems-<key>.npz`).
+
+Reference clips (`mk ref`) live outside the project: `~/.cache/mk/ref/<project name | default>/<set>/` holds
+`clips.json`, the capped downloads, `track/<id>.npz` and the contact sheet; `mk ref clean` deletes everything but
+`clips.json`. Only the small measurement JSON is kept with the project (`<project>/ref/<set>.json`).
