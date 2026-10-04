@@ -69,7 +69,7 @@ def test_the_module_builds_fast_and_well_formed(parts, shells, dyn):
     D.static_shells(), D.static_parts(), D.dynamic_parts()
     assert time.time() - t0 < 3.0                                  # the budget is 0.4 s; a loaded machine gets slack
     assert set(parts) == {"interior", "decals"} and set(shells) == {"dash", "binnacle", "stack"}
-    assert set(dyn) == {"steering_wheel", "cassette"}
+    assert set(dyn) == {"steering_wheel", "cassette", "visors"}
     meshes = [("interior", parts["interior"]), ("decals", parts["decals"])] + [(k, s.mesh) for k, s in shells.items()]
     for k, p in dyn.items():
         meshes.append((k, S.Mesh(world(p), p.mesh.Q, p.mesh.T, p.mesh.Qm, p.mesh.Tm)))
@@ -125,7 +125,7 @@ def test_the_dash_stands_between_the_door_panels_under_the_cowl(shells):
 def test_the_binnacle_face_is_the_glass_plane_four_millimetres_behind_it(shells):
     P, cw = D.hood_polygon()
     assert not segments_cross(P) and S.polygon_area(P) > 0
-    nrm, up = D.CN[1:], D.CU[1:]
+    nrm = D.CN[1:]
     for k in range(5, 8):                                                           # the three flat face points
         d = (P[k] - D.CC[1:]) @ nrm
         assert d == pytest.approx(-D.HOOD_BACK, abs=1e-9)
@@ -290,9 +290,15 @@ def test_the_wheel_clears_the_cluster_sight_line_over_the_hub_by_a_finger():
         assert clear > 0.004 or abs(loc[0]) > 0.075                                    # the hub's half width is 0.06
 
 
-def test_visors_stand_parallel_to_the_glass_a_centimetre_inside_it(parts):
-    inter = parts["interior"]
-    vis = role_vertices(inter, "vinyl")
+def turned(part, visors):
+    """The visors part in the car's frame at the param `visors`: the builder turns the object about its local X by
+    VISOR_FLIP_DEG * (1 - visors), so 1 is the rest pose (down on the glass) and 0 flipped up."""
+    R = S.rot_matrix(L.VISOR_FLIP_DEG * (1.0 - visors), 0.0, 0.0)
+    return S.Mesh(part.mesh.V @ R.T + np.asarray(part.origin, float), part.mesh.Q, part.mesh.T, part.mesh.Qm, part.mesh.Tm)
+
+
+def test_visors_down_stand_parallel_to_the_glass_a_centimetre_inside_it(dyn):
+    vis = role_vertices(turned(dyn["visors"], 1.0), "vinyl")
     assert len(vis) > 0
     g0, g1 = np.array(L.WS_BASE), np.array(L.WS_TOP)
     d = (g1 - g0) / np.linalg.norm(g1 - g0)
@@ -302,6 +308,46 @@ def test_visors_stand_parallel_to_the_glass_a_centimetre_inside_it(parts):
     s = (vis[:, 1:] - g0) @ d
     assert s.max() < np.linalg.norm(g1 - g0) - L.WS_FRAME                                # under the header rail
     assert abs(vis[:, 0]).max() < 0.60 and abs(vis[:, 0]).min() < 0.20
+
+
+def test_the_visors_part_turns_about_the_common_axis_of_its_two_rods(dyn):
+    p = dyn["visors"]
+    assert tuple(p.rot) == (0.0, 0.0, 0.0) and tuple(p.origin) == pytest.approx((0.0, *D.VISOR_PIVOT))
+    rods = role_vertices(p.mesh, "chrome")
+    assert np.abs(rods[:, 1:]).max() == pytest.approx(0.0036, abs=1e-4)                  # both rods are centred on the local X axis
+    assert np.abs(rods[:, 0]).max() == pytest.approx(0.56, abs=0.005) and np.abs(rods[:, 0]).min() < 0.17    # one per visor
+    # the axis runs just under the header rail, along the glass; a turn leaves the rods where they are
+    g0, g1 = np.array(L.WS_BASE), np.array(L.WS_TOP)
+    d = (g1 - g0) / np.linalg.norm(g1 - g0)
+    s_axis = (np.array(D.VISOR_PIVOT) - g0) @ d
+    assert np.linalg.norm(g1 - g0) - L.WS_FRAME - 0.012 < s_axis < np.linalg.norm(g1 - g0) - L.WS_FRAME
+    for v in (0.0, 0.4, 1.0):
+        r = role_vertices(turned(p, v), "chrome")
+        assert r[:, 1].mean() == pytest.approx(D.VISOR_PIVOT[0], abs=1e-6) and r[:, 2].mean() == pytest.approx(D.VISOR_PIVOT[1], abs=1e-6)
+
+
+def test_visors_flipped_up_lie_level_behind_the_header_above_the_eye_line(dyn):
+    """visors = 0: a visor under a folded top is stowed - level, pointing back from the header - so it no longer hangs in front
+    of the faces for a camera over the hood."""
+    flipped = turned(dyn["visors"], 0.0)
+    vis = role_vertices(flipped, "vinyl")
+    y_rod, z_rod = D.VISOR_PIVOT
+    assert np.ptp(vis[:, 2]) < D.V_THICK + 0.004                                          # level: only the pad's thickness is left
+    assert vis[:, 1].min() > y_rod - 0.005 and vis[:, 1].max() == pytest.approx(y_rod + 0.160, abs=0.005)    # pointing back, 16 cm
+    assert z_rod - 0.02 < vis[:, 2].min() and vis[:, 2].max() < z_rod + 0.02              # at the rods' height
+    assert vis[:, 2].max() < L.WS_TOP[1] and vis[:, 2].min() > 1.22 + 0.03                # under the header's top, over the eye line
+    assert vis[:, 1].max() < -0.05                                                         # nowhere near the faces (y > 0.2)
+    assert abs(vis[:, 0]).max() < 0.60 and abs(vis[:, 0]).min() < 0.20
+    # the stitching turned with the pads: it stays on the face that now looks up (the sun-blocking face)
+    seam = role_vertices(flipped, "seam")
+    assert len(seam) > 0 and abs(seam[:, 2].max() - vis[:, 2].max()) < 0.004 and np.ptp(seam[:, 2]) < 0.001
+
+
+def test_the_visors_never_swing_back_to_the_faces_or_down_into_the_dash(dyn):
+    for v in np.linspace(0.0, 1.0, 9):
+        vis = role_vertices(turned(dyn["visors"], v), "vinyl")
+        assert vis[:, 1].max() < 0.0                                                       # never back to the sitters' faces
+        assert vis[:, 2].min() > L.Z_GLASS + 0.05                                          # nor down into the dash
 
 
 def test_the_mirror_glass_is_at_the_layout_point_and_faces_the_driver(parts):

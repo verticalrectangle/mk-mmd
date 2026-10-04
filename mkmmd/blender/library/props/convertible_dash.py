@@ -4,8 +4,8 @@ Pure numpy (no bpy); every number the parts agree on comes from `convertible_lay
 
     static_shells()  {"dash", "binnacle", "stack"}: creased cages the builder subdivides (Subdivision Surface level 2)
     static_parts()   {"interior": forms, "decals": graphic layers}: panels, frames, vents, knobs, column, pedals, mirror,
-                     visors, and the flat display quads / stripes / seams lifted a fraction of a millimetre off a surface
-    dynamic_parts()  {"steering_wheel": Part, "cassette": Part}
+                     and the flat display quads / stripes / seams lifted a fraction of a millimetre off a surface
+    dynamic_parts()  {"steering_wheel": Part, "cassette": Part, "visors": Part}
     SURFACES, GRIDS, ANCHORS, LOOKS, BAR_GRAPH     the card's flat faces, the speed digit grid, the cassette slot and the
                                                    mirror, the points the characters look at, the bar graph's 24 cells
 
@@ -13,7 +13,8 @@ Frames. The dash faces +Y (the occupants), so a viewer sees -X on the right of e
 (right, up, normal) with right x up = normal. The cluster's frame is `CLUSTER_FRAME` of the layout (normal tipped up 20
 degrees, right = -X). The wheel part is built in its own frame (ring in XY, +Z toward the driver, spokes along X, local +Y
 down in the car); its base rotation takes local +Z onto the column axis. The cassette part has its origin at the centre of
-its label (the label plane is local z = 0, the shell lies below it).
+its label (the label plane is local z = 0, the shell lies below it). The visors part is built in the car's frame moved so that
+its origin lies on the two pivot rods' common axis (VISOR_ORIGIN; the rods are parallel to X): it turns about its local X.
 
 The dash body is ONE cage: the profile (toe board, knee ledge, lower panel, the shelf, the band under the brow, the rolled
 brow, the pad) pulled along x with rolled ends. The pad is one plane: it starts at the foot of the windshield glass
@@ -747,7 +748,7 @@ def _pedals(b):
         b.forms.append(_place(rib, c + fr[1] * v, fr, 0.0075))
 
 
-def _mirror_and_visors(b):
+def _mirror(b):
     dark = M["trim_dark"]
     # rear-view mirror: a pillow housing on a stalk, the glass a flat stadium on its face; yawed toward the driver, tipped down
     c = np.array(L.MIRROR_C, float)
@@ -757,7 +758,7 @@ def _mirror_and_visors(b):
     b.forms.append(rot(_place(house, c, (-EX, EZ, EY), -depth)))
     b.decals.append(rot(S.quad_in_plane(c + EY * 0.0006, EY, EZ, (0.212, 0.040), mat=M["mirror_glass"])))
     # the stalk: a ball joint in the housing's back, a short tapered arm up to a button on the header
-    gd3, gn3 = np.array([0.0, _GD[0], _GD[1]]), np.array([0.0, _GN[0], _GN[1]])
+    gn3 = np.array([0.0, _GN[0], _GN[1]])
     mount = np.array([0.0, *(_G0 + (GLASS_LEN - L.WS_FRAME) * _GD + 0.004 * _GN)])      # on the header, under its frame
     root = rot(Mesh(np.array([[0.0, -0.030, 0.026]]) + c)).V[0]
     b.forms.append(S.tube(np.array([root, (root + mount) / 2 + np.array([0.0, 0.004, 0.0]), mount]),
@@ -768,22 +769,39 @@ def _mirror_and_visors(b):
     btn = S.lathe(_round_profile([(0.0150, 0.0), (0.0150, 0.0040), (0.0, 0.0040)], [0, 0.003, 0], 3), seg=20, mat=dark)
     b.forms.append(btn.apply(S.rotation_between(EZ, gn3), mount - gn3 * 0.003))
 
-    # sun visors: padded pads parallel to the glass, 1 cm inside it, hanging under the header
-    s_top = GLASS_LEN - L.WS_FRAME - 0.008
+
+# ============================================================================================================ sun visors
+# Two padded pads parallel to the glass, a centimetre inside it, hanging under the header, each from a chrome pivot rod along
+# its top edge; the two rods lie on ONE line (VISOR_PIVOT, along X). They are a part of their own: the object `<car>_visors`,
+# whose origin is on that line and whose rest pose (rotation 0) is the visors down against the glass. The builder turns it
+# about its local X by VISOR_FLIP_DEG * (1 - visors): 0 = flipped up, level and pointing back from the header (a real visor
+# under a folded top), 1 = down on the glass.
+V_TOP = GLASS_LEN - L.WS_FRAME - 0.008                              # the pads' top edge, along the glass from its foot
+V_CENTRE = V_TOP - 0.080                                            # the pads' centre
+V_ROD = V_CENTRE + 0.082                                            # the rods: 2 mm above the pads' top edge
+V_STANDOFF, V_THICK = 0.010, 0.022                                  # a centimetre inside the glass, 22 mm thick
+VISOR_PIVOT = tuple(float(v) for v in _G0 + V_ROD * _GD + (V_STANDOFF + 0.5 * V_THICK) * _GN)    # (y, z) of the rods' axis
+VISOR_ORIGIN = (0.0, *VISOR_PIVOT)                                   # the visors part's origin, on that axis
+
+
+def _visors_mesh():
+    """Both visors (pads, stitching, pivot rods, clips) in the part's own frame: the car's frame with the origin on the rods'
+    axis, so the part turns about its local X."""
     fr = _frame(np.array([0.0, _GN[0], _GN[1]]), np.array([0.0, _GD[0], _GD[1]]))
-    s_c = s_top - 0.080
+    parts = []
     for x in (0.36, -0.36):
-        centre = np.array([x, *(_G0 + s_c * _GD)])
+        centre = np.array([x, *(_G0 + V_CENTRE * _GD)])
         outline = S.rrect(0.380, 0.160, 0.040, 5)
-        b.forms.append(_place(_pillow(outline, 0.022, 0.0095, n=3, dome=(0.0, 0.003), mat=M["vinyl"]), centre, fr, 0.010))
-        b.decals.append(S.ribbon(_to3(S.rrect(0.340, 0.120, 0.030, 4), centre, fr, 0.0330), 0.0014, fr[2], mat=M["seam"],
-                                 closed=True))
+        parts.append(_place(_pillow(outline, V_THICK, 0.0095, n=3, dome=(0.0, 0.003), mat=M["vinyl"]), centre, fr, V_STANDOFF))
+        parts.append(S.ribbon(_to3(S.rrect(0.340, 0.120, 0.030, 4), centre, fr, 0.0330), 0.0014, fr[2], mat=M["seam"],
+                              closed=True))
         # the pivot rod along the top edge, and a clip at the inner end
-        top = centre + fr[1] * 0.082 + fr[2] * 0.021
-        b.forms.append(S.tube(np.array([top - fr[0] * 0.20, top + fr[0] * 0.20]), 0.0036, sides=10, mat=M["chrome"]))
+        top = centre + fr[1] * 0.082 + fr[2] * (V_STANDOFF + 0.5 * V_THICK)
+        parts.append(S.tube(np.array([top - fr[0] * 0.20, top + fr[0] * 0.20]), 0.0036, sides=10, mat=M["chrome"]))
         inner = 1.0 if x > 0 else -1.0                                # toward the centre line: +right (-X) for the +X visor
-        clip = _pillow(S.rrect(0.030, 0.022, 0.008, 3), 0.014, 0.0045, n=2, mat=dark)
-        b.forms.append(_place(clip, centre + fr[0] * inner * 0.185 + fr[1] * 0.076, fr, 0.012))
+        clip = _pillow(S.rrect(0.030, 0.022, 0.008, 3), 0.014, 0.0045, n=2, mat=M["trim_dark"])
+        parts.append(_place(clip, centre + fr[0] * inner * 0.185 + fr[1] * 0.076, fr, 0.012))
+    return S.merge(parts).moved(-np.array(VISOR_ORIGIN))
 
 
 # ========================================================================================================= the module
@@ -803,13 +821,14 @@ def static_parts():
     _stack_face(b)
     _column(b)
     _pedals(b)
-    _mirror_and_visors(b)
+    _mirror(b)
     return {"interior": S.merge(b.forms), "decals": S.merge(b.decals)}
 
 
 def dynamic_parts():
     return {"steering_wheel": S.Part(_wheel_mesh(), tuple(float(x) for x in WHEEL_C), WHEEL_ROT),
-            "cassette": S.Part(_cassette_mesh(), (0.0, float(L.TAPE_IN_Y), float(L.DECK_Z)), (0.0, 0.0, 0.0))}
+            "cassette": S.Part(_cassette_mesh(), (0.0, float(L.TAPE_IN_Y), float(L.DECK_Z)), (0.0, 0.0, 0.0)),
+            "visors": S.Part(_visors_mesh(), VISOR_ORIGIN, (0.0, 0.0, 0.0))}
 
 
 # ===================================================================================================== card exports

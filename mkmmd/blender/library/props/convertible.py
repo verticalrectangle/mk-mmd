@@ -56,6 +56,10 @@ prop = "lamps" keys = [[t, v], ...]`):
   dash_on 0..1  the digital displays, the indicator lights, the dash glow light
   tape    0..1  the cassette: 0 held out in front of the slot, 1 pushed in
   bars    0..1  the bar graph level of the cluster
+  visors  0..1  the sun visors (the object `<name>_visors`: both pads, their pivot rods and clips) turn about their rods:
+                0 flipped up, level with the header and pointing back (the default: under a folded top a real visor is
+                stowed, and a camera over the hood sees the faces), 1 down against the glass. The object can also be
+                hidden by a project key: `[[key]] target = "car_visors" prop = "hide_render" keys = [[0, 1]]`
 
 Colour roles (`slots` of the prop; a palette slot name, a hex, or a blend "gold:5,rose:3,overlay:2"): body (love),
 lower (muted: the two-tone below the rub strip at z 0.43, and the bumpers), stripe (gold: the pinstripes and cassette stripe), trim (text: bright
@@ -88,6 +92,7 @@ PARAMS = {                       # name: (default, doc)
     "dash_on": (1.0, "digital displays, indicators and the dash glow"),
     "tape": (1.0, "cassette: 0 held out in front of the slot, 1 pushed in"),
     "bars": (0.6, "bar graph level of the cluster"),
+    "visors": (0.0, "sun visors: 0 flipped up (level, pointing back from the header), 1 down against the glass"),
 }
 
 HEADLAMP_W = 300.0               # watts of one headlamp spot at lamps = 1
@@ -240,7 +245,7 @@ def convertible_80s(name, coll, root, slots=None):
         oname = f"{name}_wheel" if key == "steering_wheel" else f"{name}_{key}"
         o = SH.mesh_object(oname, part.mesh, coll, root, role_mat(True), loc=tuple(part.origin), rot=tuple(part.rot))
         objs[key] = o
-    for k in ("steering_wheel", "cassette", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR"):
+    for k in ("steering_wheel", "cassette", "visors", "wheel_FL", "wheel_FR", "wheel_RL", "wheel_RR"):
         if k not in objs:
             raise ValueError(f"convertible_80s: no part {k!r} (have {sorted(objs)})")
     wheel_obj = objs["steering_wheel"]
@@ -251,6 +256,11 @@ def convertible_80s(name, coll, root, slots=None):
     cas = objs["cassette"]
     drive_vars(cas, "location", f"{LAY.TAPE_OUT_Y:.5f} + {LAY.TAPE_IN_Y - LAY.TAPE_OUT_Y:.5f} * clamp(t, 0, 1)",
                {"t": "tape"}, root, index=1)
+
+    # ---- the sun visors turn about their pivot rods (the object's local X) with `visors`: 1 down on the glass (the rest pose),
+    # 0 flipped up, level and pointing back
+    drive_vars(objs["visors"], "rotation_euler", f"{math.radians(LAY.VISOR_FLIP_DEG):.6f} * (1 - clamp(v, 0, 1))", {"v": "visors"},
+               root, index=0)
 
     # ---- lights
     lights = build_lights(name, coll, root, pal, objs)

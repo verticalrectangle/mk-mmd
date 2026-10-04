@@ -1,6 +1,8 @@
 """The 1980s convertible's body and exterior (pure numpy; the Blender side is checked by building and looking): the layout,
 the lofted body shell and its limit surface, the wheel arches, the nose and tail parts, the trim, the wheels, and the colour
 roles. The cabin (seats, dash, wheel, cassette) is in test_convertible_cabin.py, the toolkit in test_shell.py."""
+import math
+
 import numpy as np
 import pytest
 
@@ -47,6 +49,13 @@ def test_the_layout_numbers_agree_with_each_other():
     assert L.Z_RUB < L.Z_SHOULDER < L.Z_BELT < L.Z_GLASS < L.Z_COWL < L.WS_TOP[1]
     assert L.Y_HOOD_REAR < L.Y_COWL < L.WS_TOP[0] < L.CUSHION_Y[0] + 0.5
     assert 42.0 < L.WS_RAKE_DEG < 46.0                               # measured on a side-on photograph: 44
+    # a visor hanging on the glass points down the glass (the rake below horizontal, forward); turned by VISOR_FLIP_DEG about its
+    # rod it is level and points back
+    down_the_glass = np.array([-math.cos(math.radians(L.WS_RAKE_DEG)), -math.sin(math.radians(L.WS_RAKE_DEG))])
+    a = math.radians(L.VISOR_FLIP_DEG)
+    turned = np.array([down_the_glass[0] * math.cos(a) - down_the_glass[1] * math.sin(a),
+                       down_the_glass[0] * math.sin(a) + down_the_glass[1] * math.cos(a)])
+    assert turned == pytest.approx((1.0, 0.0), abs=1e-9) and 130.0 < L.VISOR_FLIP_DEG < 140.0
     assert L.AXLE_R - L.AXLE_F == pytest.approx(L.WHEELBASE) and L.WHEELBASE == pytest.approx(2.62)
     assert L.ARCH_R - L.TYRE_R >= 0.045                              # a hand's breadth of daylight round the tyre
     assert L.WHEEL_X + L.TYRE_W / 2 < L.HALF_W                       # the tyres stand inside the body side
@@ -387,6 +396,26 @@ def test_overall_size_of_the_car():
     assert lo[2] >= -0.001 and hi[2] < 1.72 and (hi[0] - lo[0]) < 2.05
     glass, frame = B.windshield()
     assert frame.bbox()[1][2] == pytest.approx(L.WS_TOP[1], abs=0.05)                  # the windshield top, without the antenna
+
+
+# ======================================================================================== the builder's params
+def test_the_builder_has_a_visors_param_that_defaults_to_flipped_up_and_documents_it():
+    """The builder imports bpy, so its source is read, not imported: `visors` is a param (default 0 = flipped up, because the
+    top is folded), the card docstring documents it and the object `<name>_visors`, and the part is one the builder requires and
+    drives about its local X by VISOR_FLIP_DEG."""
+    import ast
+    from pathlib import Path
+    src = Path(L.__file__).with_name("convertible.py").read_text()
+    tree = ast.parse(src)
+    params = next(n.value for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "PARAMS" for t in n.targets))
+    table = {k.value: ast.literal_eval(v) for k, v in zip(params.keys, params.values)}
+    assert set(table) >= {"lamps", "brake", "tails", "dash_on", "tape", "bars", "visors"}
+    assert table["visors"][0] == 0.0 and "flipped up" in table["visors"][1]
+    doc = ast.get_docstring(tree)
+    assert "visors  0..1" in doc and "`<name>_visors`" in doc and '"car_visors" prop = "hide_render"' in doc
+    required = next(set(ast.literal_eval(n.iter)) for n in ast.walk(tree) if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple)
+                    and "steering_wheel" in ast.literal_eval(n.iter))                        # the parts the builder insists on
+    assert "visors" in required and 'objs["visors"]' in src and "LAY.VISOR_FLIP_DEG" in src
 
 
 # ======================================================================================== colour roles

@@ -46,7 +46,8 @@ WS_BASE = (Y_COWL, Z_GLASS)                       # (y, z) at the foot of the gl
 WS_TOP = (-0.24, 1.32)                            # (y, z) of the header rail (the A-pillar measured on a side-on photo: 44 deg)
 WS_HALF_W_BASE, WS_HALF_W_TOP = 0.76, 0.70        # half width at the cowl / at the header (outer edge of the frame)
 WS_FRAME = 0.05                                   # frame member width: the A-pillars and the header, body colour
-WS_RAKE_DEG = math.degrees(math.atan2(WS_TOP[1] - WS_BASE[1], WS_TOP[0] - WS_BASE[0]))   # from horizontal (~45)
+WS_RAKE_DEG = math.degrees(math.atan2(WS_TOP[1] - WS_BASE[1], WS_TOP[0] - WS_BASE[0]))   # from horizontal (~44)
+VISOR_FLIP_DEG = 180.0 - WS_RAKE_DEG              # a sun visor turns this far about its rod from hanging on the glass to level, pointing back (~136)
 
 # hood profile (y, z) on the centre line: the long flat hood, rolling over at the nose
 HOOD_PROFILE = ((Y_NOSE, Z_HOOD_NOSE), (-2.11, 0.84), (-1.71, 0.92), (-1.31, 0.956), (-0.9, 0.978), (Y_HOOD_REAR, Z_COWL),
