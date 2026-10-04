@@ -41,6 +41,10 @@ blender -b SCENE.blend -y --python-exit-code 3 --python-expr BOOT -- job.json re
 - `result.json`: `{"ok": bool, "data": ..., "error": str, "trace": str, "seconds": float}`
 - Blender-side handlers register with `@runtime.op("name")` in `mkmmd/blender/ops_*.py`.
 - The Blender log of every job goes to `~/.cache/mk/jobs/<id>/blender.log`; it is kept when a job fails.
+- Jobs without a scene open `~/.cache/mk/empty.blend` (a factory-default empty scene made once with Blender's user
+  folders pointed at a scratch place), never `--factory-startup`: without the user's preferences Blender's extension
+  sync removes the wheels of extensions it sees as disabled (mmd_tools' opencc), breaking PMX import in every running
+  Blender.
 - `mk serve SCENE.blend` keeps one Blender alive on a Unix socket. The bridge uses it automatically for the ops that
   leave the scene as they found it (`ping`, `list`, `q`, `sample`, `visibility`), which matters for big files. Ops
   that change scene state (`look` hides objects, removes markers, adds a camera) always get a fresh Blender.
@@ -260,9 +264,9 @@ in order and each reads its own sections:
 | props | `[[prop]]` (`name`, `card`, `at`, `yaw` or `rot`, `parent`, `slots`, `attach`, `anchor_to`) | library props or card files; builders get the project palette as slots; their use points and colliders |
 | vehicles | `[[vehicle]]` (`prop`, `path`, `lane`, `speed`, `at`, `roll`, `pitch`, `wheelbase`, `steer_ratio`) | a prop drives a set path's lane: position and heading per frame, body roll and pitch, wheels spinning, the steering wheel turning with the curvature |
 | cast | `[[cast]]` (`name`, `asset` or `pmx`, `armature`, `at`, `yaw`, `parent`, `physics`) | models imported without Bullet (`physics = "mk"`), named, placed |
-| pose | `[pose.<cast>]` | sit on a prop's seat, feet on targets (leg IK), lean / turn / head, arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets, grips (the hand holds a prop's `use.grip` entry or lies on a `use.rest` surface, see Grips); `[[prop]] attach = "cast:bone"` puts props on bones. The stage reports each arm IK's miss in mm (`ik_error_mm`) and logs a WARNING past 5 mm: a goal beyond the arm's reach leaves the hand short of the prop |
+| pose | `[pose.<cast>]` | sit on a prop's seat (`sit_offset` slides the hips on it), feet on targets (leg IK), lean / turn / head (`lean_share`, `turn_share`, `head.neck` split them over the spine and neck), arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets or curl tables, grips (the hand holds a prop's `use.grip` entry or lies on a `use.rest` surface, a pen's nib can follow a track on every frame, see Grips), `[[pose.<cast>.drape]]` (a bone chain such as a skirt pointed along chosen directions, optionally bunched); `[[prop]] attach = "cast:bone"` puts props on bones. The stage reports each arm IK's miss in mm (`ik_error_mm`, the worst over a moving track) and logs a WARNING past 5 mm: a goal beyond the arm's reach leaves the hand short of the prop |
 | motion | `[[motion.<cast>]]` | VMDs on NLA strips: source range, scale or `retime = "beats"`, body masks, blends |
-| perform | `[perform.<cast>]` | gaze events over an idle target, breathing, sway, nod, beat bob, startles, blinks, lids, expressions, lip sync, twitches |
+| perform | `[perform.<cast>]` | gaze events over an idle target, eye-only glances (`glance`: the eyes lead, the head lifts a little, the lids open), breathing, sway, nod, beat bob, startles, blinks, lids, expressions, lip sync, twitches |
 | shots | `[[shot]]` | the cut, see Shots |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure |
 | keys | `[[key]]` (`target`, `prop`, `index`, `keys = [[t, v], ...]`, `interp`) | keys on set, prop and object properties: a set's storm and fog, a car's pop-ups, any RNA path (`location`, `data.energy`) |
@@ -274,6 +278,7 @@ stars, moon with light, horizon glow, clouds, EEVEE ray tracing), `highway` (div
 paths, lamps with baked spill, gantries and billboards as `use.surface`, tunnels, trees, wet asphalt), `skyline`
 (a city arc or band with lit windows and aviation lights), `cafe_room` (the rainy café: window with rain and fog,
 street, storm; its animatable state is custom properties on the set root). Library props (`library:<key>`):
+| text | `[[text]]` (`name`, `on` or `mount` / `at` / `facing` / `box`, `text` or `value`, `font`, `size` or `fit`, `align`, `offset`, `color`, `glow`, `depth`, `reveal`, `blink`, `flicker`; see Text) | type on set and prop surfaces: fitted, palette-coloured, a typewriter reveal, a keyed number; geometry nodes with keyed inputs, so EEVEE needs no Python at render time |
 `car_mockup`, `chair`, and the café props (`cafe_chair`, `cafe_table`, `cafe_page`, `cafe_pen`, `cafe_mug`,
 `cafe_saucer`, `cafe_ipod`, `cafe_earbuds`, `cafe_vase`, `cafe_fairy_lights`, `cafe_poster`, `cafe_pothos`,
 `cafe_haworthia`, `cafe_monstera`).
@@ -307,8 +312,9 @@ solver source).
 | `pinch` | `type = "pinch"`: `width` (thickness between the pads), `span` (depth, becomes `depth`), `length`, `center`, `axis` (along the strap), `normal` (outward) | midway between the pads, z from the index pad to the thumb pad, x away from the wrist, y = z cross x | `edge` (pads' distance inside the edge, 4 mm) |
 | `rest` | `use.rest` entry (`edge` with `a`, `b`, `normal`, or a `plane` with `center`) | origin on the plane below the palm centre, z the normal, x the hand's heading | `face` (`palm` or `back`) |
 
-`pen` was tuned on one hand shape and does not generalise yet: on other models it can miss its gates (the CLI then
-exits 1). The other three solve every hand tried within 0.5 mm.
+`pen` was tuned on one hand shape (Reisen's): the other two models tried, Una and Maki, also solve within the gates
+(gaps 0.2-0.6 mm; Maki's thumb sits at the solver's bounds) but a third hand can still miss them (the CLI then exits 1).
+The other three styles solve every hand tried within 0.5 mm.
 
 **Result.** `{"style", "side", "bones": {blender_bone: [w, x, y, z]}, "target_in_wrist": 4x4, "report", "solver"}`.
 `bones` are `pose_bone.rotation_quaternion` values (bone-local, relative to rest; the 15 finger joint bones, identity
@@ -324,14 +330,34 @@ result minus those) to the output `.npz`; exit code 0 ok, 2 bad input.
   character sees the wheel: 12 top, 3 its right; default 10 for L and 2 for R, read at the first frame, the hand then
   rides the wheel with `ride = "car_wheel"`); `approach = 90` puts the palm on the side of the rim facing the character
   and `wrap = -1` the fingers round the outside of the rim; `seeds`, `skin_radius` (0.16 m). The ring's axis is flipped
-  to point at the character when the card gives it the other way. A pen grip needs `posture`, a pinch grip a `normal`
-  on the card.
+  to point at the character when the card gives it the other way. A pen grip needs a `posture` or a `track` (below), a
+  pinch grip a `normal` on the card.
 - `grip = "rest"` with `rest = "prop:edge"` (+ `along`, `offset`, `lift = 0.0`, `face`, `dir`): the relaxed hand lies on
   the surface, the palm centre at the rest point, `dir` its heading.
 - The stage output and the build log carry each hand's digest (contact gaps, penetration, finger clash, seconds,
   warnings past 3 / 1 / 1 mm) and `ik_error_mm`. A wrist that ends more than 5 mm short of its goal is a WARNING: the
   seat is too far for the arm, so lean the character (`lean`), move the seat or bring the prop closer. Arm length is
-  about 0.38 m for a 1.7 m model.
+  about 0.38 m for a 1.7 m model. Arms without a grip take `fingers` as a preset (`relaxed`, `curled`, `fist`, `flat`,
+  `point`) or a table of curls, `{index = [8, 10, 0], middle = [10, 12], thumb = [0, 8]}`: degrees of each finger's
+  first three joints toward the palm, anything left out stays straight (`mkmmd/core/fingers.py`).
+- **A pen whose nib follows a path** (`grip = "pen:barrel"` with a `track`): the writing hand of a character who writes
+  while the camera watches. Give the nib's path as a project track, `track = "nib"` for `tracks/nib.json` (or any
+  `.json` path), `channel = "target"` (the default) naming the positions: `{"frames": [Blender frames], "target":
+  [[x, y, z] world metres per frame]}`, held before its first and after its last frame. The stage solves ONE grip for
+  the pen on the hand, with its writing orientation (the whole hand's rotation about the nib, solved against the arm
+  and the desk), then keys the arm IK on every frame with the wrist goal `pen_frame @ inv(target_in_wrist)`, the pen
+  frame's origin on the track and its rotation the solved one (LINEAR keys), and bone-parents the pen prop to the
+  wrist in the solved grip: the pen object's origin, the nib, lands on the track within the IK's accuracy (a
+  `contact` check of `obj("pen").loc` against `track:nib.target` pins it; tens of micrometres in the original).
+  `posture` completes itself from the scene (`mkmmd/core/pentrack.py`): `nib` is the track's mean x, y at
+  `paper_z` (the track's lowest z unless given), `shoulder` the shoulder in the seated pose at the end of the settle,
+  `facing` the character's heading, `pole` the IK's elbow pole (`pole = [x, y, z]` of the hand), `upper` / `fore` the
+  model's arm; the caller gives what only it knows: `table = "table:top"` (a prop's `use.rest` plane, or `{z, center,
+  radius}`: the forearm stays above it) and `target = {elevation, azimuth, tilt, extension, ulnar: [deg, tolerance]}`
+  to change the writing posture. `wobble = 2.2` (or `{deg, tau, seed}`) tilts the pen slowly about the world X and Y,
+  as the original did; the stage logs the grip digest (with the `writing` posture numbers) and the worst IK miss over
+  the track. The solve takes minutes on a pen (cached by a hash of the hand, the track-derived posture and the solver
+  source), so keep the pose (`lean`, `head`, `pole`) steady while you tune the rest.
 
 Frames: `mkmmd/core/gripframe.py` builds the grip frame in the world (`ring_frame`, `surface_frame`, `pinch_frame`) and
 the wrist goal (`wrist_goal`); it is numpy only, so the maths is tested without Blender. Check a grip with `contact`
@@ -347,6 +373,77 @@ not the road), `shake` (handheld, degrees), `keys = [{t, at, look, lens}]` for m
 frame height. `[shot.aspect.<output>]` overrides any key for one aspect. Timeline markers cut between shots; the
 scene keeps the shot table in `scene["mk_shots"]`, and `mk look` / `mk render` point the markers at each aspect's
 cameras before rendering it.
+
+## Text
+
+`[[text]]` puts type on a surface: a sign panel of a set (the `highway` gantries and billboards), a prop's screen, label
+or page (any `use.surface` card entry), or a panel placed freely on anything. Each entry is one object named `name`: an
+empty mesh with a geometry-nodes modifier (String to Curves, Fill Curve, Extrude Mesh for `depth`) and a palette-coloured
+emissive material, parented to the owner's root (or to the surface's `object`), so it rides a moving car and sits `lift`
+(2 mm) in front of the surface. Whatever changes over time is a key on a node input (the number, the typewriter's ramp,
+the emission gain), never a frame handler, so `mk render` needs nothing but the saved `.blend`; the fonts are packed
+into it. The text frame is the card's: x right (`up x normal`), y up, z out of the surface. The stage runs after `lights`
+and before `keys`, so `[[key]]` can toggle a text's `hide_render` or move it.
+
+| Key | Meaning |
+|---|---|
+| `name` | object name (unique) |
+| `on` | `"<set or prop>:<surface>"`, a card `use.surface` (centre, normal, up, size); the surface name may go when the owner has just one |
+| `mount`, `at`, `facing`, `up`, `box` | free placement instead of `on`: panel centre `at`, the direction it `facing`, and `up` (default +Z) for its top edge, in the frame of `mount` (a set, prop or object; default the world). `box = [w, h]` is the panel to fit and align in; without it text is placed around `at`. `box` also narrows a surface's panel |
+| `text` or `value` | the string (`\n`, or a list of lines, for several lines), or `value = {keys = [[t, v], ...], format = "{:.0f} MPH", interp}`: a number keyed over clip time, formatted with literal text around one `{:[0][width][.decimals][f\|d]}` field (`"{:03d}"`, `"{:.1f}"`); zero padding is for non-negative numbers |
+| `font` | asset registry slug (kind `font`) or a font file; default Blender's built-in font |
+| `size`, `fit` | `size` is the cap height (m). `fit` is the share of the panel the ink of the widest string the text will ever show may fill (a keyed number is measured at every string it can show), also the margin text aligns in; default 0.9. With both, `size` is the largest cap height `fit` allows |
+| `align`, `valign` | left / center / right and top / middle / bottom (`align = "left top"` works too): the ink block of the widest string meets that edge of the margin, or the centre; lines align inside the block by `align` |
+| `offset` | `[u, v]` metres along the panel's right and up |
+| `color`, `glow` | palette slot or `#hex` (`"slot:slot:0.3"` mixes two); emission strength (1.0; 0 = lit only by the scene) |
+| `depth`, `lift` | extrusion toward the viewer (0 = flat); distance in front of the surface (0.002) |
+| `tracking`, `word_spacing`, `leading` | character spacing and word gap (factors, 1.0); line pitch / cap height (1.5) |
+| `reveal` | `{from, to}` clip seconds, typewriter: the first character appears at `from`, the last at `to`; spaces cost no time |
+| `blink`, `flicker`, `fade` | multipliers on the emission: `blink = {period, duty, low, phase, from, to}` (on for `duty` of each `period`, `low` otherwise) and `flicker = {amount, rate, dips, seed, from, to}` (seeded random dips) step; `fade = [[t, gain], ...]` (or `{keys, interp}`) is a keyed ramp, e.g. a dash waking up. All need `glow` > 0 |
+| `ghost` | `true`, a number or `{strength, text, color}`: for display fonts, the unlit segments behind the lit ones (the widest string with every letter and digit as an 8), added as light so they stay a faint hint. `strength` is their brightness as a share of the lit segments' as displayed (0.10; the emission is that share to the 2.2), their colour the text's pulled halfway to the palette's `muted` |
+| `halo` | `true` or `{strength, size}`: a slight glow past the lit edges (copies of the lit shapes on three rings, additive, just behind them); `strength` the share of the lit emission it adds (0.3), `size` its reach in cap heights (0.04). EEVEE has no bloom; `mk post` halation comes on top |
+| `haze` | `false` or `{distance, cap}`; text on a `highway` set fades into the road's haze like its signs |
+
+```toml
+[[text]]                              # a highway sign panel: two lines, fitted to 80 % of the panel
+name = "exit_sign"
+on = "road:gantry1_panel2"
+text = "NORTH\nEXIT 12"
+font = "overpass_bold"
+fit = 0.8
+
+[[text]]                              # typed out on the lower strip of a billboard
+name = "tagline"
+on = "road:billboard1_panel"
+box = [10, 1.1]
+offset = [0, -1.55]
+text = "open all night"
+font = "permanent_marker"
+reveal = { from = 3.0, to = 5.0 }
+
+[[text]]                              # a speedometer: a keyed number in a 7-segment font, unlit segments behind it
+name = "speedo"
+on = "car:speed"                      # or free: mount = "car", at = [..], facing = [0, 1, 0], box = [0.3, 0.09]
+value = { keys = [[6.0, 58], [7.9, 71]], format = "{:.0f}" }
+font = "dseg7_classic_bold"
+align = "right"
+ghost = true
+halo = true
+fade = [[5.4, 0.0], [5.9, 1.0]]
+```
+
+Blender only measures: the ink box of every string the text can show is taken from the same String to Curves node at
+em size 1, and `mkmmd/core/typeset.py` (numpy only, tested) does the rest: size and fit, alignment, number formats, the
+typewriter's keys and character count, blink and flicker keys, the surface frame. The build reports each text's cap height,
+ink size and whether it fits, and logs a WARNING when a given `size` overflows its panel. Read a keyed number with
+`mk q 'bpy.data.node_groups["mk_text_<name>"].nodes["Value"].outputs[0].default_value' --frames ...`.
+
+Fonts live in the asset library (`<assets>/fonts/<family>/`, licence files beside them) and are registered with
+`mk assets add FILE --kind font --slug ...`, with licence and credit filled in; list the slugs in `[credits] assets`.
+Registered: `dseg7_classic`, `dseg7_classic_bold` (7-segment digits, OFL, keshikan), `overpass_regular`,
+`overpass_semibold`, `overpass_bold` (highway signage, OFL, Red Hat), `monoton`, `audiowide` (80s display, OFL),
+`permanent_marker` (hand lettering, Apache 2.0). Use static fonts: Blender reads a variable font's default instance.
+
 
 ## Palettes
 
@@ -387,3 +484,80 @@ stems are cached by a hash of the audio span (`<project>/.mk/cache/timeline/stem
 Reference clips (`mk ref`) live outside the project: `~/.cache/mk/ref/<project name | default>/<set>/` holds
 `clips.json`, the capped downloads, `track/<id>.npz` and the contact sheet; `mk ref clean` deletes everything but
 `clips.json`. Only the small measurement JSON is kept with the project (`<project>/ref/<set>.json`).
+## Characters (`mk model`)
+
+`mk model build SPEC.toml` builds an original character in code: part builders (numpy and Pillow, no Blender) make
+meshes, textures, bones, morphs and rigid bodies; the assembler merges them into one PMX; Blender imports that PMX back
+with mmd_tools (the way `mk cast` will), the result is verified against what was assembled, described like `mk inspect`
+does and saved as a review `.blend` with a neutral studio. It is the only place mk writes a PMX, and it never edits an
+existing one. The spec, builders and assembler live in `mkmmd/model/` (CLI side: numpy, Pillow, scipy), the Blender
+side in `mkmmd/blender/model/`; characters are made of parts so several people (or agents) can work on one.
+
+```toml
+[model]                       # model.toml; every other table belongs to the part or the file that defines it
+name = "rin"                  # PMX model name, output file stem
+parts = ["body", "head", "hair", "outfit"]            # build order = spec order
+include = ["proportions.toml", "colors.toml", "body.toml"]   # merged first, in order; later wins; `~` works
+out = "~/mk-assets/models/rin_mk"      # default output folder
+seed = 1                      # ctx.rng per part: the same stream whatever else is built
+needs = {hair = ["body", "head"]}      # parts `--only hair` builds first (default: body); builders may declare too
+builders = {tails = "mkmmd.model.parts.hair"}       # part -> module when it is not mkmmd/model/parts/<part>.py
+```
+
+**Spec** (`mkmmd.model.spec`): tables merge key by key, anything else (lists too) is replaced; `Spec.files` lists what
+was read; `--set a.b=1` overrides. **Builders** are `mkmmd/model/parts/<part>.py` with `@builder("hair", needs=(...))
+def build(ctx) -> Part` (`mkmmd.model.build`): `ctx.spec`, `ctx.cfg` (the part's own table), `ctx.save_png(name, rgba)`
+(into `<out>/tex`, part name prefixed, the returned file name goes into `Material.texture/toon/sphere`), `ctx.parts`
+(built so far), `ctx.land` (landmarks: every part's `info["landmarks"]`, semantic name -> np.array(3)), `ctx.rng`,
+`ctx.log`, `ctx.need(part)`, `ctx.find_body(bone)`, `ctx.find_bone(name)`. A part returns `Part` (`mkmmd/model/part.py`:
+Material, Bone, Mesh, Morph, RigidBody, Joint); after each builder `part.check` and the cross-part checks run (unique
+names, parents, weights, materials, bodies, joints).
+
+| Convention | |
+|---|---|
+| space | metres, Z up, the character faces -Y, her left is +X, feet on z = 0, centred on x = 0 |
+| faces, UVs | counter-clockwise from outside; UV per face corner with v UP (the assembler flips v and the winding for PMX) |
+| names | PMX names exactly as `mkmmd/core/bonemap.py` expects for standard bones (全ての親 ... 左足ＩＫ); chain bones classify by `core/families.py` (前髪1, 三つ編左1, 猫耳右1, 尻尾1_2, スカート前1, リボン左1, 袖左1, 襟1); morphs by the standard Japanese names (まばたき, あ, 笑い, 照れ ...), panels eye / brow / mouth / other |
+| weights | bone name -> (n,) arrays, capped at 4 and normalised by the assembler; an unweighted vertex follows the nearest deforming bone and is reported |
+| materials | one PMX material per `Material.name` across parts (faces of several meshes are grouped), list order = draw order: declare translucent ones last |
+| rigid bodies | model space; capsule height axis is +Z at rotation 0 (`size = (r, straight length, 0)`), box = half extents along x, y, z, rotation = XYZ Euler (rad); `static` -> PMX type 0, `dynamic` 1, `dynamic_bone` 2; `no_collide` groups become the PMX mask |
+| joints | model space; limits and springs in the joint's own frame exactly as Blender's rigid body constraint holds them (the assembler converts to PMX axes) |
+| IK | `Bone.ik` limits are PMX-convention degrees (the knee bends about x between -180 and -0.5) |
+
+**Toolkit** (all bpy-free, docstrings are the API): `skeleton.standard_bones(landmarks, opts)` (the full standard and
+semi-standard skeleton with IK, twist bones with fixed axes, fingers with local axes, eyes with grants, semantic names;
+the module docstring lists the landmarks), `geo` (loft, sweep, tube, ribbon, revolve, spheres, surfaces, merge, weld,
+normals, `capsule_between`, `euler_for_axis`), `skin` (chain weights with smooth joint blends, envelope weights,
+transfer from body meshes for garments, ramps), `tex` (antialiased UV-space canvas, gradients, toon ramps, sphere maps,
+noise, atlas), `subdiv` (Catmull-Clark with creases as sparse operators). `Mesh.subsurf` applies it before export: the
+surface equals Blender's Subdivision modifier (boundary "all", linear UVs) to 1e-7 and UVs, weights and morph offsets
+are carried through the operators. `mkmmd/model/parts/mannequin.py` uses all of it and is the fixture of the framework.
+
+**Assembly** (`mkmmd.model.assemble`, `pmx_io`): bones go parents first (grant parents too); a PMX vertex per unique
+(position, UV, normal); custom `Mesh.normals` as given, else angle-weighted normals split along `Mesh.sharp` edges (a
+hard edge between coplanar faces costs nothing); quads split along the shorter diagonal, ngons by ear clipping;
+positions `(x, y, z) -> (x, z, y) / 0.08` so `mk cast` (scale 0.08) gives back metres; PMX 2.0 (all mmd_tools reads),
+UTF-16, textures as `tex/<file>`, display frames Root, 表情 (every morph, ordered eye, brow, mouth, other), the parts'
+frames merged by name, the rest in その他.
+
+**Verification** (`mkmmd.blender.model.verify`, op `model_finish`): the PMX is imported unclean (vertex order = file),
+then compared with the assembled arrays: vertex positions, bone heads and parents, weights, UVs, corner normals, winding
+against the normals, faces per material, morph offsets (0.1 mm each), bone flags, grants, fixed and local axes, IK,
+materials (colours, edge, textures), morph panels and English names, display frames, rigid bodies (pose, size, mode,
+groups, masks) and joints (pose, limits, springs). Anything beyond tolerance is listed under `verify.problems` and the
+command exits 1.
+
+**CLI.** `mk model build SPEC [--only PARTS] [--out DIR] [--no-export] [--no-blend] [--no-verify] [--set K=V] [--full]`
+prints JSON: per-part numbers (meshes, vertices, faces, bones, materials, morphs, bodies, joints), warnings (lint:
+unweighted vertices, missing UVs, unused vertices), the assembled model's counts, timings, `verify`, and `rig`: required
+semantic bones missing, morph map (semantic -> morph), chain families with bone counts, bodies and measurements. Files in
+the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk look <name>.blend --view front,3q
+--target "bone('head').head" --dist 1.2` works), `<name>.rig.json` (what `mk inspect` writes; pass it as `rig =` to a
+`[[cast]]` with `pmx =`), `build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
+`--no-export` only runs and checks the builders; `mk model info SPEC` shows the plan. Exit codes as everywhere: 1 when a
+check or verification fails.
+
+Blender note: a Blender session that resets the add-on preferences (a script started with `--factory-startup` that
+touches add-ons) can delete mmd_tools' bundled opencc wheel, and every PMX import then fails with "bpy.ops.mmd_tools.
+import_model could not be found"; use another config folder (`BLENDER_USER_CONFIG`) for such scripts. `mk doctor --fix`
+restores the wheel and `mk model build` repairs and retries on its own.
