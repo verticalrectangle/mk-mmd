@@ -3,7 +3,8 @@
 [[shot]] keys (times in clip seconds; targets as in mkmmd.blender.build.targets)
   name, from, to
   mount = "car"                  object the camera rides (prop or set name; default the world)
-  at = [x, y, z]                 camera position in the mount's frame (or world)
+  at = [x, y, z] | target        camera position in the mount's frame (or world); a dict target ({path = "road:road",
+                                 s = 640, offset = 7, z = 1.2} for a roadside camera, {prop = ...}) is resolved per frame
   look = target                  what the camera points at (default: straight ahead along the mount's -Y)
   lens = 35, roll = 0 (deg), lag = 0.0 (s, operator lag on the aim), shake = 0.0 (deg, handheld)
   keys = [{t, at, look, lens}]   moves inside the shot (eased)
@@ -93,7 +94,7 @@ def run(ctx):
                     ln = k0.get("lens", ln) * (1 - u) + k1.get("lens", ln) * u
                     look = k0.get("look", look) if u < 0.5 else k1.get("look", look)
                 M = mount.matrix_world.copy() if mount is not None else Matrix()
-                p = M @ Vector(at)
+                p = targets.point(ctx, at) if isinstance(at, dict) else M @ Vector(at)
                 if look is None:
                     a = p + (M.to_3x3() @ Vector((0, -1, 0))) * 10.0
                 else:

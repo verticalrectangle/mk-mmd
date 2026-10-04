@@ -1,14 +1,36 @@
 """Target references used across the build spec:
   [x, y, z]                       a world point
   {prop = "car", point = [..]}    a point in a prop's local frame (follows the prop)
-  "car:road"                      a prop use point by name (look / rest / grip / sit / feet)
+  {path = "road:road", s = 640, offset = -6.0 | "fwd1", z = 1.2}   a point beside a set's path: arc length s (m),
+                                  offset (m left of the centreline, or a lane name), height above the road
+  "car:road"                      a prop use point by name (look / rest / grip / sit / feet / anchor / surface / pose)
   "cast:rin" | "cast:rin.head"    another character's eyes (default) or one of their bones (semantic name)
   "camera"                        the active camera"""
 import bpy
+import numpy as np
 from mathutils import Vector
 
 from .. import scene as S
 from . import BuildError
+
+
+def path_point(ctx, ref):
+    """{path = "set:path", s, offset (m or lane name), z}: a point beside a set's path, in world space."""
+    set_name, _, path_name = ref["path"].partition(":")
+    st = getattr(ctx, "sets", {}).get(set_name)
+    if st is None or path_name not in st.card.get("paths", {}):
+        raise BuildError(f"target {ref!r}: no path {path_name!r} on set {set_name!r}")
+    off = ref.get("offset", 0.0)
+    if isinstance(off, str):
+        lanes = {ln["name"]: float(ln["offset"]) for ln in st.card["paths"][path_name].get("lanes", [])}
+        if off not in lanes:
+            raise BuildError(f"target {ref!r}: lane {off!r} not in {sorted(lanes)}")
+        off = lanes[off]
+    path = st.path(path_name)
+    s = float(ref.get("s", 0.0))
+    if not 0.0 <= s <= path.length:
+        raise BuildError(f"target {ref!r}: s outside the path (0..{path.length:.0f} m)")
+    return Vector(tuple(path.offset(np.array([s]), float(off), float(ref.get("z", 0.0)))[0]))
 
 
 def eyes(member):
@@ -26,6 +48,8 @@ def point(ctx, ref, frame=None):
         return Vector(ref)
     if isinstance(ref, dict) and "prop" in ref:
         return ctx.props[ref["prop"]].world(ref.get("point", (0, 0, 0)))
+    if isinstance(ref, dict) and "path" in ref:
+        return path_point(ctx, ref)
     if isinstance(ref, str):
         if ref == "camera":
             return bpy.context.scene.camera.matrix_world.translation.copy()

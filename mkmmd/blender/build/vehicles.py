@@ -19,7 +19,7 @@ import bpy
 import numpy as np
 from mathutils import Quaternion, Vector
 
-from ...core.path import Path, speed_profile
+from ...core.path import speed_profile
 from .. import keys as K
 from . import BuildError
 
@@ -49,7 +49,7 @@ def run(ctx):
             raise BuildError(f"vehicle {name!r}: no set {set_name!r}")
         st = ctx.sets[set_name]
         cp = st.card["paths"][path_name]
-        path = Path(st.path_points(path_name))
+        path = st.path(path_name)
         speed = spec.get("speed", 20.0)
         keys = speed if isinstance(speed, list) else [[-1e6, float(speed)], [1e6, float(speed)]]
         s_rel, v = speed_profile(keys, ctx.fps, rel)
