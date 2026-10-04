@@ -164,7 +164,7 @@ def _run(args, reg):
         lines = []
         if not slugs:
             proj = get_project(args, required=True)
-            slugs = [c["asset"] for c in proj.cast if c.get("asset")]
+            slugs = list(dict.fromkeys(c["asset"] for c in proj.cast if c.get("asset")))   # one entry per asset
             slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
             lines = proj.data.get("credits", {}).get("lines", [])
         if not slugs and not lines:
