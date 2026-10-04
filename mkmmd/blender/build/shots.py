@@ -7,13 +7,24 @@
                                  s = 640, offset = 7, z = 1.2} for a roadside camera, {prop = ...}) is resolved per frame
   look = target                  what the camera points at (default: straight ahead along the mount's -Y)
   lens = 35, roll = 0 (deg), lag = 0.0 (s, operator lag on the aim), shake = 0.0 (deg, handheld)
-  keys = [{t, at, look, lens}]   moves inside the shot (eased)
+  keys = [{t, at, look, lens, shift}]   moves inside the shot (eased)
   frame = {subject = [targets], fill = 0.45, solve = "lens" | "distance"}   automatic framing per aspect: the subject's
                                  height fills `fill` of the frame (lens or dolly solved per aspect)
-  [shot.aspect.<output>]         per-output overrides of at / look / lens / roll / frame
+  shift = [x, y]                 lens shift as fractions of the LARGER image side (Blender's shift_x / shift_y: the
+                                 picture moves the other way), constant or keyed in `keys[].shift`. A 1:1 output that
+                                 must be an exact crop of a 9:16 master keeps the master's camera with lens and dof
+                                 fstop x 1920 / 1080 and shift = [0, (420 - top) / 1080] for a crop `top` px from the
+                                 master's top (mkmmd.core.shotstyle.crop_camera)
+  [shot.aspect.<output>]         per-output overrides of at / look / lens / roll / frame / shift / style / reflection
   dof = {focus = target, fstop = 2.8}
-The scene keeps the shot table in scene["mk_shots"] (JSON) so `mk look` and `mk render` bind the markers to each
-aspect's cameras."""
+  style = "silhouette"           the flat look of a shot, composed at render time (`mk render`, `mk look`) by
+                                 mkmmd.blender.styles; colors = {background, subject, accent}, hide / keep / accent =
+                                 [object patterns], tint = [{object, prop, color, gain, glow}], knockout = {objects,
+                                 color}, grow, samples (docs/design.md: Shots)
+  reflection = {object = "<glass>", strength, dim, roughness, hide, only, bend, world, tint}   her image in a window
+                                 pane: a plane light probe and a mirror layer on the glass object, made at render time
+The scene keeps the shot table in scene["mk_shots"] (JSON; per output aspect the normalised style and reflection, colours
+resolved) so `mk look` and `mk render` bind the markers to each aspect's cameras and switch the look per frame."""
 import json
 import math
 import zlib
@@ -23,7 +34,9 @@ import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 
 from ...core import perform as PF
+from ...core import shotstyle as SS
 from .. import keys as K
+from .. import styles as ST
 from . import BuildError, collection, targets
 
 SENSOR = 36.0
@@ -54,6 +67,36 @@ def _vfov_scale(size):
     return (SENSOR / 2) * (h / max(w, h))
 
 
+def _styles(ctx, spec, outs, name):
+    """{aspect: {"silhouette" | "reflection": normalised spec}} for the shot's render-time looks (the table that
+    mkmmd.blender.styles reads; colours resolved against the project palette)."""
+    styles, seen = {}, set()
+    recs = None
+    for out in outs:
+        asp = out["name"]
+        try:
+            norm = SS.normalize(_merge(spec, (spec.get("aspect") or {}).get(asp)), ctx.palette)
+        except SS.StyleError as e:
+            raise BuildError(f"shot {name!r} ({asp}): {e}") from None
+        if "reflection" in norm:
+            glass = bpy.data.objects.get(norm["reflection"]["object"])
+            if glass is None or glass.type != "MESH":
+                raise BuildError(f"shot {name!r} ({asp}): reflection object {norm['reflection']['object']!r} is not a "
+                                 f"mesh in the scene (list them with `mk q BLEND --list objects`)")
+        for kind, look in norm.items():                     # a pattern that matches nothing is a typo until proven otherwise
+            for key in ("hide", "keep", "accent", "only"):
+                for pat in look.get(key, []):
+                    if (key, pat) in seen:
+                        continue
+                    seen.add((key, pat))
+                    recs = recs if recs is not None else ST.object_records(bpy.context.scene)
+                    if not SS.select(recs, [pat]):
+                        ctx.log(f"WARNING shot {name!r}: {kind} {key} pattern {pat!r} matches no object")
+        if norm:
+            styles[asp] = norm
+    return styles
+
+
 def run(ctx):
     shots = ctx.data.get("shot", [])
     if not shots:
@@ -80,12 +123,19 @@ def run(ctx):
             coll.objects.link(cam)
             cam.rotation_mode = "QUATERNION"
             keys = sorted(sp.get("keys", []), key=lambda k: k["t"])
-            # per frame: camera position (world), aim point (world), lens, mount matrix
-            pos, aim, lens, mounts = [], [], [], []
+            base_shift = (0.0, 0.0)
+            if sp.get("shift") is not None:
+                base_shift = SS.shift_pair(sp["shift"], f"shot {name!r} ({asp}) shift")
+            for k in keys:
+                if "shift" in k:
+                    SS.shift_pair(k["shift"], f"shot {name!r} ({asp}) keys[].shift")
+            # per frame: camera position (world), aim point (world), lens, lens shift, mount matrix
+            pos, aim, lens, mounts, shifts = [], [], [], [], []
             for f in frames:
                 sc.frame_set(int(f))
                 t = ctx.time(f)
                 at, look, ln = sp.get("at", (0, 0, 0)), sp.get("look"), float(sp.get("lens", 35.0))
+                sh = base_shift
                 if keys:
                     k1 = next((k for k in keys if k["t"] >= t), keys[-1])
                     k0 = next((k for k in reversed(keys) if k["t"] <= t), keys[0])
@@ -93,6 +143,8 @@ def run(ctx):
                     at = tuple(Vector(k0.get("at", at)).lerp(Vector(k1.get("at", at)), u))
                     ln = k0.get("lens", ln) * (1 - u) + k1.get("lens", ln) * u
                     look = k0.get("look", look) if u < 0.5 else k1.get("look", look)
+                    sh = tuple(np.asarray(k0.get("shift", base_shift), float) * (1 - u)
+                               + np.asarray(k1.get("shift", base_shift), float) * u)
                 M = mount.matrix_world.copy() if mount is not None else Matrix()
                 p = targets.point(ctx, at) if isinstance(at, dict) else M @ Vector(at)
                 if look is None:
@@ -102,6 +154,7 @@ def run(ctx):
                 pos.append(tuple(p))
                 aim.append(tuple(a))
                 lens.append(ln)
+                shifts.append(sh)
                 mounts.append(M)
             pos, aim, lens = np.array(pos), np.array(aim), np.array(lens)
             if float(sp.get("lag", 0.0)) > 0:
@@ -145,6 +198,12 @@ def run(ctx):
             K.key_vec(cam, "location", frames, pos, interp="LINEAR")
             K.key_vec(cam, "rotation_quaternion", frames, K.continuous(quats), interp="LINEAR")
             K.set_fcurve(cd, "lens", 0, frames, lens, interp="LINEAR")
+            if any("shift" in k for k in keys):
+                shifts = np.array(shifts)
+                K.set_fcurve(cd, "shift_x", 0, frames, shifts[:, 0], interp="LINEAR")
+                K.set_fcurve(cd, "shift_y", 0, frames, shifts[:, 1], interp="LINEAR")
+            else:
+                cd.shift_x, cd.shift_y = base_shift
             if sp.get("dof"):
                 cd.dof.use_dof = True
                 cd.dof.aperture_fstop = float(sp["dof"].get("fstop", 2.8))
@@ -154,10 +213,16 @@ def run(ctx):
                     dist.append((targets.point(ctx, sp["dof"]["focus"]) - Vector(pos[i])).length)
                 K.set_fcurve(cd, "dof.focus_distance", 0, frames, dist, interp="LINEAR")
             cams[asp] = cam.name
+        styles = _styles(ctx, spec, outs, name)
         mk = sc.timeline_markers.new(name, frame=f_from)
         mk.camera = bpy.data.objects[cams[outs[0]["name"]]]
-        table.append({"name": name, "from": f_from, "to": f_to, "cameras": cams})
+        entry = {"name": name, "from": f_from, "to": f_to, "cameras": cams}
+        if styles:
+            entry["styles"] = styles
+        table.append(entry)
         report[name] = {"frames": [f_from, f_to], "cameras": cams}
+        if styles:
+            report[name]["styles"] = {asp: sorted(s) for asp, s in styles.items()}
         ctx.log("shot", name, f_from, f_to)
     sc["mk_shots"] = json.dumps(table)
     first = min(table, key=lambda s: s["from"])

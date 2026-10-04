@@ -161,6 +161,41 @@ def test_projection_follows_sensor_fit():
     assert uv[0, 0] == pytest.approx(0.5 + 0.5 * 1920 / 1080)                     # AUTO: sensor on the long side
 
 
+# the point (0.144 * 36 / 50, 0.086 * 36 / 50, -1) seen through a 50 mm, 36 mm-sensor camera at the origin looking down -Z
+# (AUTO fit), with Blender's own bpy_extras.object_utils.world_to_camera_view of a camera with that lens shift, probed in
+# Blender 4.2.3 at three sizes: {(w, h): {(shift_x, shift_y): (u, v)}}. The picture moves OPPOSITE to the shift.
+BLENDER_SHIFT_UV = {
+    (1000, 1000): {(0.0, 0.0): (0.644, 0.586), (0.1, -0.2): (0.544, 0.786), (-0.15, 0.05): (0.794, 0.536),
+                   (0.0, -0.259259): (0.644, 0.845259)},
+    (1920, 1080): {(0.0, 0.0): (0.644, 0.652889), (0.1, -0.2): (0.544, 1.008444), (-0.15, 0.05): (0.794, 0.564),
+                   (0.0, -0.259259): (0.644, 1.113794)},
+    (1080, 1920): {(0.0, 0.0): (0.756, 0.586), (0.1, -0.2): (0.578222, 0.786), (-0.15, 0.05): (1.022667, 0.536),
+                   (0.0, -0.259259): (0.756, 0.845259)},
+}
+
+
+@pytest.mark.parametrize("size", sorted(BLENDER_SHIFT_UV))
+def test_projection_applies_the_lens_shift_as_blender_does(size):
+    pt = np.array([[0.144 * 36.0 / 50.0, 0.086 * 36.0 / 50.0, -1.0]])
+    for shift, want in BLENDER_SHIFT_UV[size].items():
+        cam = {"world": np.eye(4)[None], "lens": np.array([50.0]), "sensor": np.array([[36.0, 24.0]]),
+               "shift": np.array([shift]), "names": ["Cam"], "sensor_fit": {"Cam": "AUTO"}}
+        uv, depth = camera.project(pt, cam, 0, size)
+        assert depth[0] == pytest.approx(1.0)
+        assert uv[0] == pytest.approx(want, abs=1e-6), (size, shift)
+
+
+def test_a_positive_shift_moves_the_picture_left_and_down():
+    cam = {"world": np.eye(4)[None], "lens": np.array([50.0]), "sensor": np.array([[36.0, 24.0]]),
+           "shift": np.zeros((1, 2)), "names": ["Cam"], "sensor_fit": {"Cam": "AUTO"}}
+    pt = np.array([[0.0, 0.0, -1.0]])                                           # on the optical axis
+    assert camera.project(pt, cam, 0, (1080, 1920))[0][0] == pytest.approx([0.5, 0.5])
+    cam["shift"] = np.array([[0.1, 0.1]])
+    u, v = camera.project(pt, cam, 0, (1080, 1920))[0][0]
+    assert u < 0.5 and v < 0.5                                                  # left of and below the frame centre
+    assert (u, v) == pytest.approx((0.5 - 0.1 * 1920 / 1080, 0.5 - 0.1))        # fractions of the LARGER side
+
+
 # ---------------------------------------------------------------- registry
 def test_registry_credits_flag_unreviewed(tmp_path):
     reg = A.Registry(tmp_path)

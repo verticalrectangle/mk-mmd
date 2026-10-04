@@ -23,7 +23,8 @@ are packed into the .blend.
                             (size alone does not shrink to fit; both: size is the largest cap height fit allows)
   align = "left" | "center" | "right", valign = "top" | "middle" | "bottom"   (align may carry both words)
   offset = [u, v]           shift along the panel's right and up axes
-  color = "text"            palette slot or #hex (slot:slot:t mixes two); glow = 1.0  emission strength
+  color = "text"            palette slot or #hex (slot:slot:t mixes two); glow = 1.0  emission strength;
+                            lit = 1.0  how much of the scene's light the letters also reflect (0: flat ink)
   depth = 0.0               extrusion toward the viewer; lift = 0.002  distance in front of the surface
   tracking = 1.0            character spacing; word_spacing = 1.0  gap between words; leading = 1.5  line pitch / cap
                             height
@@ -39,14 +40,29 @@ are packed into the .blend.
                             them): `strength` the share of the lit emission it adds (0.3), `size` how far it reaches,
                             in cap heights (0.04)
   haze = false | {distance, cap}   aerial perspective; text on a highway set fades into the road's haze by default
+  back = true               the text on the back of the surface (the outer side of a pane): the frame turns about `up`
+                            so it still reads correctly from behind
+  kinetic = {...}           keyed motion of one text (arrival, letter spread, weight, drip, recolour, when it is on
+                            screen), built from keys by `lyrics` below or written by hand; core/typefx.py lists the keys
+  lyrics = {timeline = "audio/timeline.json", line = 3, words = [1, 4], style = "pop", from = t, to = t, ...}
+                            one text per sung word, read from the timeline (never printed anywhere), each with its own
+                            `kinetic` keys; the entry's placement and look keys go to every word: build/wordtype.py
+  backing = {color = "rose", pattern = "stripe", ...}   a strip of tape behind the text (core/typefx.py): it is the
+                            text's ink box plus a margin, moves with the word and fades with its opacity
+  outline = {color = "text", width = 0.05, alpha = 0.5}   a soft ring of another colour behind the letters (width in em)
+                            so they read on any background; it moves and fades with the word
+  ink = {...}               handwriting on a surface: build/ink.py
 The text frame is the card's: x right (up x normal), y up, z out of the surface."""
 import json
+import math
 import os
 
 import bpy
 import numpy as np
 from mathutils import Matrix
 
+from ...core import wordtype as LY
+from ...core import typefx as FX
 from ...core import typeset as T
 from .. import keys as K
 from ..library.sets import highway as HIGHWAY
@@ -54,8 +70,8 @@ from ..library.sets import nightkit as NK
 from . import BuildError, collection
 
 KNOWN = {"name", "on", "mount", "at", "facing", "up", "box", "text", "value", "font", "size", "fit", "align", "valign",
-         "offset", "color", "glow", "depth", "lift", "tracking", "word_spacing", "leading", "reveal", "blink",
-         "flicker", "fade", "ghost", "halo", "haze"}
+         "offset", "color", "glow", "lit", "depth", "lift", "tracking", "word_spacing", "leading", "reveal", "blink",
+         "flicker", "fade", "ghost", "halo", "haze", "back", "kinetic", "lyric", "backing", "outline"}
 LIFT = 0.002                    # m in front of the surface
 GHOST_BACK = 0.0006             # m the unlit segments sit behind the lit ones
 GHOST_STRENGTH = 0.10           # brightness of the unlit segments as displayed, as a share of the lit ones
@@ -263,7 +279,8 @@ def _place(ctx, spec):
         else:
             raise BuildError(f"text {name!r}: on {ref!r}: {kind} {owner!r} has " +
                              (f"{len(surfaces)} surfaces, name one ({names})" if surfaces else "no surfaces"))
-        F = T.surface_matrix(s["center"], s["normal"], s.get("up", (0.0, 0.0, 1.0)), lift)
+        normal = [-float(v) for v in s["normal"]] if spec.get("back") else s["normal"]      # back: the other side
+        F = T.surface_matrix(s["center"], normal, s.get("up", (0.0, 0.0, 1.0)), lift)
         panel = tuple(float(v) for v in (spec.get("box") or s["size"]))
         parent, inverse = o.root, None
         carrier = bpy.data.objects.get(s["object"]) if s.get("object") else None
@@ -320,7 +337,7 @@ def _haze(ctx, spec, owner):
 
 
 # ------------------------------------------------------------------------------------------------------ material
-def _material(name, rgb, glow, haze, gains=("Gain",)):
+def _material(name, rgb, glow, haze, gains=("Gain",), lit=1.0):
     """Principled + emission, strength = glow x one keyable Value node per name in `gains` (Gain: blink and flicker,
     Fade: a ramp), faded into the haze with distance."""
     m, nb = NK.new_material(name)
@@ -330,7 +347,7 @@ def _material(name, rgb, glow, haze, gains=("Gain",)):
         v.name = v.label = gname
         v.outputs[0].default_value = 1.0
         strength = nb.math("MULTIPLY", v.outputs[0], strength)
-    sh = nb.principled(rgb, rough=0.55, spec=0.3, emission=rgb, strength=strength)
+    sh = nb.principled(tuple(c * lit for c in rgb), rough=0.55, spec=0.3 * lit, emission=rgb, strength=strength)
     if haze:
         sh = NK.haze(nb, sh, haze["rgb"], haze["distance"], haze["cap"])
     nb.output(sh)
@@ -352,7 +369,54 @@ def _additive(name, rgb, glow, gains=()):
     return m
 
 
+def _kinetic_material(cache, rgb, glow, to_rgb, haze, lit=1.0, alpha=1.0):
+    """The material of kinetic words, shared by every word with the same look: Principled + emission whose alpha is the
+    geometry attribute `mk_alpha` (the node tree stores the keyed opacity and the drip's fade there, so the keys stay
+    on the objects and the shader is compiled once) and, with `to_rgb`, whose colour mixes toward it by `mk_tint`.
+    Alpha is hashed (DITHERED), not blended: no sorting against the glass."""
+    key = (tuple(round(v, 5) for v in rgb), round(float(glow), 5), round(float(lit), 5), round(float(alpha), 5),
+           None if to_rgb is None else tuple(round(v, 5) for v in to_rgb),
+           None if not haze else (haze["distance"], haze["cap"]))
+    m = cache["kmats"].get(key)
+    if m is not None:
+        return m
+    m, nb = NK.new_material(f"mk_text_kinetic_{len(cache['kmats'])}")
+    m.surface_render_method = "DITHERED"
+    col = rgb
+    if to_rgb is not None:
+        col = nb.mixc(nb.attr("mk_tint", "Fac"), rgb + (1.0,), to_rgb + (1.0,))
+    base = nb.mixc(lit, (0.0, 0.0, 0.0, 1.0), col) if lit < 1.0 else col
+    a = nb.attr("mk_alpha", "Fac")
+    if alpha < 1.0:
+        a = nb.math("MULTIPLY", a, float(alpha))
+    sh = nb.principled(base, rough=0.55, spec=0.3 * lit, emission=col, strength=float(glow), alpha=a)
+    if haze:
+        sh = NK.haze(nb, sh, haze["rgb"], haze["distance"], haze["cap"])
+    nb.output(sh)
+    cache["kmats"][key] = m
+    return m
+
+
 # ------------------------------------------------------------------------------------------------------ geometry
+def _reveal(g, curves):
+    """The typewriter: delete the character instances past the count the keyed `Reveal` ramp has typed."""
+    ds = g.node("GeometryNodeAttributeDomainSize", component="INSTANCES")
+    g.put(ds.inputs["Geometry"], curves)
+    n_chars = ds.outputs["Instance Count"]
+    ramp = g.node("ShaderNodeValue", name="Reveal")
+    ramp.outputs[0].default_value = -1.0
+    r = ramp.outputs[0]
+    shown = g.math("ADD", g.math("FLOOR", g.math("ADD", g.math("MULTIPLY", r, g.math("SUBTRACT", n_chars, 1.0)),
+                                                   1e-5)), 1.0)
+    count = g.math("MULTIPLY", shown, g.math("GREATER_THAN", r, -1e-6))
+    idx = g.node("GeometryNodeInputIndex")
+    gone = g.math("GREATER_THAN", idx.outputs[0], g.math("SUBTRACT", count, 0.5))
+    dele = g.node("GeometryNodeDeleteGeometry", domain="INSTANCE")
+    g.put(dele.inputs["Geometry"], curves)
+    g.put(dele.inputs["Selection"], gone)
+    return dele.outputs[0]
+
+
 def _text_mesh(g, P, string, reveal):
     """String -> instances (-> typewriter) -> filled mesh (-> extruded): the mesh socket, in the text plane."""
     stc = _string_to_curves(g, P["font"], P["align_x"], P["tracking"], P["words"])
@@ -361,21 +425,7 @@ def _text_mesh(g, P, string, reveal):
     g.put(stc.inputs["String"], string)
     curves = stc.outputs["Curve Instances"]
     if reveal:
-        ds = g.node("GeometryNodeAttributeDomainSize", component="INSTANCES")
-        g.put(ds.inputs["Geometry"], curves)
-        n_chars = ds.outputs["Instance Count"]
-        ramp = g.node("ShaderNodeValue", name="Reveal")
-        ramp.outputs[0].default_value = -1.0
-        r = ramp.outputs[0]
-        shown = g.math("ADD", g.math("FLOOR", g.math("ADD", g.math("MULTIPLY", r, g.math("SUBTRACT", n_chars, 1.0)),
-                                                       1e-5)), 1.0)
-        count = g.math("MULTIPLY", shown, g.math("GREATER_THAN", r, -1e-6))
-        idx = g.node("GeometryNodeInputIndex")
-        gone = g.math("GREATER_THAN", idx.outputs[0], g.math("SUBTRACT", count, 0.5))
-        dele = g.node("GeometryNodeDeleteGeometry", domain="INSTANCE")
-        g.put(dele.inputs["Geometry"], curves)
-        g.put(dele.inputs["Selection"], gone)
-        curves = dele.outputs[0]
+        curves = _reveal(g, curves)
     mesh = _filled(g, curves)
     if P["depth"] > 0:
         ext = g.node("GeometryNodeExtrudeMesh", mode="FACES")
@@ -385,13 +435,17 @@ def _text_mesh(g, P, string, reveal):
     return mesh
 
 
-def _placed(g, P, mesh, mat, dz):
-    """The mesh moved to its place in the panel (and `dz` along the normal), with its material."""
+def _placed(g, P, mesh, mat, dz, motion=None):
+    """The mesh moved to its place in the panel (and `dz` along the normal), moved on by `motion` (kinetic text: a
+    function geometry -> geometry), with its material."""
     tr = g.node("GeometryNodeTransform")
     g.put(tr.inputs["Geometry"], mesh)
     tr.inputs["Translation"].default_value = (P["tx"], P["ty"], dz)
+    geo = tr.outputs[0]
+    if motion is not None:
+        geo = motion(geo)
     sm = g.node("GeometryNodeSetMaterial")
-    g.put(sm.inputs["Geometry"], tr.outputs[0])
+    g.put(sm.inputs["Geometry"], geo)
     sm.inputs["Material"].default_value = mat
     return sm.outputs[0]
 
@@ -484,6 +538,320 @@ def _key(id_data, path, keys, ctx, interp):
     K.set_fcurve(id_data, path, 0, [ctx.frame(t) for t, _ in keys], [v for _, v in keys], interp=interp)
 
 
+# ------------------------------------------------------------------------------------------------------ kinetic
+# `kinetic = {...}` is validated by mkmmd/core/typefx.py (its header lists the keys); here its keys become Value nodes.
+NODE_NAMES = {"scale": "Pop", "sx": "SquashX", "sy": "SquashY", "dx": "Dx", "dy": "Dy", "dxp": "DxPanel",
+              "dyp": "DyPanel", "rot": "Rot", "tracking": "Tracking", "weight": "Weight", "opacity": "Opacity",
+              "tint": "Tint"}
+WEIGHT_COPIES = 12              # copies on the ring a keyed weight grows the filled letters with
+
+
+def _val(g, name, v):
+    """A keyable Value node (its output socket)."""
+    n = g.node("ShaderNodeValue", name=name)
+    n.outputs[0].default_value = float(v)
+    return n.outputs[0]
+
+
+def _xyz(g, x, y, z):
+    n = g.node("ShaderNodeCombineXYZ")
+    for i, v in enumerate((x, y, z)):
+        g.put(n.inputs[i], v)
+    return n.outputs[0]
+
+
+def _smooth(g, x, lo, hi):
+    """smoothstep(lo, hi, x) for constants lo < hi (Map Range, smoothstep interpolation)."""
+    n = g.node("ShaderNodeMapRange", data_type="FLOAT", interpolation_type="SMOOTHSTEP", clamp=True)
+    g.put(n.inputs["Value"], x)
+    n.inputs["From Min"].default_value = lo
+    n.inputs["From Max"].default_value = hi
+    return n.outputs["Result"]
+
+
+def _motion(g, P, kin):
+    """geometry -> geometry: the word's keyed transform about its pivot (scale and squash, rotation, offsets), or None
+    when nothing about it moves. The Value nodes are made once, here."""
+    ch = {c: _val(g, NODE_NAMES[c], kin[c][0][1]) for c in FX.MOTION if c in kin}
+    if not ch:
+        return None
+    em, (px, py) = P["em"], P["pivot"]
+    pw, ph = P["panel"] or (0.0, 0.0)
+    if ("dxp" in ch or "dyp" in ch) and not P["panel"]:
+        raise BuildError("kinetic dxp / dyp are shares of the panel: give the text a surface or a `box`")
+
+    def total(base, *terms):
+        out = base
+        for key, k in terms:
+            if key in ch:
+                out = g.math("ADD", out, g.math("MULTIPLY", ch[key], k))
+        return out
+
+    pop = ch.get("scale", 1.0)
+    sx = g.math("MULTIPLY", pop, ch["sx"]) if "sx" in ch else pop
+    sy = g.math("MULTIPLY", pop, ch["sy"]) if "sy" in ch else pop
+    rot = g.math("RADIANS", ch["rot"]) if "rot" in ch else 0.0
+    shift = (total(px, ("dx", em), ("dxp", pw)), total(py, ("dy", em), ("dyp", ph)))
+
+    def apply(geo):
+        a = g.node("GeometryNodeTransform")
+        g.put(a.inputs["Geometry"], geo)
+        a.inputs["Translation"].default_value = (-px, -py, 0.0)
+        b = g.node("GeometryNodeTransform")
+        g.put(b.inputs["Geometry"], a.outputs[0])
+        g.put(b.inputs["Rotation"], _xyz(g, 0.0, 0.0, rot))
+        g.put(b.inputs["Scale"], _xyz(g, sx, sy, pop))
+        c = g.node("GeometryNodeTransform")
+        g.put(c.inputs["Geometry"], b.outputs[0])
+        g.put(c.inputs["Translation"], _xyz(g, shift[0], shift[1], 0.0))
+        return c.outputs[0]
+
+    return apply
+
+
+def _letters(g, P, inst, kin):
+    """Per-letter work on the filled character instances: the drip exit (stretch about each letter's top, fall, sideways
+    wobble, fade) and the attributes the material reads, `mk_alpha` (keyed opacity x the drip's fade) and `mk_tint`."""
+    em = P["em"]
+    fade = 1.0
+    d = kin.get("drip")
+    if d:
+        t = _val(g, "Drip", -1.0)                                  # seconds since the exit started; keyed
+        idx = g.node("GeometryNodeInputIndex").outputs[0]
+        rnd = g.node("FunctionNodeRandomValue", data_type="FLOAT")
+        rnd.inputs[2].default_value, rnd.inputs[3].default_value = 0.0, 1.0       # float Min, Max
+        g.put(rnd.inputs["ID"], idx)
+        rnd.inputs["Seed"].default_value = d["seed"]
+        r = rnd.outputs[1]
+        stat = g.node("GeometryNodeAttributeStatistic", data_type="FLOAT", domain="INSTANCE")
+        g.put(stat.inputs["Geometry"], inst)
+        g.put(stat.inputs["Attribute"], r)
+        span = g.math("MAXIMUM", g.math("SUBTRACT", stat.outputs["Max"], stat.outputs["Min"]), 1e-6)
+        delay = g.math("MULTIPLY", g.math("DIVIDE", g.math("SUBTRACT", r, stat.outputs["Min"]), span), LY.DRIP_SPREAD)
+        u = g.math("MAXIMUM", g.math("SUBTRACT", t, delay), 0.0)
+        s = g.math("SUBTRACT", 1.0, g.math("EXPONENT", g.math("DIVIDE", g.math("MULTIPLY", u, -1.0), LY.DRIP_TAU)))
+        sy = g.math("ADD", 1.0, g.math("MULTIPLY", s, d["stretch"]))
+        sx = g.math("DIVIDE", 1.0, g.math("SQRT", sy))
+        fall = g.math("MULTIPLY", g.math("MULTIPLY", g.math("MULTIPLY", u, u), 0.5 * d["g"] / LY.DRIP_FALL), em)
+        wob = g.math("MULTIPLY", g.math("MULTIPLY", g.math("SINE", g.math("ADD", g.math("MULTIPLY", u, 9.0), idx)), s),
+                     0.03 * em)
+        sc = g.node("GeometryNodeScaleInstances")
+        g.put(sc.inputs["Instances"], inst)
+        g.put(sc.inputs["Scale"], _xyz(g, sx, sy, 1.0))
+        g.put(sc.inputs["Center"], g.piv)
+        sc.inputs["Local Space"].default_value = True
+        tr = g.node("GeometryNodeTranslateInstances")
+        g.put(tr.inputs["Instances"], sc.outputs[0])
+        g.put(tr.inputs["Translation"], _xyz(g, wob, g.math("MULTIPLY", fall, -1.0), 0.0))
+        tr.inputs["Local Space"].default_value = False
+        inst = tr.outputs[0]
+        fade = g.math("SUBTRACT", 1.0, _smooth(g, u, 0.14 * d["life"], d["life"]))
+    g.opacity = _val(g, NODE_NAMES["opacity"], kin["opacity"][0][1]) if "opacity" in kin else 1.0
+    alpha = g.math("MULTIPLY", g.opacity, fade) if "opacity" in kin else fade
+    names = [("mk_alpha", alpha)] + ([("mk_tint", _val(g, NODE_NAMES["tint"], kin["tint"]["keys"][0][1]))]
+                                     if "tint" in kin else [])
+    for key, value in names:
+        st = g.node("GeometryNodeStoreNamedAttribute", data_type="FLOAT", domain="INSTANCE")
+        g.put(st.inputs["Geometry"], inst)
+        st.inputs["Name"].default_value = key
+        g.put(st.inputs["Value"], value)
+        inst = st.outputs[0]
+    return inst
+
+
+def _grown(g, P, mesh, weight):
+    """The mesh grown by the keyed radius `weight` (em): copies of it on a ring of that radius and in the middle, so
+    the strokes get thicker the way a bolder master's would (counters close a little, corners round)."""
+    circle = g.node("GeometryNodeMeshCircle", fill_type="TRIANGLE_FAN")
+    circle.inputs["Vertices"].default_value = WEIGHT_COPIES
+    g.put(circle.inputs["Radius"], g.math("MULTIPLY", weight, P["em"]))
+    pts = g.node("GeometryNodeMeshToPoints", mode="VERTICES")
+    g.put(pts.inputs["Mesh"], circle.outputs["Mesh"])
+    inst = g.node("GeometryNodeInstanceOnPoints")
+    g.put(inst.inputs["Points"], pts.outputs["Points"])
+    g.put(inst.inputs["Instance"], mesh)
+    real = g.node("GeometryNodeRealizeInstances")
+    g.put(real.inputs["Geometry"], inst.outputs["Instances"])
+    return real.outputs[0]
+
+
+# ------------------------------------------------------------------------------------------------------ backing
+TAPE_COLS, TAPE_ROWS = 14, 9                    # grid of the strip: the zigzag of the torn ends lives on its end columns
+
+
+def _tape_material(name, b, rgb, pat_rgb, w, h):
+    """Paper in `rgb` with a stripe / dot / check pattern in `pat_rgb` from the strip's own UV (so the pattern is fixed to
+    the paper however the word moves), lit by the scene plus a little emission so it never goes dark; alpha is the word's
+    `mk_alpha`."""
+    m, nb = NK.new_material(name)
+    m.surface_render_method = "DITHERED"
+    col = rgb + (1.0,)
+    if b["pattern"] != "plain":
+        uv = nb.node("ShaderNodeUVMap", uv_map="UVMap").outputs[0]
+        ux, uy, _ = nb.sep(uv)
+        X, Y = nb.math("MULTIPLY", ux, w), nb.math("MULTIPLY", uy, h)
+        pitch, duty = FX.TAPE_SCALE[b["pattern"]]
+        pitch *= b["scale"]
+        soft = 0.05                                 # edge softness in pattern units: no moire from hard thresholds
+        if b["pattern"] == "stripe":
+            t = nb.math("FRACT", nb.math("DIVIDE", nb.math("ADD", X, Y), pitch))
+            mask = nb.remap(t, duty + soft, duty - soft)
+        elif b["pattern"] == "check":
+            wave = nb.math("MULTIPLY", nb.math("SINE", nb.math("MULTIPLY", nb.math("DIVIDE", X, pitch), math.pi)),
+                           nb.math("SINE", nb.math("MULTIPLY", nb.math("DIVIDE", Y, pitch), math.pi)))
+            mask = nb.math("ADD", 0.5, nb.math("MULTIPLY", nb.math("TANH", nb.math("MULTIPLY", wave, 6.0)), 0.5))
+        else:
+            cx = nb.math("DIVIDE", X, pitch)
+            colx = nb.math("FLOOR", nb.math("ADD", cx, 0.5))
+            gx = nb.math("SUBTRACT", cx, colx)
+            cy = nb.math("ADD", nb.math("DIVIDE", Y, pitch), nb.math("MULTIPLY", nb.math("MODULO", colx, 2.0), 0.5))
+            gy = nb.math("SUBTRACT", cy, nb.math("FLOOR", nb.math("ADD", cy, 0.5)))
+            d = nb.math("SQRT", nb.math("ADD", nb.math("MULTIPLY", gx, gx), nb.math("MULTIPLY", gy, gy)))
+            mask = nb.remap(d, duty + soft, duty - soft)
+        col = nb.mixc(nb.math("MULTIPLY", mask, 0.9), rgb + (1.0,), pat_rgb + (1.0,))
+    sh = nb.principled(col, rough=0.75, spec=0.15, emission=col, strength=b["glow"], alpha=nb.attr("mk_alpha", "Fac"))
+    nb.output(sh)
+    return m
+
+
+def _tape_mesh(g, P, b):
+    """The strip: a grid centred on the word's ink box, the two short ends torn (every other vertex of the end columns
+    pulled in by a random share of `torn` x the height), `UVMap` stored for the pattern, `mk_alpha` = the word's opacity."""
+    w, h = b["size"]
+    cx, cy = b["centre"]
+    grid = g.node("GeometryNodeMeshGrid")
+    grid.inputs["Size X"].default_value, grid.inputs["Size Y"].default_value = w, h
+    grid.inputs["Vertices X"].default_value, grid.inputs["Vertices Y"].default_value = TAPE_COLS, TAPE_ROWS
+    uv = g.node("GeometryNodeStoreNamedAttribute", data_type="FLOAT2", domain="CORNER")
+    g.put(uv.inputs["Geometry"], grid.outputs["Mesh"])
+    uv.inputs["Name"].default_value = "UVMap"
+    g.put(uv.inputs["Value"], grid.outputs["UV Map"])
+    pos = g.node("GeometryNodeInputPosition").outputs[0]
+    sep = g.node("ShaderNodeSeparateXYZ")
+    g.put(sep.inputs[0], pos)
+    x, y = sep.outputs[0], sep.outputs[1]
+    row = g.math("ROUND", g.math("MULTIPLY", g.math("ADD", g.math("DIVIDE", y, h), 0.5), TAPE_ROWS - 1))
+    odd = g.math("MODULO", row, 2.0)
+    end = g.math("GREATER_THAN", g.math("ABSOLUTE", x), 0.5 * w - 1e-6)
+    left = g.math("LESS_THAN", x, 0.0)
+    rnd = g.node("FunctionNodeRandomValue", data_type="FLOAT")
+    rnd.inputs[2].default_value, rnd.inputs[3].default_value = 0.4, 1.0
+    g.put(rnd.inputs["ID"], g.math("ADD", row, g.math("MULTIPLY", left, 100.0)))
+    rnd.inputs["Seed"].default_value = b["seed"]
+    # left end: odd teeth pulled in; right end: even teeth (the two ends never mirror each other)
+    tooth = g.math("ADD", g.math("MULTIPLY", left, odd), g.math("MULTIPLY", g.math("SUBTRACT", 1.0, left),
+                                                               g.math("SUBTRACT", 1.0, odd)))
+    pull = g.math("MULTIPLY", g.math("MULTIPLY", g.math("MULTIPLY", end, tooth), rnd.outputs[1]), b["torn"] * h)
+    dx = g.math("MULTIPLY", pull, g.math("SUBTRACT", 1.0, g.math("MULTIPLY", left, 2.0)))   # +x on the left, -x right
+    off = g.node("ShaderNodeCombineXYZ")
+    g.put(off.inputs[0], dx)
+    sp = g.node("GeometryNodeSetPosition")
+    g.put(sp.inputs["Geometry"], uv.outputs[0])
+    g.put(sp.inputs["Offset"], off.outputs[0])
+    mv = g.node("GeometryNodeTransform")
+    g.put(mv.inputs["Geometry"], sp.outputs[0])
+    mv.inputs["Translation"].default_value = (cx, cy, 0.0)
+    st = g.node("GeometryNodeStoreNamedAttribute", data_type="FLOAT", domain="POINT")
+    g.put(st.inputs["Geometry"], mv.outputs[0])
+    st.inputs["Name"].default_value = "mk_alpha"
+    g.put(st.inputs["Value"], getattr(g, "opacity", 1.0))
+    return st.outputs[0]
+
+
+def _tree_kinetic(name, P, string, mat):
+    """The node group of a kinetic word: String to Curves (tracking keyed) -> typewriter -> Fill Curve on the character
+    instances -> per-letter drip and the attributes the material reads -> Realize -> weight -> extrude -> placed ->
+    keyed transform about the pivot -> only while `Show` says so."""
+    kin = P["kin"]
+    nt = _new_tree(name)
+    g = _G(nt)
+    stc = _string_to_curves(g, P["font"], P["align_x"], P["tracking"], P["words"])
+    stc.inputs["Size"].default_value = P["em"]
+    stc.inputs["Line Spacing"].default_value = P["ls"]
+    g.put(stc.inputs["String"], string)
+    if "tracking" in kin:
+        g.put(stc.inputs["Character Spacing"], _val(g, NODE_NAMES["tracking"], kin["tracking"][0][1] * P["tracking"]))
+    if "drip" in kin:
+        stc.pivot_mode = "TOP_CENTER"                             # each letter stretches from the middle of its top
+        g.piv = stc.outputs["Pivot Point"]
+    curves = stc.outputs["Curve Instances"]
+    if P["reveal"]:
+        curves = _reveal(g, curves)
+    fill = g.node("GeometryNodeFillCurve")
+    g.put(fill.inputs["Curve"], curves)
+    inst = _letters(g, P, fill.outputs[0], kin)
+    real = g.node("GeometryNodeRealizeInstances")
+    g.put(real.inputs["Geometry"], inst)
+    mesh = real.outputs[0]
+    if "weight" in kin:
+        mesh = _grown(g, P, mesh, _val(g, NODE_NAMES["weight"], kin["weight"][0][1]))
+    if P["depth"] > 0:
+        ext = g.node("GeometryNodeExtrudeMesh", mode="FACES")
+        g.put(ext.inputs["Mesh"], mesh)
+        ext.inputs["Offset Scale"].default_value = P["depth"]
+        mesh = ext.outputs["Mesh"]
+    motion = _motion(g, P, kin)
+    geo = _placed(g, P, mesh, mat, 0.0, motion)
+    if P.get("outline"):
+        o = P["outline"]
+        join = g.node("GeometryNodeJoinGeometry")
+        g.put(join.inputs["Geometry"], geo)
+        g.put(join.inputs["Geometry"], _placed(g, P, _grown(g, P, mesh, o["width"]), o["material"], -o["dz"], motion))
+        geo = join.outputs[0]
+    if P.get("backing"):
+        b = P["backing"]
+        join = g.node("GeometryNodeJoinGeometry")
+        g.put(join.inputs["Geometry"], geo)
+        g.put(join.inputs["Geometry"], _placed(g, P, _tape_mesh(g, P, b), b["material"], -b["dz"], motion))
+        geo = join.outputs[0]
+    if "show" in kin:
+        sw = g.node("GeometryNodeSwitch", input_type="GEOMETRY")
+        g.put(sw.inputs[0], g.math("GREATER_THAN", _val(g, "Show", 0.0), 0.5))
+        g.put(sw.inputs[2], geo)                                  # inputs: Switch, False (empty), True
+        geo = sw.outputs[0]
+    out = g.node("NodeGroupOutput")
+    g.put(out.inputs[0], geo)
+    return nt
+
+
+def _key_node(ctx, nt, node, keys, interp="LINEAR", scale=1.0):
+    """Keys on a Value node's output: frames rounded to 1e-4 (a CONSTANT key must sit on its frame, not 1e-13 after
+    it); a list whose values are all one number just sets the node's default."""
+    pts = {}
+    for t, v in keys:
+        pts[round(ctx.frame(t), 4)] = float(v) * scale
+    frames = sorted(pts)
+    vals = [pts[f] for f in frames]
+    n = nt.nodes[node]
+    if len(set(round(v, 9) for v in vals)) == 1:
+        n.outputs[0].default_value = vals[0]
+        return
+    K.set_fcurve(nt, f'nodes["{node}"].outputs[0].default_value', 0, frames, vals, interp=interp)
+
+
+def _key_kinetic(ctx, nt, kin, P):
+    """Key every channel of a kinetic word onto its Value nodes; returns how many keys were written."""
+    n_keys = 0
+    for ch in FX.KEYED:
+        if ch in kin:
+            _key_node(ctx, nt, NODE_NAMES[ch], kin[ch], scale=P["tracking"] if ch == "tracking" else 1.0)
+            n_keys += len(kin[ch])
+    if "tint" in kin:
+        _key_node(ctx, nt, NODE_NAMES["tint"], kin["tint"]["keys"])
+        n_keys += len(kin["tint"]["keys"])
+    if "show" in kin:
+        on = kin["show"][0]
+        keys = [(on - 1.0 / ctx.fps, 0.0), (on, 1.0)] + ([(kin["show"][1], 0.0)] if len(kin["show"]) > 1 else [])
+        _key_node(ctx, nt, "Show", keys, "CONSTANT")
+        n_keys += len(keys)
+    d = kin.get("drip")
+    if d:
+        end = d["t"] + d["life"] + LY.DRIP_SPREAD + 0.1
+        _key_node(ctx, nt, "Drip", [(d["t"] - 1.0 / ctx.fps, -1.0 / ctx.fps), (end, end - d["t"])])
+        n_keys += 2
+    return n_keys
+
+
 # ------------------------------------------------------------------------------------------------------ stage
 def _ghost(spec, strings):
     """(settings, string of unlit segments) or (None, None): `ghost = true | 0.10` or {strength, text, color}."""
@@ -516,6 +884,14 @@ def _halo_spec(spec):
     return {"strength": float(h.get("strength", HALO_STRENGTH)), "size": float(h.get("size", HALO_SIZE))}
 
 
+def _measurer(coll, cache, font, font_label, align, tracking, words):
+    """The shared _Measure of a font / alignment / spacing combination."""
+    tag = f"{font_label}|{align}|{tracking:g}|{words:g}"
+    if tag not in cache["measure"]:
+        cache["measure"][tag] = _Measure(coll, font, ALIGN_X[align], tracking, words, str(len(cache["measure"])))
+    return cache["measure"][tag]
+
+
 def _one(ctx, coll, spec, cache):
     name = spec.get("name")
     if not name:
@@ -525,6 +901,12 @@ def _one(ctx, coll, spec, cache):
         raise BuildError(f"text {name!r}: unknown keys {unknown} (known: {sorted(KNOWN)})")
     if bpy.data.objects.get(name) is not None:
         raise BuildError(f"text {name!r}: an object of that name exists already")
+    kin = FX.kinetic_spec(spec)
+    backing = FX.backing_spec(spec)
+    outline = FX.outline_spec(spec)
+    if (backing or outline) and kin is None:      # a strip or ring behind a plain text: the kinetic tree builds it too
+        kin = FX.kinetic_spec({**spec, "kinetic": {}})
+    lyric = spec.get("lyric")
     parent, inverse, F, panel, owner, label = _place(ctx, spec)
     strings, number = _content(ctx, spec)
     reveal = spec.get("reveal")
@@ -536,10 +918,7 @@ def _one(ctx, coll, spec, cache):
     font, font_label = _font(ctx, spec.get("font"), cache)
     align, valign = T.parse_align(spec.get("align"), spec.get("valign"))
     tracking, words = float(spec.get("tracking", 1.0)), float(spec.get("word_spacing", 1.0))
-    tag = f"{font_label}|{align}|{tracking:g}|{words:g}"
-    if tag not in cache["measure"]:
-        cache["measure"][tag] = _Measure(coll, font, ALIGN_X[align], tracking, words, str(len(cache["measure"])))
-    meas = cache["measure"][tag]
+    meas = _measurer(coll, cache, font, font_label, align, tracking, words)
     cap_ratio = meas.cap_ratio()
     ls = float(spec.get("leading", 1.5)) * cap_ratio
 
@@ -547,8 +926,13 @@ def _one(ctx, coll, spec, cache):
     ghost, ghost_text = _ghost(spec, strings)
     boxes = [b for b in (meas.ink(s, ls) for s in strings + ([ghost_text] if ghost_text else [])) if b]
     if not boxes:
-        raise BuildError(f"text {name!r}: the font draws nothing for {strings[0]!r}")
-    ref = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+        shown = f"the word ({lyric[0]}, {lyric[1]})" if lyric is not None else repr(strings[0])
+        raise BuildError(f"text {name!r}: the font draws nothing for {shown}")
+    ref0 = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+    ref = ref0
+    if kin and kin.get("headroom"):          # the letters spread: the fit leaves room for the widest the word gets
+        h = 1.0 + kin["headroom"]
+        ref = (ref0[0] * h, ref0[1], ref0[2] * h, ref0[3])
     lay = T.plan_layout(ref, cap_ratio, panel=panel, size=spec.get("size"), fit=spec.get("fit"), align=align,
                         valign=valign, offset=spec.get("offset", (0.0, 0.0)))
     warn = None
@@ -564,12 +948,24 @@ def _one(ctx, coll, spec, cache):
             lit = NK.hexof(ctx.palette, spec.get("color", "text"))
             grgb = NK.rgb(ctx.palette, ghost["color"] if "color" in ghost
                           else T.ghost_colour(lit, ctx.palette["muted"]))
+        to_rgb = NK.rgb(ctx.palette, kin["tint"]["color"]) if kin and "tint" in kin else None
+        if backing:
+            backing["rgb"] = NK.rgb(ctx.palette, backing["color"])
+            backing["pattern_rgb"] = NK.rgb(ctx.palette, backing["pattern_color"])
+        if outline:
+            outline["rgb"] = NK.rgb(ctx.palette, outline["color"])
     except KeyError as e:
         raise BuildError(f"text {name!r}: {e.args[0]}")
     haze = _haze(ctx, spec, owner)
     fade, fade_interp = _fade(spec)
     gains = ("Gain", "Fade") if fade else ("Gain",)
-    mats = {"lit": _material(f"{name}_text", rgb, glow, haze, gains)}
+    lit = float(spec.get("lit", 1.0))
+    if not 0.0 <= lit <= 1.0:
+        raise BuildError(f"text {name!r}: lit is a share of the scene's light, 0..1")
+    if kin is not None:
+        mats = {"lit": _kinetic_material(cache, rgb, glow, to_rgb, haze, lit)}
+    else:
+        mats = {"lit": _material(f"{name}_text", rgb, glow, haze, gains, lit)}
     if ghost is not None:
         g_glow = glow * T.display_share(ghost.get("strength", GHOST_STRENGTH))
         mats["ghost"] = _additive(f"{name}_ghost", grgb, g_glow, ("Fade",) if fade else ())
@@ -581,7 +977,22 @@ def _one(ctx, coll, spec, cache):
     P = {"font": font, "align_x": ALIGN_X[align], "tracking": tracking, "words": words, "em": lay.em, "ls": ls,
          "tx": lay.tx, "ty": lay.ty, "depth": float(spec.get("depth", 0.0)), "reveal": bool(reveal),
          "ghost_text": ghost_text, "halo_r": (halo["size"] * lay.cap) if halo else 0.0}
-    nt = _tree(f"mk_text_{name}", P, strings[0] if number is None else number, mats)
+    if kin is not None:
+        cx, cy = lay.tx + 0.5 * (ref0[0] + ref0[2]) * lay.em, lay.ty
+        cy += {"center": 0.5 * (ref0[1] + ref0[3]), "bottom": ref0[1], "top": ref0[3]}[kin.get("pivot", "center")] * lay.em
+        P.update(kin=kin, pivot=(cx, cy), panel=panel)
+        if outline:
+            outline["material"] = _kinetic_material(cache, outline["rgb"], 1.0, None, haze, 0.0, outline["alpha"])
+            P["outline"] = outline
+        if backing:
+            ink_w = (ref0[2] - ref0[0]) * (1.0 + 0.8 * (kin.get("headroom") or 0.0))
+            w, h = FX.tape_size(backing, ink_w, ref0[3] - ref0[1], lay.em)
+            backing.update(size=(w, h), centre=(0.5 * (ref0[0] + ref0[2]) * lay.em, 0.5 * (ref0[1] + ref0[3]) * lay.em))
+            backing["material"] = _tape_material(f"{name}_tape", backing, backing["rgb"], backing["pattern_rgb"], w, h)
+            P["backing"] = backing
+        nt = _tree_kinetic(f"mk_text_{name}", P, strings[0], mats["lit"])
+    else:
+        nt = _tree(f"mk_text_{name}", P, strings[0] if number is None else number, mats)
     ob = bpy.data.objects.new(name, bpy.data.meshes.new(name))
     coll.objects.link(ob)
     ob.modifiers.new("Text", "NODES").node_group = nt
@@ -594,13 +1005,18 @@ def _one(ctx, coll, spec, cache):
             ob.matrix_parent_inverse = inverse
         ob.matrix_basis = M
     ob.visible_shadow = P["depth"] > 0
+    if lyric is not None:                  # which sung word this is, as numbers (the text itself lives in the nodes)
+        ob["mk_lyric"] = [int(lyric[0]), int(lyric[1])]
 
-    # time: keys on node inputs (a number, the typewriter ramp, the emission gain), nothing else moves
+    # time: keys on node inputs (a number, the typewriter ramp, the emission gain, kinetic channels), nothing else moves
+    n_keys = 0
     if number is not None:
         _key(nt, 'nodes["Value"].outputs[0].default_value', number["keys"], ctx, number["interp"])
     if reveal:
         _key(nt, 'nodes["Reveal"].outputs[0].default_value',
              T.reveal_keys(float(reveal["from"]), float(reveal["to"]), ctx.fps), ctx, "LINEAR")
+    if kin is not None:
+        n_keys = _key_kinetic(ctx, nt, kin, P)
     gain = None
     for kind, fn in (("blink", T.blink_keys), ("flicker", T.flicker_keys)):
         if kind in spec:
@@ -616,10 +1032,20 @@ def _one(ctx, coll, spec, cache):
 
     ctx.texts = getattr(ctx, "texts", {})
     ctx.texts[name] = ob
-    widest = max(strings, key=len).replace("\n", " / ")
     info = {"on": label, "font": font_label, "cap_mm": round(lay.cap * 1000, 2), "em_mm": round(lay.em * 1000, 2),
             "ink_m": [round(v, 4) for v in lay.ink], "panel_m": list(panel) if panel else None, "fits": lay.fits,
-            "widest": widest if len(widest) <= 40 else widest[:37] + "...", "strings_measured": len(strings)}
+            "strings_measured": len(strings)}
+    if lyric is None:                    # a word of lyrics never leaves its text in a report
+        widest = max(strings, key=len).replace("\n", " / ")
+        info["widest"] = widest if len(widest) <= 40 else widest[:37] + "..."
+    else:
+        info["lyric"] = list(lyric)
+        info["chars"] = len(strings[0])
+    if kin:
+        info["kinetic_keys"] = n_keys
+        if "show" in kin:
+            info["frames"] = [int(round(ctx.frame(kin["show"][0]))),
+                              int(round(ctx.frame(kin["show"][1]))) if len(kin["show"]) > 1 else None]
     if warn:
         info["warning"] = warn
     if number is not None:
@@ -627,25 +1053,60 @@ def _one(ctx, coll, spec, cache):
     return info
 
 
+def _measure_fn(ctx, coll, cache, spec):
+    """callable(string) -> {w, y0, y1, cap}: the ink box of a string at em size 1 in the font, tracking and spacing of
+    `spec` (centred), for the lyrics stage's layouts. Nothing about the string reaches an error message."""
+    font, label = _font(ctx, spec.get("font"), cache)
+    tracking, words = float(spec.get("tracking", 1.0)), float(spec.get("word_spacing", 1.0))
+    meas = _measurer(coll, cache, font, label, "center", tracking, words)
+    cap = meas.cap_ratio()
+    ls = float(spec.get("leading", 1.5)) * cap
+
+    def measure(s):
+        b = meas.ink(s, ls)
+        if b is None:
+            raise T.TextError("the font draws nothing for one of the words")
+        return {"w": b[2] - b[0], "y0": b[1], "y1": b[3], "cap": cap}
+
+    return measure
+
+
 def run(ctx):
     specs = ctx.data.get("text", [])
     if not specs:
         return {}
     coll = collection("Text")
-    cache = {"fonts": {}, "measure": {}}
+    cache = {"fonts": {}, "measure": {}, "kmats": {}}
     out = {}
     try:
         for spec in specs:
-            name = spec.get("name", "?")
-            try:
-                out[name] = _one(ctx, coll, spec, cache)
-            except T.TextError as e:
-                raise BuildError(f"text {name!r}: {e}") from None
-            except BuildError as e:
-                if not str(e).startswith("text "):
+            if spec.get("ink") is not None:               # handwriting ink on a surface: build/ink.py
+                from . import ink as INK
+                out[spec.get("name", "ink")] = INK.build(ctx, coll, spec)
+                ctx.log("ink", spec.get("name", "ink"), out[spec.get("name", "ink")].get("strokes"))
+                continue
+            if spec.get("lyrics") is not None:            # lyric type: one text per word, built from the timeline
+                from . import wordtype as LYB
+                report = {}
+                try:
+                    subs = LYB.expand(ctx, spec, _measure_fn(ctx, coll, cache, spec), report)
+                except T.TextError as e:
+                    raise BuildError(f"text {spec.get('name', '?')!r}: {e}") from None
+                out[spec["name"]] = {"lyrics": report}
+            else:
+                subs = [spec]
+            for sub in subs:
+                name = sub.get("name", "?")
+                try:
+                    out[name] = _one(ctx, coll, sub, cache)
+                except T.TextError as e:
                     raise BuildError(f"text {name!r}: {e}") from None
-                raise
-            ctx.log("text", name, out[name]["on"])
+                except BuildError as e:
+                    if not str(e).startswith("text "):
+                        raise BuildError(f"text {name!r}: {e}") from None
+                    raise
+            ctx.log("text", spec.get("name", "?"),
+                    f"{len(subs)} object(s)" if len(subs) != 1 else out[subs[0]["name"]]["on"])
     finally:
         for m in cache["measure"].values():
             m.close()

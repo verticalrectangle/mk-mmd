@@ -161,15 +161,40 @@ def _run(args, reg):
         reg.save()
     elif act == "credits":
         slugs = list(args.slugs)
+        lines = []
         if not slugs:
             proj = get_project(args, required=True)
             slugs = [c["asset"] for c in proj.cast if c.get("asset")]
             slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
-        if not slugs:
-            raise UsageError("no assets: give slugs, or list them in the project's cast / [credits] assets")
-        text, problems = reg.credits(slugs)
+            lines = proj.data.get("credits", {}).get("lines", [])
+        if not slugs and not lines:
+            raise UsageError("no assets: give slugs, or list them in the project's cast / [credits] assets / lines")
+        text, problems = reg.credits(slugs) if slugs else ("# Credits\n", [])
+        text = text.rstrip("\n") + "\n" + extra_credits(lines)
         if args.out:
             Path(args.out).write_text(text + "\n", encoding="utf-8")
-        emit({"assets": slugs, "out": args.out, "problems": problems, "text": None if args.out else text})
+        emit({"assets": slugs, "lines": len(lines), "out": args.out, "problems": problems,
+              "text": None if args.out else text})
         return CHECK_FAILED if problems else 0
     return 0
+
+
+def extra_credits(lines):
+    """Markdown for the project's own credit lines (`[credits] lines = [...]`: the song, a print made for the project, the
+    palette, tools). A line starting with `#` is a heading and passes through; the rest are bullets, under `## Also`
+    until a heading says otherwise. Empty for no lines."""
+    if not lines:
+        return ""
+    out, heading = [], False
+    for ln in (str(x).strip() for x in lines):
+        if not ln:
+            continue
+        if ln.startswith("#"):
+            out += ["", "## " + ln.lstrip("#").strip(), ""]
+            heading = True
+            continue
+        if not heading:
+            out += ["", "## Also", ""]
+            heading = True
+        out.append(f"- {ln}")
+    return "\n".join(out) + "\n"

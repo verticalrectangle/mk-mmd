@@ -105,6 +105,7 @@ asset = "miy_reisen"    # registry slug (its rig.json); or rig = "path/to/model.
 
 [credits]
 assets = ["miy_reisen"] # everything else the credits must name (audio, props, motions)
+lines = ["## Music", "A Band - A Song (used as the soundtrack)", "## Palette", "Rose Pine Dawn"]   # credits only the project knows
 
 [colliders]            # named sets of scene collision shapes, see Colliders
 cafe = [{ type = "box", object = "ChairColBack", rnd = 0.012 }, { type = "floor", z = 0.0 }]
@@ -119,7 +120,8 @@ max = 0.5
 
 Project-specific reference data that only the project can compute (where a nib should be, when a hand writes) goes
 to `tracks/<name>.json`: `{"frames": [...], "<channel>": [one value per frame (number, vector or null)], ...}`.
-Checks refer to channels as `track:<name>.<channel>`.
+Checks refer to channels as `track:<name>.<channel>`. Dense geometry that a one-position-per-frame track cannot hold, such
+as the strokes of handwriting, has a shape of its own (`tracks/ink.json`, see Text: Ink).
 
 ## Model description: `rig.json` (schema 1)
 
@@ -208,7 +210,9 @@ texture or font.
 
 mk never guesses a license. New entries are `unreviewed` and keep the paths of the readme files found next to the
 asset; someone who has read them fills in `license`, `restrictions` and `credit`. `mk assets credits` builds the
-credits from the project's cast and `[credits] assets` and exits 1 while any of them is unreviewed.
+credits from the project's cast and `[credits] assets` and exits 1 while any of them is unreviewed; `[credits] lines` are
+the project's own lines (a song, a print made for it, the palette, tools), appended as bullets under `## Also` or under
+the `## Heading` lines among them.
 
 ## Colliders
 
@@ -307,7 +311,8 @@ form_exempt = [...] }`; `exclude` removes objects altogether. Calibration on the
 `mk look` renders views without touching the file: the cut (scene camera with its timeline markers) per output
 aspect, named cameras, or orbit presets around any target expression relative to a cast member's facing. It writes
 one JPEG per view, aspect and frame, plus optional contact sheets, strips, A/B pairs against another scene and
-framing guides.
+framing guides. The cut shows a shot's render-time look (silhouette, reflection; see Shots) as `mk render` will draw it;
+`--no-styles` draws every shot as it is lit.
 
 ## Building
 
@@ -326,7 +331,7 @@ in order and each reads its own sections:
 | perform | `[perform.<cast>]` | gaze events over an idle target, eye-only glances (`glance`: the eyes lead, the head lifts a little, the lids open), breathing, sway, nod, beat bob, startles, keyed upper-body `lean` / `turn` (a reach that leans in and settles back), blinks, lids, expressions, lip sync, twitches |
 | shots | `[[shot]]` | the cut, see Shots |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure |
-| text | `[[text]]` (`name`, `on` or `mount` / `at` / `facing` / `box`, `text` or `value`, `font`, `size` or `fit`, `align`, `offset`, `color`, `glow`, `depth`, `reveal`, `blink`, `flicker`; see Text) | type on set and prop surfaces: fitted, palette-coloured, a typewriter reveal, a keyed number; geometry nodes with keyed inputs, so EEVEE needs no Python at render time |
+| text | `[[text]]` (`name`, `on` or `mount` / `at` / `facing` / `box`, `text` or `value`, `font`, `size` or `fit`, `align`, `offset`, `color`, `glow`, `depth`, `reveal`, `blink`, `flicker`, `lyrics`, `kinetic`, `backing`, `outline`, `ink`; see Text) | type on set and prop surfaces: fitted, palette-coloured, a typewriter reveal, a keyed number; geometry nodes with keyed inputs, so EEVEE needs no Python at render time; `lyrics` is one text per sung word, read from the timeline and landing on its onset (arrival, letter spread, weight, drip, tape behind it, all keyed); `ink` is handwriting that appears behind a pen's nib (a ribbon mesh with write times, a keyed clock) |
 | keys | `[[key]]` (`target`, `prop`, `index`, `keys = [[t, v], ...]`, `interp`, `relative`) | keys on set, prop and object properties: a set's storm and fog, a car's lamps, any RNA path (`location`, `data.energy`); `relative = true` adds the values as offsets to what the property already does (a value another stage solved, such as a hand's grip target) and keeps its animation outside the keys' span |
 | sim | `[sim.<cast>]` (`families`, `params`, `colliders`, `props`, `fingers`, `floor`, `wind`) | secondary motion solved outside Blender (`mkmmd.solvers.strands`) and baked to keys; branching chains solve as trunk then branches; `wind.carrier = "car"` makes the air relative to a vehicle. `params.<family>`: `sag`, `drag`, `zeta`, `radius`, `radius_max`, `friction`, `wind_drag`, and for sheets (skirts) `lateral` (0..1, default 0.5: the chains of a skirt are tied to their neighbours in a ring found from the rest positions, and the cloth between them is kept out of seats and thighs; 0 = independent chains), `lateral_collide`, `anchor_free`. Strands stay inextensible, so the baked bones render the solved particles |
 | save | | the `.blend` |
@@ -514,11 +519,61 @@ checks between a fingertip bone's tail and the prop (see AGENTS.md).
 `[[shot]]` (`name`, `from`, `to` in clip seconds) makes one camera per output aspect (`<shot>@<output>`), keyed on
 every frame: `mount` (a prop, set or object the camera rides), `at` (in the mount's frame), `look` (any target),
 `lens`, `roll`, `lag` (operator lag in seconds, applied in the mount's frame so a camera in a car lags the subject,
-not the road), `shake` (handheld, degrees), `keys = [{t, at, look, lens}]` for moves, `dof = {focus, fstop}`, and
+not the road), `shake` (handheld, degrees), `keys = [{t, at, look, lens, shift}]` for moves, `dof = {focus, fstop}`, and
 `frame = {subject, fill, solve}` to solve the lens (or dolly) per aspect so the subject fills that share of the
 frame height. `[shot.aspect.<output>]` overrides any key for one aspect. Timeline markers cut between shots; the
 scene keeps the shot table in `scene["mk_shots"]`, and `mk look` / `mk render` point the markers at each aspect's
 cameras before rendering it.
+
+`shift = [x, y]` is Blender's lens shift: fractions of the larger image side, the picture moving the other way (a positive `y`
+moves it down; probed in Blender 4.2.3), constant or keyed in `keys[].shift`. It is how a 1:1 output becomes an exact crop of a
+9:16 master: the square camera keeps the master's position, aim, roll and keys and changes three numbers (`crop_camera` in
+`mkmmd/core/shotstyle.py`): the lens × 1920/1080 (a pixel keeps its angular size), the `dof` f-stop × 1920/1080 (the blur keeps its
+size in pixels) and `shift = [0, (420 − top) / 1080]` for a crop whose top row lies `top` px below the master's top, so the
+master's axis sits `960 − top` px below the crop's top (`top = 420` is centred: no shift). Against a render of the master the crop
+differs by 0.4/255 on average (anti-aliasing); pitching the aim to follow the crop instead is off by up to 88 px at the corners.
+`roll` turns the picture around the shifted axis: keep rolled shots centred.
+
+### Looks: silhouette and reflection
+
+Two looks need more than the lit scene. They belong to the shot and are switched on and off frame by frame by `mk render` and
+`mk look` (`mkmmd/blender/styles.py`; the normalised specs per output aspect are in the shot table), put back everything they
+change, and leave `mk post` to grade the finished frames as usual. `mk render --no-styles` and `mk look --no-styles` draw every shot as lit. The build
+resolves the colours, checks the glass object and logs a WARNING for an object pattern that matches nothing. Object patterns are
+`name*` (fnmatch on the object name, case-sensitive), `@collection` (in that collection or below) and `prop:key` (that custom
+property is set on the object).
+
+| Key | Meaning |
+|---|---|
+| `style = "silhouette"` | the flat look of the lightning and sunbreak shots: a flat background, the scene as one colour, accents in another. `style = "none"` in `[shot.aspect.<output>]` switches an inherited look off |
+| `colors = {background, subject, accent}` | palette slot, `#hex`, `"a:b:t"` mix or `[r, g, b]` (defaults base, text, surface) |
+| `hide`, `keep` | objects not rendered (walls, outside, rain), minus `keep` |
+| `accent` | objects in the accent colour. One with a transparent material (a lightning bolt) keeps its softness; the others (earbud cords) are painted over everything and grown by `grow` px (1, counted at 1080 wide) so a thin wire reads |
+| `tint = [{object, prop, color, gain, glow}]` | the background moves toward `color` by min(1, gain × the custom property `prop` of `object`): a lightning flash. `glow = {at = [x, y], size = [sx, sy]}` makes it a gaussian bloom from that point (fractions of the frame from the top left) |
+| `knockout = {objects, color}` | type reversed over the silhouette: `color` on the background, the background colour where it overlaps the silhouette. These objects are drawn over everything; other type is hidden behind what stands in front of it |
+| `samples = 16` | EEVEE samples of the passes below |
+| `reflection = {object, strength, dim, roughness, hide, only, bend, world, tint}` | her image in a window pane (below) |
+
+Silhouette. Blender 4.2.3 ignores `view_layer.material_override` in EEVEE Next and Workbench (only Cycles honours it), so the
+frame is composed inside the render call from passes that work, with the formulas of the original video's post
+(`compose_silhouette`, numpy): Workbench with flat light and `Object.color` draws the subject and the cords in their colours
+(exact to one level of 255, Workbench's colour transform); EEVEE with an AOV on the Mix Shader factor of the accent objects'
+materials and the compositor (R = alpha, B = AOV, Raw) gives the bolt as the original's `sil` pass did (`sil = alpha − bolt`: the
+AOV is painted in the accent colour, what its soft shells have beyond that stays a glow in the subject colour); type, the objects
+whose modifier node group starts with `mk_text_`, is rendered by EEVEE with the lights off and a black world as its emission shows
+it, keyed opacity included, and drawn over the silhouette; `knockout` objects likewise as a mask. Against the original's own sil
+pass at three frames the bolt's alpha and AOV agree to 0.002 (mean absolute) and the composed frame to 1.2–2.1/255 (the rest is
+the scene: her pose, the cords' route); the flat colours graded by `[post]` land within 1–2 levels of the delivered frames. A
+frame costs about a second at 540 px wide (Workbench 0.2 s, the EEVEE passes the rest); silhouettes are always 8-bit.
+
+Reflection. `reflection = {object = "<glass>"}` shows what stands in front of a window pane; screen-space tracing cannot see a person
+behind the camera. EEVEE Next draws it through a plane light probe on the glass (the set's own probe at the pane, else one is made)
+and a mirror layer mixed in front of the glass shader: `strength` (0.5) of a Glossy BSDF (`roughness`, tinted by `tint`) over the
+glass dimmed by `dim`. The rain bends the reflection only with `bend`. `hide` and `only` choose what the pane reflects (the probe
+skips the other objects) and the sky is black in it unless `world`, so a pane that reflects only the sitter lets the dimmed street
+show through at 1 − `strength`. The original composed a mirrored-camera pass at 18 % for the room and 52 % where she is (street
+at 57 %); one mirror weighs both the same, which is why the room is left out. Against that composite (type and grade left out) the
+error of the frame drops from 32 to 17 of 255 with `strength` 0.3–0.4; the sitter's own region (24 → 21) is limited by her pose.
 
 ## Text
 
@@ -549,6 +604,13 @@ and before `keys`, so `[[key]]` can toggle a text's `hide_render` or move it.
 | `ghost` | `true`, a number or `{strength, text, color}`: for display fonts, the unlit segments behind the lit ones (the widest string with every letter and digit as an 8), added as light so they stay a faint hint. `strength` is their brightness as a share of the lit segments' as displayed (0.10; the emission is that share to the 2.2), their colour the text's pulled halfway to the palette's `muted` |
 | `halo` | `true` or `{strength, size}`: a slight glow past the lit edges (copies of the lit shapes on three rings, additive, just behind them); `strength` the share of the lit emission it adds (0.3), `size` its reach in cap heights (0.04). EEVEE has no bloom; `mk post` halation comes on top |
 | `haze` | `false` or `{distance, cap}`; text on a `highway` set fades into the road's haze like its signs |
+| `lit` | share of the scene's light the letters also reflect (1.0); 0 is flat ink: only the emission shows |
+| `back` | `true`: the text goes on the other side of a card surface (its normal reversed, `up` kept: a pane read from outside) |
+| `backing` | `{color, pattern, pattern_color, pad, height, torn, glow, scale, dz, seed}`: a strip of tape behind the text, the ink box plus `pad` [x, y] (em; 0.55, 0.3) or `height` em, ends torn by `torn` x its height (0.1), `pattern` `plain` / `stripe` / `dots` / `check` drawn from the strip's own UV; it moves, rotates and fades with the word |
+| `outline` | `{color, width, alpha, dz}`: a ring of another colour behind the letters (the filled shapes grown by `width` em, 0.05, at `alpha` 0.5) so they read on any background |
+| `kinetic` | `{show, scale, sx, sy, dx, dy, dxp, dyp, rot, pivot, tracking, weight, opacity, tint, drip}`: motion keyed on node inputs, written by `lyrics` (see Lyrics) or by hand |
+| `lyrics` | `{timeline, line, words, style, ...}`: one text per sung word, read from the timeline, see Lyrics below |
+| `ink` | `{strokes \| track, on, width, lift, color, dry, glossy, from, to}`: handwriting instead of type, a pen's strokes that appear behind the nib; the entry carries only `name` and `ink`, see Ink below |
 
 ```toml
 [[text]]                              # a highway sign panel: two lines, fitted to 80 % of the panel
@@ -588,8 +650,139 @@ Fonts live in the asset library (`<assets>/fonts/<family>/`, licence files besid
 `mk assets add FILE --kind font --slug ...`, with licence and credit filled in; list the slugs in `[credits] assets`.
 Registered: `dseg7_classic`, `dseg7_classic_bold` (7-segment digits, OFL, keshikan), `overpass_regular`,
 `overpass_semibold`, `overpass_bold` (highway signage, OFL, Red Hat), `monoton`, `audiowide` (80s display, OFL),
-`permanent_marker` (hand lettering, Apache 2.0). Use static fonts: Blender reads a variable font's default instance.
+`permanent_marker` (hand lettering, Apache 2.0), `fraunces_italic`, `fraunces_roman`, `fraunces_semibold`, `fraunces_black` (a
+variable serif, OFL, Undercase Type). Use static fonts: Blender reads a variable font's default instance. `python -m
+mkmmd.fontinst SRC.ttf OUT.ttf wght=420 opsz=72 SOFT=100` pins a variable font's axes into a static font (`--axes` lists
+them; needs fontTools), which is how the Fraunces entries were made.
 
+### Lyrics
+
+A `[[text]]` with `lyrics = {...}` is lyric type: one text per sung word, read from the timeline and keyed so that every word
+lands on its onset. `mkmmd/core/wordtype.py` (numpy only, tested on synthetic timelines) selects the words and decides when each
+lands, arrives, spreads, weighs, leaves and where it stands; `mkmmd/blender/build/wordtype.py` reads the file and hands one
+ordinary text per word to the stage, each with a `kinetic` table of keys. The entry's other keys (`on`, `mount` / `at` /
+`facing` / `box`, `font`, `size` / `fit`, `color`, `glow`, `lit`, `depth`, `lift`, `offset`, `outline`, `backing`, ...) go to
+every word; `on` may be a list of surfaces (word k goes to surface k mod len: a diagonal chain over window panes in lyric
+order is such a list, each word fitted into its own pane). Words that must stay where they are on screen
+while the camera moves (macro shots against glass) go on a plane that rides the shot's camera: `mount = "<shot>@<output>"`,
+`at = [0, 0, -distance]`, `facing = [0, 0, 1]`, `up = [0, 1, 0]`.
+
+The words never leave the local files: the log, the stage report, errors, object names (`<name>_l<line>w<word>`) and custom
+properties (`mk_lyric = [line, word]`) carry numbers only; the string lives in the object's String to Curves input and nowhere
+else. Lines and words are numbered from 1 as everywhere.
+
+**Timing.** A word lands on clip frame `floor(start * fps + 0.4)`, never before the frame of `from`, and is on screen from that
+frame (its arrival plays after it). It is gone from `round(frame0 + to * fps)`, the frame the shots stage cuts to the next shot,
+or earlier when its line drips away (`leave`) or another word takes its slot (`recycle`); a word that would never be on screen
+is left out (the report lists it by number). Frames in the stage report are Blender frames.
+
+| Key (inside `lyrics = {...}`) | Meaning |
+|---|---|
+| `timeline` | the timeline JSON (project-relative, or `~/...`) |
+| `line`, `lines = [a, b]`, `words = [i, j]` | 1-based and inclusive; `words` applies to every selected line (one number: one word) |
+| `case`, `clean` | `keep` / `lower` / `upper` / `title`; `clean = true` keeps letters, digits and apostrophes |
+| `style`, `arrive` | how a word arrives: `pop` (a damped spring about its centre: `arrive = {a, td, tp, rise, jitter}`), `slap` (`pop` plus a decaying wobble: `wobble`), `drop` (falls in from half a panel above and squashes on landing, about its bottom: `drop`), `rise` (steam: from `arrive.base` = [u, v] shares of the panel, default the last word's slot, to its slot, swaying, arriving when the last word lands: `sway`, `sway_rot`), `type` (a typewriter over the note), `none`. Every style takes `alpha0` and `alpha_frames`: the opacity at the landing (1.0) and the frames it takes to reach 1 |
+| `from`, `to` | clip seconds the type may show; default `to`: the end of the last word's note |
+| `leave` | `cut` (default: hold to the cut) or `drip`: when a tempo tick falls between the end of the last word's note (minus 30 ms) and `to - 0.4 s`, every letter stretches downward from its top and falls like a drop, the first one leaving on the tick's frame; no such tick: it holds to the cut. `drip = {g, stretch, life, gap, order, min_run}`: gravity in px/s² at a 150 px em (2600), extra height (3.2), seconds to fade (0.55), seconds between words, `none` / `bottom_first` / `last_first`, seconds of shot left (0.4) |
+| `spread` | letters spread (tracking grows) while a note is held, by `0.07 + 0.27 smoothstep(0.12, 0.85, hold)` of the word's width with an ease-out cubic, and relax after it with a 0.13 s time constant; the fit leaves room for the widest it gets. `false` or `{scale}` |
+| `weight` | `{lo, hi, breath}`: strokes grow by `lo` .. `hi` em with the word's own `vocal_db` level (the mean over its note), breathing with the voice (smoothed per frame, `breath` 0.65 of it) while the note is held and 0.1 s after |
+| `colors`, `color_by` | accent colours cycled by `line` (default) or by `word` |
+| `recolor` | `{color, from, over, ease, words}`: a keyed mix toward another palette colour (frost, ash) from clip seconds `from` (`"last"`: when the last word lands) over `over` seconds, for `words` = [first, last] of the selection only (default all) |
+| `tilt`, `sizes`, `offsets` | per word: degrees, cap heights (m), `[u, v]` nudges (m) on top of where the word stands: a number or a list cycled over the words (`tilt = {random = deg}`: seeded by the word) |
+| `backing` | a `backing` table, or a list of them cycled over the words |
+| `recycle` | `true` or `{gap, fade, assign}`: a word is gone `gap` frames before the next word of its slot lands and fades over the `fade` frames before; `assign` lists group numbers cycled over the words, apart from where they stand |
+| `layout` | `same` (default: every word in the entry's panel, centred), `flow`, `stack` or `slots`, below |
+
+Layouts. `flow` (`gap` 0.28 em): words side by side in reading order, one row per lyric line, the block centred on the panel
+and fitted to it (one cap height for all). `stack` (`rows`, `pitch` 1.3 em, `dir` `down` | `up`, `align` and `shift` cycled by
+row, `tilt` per row): word k on row `k mod rows`, the first on top (`down`) or at the bottom (`up`). `slots` (`slots = [{at,
+box, align, tilt, size}]`, `assign`): `at = [u, v]` and `box = [w, h]` are shares of the panel (u right, v up from its centre),
+the word is fitted into its box and aligned there; word k takes slot `assign[k]` (default k mod len). A layout needs a panel
+(`on`, or `box`). The words are measured in Blender with the node the text is drawn with; the rest is `core/wordtype.py`.
+
+`kinetic` keys (clip seconds; `[[t, v], ...]` linear keys, one per frame where a value changes): `show = [on, off]` (on screen
+from the frame of `on` until the frame of `off`), `scale`, `sx` / `sy` (squash about the pivot), `rot` (degrees), `dx`, `dy`
+(em), `dxp`, `dyp` (shares of the panel), `pivot` (`center`, `bottom`, `top`), `tracking` (a factor), `weight` (em),
+`opacity`, `tint = {color, keys}` and `drip = {t, g, stretch, life, seed}`. They become keys on Value nodes of the text's node
+group (`Pop`, `SquashX`, `SquashY`, `Rot`, `Dx`, `Dy`, `DxPanel`, `DyPanel`, `Tracking`, `Weight`, `Opacity`, `Tint`, `Show`,
+`Drip`; read one with `mk q 'bpy.data.node_groups["mk_text_<name>"].nodes["Pop"].outputs[0].default_value' --frames ...`), so
+a render needs no Python. Letters stay filled shapes of the String to Curves instances: the drip scales and moves each
+character about its own top, opacity and tint travel as the attributes `mk_alpha` and `mk_tint` that the shared material reads
+(hashed alpha: a word fades without sorting against the glass), the weight is the shape repeated on a ring. A `kinetic` text
+takes no `value`, `blink`, `flicker`, `fade`, `ghost` or `halo` (they need their own material).
+
+```toml
+[[text]]                              # steam words over a mug: they land on their onsets, rise to their slots and frost over
+name = "mug"
+mount = "mug"
+at = [0, 0, 0.14]                     # the plane through the focus point, facing the camera
+facing = [0.495, -0.869, 0.0]
+box = [0.128, 0.137]
+font = "fraunces_italic"
+size = 0.0175
+color = "love:text:0.3"
+lit = 0                               # flat ink
+[text.lyrics]
+timeline = "audio/timeline.json"
+line = 1
+words = [1, 4]
+case = "lower"
+clean = true
+style = "rise"
+from = 1.3                            # the shot's own seconds: no word lands before it, the cut hides them at `to`
+to = 2.6
+arrive = { alpha0 = 0.55, base = [0.0, -0.208] }
+recolor = { color = "foam", from = "last", over = 0.2 }
+[text.lyrics.layout]
+kind = "slots"
+slots = [{ at = [-0.215, 0.278] }, { at = [0.187, 0.150] }, { at = [-0.195, -0.069] }, { at = [0.0, -0.199] }]
+
+[[text]]                              # one word per window pane, falling in and dripping away on a tempo tick
+name = "front"
+on = ["cafe:pane_r1c3", "cafe:pane_r1c2", "cafe:pane_r0c2", "cafe:pane_r0c3"]
+font = "fraunces_roman"
+fit = 0.8
+lyrics = { timeline = "audio/timeline.json", line = 1, words = [5, 8], style = "drop", from = 2.6, to = 5.0, leave = "drip", sizes = [0.13, 0.055, 0.12, 0.21] }
+```
+
+The stage report has one entry per `lyrics` text, `{words, lines, style, layout, skipped, first_frame, last_frame, cut_frame,
+drip_from}` (Blender frames; `skipped` as `[line, word]` pairs), and per word the usual text numbers with `lyric` [line, word],
+`chars`, `kinetic_keys` and `frames` [on, off); the string itself (`widest`) is not reported.
+
+### Ink
+
+A `[[text]]` with `ink = {...}` is handwriting: the strokes of a pen, drawn on a surface, that appear exactly behind the nib
+with no Python at render time. `mkmmd/core/ink.py` (numpy only, tested) makes ONE ribbon mesh of all strokes in the surface
+frame (x right, y up, z out): per pen-down stroke a strip of quads `width` wide, `lift` above the paper, with a square cap
+half a width long at both ends, bends mitred (up to two half widths: sharp turns thin out, they never spike), repeated
+points merged and a one-point stroke made a dot. Every vertex carries the time the nib is on its cross-section as the point
+attribute `tw`. The material (dithered alpha, exactly 0 or 1) shows a fragment once the ink object's clock has passed its
+`tw`; the clock is the object's custom property `clip_t`, KEYED linearly over the frames to clip seconds (no driver, no
+handler: `mk q 'bpy.data.objects["ink"]["clip_t"]' --frames ...`). Attributes interpolate along every quad, so the front
+sits at the nib between points and between frames, and a nib that moves 3-10 mm per frame still leaves legible letters.
+Fresh ink is glossy (coat, low roughness) and 18 % deeper in colour, and dries matte over `dry` seconds. Like any text
+the object is parented to the owner's root, so it follows the page; it casts no shadow and takes `[[key]]` like any object.
+
+| Key (inside `ink = {...}`) | Meaning |
+|---|---|
+| `strokes` | the strokes file (project-relative): `{"unit": "mm", "page": [w, h], "strokes": [{"t": [...], "p": [[x, y], ...]}]}`: page millimetres from the top-left corner as read (x right, y down) and the clip seconds the nib is on each point (never decreasing); `page` (optional) is checked against the surface. Points ~0.15 mm apart make letters |
+| `track` | instead of `strokes`, the coarse fallback: `"nib"` (the project's `tracks/nib.json`) or a `.json` path: the runs of `down` through the `target` positions, one point per frame (shapes, not letters), counted only while the nib is within 1 mm of the surface's plane (a pen lifted away for a pause draws nothing) |
+| `on` | `"<prop or set>:<surface>"`, a card `use.surface` (required): page millimetres map onto its panel from the top-left corner, as `page_to_local` does for the cafe page (160 x 220 mm) |
+| `width`, `lift` | ribbon width (0.00042 m) and distance above the surface (0.00018 m) |
+| `color` | palette slot or `#hex` (`pine`) |
+| `dry`, `glossy` | seconds fresh ink stays glossy (0.55); `glossy = false` (or `dry = 0`): matte from the first moment |
+| `from`, `to` | clip seconds: only ink written inside the window is built, a stroke that crosses a bound is cut exactly there |
+
+```toml
+[[text]]                              # the handwriting of the writing schedule on the cafe page, in pine
+name = "ink"
+ink = { strokes = "tracks/ink.json", on = "page:page" }
+```
+
+Only the project can compute where the pen is at every moment, so the strokes are reference data like the pen track: one
+nib position per frame (`tracks/nib.json`) cannot draw letters of 3 mm that the nib crosses in a frame; the writing
+schedule's dense strokes can. The build reports `strokes`, `points`, `verts`, `faces`, the length of ink (mm) and its time
+range.
 
 ## Palettes
 
@@ -601,7 +794,8 @@ hl_high. Sets, props, lights and the grade colour by slot, never by hard-coded v
 
 `mk render --preset draft|preview|final` renders each output's cut to `<project>/renders/<preset>/<output>/
 <frame>.png`. Frames are claimed with an empty file first, so a stopped render resumes and `--jobs N` Blender
-processes share the frames; a disk check refuses to start when the frames would not fit.
+processes share the frames; a disk check refuses to start when the frames would not fit. Shots with a render-time look (Shots:
+silhouette, reflection) are finished flat frames on disk, composed inside the render job; `--no-styles` renders them as lit.
 
 `mk post` grades the frames (`[post]`: contrast around a pivot, saturation, split toning, a palette floor with a
 soft toe so nothing is black, halation from blurred highlights, vignette, grain) and encodes

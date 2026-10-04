@@ -21,6 +21,8 @@ Views:
   --view LIST        preset directions around --target, relative to the cast member's facing:
                      """ + " ".join(PRESETS) + """
                      or yaw:elev pairs such as 20:15 (degrees; yaw 0 = in front, 90 = the model's left)
+  Shots of the cut with a render-time look (`style = "silhouette"`, `reflection = {...}` in [[shot]]) are drawn in it,
+  as `mk render` draws them; --no-styles draws every shot as it is lit.
 
 Layout: one image per frame, view and aspect; --sheet adds a contact sheet (rows = view x aspect, columns =
 frames), --strip one row per view, --ab OTHER.blend renders the same views there and pairs them side by side,
@@ -31,6 +33,7 @@ view i; one photo is repeated beside every view and one view beside every photo;
 Examples:
   mk look --frames 200,400,600 --sheet                       # the cut, every aspect
   mk look --view front,left,back --target 'bone("head").head' --dist 0.6 --frames 300 --sheet
+  mk look --frames t=0:1.3:0.3 --sheet --no-styles           # the lightning shot as it is lit, not as the flat look
   mk look --view 3q --target 'bone("elbow.L").head' --dist 0.35 --lens 60 --frames 189:189
   mk look --cam CloseUp --frames t=2:4:0.5 --strip --engine workbench
   mk look --frames 1 --view 35:12,90:8 --target '(0, 0, 0.7)' --dist 7 --ref refs/car/front_left.jpg,refs/car/side.jpg
@@ -54,6 +57,8 @@ def add(sub):
     p.add_argument("--engine", choices=("eevee", "workbench", "cycles"), default="eevee")
     p.add_argument("--samples", type=int, default=16)
     p.add_argument("--hide", action="append", default=[], metavar="OBJECT", help="hide an object (repeatable)")
+    p.add_argument("--no-styles", action="store_true", help="draw every shot as it is lit, ignoring its silhouette / "
+                   "reflection look (the cut shows them by default, as `mk render` draws them)")
     p.add_argument("--sheet", action="store_true", help="also write a contact sheet")
     p.add_argument("--strip", action="store_true", help="also write one strip per view")
     p.add_argument("--ab", metavar="OTHER.blend", help="render the same views on another scene and pair them")
@@ -200,7 +205,7 @@ def run(args):
     out = Path(args.out).expanduser() if args.out else (
         (proj.mk_dir / "look" / stamp) if proj else CFG.cache_dir() / "look" / stamp)
     job = {"frames": frames, "views": views, "sizes": sizes, "engine": args.engine, "samples": args.samples,
-           "hide": args.hide, "armature": cast_arm}
+           "hide": args.hide, "armature": cast_arm, "styles": not args.no_styles}
     t0 = time.time()
     scenes = [("a", blend)] + ([("b", Path(args.ab).expanduser().resolve())] if args.ab else [])
     shots = {}

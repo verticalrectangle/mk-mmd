@@ -8,7 +8,8 @@ from . import CheckError, Metric, is_expr, metric
 def project(points, cam, k, size):
     """Normalised image coordinates (n, 2) (0..1, origin bottom-left) and depth (n,) of world points for camera
     sample k rendered at size (w, h). Follows Blender: sensor fit AUTO puts the sensor width on the larger image
-    side; shift is in units of the larger side."""
+    side; the lens shift (fractions of the larger side) moves the VIEW WINDOW, so the picture moves the other way: a
+    positive shift_x moves it left, a positive shift_y down (probed against world_to_camera_view in Blender 4.2.3)."""
     w, h = size
     M = cam["world"][k]
     R, t = M[:3, :3] / np.linalg.norm(M[:3, :3], axis=0, keepdims=True), M[:3, 3]
@@ -25,8 +26,8 @@ def project(points, cam, k, size):
         fpix = lens / sw * max(w, h)
     big = max(w, h)
     with np.errstate(divide="ignore", invalid="ignore"):
-        u = (w / 2 + fpix * pc[:, 0] / depth + cam["shift"][k][0] * big) / w
-        v = (h / 2 + fpix * pc[:, 1] / depth + cam["shift"][k][1] * big) / h
+        u = (w / 2 + fpix * pc[:, 0] / depth - cam["shift"][k][0] * big) / w
+        v = (h / 2 + fpix * pc[:, 1] / depth - cam["shift"][k][1] * big) / h
     return np.stack([u, v], 1), depth
 
 

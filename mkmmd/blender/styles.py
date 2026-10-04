@@ -1,0 +1,499 @@
+"""Render-time looks of a shot (docs/design.md: Shots): the flat `silhouette` and the window `reflection`, switched on and
+off per frame by `mk render` (ops_render) and `mk look` (ops_look) from the shot table that `mk build` keeps in
+scene["mk_shots"] (mkmmd.blender.build.shots; the normalised specs are mkmmd.core.shotstyle's).
+
+    looks = Looks(scene)
+    for f in frames:
+        scene.frame_set(f)
+        if looks.prepare(f, aspect):            # enters / leaves / updates the look of frame f's shot
+            looks.render(path)                  # one image in that look, written as the file type of `path`
+        else:
+            bpy.ops.render.render(write_still=True)
+    looks.close()                               # puts back everything the looks changed
+
+silhouette. Blender 4.2's EEVEE Next (and Workbench) ignore a view layer's `material_override`, so the flat look is built
+from the passes that do work, all inside the one render call of a frame and composed with numpy like the original's post:
+  flat   Workbench, flat light, `Object.color`: the subject and the hard accents (thin cords) in their colours. Exact
+         to one level of 255 (Workbench's colour transform), antialiased by Workbench.
+  soft   EEVEE with an AOV carrying the opaque share of the accent objects' Mix Shader (a lightning bolt: Transparent
+         mixed with Emission) and the compositor writing R = alpha, B = that AOV (Raw values): the original's `sil` pass.
+         The AOV is painted in the accent colour; what the bolt's alpha has beyond it (its soft shells) stays a glow in
+         the subject colour, as in the original (`sil = alpha - bolt`).
+  type   EEVEE with the lights off and a black world: the type objects (the text stage's `mk_text_*` objects) as their
+         emission shows them, keyed opacity (the alpha attribute of kinetic words) included.
+  knock  the same, alpha only, for the `knockout` objects: ink colour on the background, background colour where it
+         overlaps the silhouette.
+No file is left behind and nothing in the scene stays changed.
+
+reflection. A plane light probe at the glass object and, in the glass material, a mirror layer in front of the glass
+shader (mkmmd.blender.mirror). EEVEE Next fills a glossy surface on a probe's plane with the mirrored view of the whole
+scene, so what stands behind the camera shows up in the pane."""
+import json
+import os
+import tempfile
+
+import bpy
+import numpy as np
+
+from ..core import shotstyle as SS
+from . import mirror as MR
+
+WORKBENCH = "BLENDER_WORKBENCH"
+EEVEE = "BLENDER_EEVEE_NEXT"
+FLAT_TYPES = {"MESH", "CURVE", "SURFACE", "FONT", "META", "CURVES", "POINTCLOUD"}
+TEXT_GROUP = "mk_text_"                  # the node groups of the text stage: its objects are type
+AOV_NAME = "mk_soft"
+
+
+# ================================================================================================= small helpers
+class Restore:
+    """Records the old value of every attribute it sets (and every callable it is given) and puts them back, last first."""
+
+    def __init__(self):
+        self.undo = []
+
+    def attr(self, owner, name, value):
+        old = getattr(owner, name)
+        if hasattr(old, "__len__") and not isinstance(old, str):
+            old = tuple(old)
+        self.undo.append((owner, name, old))
+        setattr(owner, name, value)
+
+    def call(self, fn):
+        self.undo.append((None, None, fn))
+
+    def run(self):
+        while self.undo:
+            owner, name, old = self.undo.pop()
+            if owner is None:
+                old()
+            else:
+                try:
+                    setattr(owner, name, old)
+                except (ReferenceError, AttributeError):
+                    pass                                  # the owner went away with its look
+
+
+def _linear(rgb):
+    return [SS.srgb_to_linear(c) for c in rgb]
+
+
+def _read_rgba(path):
+    """A PNG as (h, w, 4) float32, top row first: the stored values, straight alpha, no colour management."""
+    img = bpy.data.images.load(path)
+    try:
+        img.colorspace_settings.name = "Non-Color"
+        w, h = img.size
+        px = np.empty(w * h * 4, np.float32)
+        img.pixels.foreach_get(px)
+    finally:
+        bpy.data.images.remove(img)
+    return px.reshape(h, w, 4)[::-1]
+
+
+def _save(path, rgb, quality=90):
+    """Write float RGB (h, w, 3) in 0..1, top row first, as the file type of `path`: PNG by hand (8-bit), anything else
+    through Blender's own writer with the values untouched."""
+    img8 = (np.clip(rgb, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+    if path.lower().endswith(".png"):
+        with open(path, "wb") as fh:
+            fh.write(SS.png_bytes(img8))
+        return
+    h, w, _ = img8.shape
+    buf = np.ones((h, w, 4), np.float32)
+    buf[..., :3] = img8[::-1].astype(np.float32) / 255.0
+    img = bpy.data.images.new("mk_look_out", w, h, alpha=False, float_buffer=True)
+    try:
+        img.colorspace_settings.name = "Non-Color"
+        img.pixels.foreach_set(buf.reshape(-1))
+        img.filepath_raw = path
+        if path.lower().endswith((".jpg", ".jpeg")):
+            img.file_format = "JPEG"
+            img.save(quality=quality)
+        else:
+            img.file_format = "PNG"
+            img.save()
+    finally:
+        bpy.data.images.remove(img)
+
+
+def _truthy_props(ob):
+    return frozenset(k for k in ob.keys() if not k.startswith("_") and not hasattr(ob[k], "to_dict") and bool(ob[k]))
+
+
+def _collections(ob):
+    """Names of the collections `ob` is in, with every ancestor collection."""
+    parents = {}
+    for c in bpy.data.collections:
+        for ch in c.children:
+            parents.setdefault(ch.name, []).append(c)
+    out, seen, todo = [], set(), list(ob.users_collection)
+    while todo:
+        c = todo.pop()
+        if c.name in seen:
+            continue
+        seen.add(c.name)
+        out.append(c.name)
+        todo.extend(parents.get(c.name, []))
+    return tuple(out)
+
+
+def object_records(scene=None):
+    """What the object patterns match (mkmmd.core.shotstyle.Obj) for every renderable object of the scene."""
+    sc = scene or bpy.context.scene
+    return [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in sc.objects if o.type in FLAT_TYPES]
+
+
+def _materials(ob):
+    """Every material of the object: its slots and the Set Material nodes of its geometry-nodes modifiers."""
+    mats = [s.material for s in ob.material_slots if s.material is not None]
+    for mod in ob.modifiers:
+        if mod.type == "NODES" and mod.node_group is not None:
+            todo, seen = [mod.node_group], set()
+            while todo:
+                ng = todo.pop()
+                if ng.name in seen:
+                    continue
+                seen.add(ng.name)
+                for n in ng.nodes:
+                    if n.bl_idname == "GeometryNodeSetMaterial" and n.inputs["Material"].default_value is not None:
+                        mats.append(n.inputs["Material"].default_value)
+                    if getattr(n, "node_tree", None) is not None:
+                        todo.append(n.node_tree)
+    out, seen = [], set()
+    for m in mats:
+        if m.name not in seen and m.use_nodes and m.node_tree is not None:
+            seen.add(m.name)
+            out.append(m)
+    return out
+
+
+def is_soft(ob):
+    """An object whose material lets the scene through (a Transparent shader in it): a lightning bolt, a glow shell."""
+    return any(n.bl_idname == "ShaderNodeBsdfTransparent" for m in _materials(ob) for n in m.node_tree.nodes)
+
+
+def is_type(ob):
+    return any(m.type == "NODES" and m.node_group is not None and m.node_group.name.startswith(TEXT_GROUP)
+               for m in ob.modifiers)
+
+
+def add_weight_aov(mat, aov):
+    """An AOV Output node in `mat` that carries the opaque share of its surface: the factor of the Mix Shader that mixes
+    a Transparent BSDF in (the factor itself when Transparent is the first shader, one minus it when it is the second).
+    Returns the function that removes what it added; a material without such a mix gets nothing."""
+    nt = mat.node_tree
+    added = []
+    for mix in [n for n in nt.nodes if n.bl_idname == "ShaderNodeMixShader"]:
+        for slot in (1, 2):
+            links = mix.inputs[slot].links
+            if not (links and links[0].from_node.bl_idname == "ShaderNodeBsdfTransparent"):
+                continue
+            node = nt.nodes.new("ShaderNodeOutputAOV")
+            node.aov_name = aov
+            added.append(node)
+            fac = mix.inputs[0]
+            src = fac.links[0].from_socket if fac.links else None
+            if slot == 1:
+                if src is not None:
+                    nt.links.new(src, node.inputs["Value"])
+                else:
+                    node.inputs["Value"].default_value = fac.default_value
+            else:
+                sub = nt.nodes.new("ShaderNodeMath")
+                sub.operation = "SUBTRACT"
+                sub.inputs[0].default_value = 1.0
+                added.append(sub)
+                if src is not None:
+                    nt.links.new(src, sub.inputs[1])
+                else:
+                    sub.inputs[1].default_value = fac.default_value
+                nt.links.new(sub.outputs[0], node.inputs["Value"])
+
+    def undo():
+        for n in added:
+            nt.nodes.remove(n)
+    return undo
+
+
+# ================================================================================================= the looks
+class Looks:
+    """The look in force at each frame of a render or look session (see the module docstring)."""
+
+    def __init__(self, scene=None):
+        self.sc = scene or bpy.context.scene
+        try:
+            self.table = json.loads(self.sc.get("mk_shots", "[]"))
+        except ValueError:
+            self.table = []
+        self.kind = None                  # "silhouette" | "reflection" | None
+        self.key = None                   # (shot name, aspect, kind) of the look that is entered
+        self.spec = None
+        self.rs = Restore()
+        self.info = {}
+        self.cl = {}
+        self.tint_values = []
+
+    # ---------------------------------------------------------------- state machine
+    def spec_at(self, frame, aspect=None):
+        """(shot name, kind, spec) of the look at `frame` for an output aspect, or (name, None, None)."""
+        entry = SS.shot_at(self.table, frame)
+        if entry is None:
+            return None, None, None
+        styles = entry.get("styles") or {}
+        look = styles.get(aspect) if aspect is not None else (next(iter(styles.values())) if styles else None)
+        if not look:
+            return entry["name"], None, None
+        kind = next(iter(look))
+        return entry["name"], kind, look[kind]
+
+    def prepare(self, frame, aspect=None):
+        """Bring the scene into the look of `frame` (call after `frame_set`). Returns the active kind or None."""
+        name, kind, spec = self.spec_at(frame, aspect)
+        key = (name, aspect, kind)
+        if key != self.key:
+            self.leave()
+            self.key = key
+            if kind is not None:
+                self.kind, self.spec = kind, spec
+                getattr(self, "_enter_" + kind)(name, spec)
+        if self.kind == "silhouette":
+            self._update_silhouette()
+        return self.kind
+
+    def leave(self):
+        if self.kind is not None:
+            self.rs.run()
+            self.kind, self.spec = None, None
+        self.key = None
+
+    close = leave
+
+    def render(self, path):
+        """Render the current frame to `path` in the active look (a plain render for the reflection, whose image settings
+        are the scene's; the composed silhouette is written as the file type of `path`)."""
+        if self.kind == "silhouette":
+            return self._render_silhouette(path)
+        self.sc.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+
+    # ---------------------------------------------------------------- passes
+    def _objects(self):
+        return [o for o in self.sc.objects if o.type in FLAT_TYPES]
+
+    def _visibility(self, rs, show=(), holdout=()):
+        """Everything rendered but `show` (as it is) and `holdout` (invisible but hiding what is behind it, EEVEE only)
+        is hidden for the pass. Objects the scene hides at this frame stay hidden."""
+        show, holdout = set(show), set(holdout)
+        for o in self._objects():
+            if o.hide_render or o.name in show:
+                continue
+            if o.name in holdout:
+                rs.attr(o, "is_holdout", True)
+            else:
+                rs.attr(o, "hide_render", True)
+
+    def _film(self, rs, engine, view, samples=None):
+        sc, r = self.sc, self.sc.render
+        rs.attr(r, "engine", engine)
+        rs.attr(r, "film_transparent", True)
+        rs.attr(r, "use_motion_blur", False)
+        rs.attr(r, "dither_intensity", 0.0)
+        rs.attr(r, "use_compositing", False)
+        v = sc.view_settings
+        for k, val in (("look", "None"),                  # first: the look resets with the view transform, so it is
+                       ("view_transform", view),          # restored last, when its transform is back
+                       ("exposure", 0.0), ("gamma", 1.0), ("use_curve_mapping", False)):
+            rs.attr(v, k, val)
+        ims = r.image_settings
+        for k, val in (("file_format", "PNG"), ("color_mode", "RGBA"), ("color_depth", "8"), ("compression", 0)):
+            rs.attr(ims, k, val)
+        if engine == EEVEE:
+            rs.attr(sc.eevee, "taa_render_samples", int(samples or 16))
+            rs.attr(sc.eevee, "use_raytracing", False)
+        else:
+            d = sc.display
+            rs.attr(d, "render_aa", "16")
+            sh = d.shading
+            for k, val in (("light", "FLAT"), ("color_type", "OBJECT"), ("show_object_outline", False),
+                           ("show_cavity", False), ("show_shadows", False), ("show_specular_highlight", False)):
+                rs.attr(sh, k, val)
+
+    def _shoot(self, tag):
+        """Render the current frame into a temporary PNG and read it back -> (h, w, 4) float32."""
+        path = os.path.join(tempfile.gettempdir(), f"mk_pass_{os.getpid()}_{tag}.png")
+        self.sc.render.filepath = path
+        try:
+            bpy.ops.render.render(write_still=True)
+            return _read_rgba(path)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def _flat(self):
+        """Subject and hard accents in their flat colours -> straight RGBA (coverage in alpha, Workbench scale)."""
+        rs = Restore()
+        try:
+            self._film(rs, WORKBENCH, "Standard")
+            self._visibility(rs, show=self.cl["subject"] + self.cl["hard"])
+            return self._shoot("flat")
+        finally:
+            rs.run()
+
+    def _soft(self, occlude=True):
+        """The accent objects with a transparent material, hidden behind the subject (unless `occlude` is off) ->
+        (alpha, aov weight), both 0..1."""
+        sc, rs = self.sc, Restore()
+        try:
+            self._film(rs, EEVEE, "Raw", self.spec["samples"])
+            rs.attr(sc.render.image_settings, "color_mode", "RGB")
+            self._visibility(rs, show=self.cl["soft"], holdout=self.cl["subject"] + self.cl["hard"] if occlude else ())
+            vl = bpy.context.view_layer
+            aov = vl.aovs.add()
+            aov.name, aov.type = AOV_NAME, "VALUE"
+            rs.call(lambda: vl.aovs.remove(aov))
+            for n in self.cl["soft"]:
+                for m in _materials(bpy.data.objects[n]):
+                    rs.call(add_weight_aov(m, AOV_NAME))
+            self._aov_compositor(rs, AOV_NAME)
+            px = self._shoot("soft")
+            return np.clip(px[..., 0], 0.0, 1.0), np.clip(px[..., 2], 0.0, 1.0)
+        finally:
+            rs.run()
+
+    def _aov_compositor(self, rs, aov):
+        """Render Layers -> Combine (R = alpha, B = the AOV) -> Composite, on a scene that has no compositor of its own."""
+        sc = self.sc
+        ours = ("CompositorNodeRLayers", "CompositorNodeComposite")
+        if sc.use_nodes and sc.node_tree is not None and any(n.bl_idname not in ours for n in sc.node_tree.nodes):
+            raise RuntimeError("the scene has a compositor tree of its own; the silhouette's accent pass needs the compositor")
+        rs.attr(sc, "use_nodes", True)
+        rs.attr(sc.render, "use_compositing", True)
+        nt = sc.node_tree
+        mine = []
+
+        def node(kind):
+            n = nt.nodes.new(kind)
+            mine.append(n)
+            return n
+        for n in list(nt.nodes):                                 # a freshly enabled tree holds a default Render Layers
+            nt.nodes.remove(n)                                   # and Composite; the pass uses its own
+        rl, comb = node("CompositorNodeRLayers"), node("CompositorNodeCombineColor")
+        comp = node("CompositorNodeComposite")
+        comb.mode = "RGB"
+        comb.inputs["Alpha"].default_value = 1.0
+        comb.inputs["Green"].default_value = 0.0
+        comp.use_alpha = False
+        nt.links.new(rl.outputs["Alpha"], comb.inputs["Red"])
+        nt.links.new(rl.outputs[aov], comb.inputs["Blue"])
+        nt.links.new(comb.outputs["Image"], comp.inputs["Image"])
+
+        def undo():
+            for n in mine:
+                nt.nodes.remove(n)
+        rs.call(undo)
+
+    def _type(self, names, holdout=(), tag="type"):
+        """The given objects as their emission shows them (lights off, black world) -> straight RGBA."""
+        sc, rs = self.sc, Restore()
+        try:
+            self._film(rs, EEVEE, "Standard", self.spec["samples"])
+            for o in sc.objects:
+                if o.type == "LIGHT" and not o.hide_render:
+                    rs.attr(o, "hide_render", True)
+            world = bpy.data.worlds.new("mk_black")
+            world.use_nodes = True
+            bg = world.node_tree.nodes["Background"]
+            bg.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+            bg.inputs["Strength"].default_value = 0.0
+            rs.attr(sc, "world", world)
+            rs.call(lambda: bpy.data.worlds.remove(world))
+            self._visibility(rs, show=names, holdout=holdout)
+            return self._shoot(tag)
+        finally:
+            rs.run()
+
+    # ---------------------------------------------------------------- silhouette
+    def _enter_silhouette(self, name, spec):
+        rs = self.rs
+        objs = [o for o in self._objects() if not o.hide_render]
+        recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
+        hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
+        knock = set(SS.select(recs, spec["knockout"]["objects"])) if spec["knockout"] else set()
+        accent = set(SS.select(recs, spec["accent"]))
+        cols = spec["colors"]
+        cl = {k: [] for k in ("hide", "subject", "hard", "soft", "type", "knock")}
+        for o in objs:
+            if o.name in hide:
+                cl["hide"].append(o.name)
+                rs.attr(o, "hide_render", True)
+            elif o.name in knock:
+                cl["knock"].append(o.name)
+            elif is_type(o):
+                cl["type"].append(o.name)
+            elif o.name in accent and is_soft(o):
+                cl["soft"].append(o.name)
+            elif o.name in accent:
+                cl["hard"].append(o.name)
+                rs.attr(o, "color", (*_linear(cols["accent"]), 1.0))
+            else:
+                cl["subject"].append(o.name)
+                rs.attr(o, "color", (*_linear(cols["subject"]), 1.0))
+        self.cl = cl
+        self.info = {k: len(v) for k, v in cl.items()}
+
+    def _update_silhouette(self):
+        """Per frame: the custom properties the background layers follow (a flash, a sun)."""
+        vals = []
+        for layer in self.spec["tint"]:
+            holder = bpy.data.objects.get(layer["object"])
+            vals.append(float(holder[layer["prop"]]) if holder is not None and layer["prop"] in holder.keys() else 0.0)
+        self.tint_values = vals
+
+    def passes(self):
+        """The renders of the current frame that the silhouette is composed from: {name: array}, for inspection."""
+        cl, out = self.cl, {}
+        out["flat"] = self._flat()
+        if cl["soft"]:
+            out["soft_alpha"], out["soft_aov"] = self._soft()
+        live = [n for n in cl["type"] if not bpy.data.objects[n].hide_render]
+        if live:
+            out["type"] = self._type(live, holdout=cl["subject"] + cl["hard"])
+        live = [n for n in cl["knock"] if not bpy.data.objects[n].hide_render]
+        if self.spec["knockout"] and live:
+            out["knock"] = self._type(live, tag="knock")
+        return out
+
+    def compose(self, p):
+        """The finished silhouette frame (float RGB, display space) from the passes `passes()` made."""
+        return SS.compose_silhouette(p, self.spec, self.tint_values, hard=bool(self.cl["hard"]))
+
+    def _render_silhouette(self, path):
+        _save(path, self.compose(self.passes()))
+
+    # ---------------------------------------------------------------- reflection
+    def _enter_reflection(self, name, spec):
+        rs = self.rs
+        glass = bpy.data.objects.get(spec["object"])
+        if glass is None:
+            raise RuntimeError(f"shot {name!r}: reflection object {spec['object']!r} is not in the scene")
+        plane = MR.glass_plane(glass)
+        probe = MR.find_probe(self.sc, plane)
+        made = probe is None
+        if made:
+            probe = MR.make_probe(self.sc, f"mk_reflect_{name}", plane, spec.get("probe") or {})
+            rs.call(lambda p=probe: MR.remove_probe(p))
+        objs = [o for o in self._objects() if not o.hide_render]
+        recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
+        skip = set(SS.select(recs, spec["hide"]))
+        if spec["only"]:
+            skip |= {r.name for r in recs} - set(SS.select(recs, spec["only"]))
+        for n in sorted(skip):
+            rs.attr(bpy.data.objects[n], "hide_probe_plane", True)       # the pane does not show these
+        if not spec["world"]:
+            undo = MR.world_dark_to_camera(self.sc.world)
+            if undo is not None:
+                rs.call(undo)
+        rs.call(MR.mirror_layer(glass, spec))
+        self.info = {"object": glass.name, "probe": probe.name, "probe_made": made, "not_reflected": len(skip),
+                     "plane_centre": [round(c, 4) for c in plane["centre"]], "half": [round(v, 4) for v in plane["half"]]}

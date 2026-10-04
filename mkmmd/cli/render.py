@@ -22,6 +22,10 @@ HELP = """Render the project's cut (shot cameras, per output aspect) to PNG fram
 Presets: draft (50 %, 16 samples, no motion blur), preview (50 %, 32 samples, motion blur), final (100 %, 64 samples,
 motion blur). [render] in mk.toml can override samples, shutter, engine.
 
+Shots with a render-time look (`style = "silhouette"`, `reflection = {...}` in [[shot]], see docs/design.md: Shots) are
+rendered in it, inside the same Blender job: the frame on disk is the finished flat frame, not a pass. --no-styles renders
+every shot as it is lit.
+
 Examples:
   mk render --preset draft                     # every output, the whole clip
   mk render --output 9x16 --frames t=0:5 --jobs 2
@@ -37,6 +41,7 @@ def add(sub):
     p.add_argument("--jobs", type=int, default=1, help="parallel Blender processes per output")
     p.add_argument("--samples", type=int)
     p.add_argument("--percent", type=int)
+    p.add_argument("--no-styles", action="store_true", help="ignore the shots' silhouette / reflection looks")
     add_project_arg(p)
     p.set_defaults(func=run)
 
@@ -78,7 +83,7 @@ def run(args):
         for p in d.glob("*.png"):                        # stale claims from a stopped render
             if p.stat().st_size == 0:
                 p.unlink()
-        job = {"frames": frames, "out": str(d), "size": list(o.size), "aspect": o.name, **cfg}
+        job = {"frames": frames, "out": str(d), "size": list(o.size), "aspect": o.name, "styles": not args.no_styles, **cfg}
         n = max(1, args.jobs)
         with ThreadPoolExecutor(max_workers=n) as ex:
             futs = []
@@ -87,8 +92,14 @@ def run(args):
                 if k < n - 1:
                     time.sleep(8)                          # stagger loading
             res = [f.result() for f in futs]
+        looks = {}
+        for r in res:
+            for k, v in r.get("looks", {}).items():
+                looks[k] = looks.get(k, 0) + v
         report[o.name] = {"dir": str(d), "rendered": sum(r["rendered"] for r in res),
                           "s_per_frame": max(r["s_per_frame"] for r in res), "aspect_bound": res[0]["aspect_bound"],
                           "frames_on_disk": len([p for p in d.glob("*.png") if p.stat().st_size > 0])}
+        if looks:
+            report[o.name]["looks"] = looks               # frames rendered in a silhouette / reflection look
     emit({"preset": args.preset, "seconds": round(time.time() - t0, 1), "outputs": report})
     return 0

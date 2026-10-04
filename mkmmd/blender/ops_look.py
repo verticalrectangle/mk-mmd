@@ -4,7 +4,8 @@ expression), relative to a model's facing.
 
 args: frames; views [{name, kind: shot|camera|orbit, camera, target (expr), facing (armature or null), yaw, elev,
 dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out (folder); hide [object names];
-only [object names: hide every other mesh]."""
+only [object names: hide every other mesh]; styles (default true: shots with a render-time look, `style = "silhouette"` or
+`reflection`, are rendered in it, see mkmmd.blender.styles)."""
 import math
 import os
 
@@ -12,6 +13,7 @@ import bpy
 from mathutils import Vector
 
 from . import scene as S
+from . import styles as ST
 from .ops_core import _namespace
 from .runtime import op
 
@@ -63,6 +65,7 @@ def look(args):
     os.makedirs(args["out"], exist_ok=True)
     ns = _namespace(args.get("armature"))
     views = args["views"]
+    looks = ST.Looks(sc) if args.get("styles", True) else None
     markers = [(m.frame, m.camera) for m in sc.timeline_markers]
     if any(v["kind"] != "shot" for v in views):
         cd = bpy.data.cameras.new("mk_look")
@@ -98,7 +101,15 @@ def look(args):
                     sc.frame_set(int(f))                 # the markers switch the camera on frame change
                 path = os.path.join(args["out"], f"{v['name']}_{size['name']}_{int(f):05d}.jpg")
                 r.filepath = path
-                bpy.ops.render.render(write_still=True)
+                kind = looks.prepare(int(f), size["name"]) if looks is not None and v["kind"] == "shot" else None
+                if looks is not None and kind is None:
+                    looks.leave()
+                if kind:
+                    looks.render(path)
+                else:
+                    bpy.ops.render.render(write_still=True)
                 out.append({"view": v["name"], "size": size["name"], "frame": int(f), "path": path,
                             "camera": sc.camera.name if sc.camera else None})
+    if looks is not None:
+        looks.close()
     return out
