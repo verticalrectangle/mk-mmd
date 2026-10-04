@@ -16,6 +16,7 @@ from .. import bridge
 from .. import config as CFG
 from ..assets import AssetError, Registry
 from ..core import frames as FR
+from ..core.cast import armature_name
 from ..project import ProjectError
 
 METRICS = {}
@@ -204,7 +205,7 @@ class Context:
                 c = self.project.cast_member(args.get("cast"))
             except ProjectError as e:
                 raise CheckError(str(e))
-            arm = c.get("armature", "")
+            arm = armature_name(c)
             if c.get("rig"):
                 rig_path = self.project.path(c["rig"])
             elif c.get("asset"):

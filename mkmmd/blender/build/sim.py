@@ -45,34 +45,6 @@ def _quats(R):
     return q
 
 
-def decompose(chain, bones):
-    """A rig.json chain -> [(level, chain)] of non-branching chains (level 0: the trunk; level n anchors on level n-1)."""
-    names, par, ends = chain["bones"], chain["parents"], chain["ends"]
-    n = len(names)
-    kids = {i: [] for i in range(n)}
-    for i, p in enumerate(par):
-        if p >= 0:
-            kids[p].append(i)
-    height = {}
-    for i in reversed(range(n)):                        # parents precede children in rig.json order
-        height[i] = 1 + max((height[k] for k in kids[i]), default=0)
-    out, todo = [], [(0, chain["anchor"], 0)]
-    while todo:
-        start, anchor, level = todo.pop(0)
-        seq, cur = [start], start
-        while kids[cur]:
-            trunk = max(kids[cur], key=lambda k: (height[k], -k))
-            todo += [(k, names[cur], level + 1) for k in kids[cur] if k != trunk]
-            seq.append(trunk)
-            cur = trunk
-        seg_ends = [bones[names[seq[j + 1]]]["head"] for j in range(len(seq) - 1)] + [ends[seq[-1]]]
-        out.append((level, {"family": chain["family"], "root": names[seq[0]], "anchor": anchor,
-                            "bones": [names[i] for i in seq], "parents": list(range(-1, len(seq) - 1)),
-                            "ends": seg_ends, "body_radius": [chain["body_radius"][i] for i in seq],
-                            "branching": False}))
-    return out
-
-
 def sample_sources(sources, frames):
     """Posed world frames (unscaled) of shape sources on every frame: positions (F, S, 3), rotations (F, S, 3, 3)."""
     sc = bpy.context.scene
@@ -178,11 +150,8 @@ def run(ctx):
             ctx.log(f"sim {name}: no chains in families {spec.get('families') or DEFAULT_FAMILIES}")
             continue
         levels = {}
-        for c in rig["chains"]:
-            if c["family"] not in fams:
-                continue
-            for lv, piece in (decompose(c, rig["bones"]) if c.get("branching") else [(0, c)]):
-                levels.setdefault(lv, []).append(piece)
+        for lv, piece in geom.split_chains(rig, fams):
+            levels.setdefault(lv, []).append(piece)
         simulated = {b for pieces in levels.values() for p in pieces for b in p["bones"]}
         bodies = [b for b in rig["bodies"] if b.get("bone") not in simulated]
         items = collider_items(ctx, spec, m.arm)

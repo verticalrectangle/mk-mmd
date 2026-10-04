@@ -155,6 +155,7 @@ class Penetration(Metric):
         if rig is None:
             raise CheckError("penetration: needs the model's rig.json (cast with rig/asset, or rig = path)")
         fams = _list(args.get("families")) or sorted(FAM.HAIR_FAMILIES | {"ears"})
+        rig = dict(rig, chains=[c for _, c in geom.split_chains(rig, fams)])     # as the sim stage solves them
         chains = geom.Chains(rig, fams)
         if not len(chains):
             raise CheckError(f"penetration: no chains in families {fams}")
@@ -163,7 +164,12 @@ class Penetration(Metric):
             need.bone(arm, *[b["bone"] for b in rig["bodies"] if b.get("bone") and "geom" in b and
                              b["bone"] not in chains.chain_bones])
         specs = ctx.colliders(args.get("colliders"))
-        return {"arm": arm, "rig": rig, "chains": chains, "idx": need.collider_specs(specs)}
+        sim_params = {}
+        if ctx.project and args.get("cast"):
+            sim_params = (ctx.project.data.get("sim", {}).get(args["cast"]) or {}).get("params") or {}
+        from ..solvers.strands import resolve_params
+        params = resolve_params(sorted(set(chains.family)), sim_params)
+        return {"arm": arm, "rig": rig, "chains": chains, "idx": need.collider_specs(specs), "params": params}
 
     def compute(self, args, ctx, data, frames, st):
         arm, rig, chains = st["arm"], st["rig"], st["chains"]
@@ -179,10 +185,16 @@ class Penetration(Metric):
                 m = P[kind]["model"][k]
                 labels.append(f"body:{rig['bodies'][m]['bone']}" if m is not None else P[kind]["tag"][k])
         labels.append("floor")
-        rad_arg = args.get("radius") or {}
-        per = rad_arg if any(isinstance(v, dict) for v in rad_arg.values()) else {f: rad_arg for f in set(chains.family)}
-        scale = np.array([per.get(f, {}).get("scale", 1.0) for f in chains.family], float)
-        rmax = np.array([per.get(f, {}).get("max", np.inf) for f in chains.family], float)
+        rad_arg = args.get("radius")
+        if rad_arg:                                      # explicit: {scale, max} or {family: {scale, max}}
+            per = rad_arg if any(isinstance(v, dict) for v in rad_arg.values()) else \
+                {f: rad_arg for f in set(chains.family)}
+            scale = np.array([per.get(f, {}).get("scale", 1.0) for f in chains.family], float)
+            rmax = np.array([per.get(f, {}).get("max", np.inf) for f in chains.family], float)
+        else:                                            # what the solver used: [sim.<cast>] params over its defaults
+            pr = st["params"]
+            scale = np.array([pr[f]["radius"] for f in chains.family], float)
+            rmax = np.array([pr[f]["radius_max"] for f in chains.family], float)
         rad = np.minimum(chains.radius * scale, rmax)
         Rs, ps, R0, p0 = data.source_frames(shapes.sources, frames)
         rest_W = geom.world(P, R0, p0)

@@ -11,6 +11,7 @@ import os
 import bpy
 from mathutils import Euler, Vector
 
+from ...core import cast as CN
 from . import BuildError, Member, collection, link
 
 SKIP_TYPES = ("RIGID_BODY", "JOINT", "TEMPORARY", "RIGID_GRP_OBJ", "JOINT_GRP_OBJ", "TEMPORARY_GRP_OBJ")
@@ -103,9 +104,9 @@ def run(ctx):
         pmx, rig = resolve(ctx, spec)
         physics = spec.get("physics", "mk")
         root, arm, meshes, new = import_model(pmx, physics)
-        title = name[:1].upper() + name[1:]
+        title = CN.root_name(spec)
         root.name = title
-        arm.name = spec.get("armature", f"{title}_arm")
+        arm.name = CN.armature_name(spec)
         for i, m in enumerate(meshes):
             m.name = f"{title}_mesh{i}"
         for o in new:

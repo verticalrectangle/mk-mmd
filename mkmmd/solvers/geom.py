@@ -351,3 +351,40 @@ def measure(X, rr, W, floor_z, P, enable=None, own=None):
     S, I = np.concatenate(Ss, 1), np.concatenate(ids)
     k = np.argmax(S, 1)
     return S[np.arange(len(X)), k], I[k]
+
+
+def split_chains(rig, families):
+    """Chains of the given families as non-branching pieces: [(level, chain)]. A branching chain becomes a trunk
+    (following the deepest subtree, level 0) and branches anchored on the bone they grow from (level = the anchor's
+    level + 1); a trunk bone's segment ends at the head of its trunk child. Plain chains are level 0."""
+    out = []
+    for chain in rig["chains"]:
+        if chain["family"] not in families:
+            continue
+        if not chain.get("branching"):
+            out.append((0, chain))
+            continue
+        names, par, ends = chain["bones"], chain["parents"], chain["ends"]
+        n = len(names)
+        kids = {i: [] for i in range(n)}
+        for i, p in enumerate(par):
+            if p >= 0:
+                kids[p].append(i)
+        height = {}
+        for i in reversed(range(n)):                       # parents precede children in rig.json order
+            height[i] = 1 + max((height[k] for k in kids[i]), default=0)
+        todo = [(0, chain["anchor"], 0)]
+        while todo:
+            start, anchor, level = todo.pop(0)
+            seq, cur = [start], start
+            while kids[cur]:
+                trunk = max(kids[cur], key=lambda k: (height[k], -k))
+                todo += [(k, names[cur], level + 1) for k in kids[cur] if k != trunk]
+                seq.append(trunk)
+                cur = trunk
+            seg_ends = [rig["bones"][names[seq[j + 1]]]["head"] for j in range(len(seq) - 1)] + [ends[seq[-1]]]
+            out.append((level, {"family": chain["family"], "root": names[seq[0]], "anchor": anchor,
+                                "bones": [names[i] for i in seq], "parents": list(range(-1, len(seq) - 1)),
+                                "ends": seg_ends, "body_radius": [chain["body_radius"][i] for i in seq],
+                                "branching": False}))
+    return out
