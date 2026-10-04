@@ -38,6 +38,20 @@ def envelope(t, t_on, t_hold, t_back, rise, fall=None):
     return smooth((np.asarray(t, float) - t_on) / max(rise, 1e-3)) * (1.0 - smooth((np.asarray(t, float) - t_hold) / fall))
 
 
+def eased_keys(ts, keys):
+    """Values over time from keys [[t, v], ...]: smoothstep-eased between consecutive keys, held before the first and
+    after the last; zeros without keys."""
+    ts = np.asarray(ts, float)
+    if not keys:
+        return np.zeros(len(ts))
+    ks = sorted((float(t), float(v)) for t, v in keys)
+    out = np.full(len(ts), ks[0][1])
+    for (t0, v0), (t1, v1) in zip(ks, ks[1:]):
+        m = ts >= t0
+        out[m] = v0 + (v1 - v0) * smooth((ts[m] - t0) / max(t1 - t0, 1e-6))
+    return out
+
+
 class GazeEvents:
     """Look-at events [(t_on, t_hold_end, t_back, target_index, rise_s)] over an idle target. weights(t) -> (E, F)."""
 

@@ -15,6 +15,9 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
   breath = {per_min = 16.5, deg = 0.6}, sway = {deg = 0.37, period = 2.5}, nod = {deg = 0.48, period = 2.3}
   bob = {deg = 1.5, timeline = "audio/timeline.json" | beats = [t...], downbeat_accent = 1.6}
   startle = [t...]
+  lean = [[t, deg], ...], turn = [[t, deg], ...]   extra upper-body lean forward / turn toward the model's left over
+                                     time, eased between keys and held before the first and after the last, on top of
+                                     the pose's base (a reach that leans in and settles back; hand targets still hold)
   blink = {per_min = 15, seed = 0, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1)
   sing = {timeline = "audio/timeline.json", lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
@@ -144,6 +147,8 @@ def run(ctx):
                 accent = [b.get("downbeat_accent", 1.6) if round(x, 3) in downs else 1.0 for x in beats]
             bob = PF.beat_bob(ts, beats, b.get("deg", 1.5), accent=accent)
         startle = PF.startles(ts, spec.get("startle", []))
+        lean_x = np.radians(PF.eased_keys(ts, spec.get("lean", [])))
+        turn_x = np.radians(PF.eased_keys(ts, spec.get("turn", [])))
         k_head = float(spec.get("head_share", 0.7))
         k_neck = float(spec.get("neck_share", 0.35))
         head_limits = spec.get("head_limits")
@@ -157,7 +162,7 @@ def run(ctx):
             q2b = Quaternion().slerp(base.get("upper_body2", Quaternion()), s) if has2 else Quaternion()
             q3b = Quaternion().slerp(base.get("neck", Quaternion()), s)
             q4b = Quaternion().slerp(base.get("head", Quaternion()), s)
-            q1 = Quaternion(lat, -startle[i]) @ Quaternion(up, sway[i]) @ q1b
+            q1 = Quaternion(up, turn_x[i]) @ Quaternion(lat, lean_x[i] - startle[i]) @ Quaternion(up, sway[i]) @ q1b
             q2 = Quaternion(lat, breath[i]) @ q2b
             if not has2:                                   # breathing goes to the only chest bone
                 q1, q2 = q1 @ q2, Quaternion()

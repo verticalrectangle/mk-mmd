@@ -408,11 +408,21 @@ def visibility(args):
                 blocked += 1
                 by[name] = by.get(name, 0) + 1
                 break
-        inside_by = None
-        hits = []
+        inside_by = None                                   # inside a closed mesh a render shows (not a glow volume,
+        hits = []                                          # a hidden collider or an ignored object)
         for dvec in dirs:
-            hit, loc, nrm, _i, ob, _m = sc.ray_cast(dg, c, dvec)
-            hits.append((hit, ob.name if hit else None, hit and nrm.dot(dvec) > 0))
+            origin, first = c, (False, None, False)
+            for _ in range(64):
+                hit, loc, nrm, _i, ob, _m = sc.ray_cast(dg, origin, dvec)
+                if not hit:
+                    break
+                name = ob.original.name if hasattr(ob, "original") else ob.name
+                if name in ignore or ob.hide_render or not ob.visible_camera:
+                    origin = loc + dvec * 1e-4
+                    continue
+                first = (True, name, nrm.dot(dvec) > 0)
+                break
+            hits.append(first)
         if all(h[0] and h[2] for h in hits) and len({h[1] for h in hits}) == 1:
             inside_by = hits[0][1]
         rows.append({"frame": f, "points": len(pts), "blocked": blocked, "by": by, "camera": cam.name,

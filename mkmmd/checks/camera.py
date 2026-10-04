@@ -136,14 +136,15 @@ class Occlusion(Metric):
 @metric
 class CameraInside(Metric):
     name = "camera_inside"
-    doc = ("Camera inside a closed mesh (a wall, a car body, a head): rays in six directions all hit back faces of "
-           "the same object. Value: the number of such frames.")
-    args = {}
+    doc = ("Camera inside a closed mesh a render shows (a wall, a car body, a head): rays in six directions all hit "
+           "back faces of the same object; hidden objects (colliders) and `ignore` are passed through. Value: the "
+           "number of such frames.")
+    args = {"ignore": "object names a camera may sit inside (glow and haze volumes)"}
     sampled = False
 
     def compute(self, args, ctx, data, frames, st):
-        rows = bridge.run("visibility", {"frames": frames, "points": []}, blend=ctx.scene, project=ctx.project,
-                          timeout=3600)
+        rows = bridge.run("visibility", {"frames": frames, "points": [], "ignore": args.get("ignore", [])},
+                          blend=ctx.scene, project=ctx.project, timeout=3600)
         bad = [r for r in rows if r["inside"]]
         return float(len(bad)), {"frames": [r["frame"] for r in bad[:20]],
                                  "inside": sorted({r["inside"] for r in bad})}
