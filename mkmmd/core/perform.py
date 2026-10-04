@@ -145,3 +145,27 @@ def drift(n, seed=11, tau_frames=40, scale=(0.02, 0.01, 0.015)):
 def keys_from_points(points, fps, frame0):
     """[(t, v)] -> [(frame, v)]."""
     return [(frame0 + t * fps, v) for t, v in points]
+
+
+HEAD_LIMITS = {"yaw": 75.0, "up": 35.0, "down": 45.0}      # deg: head + neck together, comfortable human range
+
+
+def yaw_elevation(f, u, d):
+    """Angles (rad) that take the head's forward f (unit, perpendicular to its up u) to look along d: yaw about u
+    (positive toward u x f, the character's left for a -Y facing, Z up model) and elevation above the plane normal to
+    u (positive up)."""
+    f, u, d = (np.asarray(v, float) for v in (f, u, d))
+    d = d / (np.linalg.norm(d) + 1e-12)
+    dh = d - d.dot(u) * u
+    yaw = math.atan2(float(np.cross(f, dh).dot(u)), float(f.dot(dh))) if np.linalg.norm(dh) > 1e-9 else 0.0
+    elev = math.asin(float(np.clip(d.dot(u), -1.0, 1.0)))
+    return yaw, elev
+
+
+def head_angles(yaw, elev, share, limits=None):
+    """The head's (yaw, pitch) in rad for a look of (yaw, elev): `share` of it, clamped to the head's range
+    {yaw, up, down} (deg; defaults HEAD_LIMITS). The eyes take what is left, up to their own maximum."""
+    lim = dict(HEAD_LIMITS, **(limits or {}))
+    y = float(np.clip(share * yaw, -math.radians(lim["yaw"]), math.radians(lim["yaw"])))
+    p = float(np.clip(share * elev, -math.radians(lim["down"]), math.radians(lim["up"])))
+    return y, p

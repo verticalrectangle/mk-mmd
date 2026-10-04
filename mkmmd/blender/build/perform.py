@@ -8,6 +8,8 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      lead to `at`, the head lifts `pitch` deg, the lids open, a blink follows); the
                                      head and neck do not turn
   head_share = 0.7                   share of a gaze turn taken by head + neck (the eyes do the rest, up to eye_max)
+  head_limits = {yaw = 75, up = 35, down = 45}   the head + neck's range (deg): a target overhead or behind is met
+                                     by the eyes, not by an impossible head turn
   neck_share = 0.35                  share of the head's turn carried by the neck
   eye_max = 24 (deg)
   breath = {per_min = 16.5, deg = 0.6}, sway = {deg = 0.37, period = 2.5}, nod = {deg = 0.48, period = 2.3}
@@ -144,6 +146,7 @@ def run(ctx):
         startle = PF.startles(ts, spec.get("startle", []))
         k_head = float(spec.get("head_share", 0.7))
         k_neck = float(spec.get("neck_share", 0.35))
+        head_limits = spec.get("head_limits")
         eye_max = math.radians(float(spec.get("eye_max", 24)))
         settle = PF.smooth((frames - ctx.start) / max(ctx.settle, 1))
         has2 = "upper_body2" in smap
@@ -162,10 +165,16 @@ def run(ctx):
             Dn_base = D2 @ q3b
             Dh_base = Dn_base @ q4b
             eye_pos = E[i]
-            R_full = (Dh_base @ fwd).rotation_difference((Vector(look_head[i]) - eye_pos).normalized())
+            f_h = (Dh_base @ fwd).normalized()
+            u_h = (Dh_base @ up).normalized()
+            yaw, elev = PF.yaw_elevation(tuple(f_h), tuple(u_h), tuple(Vector(look_head[i]) - eye_pos))
+            yaw_h, pitch_h = PF.head_angles(yaw, elev, k_head, head_limits)
+            R_yaw = Quaternion(u_h, yaw_h)
+            ax = (R_yaw @ f_h).cross(u_h)
+            R_head = (Quaternion(ax.normalized(), pitch_h) if ax.length > 1e-9 else Quaternion()) @ R_yaw
             pitch = Quaternion(lat, nod[i] + bob[i] - math.radians(lift[i]))
-            Dn = Quaternion().slerp(R_full, k_head * k_neck) @ Dn_base
-            Dh = pitch @ Quaternion().slerp(R_full, k_head) @ Dh_base
+            Dn = Quaternion().slerp(R_head, k_neck) @ Dn_base
+            Dh = pitch @ R_head @ Dh_base
             R_eye = (Dh @ fwd).rotation_difference((Vector(look_eye[i]) - eye_pos).normalized())
             if R_eye.angle > eye_max:
                 R_eye = Quaternion().slerp(R_eye, eye_max / R_eye.angle)

@@ -76,3 +76,25 @@ def test_lipsync_closes_for_m_and_between_distant_words():
     assert len(gap) == 2 and max(gap) == 0.0
     k1 = LS.keyframes(tl, lines=[1, 1])
     assert max(t for t, _ in k1["a"]) < 2.0                    # only the first line
+
+
+def test_head_turn_is_clamped_and_the_eyes_keep_the_rest():
+    f, u = (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)                  # a model facing -Y, Z up
+    yaw, elev = PF.yaw_elevation(f, u, (1.0, 0.0, 0.0))        # straight to her left
+    assert yaw == pytest.approx(np.pi / 2) and elev == pytest.approx(0.0)
+    assert PF.head_angles(yaw, elev, 0.7) == pytest.approx((0.7 * np.pi / 2, 0.0))   # inside the range: share only
+    yaw, elev = PF.yaw_elevation(f, u, (0.0, -0.2, 1.0))       # a sign almost overhead
+    y, p = PF.head_angles(yaw, elev, 0.7)
+    assert y == pytest.approx(0.0) and p == pytest.approx(np.radians(35.0))
+    yaw, elev = PF.yaw_elevation(f, u, (-1.0, 1.0, 0.0))       # behind, over her right shoulder
+    y, p = PF.head_angles(yaw, elev, 0.7, {"yaw": 60})
+    assert yaw == pytest.approx(-0.75 * np.pi) and y == pytest.approx(np.radians(-60.0))
+
+
+def test_yaw_elevation_does_not_depend_on_how_the_head_is_turned():
+    rng = np.random.default_rng(3)
+    a, b = rng.normal(size=3), rng.normal(size=3)
+    q, _ = np.linalg.qr(np.stack([a, b, np.cross(a, b)], 1))
+    q *= np.sign(np.linalg.det(q))                              # a rotation, not a reflection
+    f, u, d = np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 1.0]), np.array([0.3, -0.8, 0.5])
+    assert PF.yaw_elevation(q @ f, q @ u, q @ d) == pytest.approx(PF.yaw_elevation(f, u, d))
