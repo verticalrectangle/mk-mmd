@@ -44,22 +44,25 @@ Styles and the grip frame (prop keys: a prop card's use.grip entry; unknown keys
          or --prop with the solver's own neck problem. Frame: on the board under the position fret's wire, x toward the nut,
          z out of the board, y = z cross x. The thumb behind the neck, pressing fingers arched on their strings.
 
-A project's mk.toml names the armature (--cast); results are cached by a hash of the hand and the inputs. Exit codes:
-0 ok, 1 the grip misses a gate (a contact gap, penetration or finger clash over its limit; the file is still written),
-2 usage error, 3 Blender or runtime error.
+A project's mk.toml names the armature (--cast); results are cached by a hash of the hand and the inputs. A build
+solves the same grips from `grip = ...` in [pose.<cast>.hands.<L|R>] (docs/design.md: Grips); this command solves one
+without a build. Exit codes: 0 ok, 1 the grip misses a gate (a contact gap, penetration or finger clash over its limit;
+the file is still written), 2 usage error, 3 Blender or runtime error.
 
 Examples:
-  mk grip pen build/scene.blend --cast reisen --side R --length 0.14 --radius 0.0068 --out tracks/grip_pen.json
+  mk grip pen build/scene.blend --cast rin --side R --length 0.14 --radius 0.0068 --out tracks/grip_pen.json
   mk grip wheel --cast driver --side L --radius 0.19 --tube 0.015 --approach 90 --out grips/wheel_L.json
   mk grip pinch --armature Model_arm --side R --width 0.011 --out grips/strap.json
   mk grip rest --side L --prop '{"surface": "plane"}' --face palm --out grips/rest_L.json
+  mk grip neck --side L --card @card.json --chord power --fret 3 --out grips/neck_L.json
 """
 
 
 def add(sub):
     p = sub.add_parser("grip", help="solve a hand grip on a prop (pen, wheel, pinch, rest, neck)", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("style", choices=STYLES)
+    p.add_argument("style", choices=STYLES, help="what the hand holds: pen, wheel (a ring), pinch (a strap, a pick), rest "
+                                                 "(a surface), neck (a guitar neck)")
     p.add_argument("scene", nargs="?", metavar="SCENE.blend", help="default: the project's scene")
     who = p.add_argument_group("whose hand")
     who.add_argument("--cast", metavar="NAME", help="cast member of the project (default: its only member)")

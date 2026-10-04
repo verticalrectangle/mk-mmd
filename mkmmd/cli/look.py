@@ -21,19 +21,22 @@ PRESETS = {"front": (0, 8), "3q": (35, 12), "left": (90, 8), "back": (180, 10), 
 HELP = """Render quick views of a scene to look at. Nothing is saved to the .blend.
 
 Views:
-  (default)          the cut: the scene camera with its timeline markers, once per output aspect of mk.toml
+  (default)          the cut: the scene camera with its timeline markers, once per output of mk.toml
   --cam NAME         through a named camera
   --view LIST        preset directions around --target, relative to the cast member's facing:
                      """ + " ".join(PRESETS) + """
                      or yaw:elev pairs such as 20:15 (degrees; yaw 0 = in front, 90 = the model's left)
   Shots of the cut with a render-time look (`style = "silhouette"`, `reflection = {...}` in [[shot]]) are drawn in it,
-  as `mk render` draws them; --no-styles draws every shot as it is lit.
+  as `mk render` draws them; --no-styles draws every shot as it is lit. Frames inside a [[transition]] / [[insert]] and
+  frames with screen type are previewed composited, as `mk post` makes them.
 
-Layout: one image per frame, view and aspect; --sheet adds a contact sheet (rows = view x aspect, columns =
-frames), --strip one row per view, --ab OTHER.blend renders the same views there and pairs them side by side,
---guides draws thirds and the 5 % safe area. --ref PHOTO[,PHOTO...] writes ref.jpg: each reference photo beside a
-rendered view at the render's height, to compare a model with the real thing at the same angle (photo i goes with
-view i; one photo is repeated beside every view and one view beside every photo; a view is its first frame and size).
+Layout: one image per frame, view and output, written to --out as <view>_<output>_<frame>.jpg (the cut is view `cut`,
+orbit views are named after their preset or yaw_elev, orbits without --output are the square output `sq`); --sheet adds
+a contact sheet (rows = view x output, columns = frames), --strip one row per view, --ab OTHER.blend renders the same
+views there and pairs them side by side, --guides draws thirds and the 5 % safe area. --ref PHOTO[,PHOTO...] writes
+ref.jpg: each reference photo beside a rendered view at the render's height, to compare a model with the real thing at
+the same angle (photo i goes with view i; one photo is repeated beside every view and one view beside every photo; a
+view is its first frame and size).
 
 Examples:
   mk look --frames 200,400,600 --sheet                       # the cut, every aspect
@@ -48,19 +51,21 @@ Examples:
 def add(sub):
     p = sub.add_parser("look", help="render quick views (cut, cameras, orbits); sheets and A/B", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("scene", nargs="?", metavar="SCENE.blend")
-    p.add_argument("--frames", required=True)
+    p.add_argument("scene", nargs="?", metavar="SCENE.blend", help="default: the project's scene")
+    p.add_argument("--frames", required=True, help="frame spec: 181:280 (inclusive), 181:280:5 (step), 100,140,200, "
+                   "t=1.5:3.0 (clip seconds, needs a project), all")
     p.add_argument("--cam", action="append", metavar="NAME", help="named camera (repeatable)")
     p.add_argument("--view", help="comma list of presets or yaw:elev pairs (orbit views around --target)")
     p.add_argument("--target", help="expression for the orbit target (default: the cast's head)")
     p.add_argument("--dist", type=float, default=1.0, help="orbit distance (m, default 1)")
     p.add_argument("--lens", type=float, default=50.0, help="orbit lens (mm, default 50)")
     p.add_argument("--cast", help="cast member: whose facing the presets follow and whose head is the default target")
-    p.add_argument("--output", action="append", metavar="NAME", help="output aspect(s) from mk.toml (default: all "
-                   "for the cut and cameras, square for orbits)")
+    p.add_argument("--output", action="append", metavar="NAME", help="output(s) from mk.toml (default: all for the "
+                   "cut and cameras, square for orbits)")
     p.add_argument("--size", type=int, default=640, help="longest image side in pixels (default 640)")
-    p.add_argument("--engine", choices=("eevee", "workbench", "cycles"), default="eevee")
-    p.add_argument("--samples", type=int, default=16)
+    p.add_argument("--engine", choices=("eevee", "workbench", "cycles"), default="eevee",
+                   help="eevee (default), workbench (fast, flat) or cycles")
+    p.add_argument("--samples", type=int, default=16, help="render samples (default 16)")
     p.add_argument("--hide", action="append", default=[], metavar="OBJECT", help="hide an object (repeatable)")
     p.add_argument("--no-styles", action="store_true", help="draw every shot as it is lit, ignoring its silhouette / "
                    "reflection look (the cut shows them by default, as `mk render` draws them)")

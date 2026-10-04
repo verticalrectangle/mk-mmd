@@ -19,8 +19,7 @@ light, no surface flowing into the next. This page is the standard for everythin
    let the Subdivision Surface do the rounding; put a crease only where the real part has a line. Fewer, well placed
    control points beat many.
 4. **Work from real references and compare side by side at matching angles before calling anything done.** Look at the
-   reference photo and the render at the same yaw, elevation and lens (`tools/sidebyside.py` in the car project draws a
-   10 % grid on both), correct proportion and silhouette first, then the surface detail. Numbers from a data sheet are
+   reference photo and the render at the same yaw, elevation and lens (`mk look ... --ref` puts them side by side; a 10 % grid drawn on both helps), correct proportion and silhouette first, then the surface detail. Numbers from a data sheet are
    starting values; the photo decides. A first render is never the answer.
 5. **Graphic layers are not forms.** A display segment, a label stripe, a seam ribbon, a decal lifted a fraction of a
    millimetre off a surface may be flat quads: tag the object `exempt(obj)` (custom property `mk_form_exempt`) and the
@@ -174,7 +173,7 @@ the side, the door top at 0.915 m, the foot of the glass at 0.925 m with the win
 The builder (`convertible.py`) makes the shells first, bakes them, builds ray-cast probes on them, then asks the other modules for
 their meshes with those probes (`static_parts(probes)`), so a lamp is placed on the real surface. Reference checks used: the
 side silhouette laid over the photograph (orthographic render at the photo's scale), and the car beside the photographs at the
-same angle (`review/refcmp.sh` in the test project).
+same angle.
 
 ## Worked example: the guitar
 
@@ -187,7 +186,7 @@ lettering. `electric_guitar_layout.py` holds every number and the card (the cont
 **What was measured.** A photograph is flat and has perspective, so the first step was a metric frame: the 20 visible fret wires of a
 full-length front photo, fitted with 12-TET on the known 648 mm scale and a scale that shrinks along the neck, give the nut row, the pixels
 per metre at every height (residual 0.4 mm; a plain scale left 2 mm and put the saddle line 25 px off) and, with the neck's tilt, an image
-rectified to a grid in metres (`tools/rectify.py` in the test project: x across, z along the strings from the saddle line). Read off it
+rectified to a grid in metres (a small script of your own: x across, z along the strings from the saddle line). Read off it
 as landmarks, never traced: body 0.315 across the lower bout and 0.225 at the waist (z 0.125), tail edge z -0.1155, long horn tip z 0.314
 (the 12.6th fret) and short horn 0.2565 (16th) with its bay down to 0.196, the pocket's end at 0.2545, pickups at z 0.159 / 0.100 / 0.045 (the
 bridge one slanted 9 degrees, poles 10.5 mm apart), a 75 x 42 mm bridge plate, knobs on an arc, the jack's 71 x 33 mm boat plate at -36
@@ -207,7 +206,7 @@ back exponent p = 2.6, a 10-46 set.
 Checks used: the rectified photograph beside the orthographic render and the render's outline over it (the body is within 2 mm
 all round, IoU 0.96 with the pick and cord in; the headstock within 2 mm), 3/4 views against a case photograph, and a `silhouette`
 shot (`keep = ["guitar*"]`, `accent = ["guitar_cable"]`) upright and turned 65 degrees about +Y, where the long neck, headstock,
-horns, strap buttons and the hanging cord read at once (`review/sheets/` in `~/Projects/mk-tests/guitar_model`).
+horns, strap buttons and the hanging cord read at once.
 
 ## Reviewing
 

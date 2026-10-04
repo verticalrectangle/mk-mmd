@@ -16,12 +16,14 @@ PRESETS = {
 }
 EST_MB = {50: 0.9, 100: 3.2}          # rough PNG size per 1080-class frame at that percentage
 
-HELP = """Render the project's cut (shot cameras, per output aspect) to PNG frames in
-<project>/renders/<preset>/<output>/<frame>.png. Frames already on disk are skipped, so a stopped render resumes;
---jobs N runs N Blender processes that share the frames. Before starting, mk checks that the disk can hold the frames.
+HELP = """Render the project's cut (shot cameras, per output) to PNG frames in
+<project>/renders/<preset>/<output>/<frame>.png (<frame> is the Blender frame, five digits). Frames already on disk are
+skipped, so a stopped render resumes; --jobs N runs N Blender processes that share the frames. Before starting, mk
+checks that the disk can hold the frames.
 
 Presets: draft (50 %, 16 samples, no motion blur), preview (50 %, 32 samples, motion blur), final (100 %, 64 samples,
-motion blur). [render] in mk.toml can override samples, shutter, engine.
+motion blur). [render] in mk.toml can override samples, shutter (motion blur, 0.35) and engine (eevee, cycles,
+workbench); --samples and --percent override the preset for one run.
 
 Shots with a render-time look (`style = "silhouette"`, `reflection = {...}` in [[shot]], see docs/design.md: Shots) are
 rendered in it, inside the same Blender job: the frame on disk is the finished flat frame, not a pass. --no-styles renders
@@ -42,14 +44,15 @@ Examples:
 
 
 def add(sub):
-    p = sub.add_parser("render", help="render the cut per output aspect (resumable, parallel)", description=HELP,
+    p = sub.add_parser("render", help="render the cut per output (resumable, parallel)", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--output", action="append", metavar="NAME", help="output aspect(s) (default: all)")
-    p.add_argument("--frames", help="frame spec (default: the clip)")
-    p.add_argument("--preset", choices=sorted(PRESETS), default="draft")
+    p.add_argument("--output", action="append", metavar="NAME", help="output(s) to render (default: all)")
+    p.add_argument("--frames", help="frame spec: 181:280, 181:280:5, 100,140,200, t=0:5 (clip seconds), all "
+                   "(default: the whole clip)")
+    p.add_argument("--preset", choices=sorted(PRESETS), default="draft", help="draft (default), preview or final")
     p.add_argument("--jobs", type=int, default=1, help="parallel Blender processes per output")
-    p.add_argument("--samples", type=int)
-    p.add_argument("--percent", type=int)
+    p.add_argument("--samples", type=int, help="render samples (default: the preset's, or [render] samples)")
+    p.add_argument("--percent", type=int, help="resolution percentage (default: the preset's, 50 or 100)")
     p.add_argument("--no-styles", action="store_true", help="ignore the shots' silhouette / reflection looks")
     p.add_argument("--no-transitions", action="store_true", help="do not render the layers of [[transition]] / [[insert]]")
     add_project_arg(p)

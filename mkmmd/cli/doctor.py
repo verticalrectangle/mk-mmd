@@ -16,8 +16,12 @@ MIN_FREE_GB = 10.0
 def add(sub):
     p = sub.add_parser("doctor", help="check the environment (Blender, mmd_tools, tools, disk, keys)",
                        description="Checks Blender + mmd_tools (and the Python wheels the extension bundles), ffmpeg, "
-                                   "espeak-ng, Python packages, free disk space and API keys. Exits 1 if anything "
-                                   "required is missing. --fix reinstalls missing mmd_tools wheels (a Blender started "
+                                   "ffprobe, espeak-ng, Python packages, free disk space and API keys. Exits 1 if "
+                                   "anything required is missing: Blender, mmd_tools, ffmpeg, ffprobe, numpy, scipy, "
+                                   "opencv, pillow. Optional (reported, never fail the exit code): espeak-ng (lip sync "
+                                   "from sung words), numba (faster solvers), mediapipe (mk ref), torch, demucs and "
+                                   "faster-whisper (mk timeline), the assets folder, 10 GB free disk, the Pexels key "
+                                   "(mk ref search). --fix reinstalls missing mmd_tools wheels (a Blender started "
                                    "with --factory-startup deletes them, and PMX import then fails).")
     p.add_argument("--fix", action="store_true", help="reinstall mmd_tools' bundled wheels that are missing")
     p.set_defaults(func=run)

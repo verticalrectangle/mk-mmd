@@ -15,15 +15,21 @@ HELP = """Keep track of every asset a project uses: where it lives, who made it 
 The registry is <assets>/registry.json (MK_ASSETS, default ~/mk-assets). Adding a model also inspects it and stores
 its rig.json under <assets>/rigs/. mk never guesses a license: new entries are `unreviewed` and keep the paths of
 the author's readme files; read them (`mk assets show SLUG --terms` prints the lines about terms of use) and fill in
-license, restrictions and credit with `mk assets set`. `mk assets credits` fails while anything used is unreviewed.
+license, restrictions and credit with `mk assets set`. `mk assets credits` fails (exit 1) while anything used is
+unreviewed or has neither an author nor a credit line. Kinds: model, motion, prop, vehicle, audio, reference,
+texture, font, other. Registry slugs are what mk.toml refers to: [[cast]] asset, [[motion.<cast>]] vmd, [[prop]] card,
+[[text]] font, [credits] assets.
 
 Examples:
-  mk assets add ~/models/reisen/reisen.pmx --kind model --slug miy_reisen --author Miy
+  mk assets add ~/models/my_model/my_model.pmx --kind model --slug my_model --author NAME
   mk assets scan ~/models --kind model --jobs 6
-  mk assets show miy_reisen --terms
-  mk assets set miy_reisen license="Miy terms of use (readme)" credit="Reisen model: Miy" restrictions="no political use"
+  mk assets show my_model --terms
+  mk assets set my_model license="NAME terms of use (readme)" credit="Model: NAME" restrictions="no commercial use"
   mk assets credits --out CREDITS.md               # in a project: its cast and [credits] assets
 """
+
+FIELD_HELP = ("field=value, one or more: name author source_url license restrictions credit tags (a,b) rig path; "
+              "an empty value removes the field")
 
 
 def add(sub):
@@ -31,31 +37,38 @@ def add(sub):
                        formatter_class=argparse.RawDescriptionHelpFormatter)
     s = p.add_subparsers(dest="action", metavar="ACTION", required=True)
     a = s.add_parser("add", help="register one file")
-    a.add_argument("path")
-    a.add_argument("--kind", required=True, choices=A.KINDS)
-    for f in ("slug", "name", "author", "url", "license", "restrictions", "credit", "tags"):
-        a.add_argument(f"--{f}")
+    a.add_argument("path", help="the asset: a .pmx/.pmd model, a .vmd motion, an audio, font or texture file, or for a "
+                                "prop a model, a card .json or a folder holding a card.json")
+    a.add_argument("--kind", required=True, choices=A.KINDS, help="what the asset is")
+    a.add_argument("--slug", help="registry key (default: the model's English name, else <folder>_<file stem>)")
+    a.add_argument("--name", help="display name (default: the model's own name)")
+    a.add_argument("--author", help="who made it")
+    a.add_argument("--url", help="where it was published (stored as source_url)")
+    a.add_argument("--license", help="license summary (default: unreviewed)")
+    a.add_argument("--restrictions", help="what the terms forbid or require")
+    a.add_argument("--credit", help="the line the credits print (default: name / author)")
+    a.add_argument("--tags", help="comma list")
     a.add_argument("--readme-root", help="look for readme files up to this folder (default: two levels up)")
     a.add_argument("--replace", action="store_true", help="replace an entry with the same slug")
     a.add_argument("--no-inspect", action="store_true", help="models: do not build rig.json now")
     sc = s.add_parser("scan", help="register every model (.pmx/.pmd) or motion (.vmd) under a folder")
-    sc.add_argument("folder")
-    sc.add_argument("--kind", required=True, choices=("model", "motion"))
-    sc.add_argument("--tags")
-    sc.add_argument("--jobs", type=int, default=4)
+    sc.add_argument("folder", help="searched recursively; files already in the registry are skipped")
+    sc.add_argument("--kind", required=True, choices=("model", "motion"), help="which files to register")
+    sc.add_argument("--tags", help="comma list added to every new entry")
+    sc.add_argument("--jobs", type=int, default=4, help="parallel Blender processes for inspecting models (default 4)")
     ls = s.add_parser("list", help="list entries")
-    ls.add_argument("--kind", choices=A.KINDS)
-    ls.add_argument("--tag")
+    ls.add_argument("--kind", choices=A.KINDS, help="only this kind")
+    ls.add_argument("--tag", help="only entries with this tag")
     sh = s.add_parser("show", help="one entry")
-    sh.add_argument("slug")
+    sh.add_argument("slug", help="registry key")
     sh.add_argument("--terms", action="store_true", help="print readme lines about terms of use")
     st = s.add_parser("set", help="update fields: field=value ... (tags as a,b; empty value removes)")
-    st.add_argument("slug")
-    st.add_argument("fields", nargs="+")
+    st.add_argument("slug", help="registry key")
+    st.add_argument("fields", nargs="+", help=FIELD_HELP)
     rm = s.add_parser("rm", help="remove an entry (files are not touched)")
-    rm.add_argument("slug")
+    rm.add_argument("slug", help="registry key")
     cr = s.add_parser("credits", help="credits for a project's assets (cast + [credits] assets) or given slugs")
-    cr.add_argument("slugs", nargs="*")
+    cr.add_argument("slugs", nargs="*", help="registry keys (default: the project's cast and [credits] assets)")
     cr.add_argument("--out", help="write the markdown here")
     add_project_arg(cr)
     p.set_defaults(func=run)

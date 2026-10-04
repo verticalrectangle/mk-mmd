@@ -14,7 +14,10 @@ COMMANDS = ["assets", "build", "check", "doctor", "grip", "inspect", "look", "mo
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="mk", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Output is JSON on stdout. Exit codes: 0 ok, 1 a check failed, 2 usage error, 3 Blender/runtime error.")
+        epilog="Making a video, in order: assets add, timeline analyze, build, check, look, render, post, assets credits.\n"
+               "Output is JSON on stdout. Exit codes: 0 ok, 1 a check, gate or verification failed, 2 usage or\n"
+               "configuration error, 3 Blender or runtime error.\n"
+               "Docs: README.md, docs/AGENTS.md (the playbook), docs/design.md (the reference).")
     parser.add_argument("--version", action="version", version=f"mk-mmd {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
     for name in COMMANDS:

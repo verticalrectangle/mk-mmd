@@ -12,9 +12,11 @@ from ..core import transition as TR
 from .common import add_project_arg, cut_plan, emit, get_project, UsageError
 
 HELP = """Grade the rendered frames of each output ([post] in mk.toml: contrast, split tone, the palette floor that keeps
-shadows off black, halation, vignette, grain) and encode them to <project>/out/<name>_<output>[_<preset>].mp4 with
-the audio of [audio] (file, start = song seconds at clip time 0). Missing frames are an error unless --allow-gaps
-(then the previous frame repeats).
+shadows off black, halation, vignette, grain) and encode them to <project>/out/<name>_<output>[_<preset>].mp4 (the
+preset is left out of the name for `final`) with the audio of [audio] (file, start = song seconds at clip time 0), as
+H.264 (yuv420p, even size) and AAC with a 60 ms fade-out at the end. Missing frames are an error unless --allow-gaps
+(then the previous frame repeats). The report has each video's path, frames, size and the darkest luma after the grade
+(`min_luma`: above 0 when the floor keeps shadows off black).
 
 [[transition]] and [[insert]] entries (docs/design.md: Shots: Transitions and inserts) are composited from the layers mk
 render drew next to the frames, before the grade: the grade, grain and vignette cover the whole frame. A missing layer is
@@ -23,20 +25,22 @@ an error unless --allow-gaps (then the plain cut shows there); --no-transitions 
 
 Examples:
   mk post --preset draft
-  mk post --preset final --to ~/Videos
+  mk post --preset final --to ~/share
 """
 
 
 def add(sub):
     p = sub.add_parser("post", help="grade frames and encode MP4s with audio", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--preset", default="draft", help="which render folder (draft, preview, final)")
-    p.add_argument("--output", action="append", metavar="NAME")
+    p.add_argument("--preset", default="draft", help="which render folder under renders/ (draft, preview, final; "
+                   "default draft)")
+    p.add_argument("--output", action="append", metavar="NAME", help="output(s) to encode (default: all)")
     p.add_argument("--to", metavar="DIR", help="also copy the videos here")
-    p.add_argument("--no-audio", action="store_true")
-    p.add_argument("--allow-gaps", action="store_true")
+    p.add_argument("--no-audio", action="store_true", help="encode without the song")
+    p.add_argument("--allow-gaps", action="store_true", help="repeat the previous frame for a missing frame and show "
+                   "the plain cut where an effect's layer is missing")
     p.add_argument("--no-transitions", action="store_true", help="composite no [[transition]] / [[insert]]: plain cuts")
-    p.add_argument("--crf", type=int, default=15)
+    p.add_argument("--crf", type=int, default=15, help="x264 quality, lower is better (default 15)")
     add_project_arg(p)
     p.set_defaults(func=run)
 

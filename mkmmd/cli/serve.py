@@ -11,11 +11,14 @@ from .common import emit, get_project, scene_path, UsageError, add_project_arg
 
 def add(sub):
     p = sub.add_parser(
-        "serve", help="keep a scene loaded in a background Blender (fast q/look/sample)",
-        description="Starts Blender with SCENE loaded and answers read-only jobs (q, list, look, sample) on a Unix "
-                    "socket; other commands use it automatically. Runs in the foreground: start it as a background "
-                    "job. `mk serve SCENE --stop` shuts it down. Re-run after the scene file changes on disk.")
-    p.add_argument("scene", nargs="?", metavar="SCENE.blend")
+        "serve", help="keep a scene loaded in a background Blender (fast q, check, grip)",
+        description="Starts Blender with SCENE loaded and answers the read-only jobs (ping, list, q, sample, visibility, "
+                    "hand_model: what `mk q`, `mk check` and `mk grip` send) on a Unix socket; those commands use it "
+                    "automatically, which matters for big scenes. Jobs that change the scene (`mk look` hides objects "
+                    "and adds a camera, `mk build`, `mk render`) always get a fresh Blender. Runs in the foreground: "
+                    "start it as a background job. `mk serve SCENE --stop` shuts it down. Re-run after the scene file "
+                    "changes on disk.")
+    p.add_argument("scene", nargs="?", metavar="SCENE.blend", help="default: the project's scene")
     p.add_argument("--stop", action="store_true", help="stop the server for SCENE")
     add_project_arg(p)
     p.set_defaults(func=run)

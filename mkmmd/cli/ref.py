@@ -18,7 +18,9 @@ events) and recommends blink / lids / gaze / head_share / eye_max / nod / sway /
 Sets live in ~/.cache/mk/ref/<project name | default>/<set>/ (clips.json, clips/, track/). Downloads (at most 150 MB per
 clip, the smallest rendition >= 720p) and tracking data are copyrighted and large: they never go into a repository;
 `mk ref clean` deletes them. Inside a project, `measure` writes <project>/ref/<set>.json (numbers only, safe to keep).
-The Pexels API key is read from the system keyring (secret-tool lookup service pexels key api) and never printed.
+The Pexels API key (search, add and the downloads of track) is read from the system keyring (secret-tool lookup service
+pexels key api; store it with `secret-tool store --label=Pexels service pexels key api`) and never printed. `track` and
+`sheet` need the `ref` extra (MediaPipe: `uv tool install --editable '.[ref]'`); `measure` and `photos` do not.
 
 Reference photos (modelling): `mk ref photos QUERY` searches Wikimedia Commons (no login), keeps photographs wide enough
 with their licence, author and page, downloads thumbnails into <project>/refs/<set>/ (outside a project:
@@ -35,6 +37,8 @@ Examples:
   mk ref photos 'Dodge 600 convertible' --set dodge600 --n 12     # photos to model a car from
 """
 
+SET_HELP = f"reference set (default {store.DEFAULT_SET!r})"
+
 
 def add(sub):
     p = sub.add_parser("ref", help="reference clips: search, track, measure, performance parameters", description=HELP,
@@ -42,7 +46,7 @@ def add(sub):
     s = p.add_subparsers(dest="action", metavar="ACTION", required=True)
 
     ph = s.add_parser("photos", help="Wikimedia Commons photos as modelling references (licence and author kept)")
-    ph.add_argument("query")
+    ph.add_argument("query", help="search words, e.g. 'Dodge 600 convertible' or 'Dodge 600 dashboard'")
     ph.add_argument("--set", dest="set_name", metavar="NAME", help="folder name under refs/ (default: the query's words)")
     ph.add_argument("--n", type=int, default=12, help="photos of this query the set should hold (default 12; the same "
                     "query again downloads nothing, another query adds its own)")
@@ -52,10 +56,11 @@ def add(sub):
     add_project_arg(ph)
 
     se = s.add_parser("search", help="Pexels video search (downloads nothing)")
-    se.add_argument("query")
+    se.add_argument("query", help="search words, e.g. 'woman singing in car'")
     se.add_argument("--n", type=int, default=30, help="how many results (default 30)")
     se.add_argument("--min-height", type=int, default=720, help="smallest short side of a usable rendition, px (default 720)")
-    se.add_argument("--orientation", choices=("landscape", "portrait", "any"), default="landscape")
+    se.add_argument("--orientation", choices=("landscape", "portrait", "any"), default="landscape",
+                    help="shape of the clips (default landscape)")
 
     ad = s.add_parser("add", help="remember clips in a reference set (id, author, url, license note, why)")
     ad.add_argument("ids", nargs="+", type=int, metavar="ID", help="Pexels video ids")
@@ -64,7 +69,7 @@ def add(sub):
     add_project_arg(ad)
 
     tr = s.add_parser("track", help="download (capped) and track the clips of a set with MediaPipe")
-    tr.add_argument("--set", dest="set_name", metavar="NAME")
+    tr.add_argument("--set", dest="set_name", metavar="NAME", help=SET_HELP)
     tr.add_argument("--jobs", type=int, help="parallel tracking processes (default min(4, cpus / 2))")
     tr.add_argument("--min-height", type=int, default=720, help="smallest short side of the rendition to download (default 720)")
     tr.add_argument("--max-seconds", type=float, default=90.0, help="track at most this much of a clip (default 90)")
@@ -72,19 +77,19 @@ def add(sub):
     add_project_arg(tr)
 
     me = s.add_parser("measure", help="per-clip and pooled metrics, recommended perform parameters")
-    me.add_argument("--set", dest="set_name", metavar="NAME")
+    me.add_argument("--set", dest="set_name", metavar="NAME", help=SET_HELP)
     me.add_argument("--out", metavar="FILE.json", help="where the full result goes (default <project>/ref/<set>.json, else the set's cache folder)")
     me.add_argument("--full", action="store_true", help="print the full result on stdout instead of the digest")
     add_project_arg(me)
 
     sh = s.add_parser("sheet", help="contact sheet with the landmarks drawn at the measured events")
-    sh.add_argument("--set", dest="set_name", metavar="NAME")
+    sh.add_argument("--set", dest="set_name", metavar="NAME", help=SET_HELP)
     sh.add_argument("--out", metavar="FILE.jpg", help="default: contact_sheet.jpg in the set's cache folder")
     sh.add_argument("--per-row", type=int, default=4, help="frames per clip (default 4)")
     add_project_arg(sh)
 
     cl = s.add_parser("clean", help="delete downloads, tracks and the contact sheet")
-    cl.add_argument("--set", dest="set_name", metavar="NAME")
+    cl.add_argument("--set", dest="set_name", metavar="NAME", help=SET_HELP)
     cl.add_argument("--all", action="store_true", help="every set of this project (or the default scope) and the model bundles")
     cl.add_argument("--keep-tracks", action="store_true", help="delete the downloads and the sheet only")
     cl.add_argument("--forget", action="store_true", help="also delete the set itself (clips.json, measure.json)")

@@ -17,11 +17,12 @@ HELP = """Describe MMD models and motions.
 A model (.pmx/.pmd) is imported into an empty scene and described as rig.json (docs/design.md: Model description):
 standard bones mapped to semantic names, fingers, physics chains with their families, collision bodies, expressions,
 measurements and known quirks. A motion (.vmd) gets frames, tracks, tempo (bpm, beat phase), energy and travel.
+`mk assets add --kind model` does the same and registers the model, which is what a project's [[cast]] asset uses.
 
 Examples:
-  mk inspect model.pmx                         # print a summary, write <assets>/rigs/<slug>.rig.json
+  mk inspect model.pmx                         # print a summary, write <assets>/rigs/<folder>__<file>.rig.json
   mk inspect model.pmx --full                  # print the whole rig.json
-  mk inspect assets/crowd/**/*.pmx --jobs 6    # many models in parallel
+  mk inspect models/**/*.pmx --jobs 6          # many models in parallel
   mk inspect dance.vmd
 """
 
@@ -29,7 +30,7 @@ Examples:
 def add(sub):
     p = sub.add_parser("inspect", help="describe models (rig.json) and motions", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("paths", nargs="+", metavar="FILE")
+    p.add_argument("paths", nargs="+", metavar="FILE", help="models (.pmx/.pmd) and motions (.vmd)")
     p.add_argument("--out", metavar="PATH", help="rig.json path (one model) or folder (several)")
     p.add_argument("--jobs", type=int, default=1, help="parallel Blender processes for many models")
     p.add_argument("--scale", type=float, default=0.08, help="import scale (default 0.08: 1 MMD unit = 8 cm)")

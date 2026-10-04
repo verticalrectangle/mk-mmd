@@ -5,28 +5,35 @@ import math
 from .. import bridge
 from .common import add_project_arg, emit, get_project, parse_frames, scene_path, UsageError
 
-HELP = """Evaluate a Python expression in a scene at each frame and print the values.
+HELP = """Evaluate a Python expression in a scene at each frame and print the values (vectors print as lists). The same
+expression language is used by check arguments (`a`, `b`, `points`), mk look --target and the `anchor` / `center` of
+transitions and inserts.
 
 Names available in EXPR:
-  bone(NAME[, armature])  world-space view of a posed bone: .head .tail .center .dir .length .matrix .quat
+  bone(NAME[, armature])  world-space view of a posed bone: .head .tail .center .dir .length .matrix .quat .local_quat
                           NAME is a Blender name, a semantic name (head, wrist.R, index2.L) or a PMX name (右手首)
   obj(NAME)               world-space view of an object: .loc .matrix .quat .euler .dims .bbox .visible
-  morph(NAME)             shape-key value on the model's meshes
-  cam()                   the active camera (an obj view); screen(point) -> camera-view coordinates (x, y, depth)
-  dist(a, b), angle(a, b) helpers; frame, t (clip seconds when in a project), np, math, Vector, bpy, scene
+  morph(NAME[, armature]) shape-key value on the model's meshes
+  cam()                   the active camera (an obj view); screen(point[, camera]) -> (x, y, depth): x, y in 0..1 of the
+                          frame from its bottom left, depth in metres in front of the camera
+  dist(a, b), angle(a, b) helpers (metres; degrees)
+  arm(NAME), scene, bpy, np, math, Vector, fps, frame0
+  frame, t                the frame being evaluated and its clip seconds (t is None without a project)
 
 Examples:
-  mk q build/stan.blend 'bone("head").head' --frames 181:280
+  mk q build/scene.blend 'bone("head").head' --frames 181:280
   mk q 'dist(bone("index_tip.R").head, obj("Pen").loc)' --frames all --summary
-  mk q build/stan.blend --list bones
+  mk q build/scene.blend --list bones
 """
 
 
 def add(sub):
     p = sub.add_parser("q", help="evaluate an expression over frames", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("args", nargs="*", metavar="[SCENE.blend] EXPR")
-    p.add_argument("--frames", help="frame spec (default: the scene's current frame)")
+    p.add_argument("args", nargs="*", metavar="[SCENE.blend] EXPR", help="an optional scene (default: the project's) "
+                   "and one quoted expression")
+    p.add_argument("--frames", help="frame spec: 181:280, 181:280:5, 100,140,200, t=1.5:3.0 (clip seconds), all "
+                   "(default: the project's frame0; without a project the scene's first frame)")
     p.add_argument("--list", metavar="KIND",
                    help="list names instead: armatures bones semantic morphs cameras markers collections actions "
                         "objects")

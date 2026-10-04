@@ -11,13 +11,18 @@ HELP = """Measure a scene and compare against thresholds.
 With no METRIC, runs every [[check]] in mk.toml (or the ones named by --only). With a METRIC, runs that one metric
 ad hoc. All sampled metrics share one Blender pass over the union of their frames.
 
+A [[check]] entry is  name, metric, args = {...} (the metric's arguments, below), frames (a frame spec, default the
+whole clip), min and max. It passes when min <= value <= max; a metric with a default limit (form 0.25, prop_body 8,
+strum 10) uses it when the entry gives neither. A check that cannot be computed fails with an `error`. Exit 1 when any
+check fails, 0 when all pass.
+
 Metrics (mk check --list for their arguments):
   jitter         shake of hair / ears / tails relative to the head (ratio; calm < 0.5)
   contact        distance between two tracked points (nib on paper, hand on a wheel)
   penetration    chains sinking into the body and scene colliders (mm)
   foot_slide     planted feet sliding (mm per frame)
   joint_limits   elbows, knees, wrists, neck, spine in human ranges (degrees over)
-  framing        subject inside every output aspect's safe area (margin)
+  framing        subject inside every output's safe area (margin)
   occlusion      subject hidden behind objects (share of points)
   camera_inside  camera inside a closed mesh (frames)
   flicker        temporal noise in rendered frames
@@ -31,19 +36,22 @@ Examples:
   mk check --only "back hair is calm" --frames 181:400
   mk check jitter --args '{"family": "back_hair"}' --max 0.5 --frames 181:918
   mk check contact --args '{"a": "obj(\\"Pen\\").loc", "b": "track:nib.target", "when": "track:nib.writing"}' --max 0.1
+  mk check build/scene.blend form --args '{"prop": "car"}'      # a prop's boxiness, worst parts in detail
 """
 
 
 def add(sub):
     p = sub.add_parser("check", help="measure and compare against thresholds", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("args_pos", nargs="*", metavar="[SCENE.blend] [METRIC]")
+    p.add_argument("args_pos", nargs="*", metavar="[SCENE.blend] [METRIC]",
+                   help="an ad-hoc check: an optional scene (default: the project's) and the metric to run")
     p.add_argument("--args", dest="metric_args", default="{}", help="metric arguments as JSON (ad-hoc metric)")
     p.add_argument("--max", type=float, help="fail above this value (ad-hoc metric)")
     p.add_argument("--min", type=float, help="fail below this value (ad-hoc metric)")
     p.add_argument("--name", help="name for the ad-hoc check")
     p.add_argument("--only", action="append", metavar="NAME", help="run only these project checks (repeatable)")
-    p.add_argument("--frames", help="override every check's frames")
+    p.add_argument("--frames", help="override every check's frames (frame spec: 181:280, 181:280:5, 100,140,200, "
+                                    "t=1.5:3.0 in clip seconds, all)")
     p.add_argument("--list", action="store_true", help="list metrics with their arguments")
     p.add_argument("--keep-sample", action="store_true", help="keep the sampled .npz in ~/.cache/mk/samples")
     add_project_arg(p)

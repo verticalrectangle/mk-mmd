@@ -22,10 +22,12 @@ from .common import CHECK_FAILED, UsageError, emit
 HELP = """Build a character from a spec: part builders (body, head, hair, outfit, ...) are plain Python in
 mkmmd/model/parts/, driven by a TOML spec; the parts are merged, exported as a PMX (textures next to it), imported
 back with mmd_tools, verified against what was assembled (positions, weights, morphs, UVs, rigid bodies; 0.1 mm), and
-described like `mk inspect` does (rig.json). A review .blend with a neutral studio works with `mk look`.
+described like `mk inspect` does (rig.json). A review .blend with a neutral studio works with `mk look`. The spec's
+[model] table, the part builders and the conventions are in docs/design.md: Characters (mk model). Exit 1 when a
+builder, the assembly or the verification fails.
 
 Examples:
-  mk model build ~/Projects/mk-tests/rin_model/model.toml
+  mk model build ~/projects/rin/model.toml
   mk model build model.toml --only head                  # head + the parts it needs, into <out>/only_head/
   mk model build model.toml --no-export                  # run and check the builders only (no Blender)
   mk model build model.toml --set hair.length=0.3 --out /tmp/try
@@ -42,7 +44,7 @@ def add(sub):
     ss = p.add_subparsers(dest="model_command", metavar="ACTION", required=True)
     b = ss.add_parser("build", help="build the parts, export the PMX, import it back and verify it",
                       description=HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
-    b.add_argument("spec", metavar="SPEC.toml")
+    b.add_argument("spec", metavar="SPEC.toml", help="the model spec (model.toml): [model] plus the part tables")
     b.add_argument("--only", metavar="PARTS", help="comma list of parts to build, plus the parts they need")
     b.add_argument("--out", metavar="DIR", help="output folder (default: [model] out; with --only: <out>/only_<parts>)")
     b.add_argument("--no-export", action="store_true", help="only run and check the builders (no PMX, no Blender)")
@@ -54,13 +56,15 @@ def add(sub):
     b.add_argument("--full", action="store_true", help="also print the part-by-part warnings and the whole morph list")
     b.set_defaults(func=run_build)
     i = ss.add_parser("info", help="print what a build would do (parts in order, output folder, builders)")
-    i.add_argument("spec", metavar="SPEC.toml")
-    i.add_argument("--only", metavar="PARTS")
-    i.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides")
+    i.add_argument("spec", metavar="SPEC.toml", help="the model spec (model.toml)")
+    i.add_argument("--only", metavar="PARTS", help="comma list of parts: show the plan for these and what they need")
+    i.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
+                   help="override a spec value (TOML syntax, repeatable): hair.length=0.3")
     i.set_defaults(func=run_info)
     s = ss.add_parser("studio", help="copy a built scene with the neutral review studio (grey world, floor, lights)")
-    s.add_argument("scene", metavar="SCENE.blend")
-    s.add_argument("--out", required=True, metavar="OUT.blend")
+    s.add_argument("scene", metavar="SCENE.blend", help="a scene with models in it (a built project, several imported "
+                                                        "PMX); it is left alone")
+    s.add_argument("--out", required=True, metavar="OUT.blend", help="where to save the copy that has the studio")
     s.add_argument("--floor", action="append", default=[], metavar="X,Y", help="a floor disc at x,y (repeatable)")
     s.add_argument("--lights", action="store_true", help="add key/fill/rim suns (default: the scene has its own)")
     s.add_argument("--height", type=float, default=1.6, help="model height for aiming the lights")
