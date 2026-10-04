@@ -162,10 +162,20 @@ def yaw_elevation(f, u, d):
     return yaw, elev
 
 
-def head_angles(yaw, elev, share, limits=None):
-    """The head's (yaw, pitch) in rad for a look of (yaw, elev): `share` of it, clamped to the head's range
-    {yaw, up, down} (deg; defaults HEAD_LIMITS). The eyes take what is left, up to their own maximum."""
+def clamp_look(f, u, d, share, limits=None):
+    """Where the head should aim for a look along d: None when `share` of the turn from its forward f (unit,
+    perpendicular to its up u) stays inside the head's range {yaw, up, down} (deg; defaults HEAD_LIMITS), so the
+    look is used as it is; otherwise the unit direction with yaw and elevation clipped so that it does. The head
+    still turns by the minimal rotation toward it; the eyes take what is left, up to their own maximum."""
+    if share <= 0:
+        return None
     lim = dict(HEAD_LIMITS, **(limits or {}))
-    y = float(np.clip(share * yaw, -math.radians(lim["yaw"]), math.radians(lim["yaw"])))
-    p = float(np.clip(share * elev, -math.radians(lim["down"]), math.radians(lim["up"])))
-    return y, p
+    yaw, elev = yaw_elevation(f, u, d)
+    y_max = math.radians(lim["yaw"]) / share
+    e_lo, e_hi = -math.radians(lim["down"]) / share, math.radians(lim["up"]) / share
+    if abs(yaw) <= y_max and e_lo <= elev <= e_hi:
+        return None
+    y, e = float(np.clip(yaw, -y_max, y_max)), float(np.clip(elev, e_lo, e_hi))
+    f, u = np.asarray(f, float), np.asarray(u, float)
+    out = math.cos(e) * (math.cos(y) * f + math.sin(y) * np.cross(u, f)) + math.sin(e) * u
+    return tuple(out / np.linalg.norm(out))

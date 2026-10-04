@@ -78,17 +78,16 @@ def test_lipsync_closes_for_m_and_between_distant_words():
     assert max(t for t, _ in k1["a"]) < 2.0                    # only the first line
 
 
-def test_head_turn_is_clamped_and_the_eyes_keep_the_rest():
+def test_head_aims_inside_its_range_and_leaves_a_look_in_range_alone():
     f, u = (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)                  # a model facing -Y, Z up
     yaw, elev = PF.yaw_elevation(f, u, (1.0, 0.0, 0.0))        # straight to her left
     assert yaw == pytest.approx(np.pi / 2) and elev == pytest.approx(0.0)
-    assert PF.head_angles(yaw, elev, 0.7) == pytest.approx((0.7 * np.pi / 2, 0.0))   # inside the range: share only
-    yaw, elev = PF.yaw_elevation(f, u, (0.0, -0.2, 1.0))       # a sign almost overhead
-    y, p = PF.head_angles(yaw, elev, 0.7)
-    assert y == pytest.approx(0.0) and p == pytest.approx(np.radians(35.0))
-    yaw, elev = PF.yaw_elevation(f, u, (-1.0, 1.0, 0.0))       # behind, over her right shoulder
-    y, p = PF.head_angles(yaw, elev, 0.7, {"yaw": 60})
-    assert yaw == pytest.approx(-0.75 * np.pi) and y == pytest.approx(np.radians(-60.0))
+    assert PF.clamp_look(f, u, (1.0, 0.0, 0.0), 0.7) is None   # 0.7 x 90 = 63 deg < 75: the look is used as it is
+    yaw, elev = PF.yaw_elevation(f, u, PF.clamp_look(f, u, (0.0, -0.2, 1.0), 0.7))   # a sign almost overhead
+    assert yaw == pytest.approx(0.0, abs=1e-9) and 0.7 * elev == pytest.approx(np.radians(35.0))
+    yaw, elev = PF.yaw_elevation(f, u, PF.clamp_look(f, u, (-1.0, 1.0, 0.0), 0.7, {"yaw": 60}))   # behind, right
+    assert 0.7 * yaw == pytest.approx(np.radians(-60.0)) and elev == pytest.approx(0.0, abs=1e-9)
+    assert PF.clamp_look(f, u, (0.0, -0.2, 1.0), 0.0) is None  # a head that does not turn needs no limit
 
 
 def test_yaw_elevation_does_not_depend_on_how_the_head_is_turned():

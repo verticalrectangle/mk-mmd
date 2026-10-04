@@ -165,16 +165,13 @@ def run(ctx):
             Dn_base = D2 @ q3b
             Dh_base = Dn_base @ q4b
             eye_pos = E[i]
-            f_h = (Dh_base @ fwd).normalized()
-            u_h = (Dh_base @ up).normalized()
-            yaw, elev = PF.yaw_elevation(tuple(f_h), tuple(u_h), tuple(Vector(look_head[i]) - eye_pos))
-            yaw_h, pitch_h = PF.head_angles(yaw, elev, k_head, head_limits)
-            R_yaw = Quaternion(u_h, yaw_h)
-            ax = (R_yaw @ f_h).cross(u_h)
-            R_head = (Quaternion(ax.normalized(), pitch_h) if ax.length > 1e-9 else Quaternion()) @ R_yaw
+            look = (Vector(look_head[i]) - eye_pos).normalized()
+            aim = PF.clamp_look(tuple((Dh_base @ fwd).normalized()), tuple((Dh_base @ up).normalized()), tuple(look),
+                                k_head, head_limits)
+            R_full = (Dh_base @ fwd).rotation_difference(look if aim is None else Vector(aim))
             pitch = Quaternion(lat, nod[i] + bob[i] - math.radians(lift[i]))
-            Dn = Quaternion().slerp(R_head, k_neck) @ Dn_base
-            Dh = pitch @ R_head @ Dh_base
+            Dn = Quaternion().slerp(R_full, k_head * k_neck) @ Dn_base
+            Dh = pitch @ Quaternion().slerp(R_full, k_head) @ Dh_base
             R_eye = (Dh @ fwd).rotation_difference((Vector(look_eye[i]) - eye_pos).normalized())
             if R_eye.angle > eye_max:
                 R_eye = Quaternion().slerp(R_eye, eye_max / R_eye.angle)
