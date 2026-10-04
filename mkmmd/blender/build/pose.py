@@ -12,13 +12,30 @@
      rest = "prop:edge" (+ along = 0..1, lift = m): the hand lies on an edge use point
      keys = [{t, at, dir, palm}]  moving targets (clip seconds, eased)
      fingers = "relaxed" | "curled" | "fist" | "flat" | "point"
+     grip = "prop:use" | "rest"   the hand HOLDS something: a solver (mkmmd.solvers.grip, on the model's own skin) finds
+        the finger rotations and the hand's frame on the prop; the wrist goal follows, the finger rotations are keyed
+        like a finger preset (they replace `fingers`) and `ride` still makes the goal follow a prop part.
+        grip = "car:wheel"  a prop's use.grip entry, by its type: ring -> a power grip round the rim (prop radius,
+           tube); clock = 10 (hours as the character sees the wheel: 12 top, 3 its right; default 10 for L, 2 for R,
+           read at the first frame, the hand then rides the wheel), approach = 90 (the palm on the side of the rim that
+           faces the character), wrap = -1 (fingers round the outside of the rim), seeds, skin_radius (0.16 m);
+           pinch -> thumb-index pad pinch of the strap (prop width, span, length; edge = 0.004 m); pen -> a lateral
+           tripod, only with `posture` = {nib, shoulder, pole, table, ...} (pen grips are tuned for one hand shape and
+           do not generalise yet; other models can fail the gates)
+        grip = "rest" with rest = "prop:edge" (+ along, offset, lift = 0.0 m, face = "palm" | "back", dir): the relaxed
+           hand lies ON the surface; the palm centre is at the rest point, `dir` is the hand's heading
+        Every solve is cached (<project>/.mk/cache/grip); the stage output and the log carry each hand's digest
+        (contact gaps, penetration, finger clash in mm, seconds, warnings past 3 / 1 / 1 mm).
   fingers = {L = preset, R = preset}  without arm IK
 World-axis rotations are keyed with mkmmd.blender.keys (q_child = D_parent^-1 D_want)."""
 import math
+import time
 
 import bpy
+import numpy as np
 from mathutils import Euler, Matrix, Quaternion, Vector
 
+from ...core import gripframe as GF
 from .. import keys as K
 from .. import scene as S
 from . import BuildError, collection, targets
@@ -187,6 +204,101 @@ def _hand_matrix(arm, smap, side, at, direction, palm=None):
     return M @ Matrix.Translation((0.0, bone.length, 0.0))
 
 
+def _rest_point(p, u, h):
+    """World point on a prop's use.rest entry: a plane's centre (+ `offset` in the prop's frame) or a point `along`
+    an edge."""
+    if u.get("type") == "plane" or "a" not in u:        # a plane: centre + offset in the prop's frame
+        return p.world(Vector(u["center"]) + Vector(h.get("offset", (0.0, 0.0, 0.0))))
+    return p.world(u["a"]).lerp(p.world(u["b"]), float(h.get("along", 0.5)))      # an edge: a point along it
+
+
+def _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1):
+    """[(frame, IK goal matrix)] of a hand without a grip: lying on an edge or plane, at a point, or moving keys."""
+    mats = []
+    if h.get("rest"):
+        prop_name, _, use = h["rest"].partition(":")
+        p = ctx.props[prop_name]
+        u = p.use("rest", use)
+        n_w = p.world_dir(u.get("normal", (0, 0, 1)))
+        at = _rest_point(p, u, h) + n_w * float(h.get("lift", 0.03))
+        d = Vector(h.get("dir", tuple(-back + out_dir * 0.3)))
+        mats.append((f1, _hand_matrix(arm, smap, side, at, d, h.get("palm", (0, 0, -1)))))
+    if h.get("at") is not None:
+        at = targets.point(ctx, h["at"])
+        mats.append((f1, _hand_matrix(arm, smap, side, at, h.get("dir", tuple(-back)), h.get("palm"))))
+    for k in h.get("keys", []):
+        mats.append((ctx.frame(float(k["t"])), _hand_matrix(arm, smap, side, targets.point(ctx, k["at"]),
+                                                             k.get("dir", h.get("dir", tuple(-back))),
+                                                             k.get("palm", h.get("palm")))))
+    if not mats:
+        raise BuildError(f"pose.{name}.hands.{side}: give at, rest, grip or keys")
+    return mats
+
+
+def _grip(ctx, m, smap, name, side, h, back, out_dir):
+    """Solve the grip of one hand (docs/design.md: Grips): the grip frame G in the world from the prop's card and its
+    current transform, the solver's finger rotations and `target_in_wrist`, and the IK goal that puts the wrist where
+    G @ inv(target_in_wrist) says. Returns {goal (Matrix), bones {bone: quaternion}, digest}."""
+    from ..ops_hand import hand_arrays
+    arm, where = m.arm, f"pose.{name}.hands.{side}"
+    wrist = smap[f"wrist.{side}"]
+    toward = (_world_head(arm, smap["arm.L"]) + _world_head(arm, smap["arm.R"])) / 2      # the character's side
+    ref = h["grip"]
+    try:
+        if ref == "rest":
+            if not h.get("rest"):
+                raise BuildError(f"{where}: grip = \"rest\" needs rest = \"prop:edge\" (a prop's use.rest point)")
+            prop_name, _, use = h["rest"].partition(":")
+            p = ctx.props[prop_name]
+            u = p.use("rest", use)
+            n_w = p.world_dir(u.get("normal", (0, 0, 1)))
+            at = _rest_point(p, u, h) + n_w * float(h.get("lift", 0.0))
+            G = GF.surface_frame(at, n_w, h.get("dir", tuple(-back + out_dir * 0.3)))
+            style, prop, params = "rest", {"surface": "plane"}, {"face": h.get("face", "palm")}
+            if h.get("seeds") is not None:
+                params["seeds"] = int(h["seeds"])
+            info = {"point": [round(v, 3) for v in at]}
+        else:
+            prop_name, _, use = ref.partition(":")
+            if prop_name not in ctx.props:
+                raise BuildError(f"{where}: grip {ref!r}: no prop {prop_name!r}")
+            p = ctx.props[prop_name]
+            u = p.use("grip", use or None)
+            style, prop, params = GF.card_style(u, h)
+            if style == "wheel":
+                G, info = GF.ring_frame(p.world(u["center"]), p.world_dir(u["axis"]), u["radius"],
+                                        p.world_dir((0, 0, 1)), GF.clock_of(h, side), toward)
+                info = {"clock": GF.clock_of(h, side), "axis_flipped": info["flipped"]}
+            elif style == "pinch":
+                G = GF.pinch_frame(p.world(u["center"]), p.world_dir(u["axis"]), p.world_dir(u["normal"]),
+                                   u.get("span", 0.0), params.get("edge", 0.004), toward)
+                info = {}
+            else:                                                # the pen: the prop's own frame
+                mw = p.root.matrix_world
+                G = GF.frame_matrix(*(np.array(mw.to_3x3().normalized().col[i]) for i in range(3)),
+                                    np.array(mw.translation))
+                info = {}
+    except (ValueError, KeyError) as e:
+        raise BuildError(f"{where}: grip {ref!r}: {e}")
+    arrays = hand_arrays(arm, side, float(h.get("skin_radius", 0.16)))
+    t0 = time.time()
+    res, rep = ctx.solve("mkmmd.solvers.grip", arrays, {"style": style, "prop": prop, "params": params},
+                         f"grip-{name}-{side}")
+    seconds = round(time.time() - t0, 1)
+    r = rep.get("report", {})
+    contacts = {k: v.get("gap_mm") for k, v in (r.get("contacts") or {}).items() if isinstance(v, dict)}
+    digest = {"style": style, "contacts_mm": contacts, "penetration_mm": r.get("penetration_mm"),
+              "finger_clash_mm": r.get("finger_clash_mm"), "seconds": seconds, **info}
+    warn = [f"contact {k} {v} mm" for k, v in contacts.items() if v is not None and v > 3.0]
+    warn += [f"{k} {r[k]} mm" for k in ("penetration_mm", "finger_clash_mm") if (r.get(k) or 0.0) > 1.0]
+    if warn:
+        digest["warnings"] = warn
+        ctx.log("WARNING", where, "grip misses its gates:", "; ".join(warn))
+    _W, goal = GF.wrist_goal(G, res["target_in_wrist"], arm.data.bones[wrist].length)
+    bones = {str(b): tuple(float(x) for x in q) for b, q in zip(res["bones"], res["quats"])}
+    return {"goal": K.mat(goal), "bones": bones, "digest": digest}
+
+
 def run(ctx):
     out = {}
     f0, f1 = ctx.start, ctx.start + ctx.settle
@@ -278,28 +390,16 @@ def run(ctx):
                 mw = tgt.matrix_world.copy()
                 tgt.parent = ob
                 tgt.matrix_world = mw
-            frames, mats = [], []
-            if h.get("rest"):
-                prop_name, _, use = h["rest"].partition(":")
-                p = ctx.props[prop_name]
-                u = p.use("rest", use)
-                n_w = p.world_dir(u.get("normal", (0, 0, 1)))
-                if u.get("type") == "plane" or "a" not in u:     # a plane: centre + offset in the prop's frame
-                    at = p.world(Vector(u["center"]) + Vector(h.get("offset", (0.0, 0.0, 0.0))))
-                else:                                             # an edge: a point along it
-                    at = p.world(u["a"]).lerp(p.world(u["b"]), float(h.get("along", 0.5)))
-                at = at + n_w * float(h.get("lift", 0.03))
-                d = Vector(h.get("dir", tuple(-back + out_dir * 0.3)))
-                mats.append((f1, _hand_matrix(arm, smap, side, at, d, h.get("palm", (0, 0, -1)))))
-            if h.get("at") is not None:
-                at = targets.point(ctx, h["at"])
-                mats.append((f1, _hand_matrix(arm, smap, side, at, h.get("dir", tuple(-back)), h.get("palm"))))
-            for k in h.get("keys", []):
-                mats.append((ctx.frame(float(k["t"])), _hand_matrix(arm, smap, side, targets.point(ctx, k["at"]),
-                                                                     k.get("dir", h.get("dir", tuple(-back))),
-                                                                     k.get("palm", h.get("palm")))))
-            if not mats:
-                raise BuildError(f"pose.{name}.hands.{side}: give at, rest or keys")
+            frames, grip = [], None
+            if h.get("grip"):
+                if h.get("keys"):
+                    raise BuildError(f"pose.{name}.hands.{side}: grip and keys cannot be combined")
+                grip = _grip(ctx, m, smap, name, side, h, back, out_dir)
+                mats = [(f1, grip["goal"])]
+                info.setdefault("grip", {})[side] = grip["digest"]
+                ctx.log("grip", name, side, grip["digest"])
+            else:
+                mats = _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1)
             mats.sort(key=lambda fm: fm[0])
             par_inv = tgt.parent.matrix_world.inverted() if tgt.parent else Matrix()
             locs, rots = [], []
@@ -314,7 +414,10 @@ def run(ctx):
             K.key_prop(arm, f'pose.bones["{wrist}"].constraints["mk_arm_ik"].influence', [f0, f1], [0.0, 1.0])
             c.influence = 1.0
             fp = h.get("fingers")
-            if fp:
+            if grip:
+                for b, q in grip["bones"].items():
+                    K.key_bone_quats(arm, b, [f0, f1], [(1, 0, 0, 0), q], interp="BEZIER")
+            elif fp:
                 for b, q in _finger_quats(arm, smap, side, fp).items():
                     K.key_bone_quats(arm, b, [f0, f1], [(1, 0, 0, 0), tuple(q)], interp="BEZIER")
         for side, fp in (spec.get("fingers") or {}).items():
@@ -324,7 +427,34 @@ def run(ctx):
         ctx.log("pose", name)
     out["attached"] = attach_props(ctx)
     bpy.context.view_layer.update()
+    errs = ik_errors(ctx, f1)
+    if errs:
+        out["ik_error_mm"] = errs
     return out
+
+
+IK_TOLERANCE_MM = 5.0
+
+
+def ik_errors(ctx, frame):
+    """How far each arm IK's wrist tail ends from its goal at `frame` (mm), keyed "<cast>.<side>". A goal beyond the
+    arm's reach leaves the hand short of the prop, so it is logged as a warning."""
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    sc.frame_set(int(frame))
+    dg = bpy.context.evaluated_depsgraph_get()
+    errs = {}
+    for name, m in ctx.cast.items():
+        smap = S.semantic_map(m.arm)
+        ae = m.arm.evaluated_get(dg)
+        for side, (tgt, _pole) in m.ik.items():
+            tail = ae.matrix_world @ ae.pose.bones[smap[f"wrist.{side}"]].tail
+            errs[f"{name}.{side}"] = round((tail - tgt.evaluated_get(dg).matrix_world.translation).length * 1000, 1)
+            if errs[f"{name}.{side}"] > IK_TOLERANCE_MM:
+                ctx.log("WARNING", f"pose.{name}.hands.{side}: the wrist ends {errs[f'{name}.{side}']} mm short of its "
+                                   f"goal (out of reach: move the seat, lean forward or bring the prop closer)")
+    sc.frame_set(keep)
+    return errs
 
 
 def attach_to_bone(obj, arm, bone, rel):

@@ -48,10 +48,18 @@ Blender name (`手首.R`) or their PMX name (`右手首`).
 | Hair stays out of the body and props | `penetration` with the project's collider set, `max = 5` (mm) |
 | Feet do not skate | `foot_slide`, `max = 1.5` (mm per frame) |
 | No broken elbows, knees, necks | `joint_limits`, `max = 0` |
-| A hand really holds or touches something | `contact` between two points or a point and a track |
+| A hand really holds or touches something | `contact` between two points or a point and a track (see Grips below) |
 | The subject is in frame in every aspect | `framing` per shot (frames of that shot), `min = 0` |
 | Nothing blocks the subject | `occlusion`, `max = 0.3` |
 | No near-black, stays in palette | `palette` on rendered frames |
+
+## Grips
+
+Hands that hold things are built, not placed: `grip = "car:wheel"` (or `"rest"` with `rest = "car:sill_R"`) in
+`[pose.<cast>.hands.L]` solves the fingers on the model's own skin (docs/design.md: Grips), where `at` plus a finger
+preset only guesses. Read the build log: `WARNING ... short of its goal` means the seat is out of the arm's reach
+(`lean`, move the seat or bring the prop closer), a grip digest past 3 / 1 / 1 mm (gap, penetration, clash) means
+the prop does not fit that hand. Pin it with a `contact` check between the fingertip bone's `.tail` and the prop.
 
 ## Reading results
 

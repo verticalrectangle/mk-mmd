@@ -260,7 +260,7 @@ in order and each reads its own sections:
 | props | `[[prop]]` (`name`, `card`, `at`, `yaw` or `rot`, `parent`, `slots`, `attach`, `anchor_to`) | library props or card files; builders get the project palette as slots; their use points and colliders |
 | vehicles | `[[vehicle]]` (`prop`, `path`, `lane`, `speed`, `at`, `roll`, `pitch`, `wheelbase`, `steer_ratio`) | a prop drives a set path's lane: position and heading per frame, body roll and pitch, wheels spinning, the steering wheel turning with the curvature |
 | cast | `[[cast]]` (`name`, `asset` or `pmx`, `armature`, `at`, `yaw`, `parent`, `physics`) | models imported without Bullet (`physics = "mk"`), named, placed |
-| pose | `[pose.<cast>]` | sit on a prop's seat, feet on targets (leg IK), lean / turn / head, arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets; `[[prop]] attach = "cast:bone"` puts props on bones |
+| pose | `[pose.<cast>]` | sit on a prop's seat, feet on targets (leg IK), lean / turn / head, arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets, grips (the hand holds a prop's `use.grip` entry or lies on a `use.rest` surface, see Grips); `[[prop]] attach = "cast:bone"` puts props on bones. The stage reports each arm IK's miss in mm (`ik_error_mm`) and logs a WARNING past 5 mm: a goal beyond the arm's reach leaves the hand short of the prop |
 | motion | `[[motion.<cast>]]` | VMDs on NLA strips: source range, scale or `retime = "beats"`, body masks, blends |
 | perform | `[perform.<cast>]` | gaze events over an idle target, breathing, sway, nod, beat bob, startles, blinks, lids, expressions, lip sync, twitches |
 | shots | `[[shot]]` | the cut, see Shots |
@@ -289,6 +289,53 @@ Targets anywhere in the build spec are `[x, y, z]` (world), `{prop = "car", poin
 
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python and are cached in `<project>/.mk/cache/`
 by a hash of their inputs.
+
+## Grips
+
+A grip is how a character's hand holds a prop: the 15 finger rotations and the frame the hand takes on the prop, solved
+on the model's own skin (`mkmmd/solvers/grip.py`, numpy + scipy, no Blender) until the pads touch the prop's surface
+(contacts within about 0.5 mm), nothing of the hand is inside it and no finger is inside another. The hand is
+exported from the scene by the Blender op `hand_model` (rest bones, rest skin near the wrist with its weights, and for
+a missing `*_tip` bone a virtual tip). `mk grip STYLE ...` runs both and writes JSON; the build's pose stage calls the
+same solver through `python -m mkmmd.solvers.grip IN.npz OUT.npz` (cached by a hash of the hand, the spec and the
+solver source).
+
+| Style | Prop (`use.grip` card entry, metres) | Grip frame (`target_in_wrist` is this frame) | Options |
+|---|---|---|---|
+| `pen` | `type = "pen"`: `length`, `radius` (number or `[[distance from nib, radius], ...]`), `tip`, `nib_offset` | the prop's own: origin at the nib (minus `nib_offset`), +Z nib to cap, +X the barrel side facing the back of the hand | lateral tripod; `posture` (nib, shoulder, pole, table, ...) adds the writing orientation |
+| `wheel` | `type = "ring"`: `center`, `axis` (prop frame), `radius`, `tube` | origin on the tube's centreline where the palm sits, x radially outward, y tangent (counter-clockwise seen from +z), z the ring axis | `approach` (deg, palm side in the section plane, 0 = +x, 90 = +z), `wrap` (+1 / -1) |
+| `pinch` | `type = "pinch"`: `width` (thickness between the pads), `span` (depth, becomes `depth`), `length`, `center`, `axis` (along the strap), `normal` (outward) | midway between the pads, z from the index pad to the thumb pad, x away from the wrist, y = z cross x | `edge` (pads' distance inside the edge, 4 mm) |
+| `rest` | `use.rest` entry (`edge` with `a`, `b`, `normal`, or a `plane` with `center`) | origin on the plane below the palm centre, z the normal, x the hand's heading | `face` (`palm` or `back`) |
+
+`pen` was tuned on one hand shape and does not generalise yet: on other models it can miss its gates (the CLI then
+exits 1). The other three solve every hand tried within 0.5 mm.
+
+**Result.** `{"style", "side", "bones": {blender_bone: [w, x, y, z]}, "target_in_wrist": 4x4, "report", "solver"}`.
+`bones` are `pose_bone.rotation_quaternion` values (bone-local, relative to rest; the 15 finger joint bones, identity
+where the grip leaves one alone). With the wrist posed, `frame_world = wrist_bone_world @ target_in_wrist`, so the wrist
+goes where `grip_frame_world @ inv(target_in_wrist)` says. `report` has `contacts.<name>.gap_mm` (0 = touching),
+`penetration_mm`, `finger_clash_mm`, `angles_deg` and style numbers; a pen with a posture adds `frame_world_quat`.
+The solver's `python -m` interface writes `bones` (names), `quats`, `target_in_wrist` and `report` (JSON of the whole
+result minus those) to the output `.npz`; exit code 0 ok, 2 bad input.
+
+**In the build** (`[pose.<cast>.hands.<L|R>]`, replaces `at` / `rest` / `fingers`):
+
+- `grip = "car:wheel"`: the prop's `use.grip` entry, by type. A ring needs `clock` (hours on a clock face as the
+  character sees the wheel: 12 top, 3 its right; default 10 for L and 2 for R, read at the first frame, the hand then
+  rides the wheel with `ride = "car_wheel"`); `approach = 90` puts the palm on the side of the rim facing the character
+  and `wrap = -1` the fingers round the outside of the rim; `seeds`, `skin_radius` (0.16 m). The ring's axis is flipped
+  to point at the character when the card gives it the other way. A pen grip needs `posture`, a pinch grip a `normal`
+  on the card.
+- `grip = "rest"` with `rest = "prop:edge"` (+ `along`, `offset`, `lift = 0.0`, `face`, `dir`): the relaxed hand lies on
+  the surface, the palm centre at the rest point, `dir` its heading.
+- The stage output and the build log carry each hand's digest (contact gaps, penetration, finger clash, seconds,
+  warnings past 3 / 1 / 1 mm) and `ik_error_mm`. A wrist that ends more than 5 mm short of its goal is a WARNING: the
+  seat is too far for the arm, so lean the character (`lean`), move the seat or bring the prop closer. Arm length is
+  about 0.38 m for a 1.7 m model.
+
+Frames: `mkmmd/core/gripframe.py` builds the grip frame in the world (`ring_frame`, `surface_frame`, `pinch_frame`) and
+the wrist goal (`wrist_goal`); it is numpy only, so the maths is tested without Blender. Check a grip with `contact`
+checks between a fingertip bone's tail and the prop (see AGENTS.md).
 
 ## Shots
 
