@@ -55,6 +55,19 @@ class GazeEvents:
         return W
 
 
+def glance_weights(ts, glances):
+    """(G, F) weights of eye-only glances [(t_on, dur, rise, fall)]: a smooth rise over `rise` s from t_on, held for `dur`
+    s, a smooth fall over `fall` s. Where glances overlap their weights are scaled to add up to one."""
+    ts = np.asarray(ts, float)
+    W = np.zeros((len(glances), len(ts)))
+    for i, (t_on, dur, rise, fall) in enumerate(glances):
+        W[i] = envelope(ts, t_on, t_on + dur, t_on + dur + fall, rise, fall)
+    total = W.sum(0)
+    over = total > 1.0
+    W[:, over] /= total[over]
+    return W
+
+
 def blink_schedule(t0, t1, per_min=15.0, seed=0, extra=(), avoid=(), min_gap=1.2, jitter=0.45):
     """[(t, duration)] between t0 and t1: `extra` blinks (t, dur) at chosen moments (gaze shifts, startles), then
     natural blinks with mean interval 60/per_min s (+- jitter share), at least min_gap s from any other, never inside

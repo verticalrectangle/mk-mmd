@@ -18,6 +18,24 @@ def test_gaze_weights_rise_hold_return_and_never_exceed_one():
     assert W[1, 3] > W[0, 3]                                  # the later event takes over
 
 
+def test_glance_weights_are_the_micro_eye_lift_of_the_reference_video():
+    ts = np.linspace(0.0, 4.0, 401)
+    W = PF.glance_weights(ts, [(1.0, 0.75, 0.12, 0.25)])
+    assert W.shape == (1, 401) and W[0, 0] == 0 and W[0, -1] == 0
+    assert W[0, 150] == pytest.approx(1.0)                                # inside the hold (t = 1.5)
+    t = 1.9                                                               # in the fall: the reference's own formula
+    ref = PF.smooth((t - 1.0) / 0.12) * (1.0 - PF.smooth((t - 1.0 - 0.75) / 0.25))
+    assert W[0, 190] == pytest.approx(ref)
+    assert 0 < W[0, 190] < 1
+
+
+def test_glance_weights_that_overlap_share_the_eyes():
+    ts = np.linspace(0.0, 3.0, 301)
+    W = PF.glance_weights(ts, [(0.5, 1.0, 0.1, 0.4), (1.2, 1.0, 0.1, 0.4)])
+    assert W.sum(0).max() <= 1.0 + 1e-9
+    assert PF.glance_weights(ts, []).shape == (0, 301)
+
+
 def test_blink_schedule_spacing_extras_and_avoid():
     extra = [(2.0, 0.3)]
     b = PF.blink_schedule(0.0, 60.0, per_min=20, seed=1, extra=extra, avoid=[(10.0, 20.0)], min_gap=1.2)

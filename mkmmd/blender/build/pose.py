@@ -3,15 +3,20 @@
 [pose.<cast>] keys
   sit = "prop:seat" | {hip, facing, seat_z, floor_z, pelvis_deg, back_deg}   place the hips on a seat (root follows
         the prop); without sit the model stands where the cast stage put it
+  sit_offset = [x, y, z]      slides the hip point on the seat (metres, in the seat prop's frame): sit further forward
   feet = "prop:feet" | "floor" | {L = [x, y, z|nan], R = [...]}               ankle targets (leg IK); z omitted / nan =
         the model's own ankle height above the floor
   lean, turn (deg)            upper body forward lean / turn toward the model's left, on top of the seat's back angle
-  head = {pitch, yaw, roll}   base head rotation (deg); perform's gaze adds on top
+  lean_share, turn_share = 0.6   the share of each that `upper_body` takes (`upper_body2` takes the rest)
+  head = {pitch, yaw, roll, neck = 0.4}   base head rotation (deg, absolute); the neck carries the share `neck` of the
+        turn from the chest to the head; perform's gaze adds on top
   [pose.<cast>.hands.<L|R>]   arm IK on the wrist through the twist bones:
      at = target ref, dir = [x, y, z] (hand direction), palm = [x, y, z] (palm normal), pole = target ref
      rest = "prop:edge" (+ along = 0..1, lift = m): the hand lies on an edge use point
      keys = [{t, at, dir, palm}]  moving targets (clip seconds, eased)
-     fingers = "relaxed" | "curled" | "fist" | "flat" | "point"
+     fingers = "relaxed" | "curled" | "fist" | "flat" | "point" | {index = [a, b, c], middle, ring, little, thumb}
+        a table gives the degrees of each finger's first three joints toward the palm; fingers and joints left out
+        stay straight (mkmmd.core.fingers)
      grip = "prop:use" | "rest"   the hand HOLDS something: a solver (mkmmd.solvers.grip, on the model's own skin) finds
         the finger rotations and the hand's frame on the prop; the wrist goal follows, the finger rotations are keyed
         like a finger preset (they replace `fingers`) and `ride` still makes the goal follow a prop part.
@@ -20,41 +25,59 @@
            read at the first frame, the hand then rides the wheel), approach = 90 (the palm on the side of the rim that
            faces the character), wrap = -1 (fingers round the outside of the rim), seeds, skin_radius (0.16 m);
            pinch -> thumb-index pad pinch of the strap (prop width, span, length; edge = 0.004 m); pen -> a lateral
-           tripod, only with `posture` = {nib, shoulder, pole, table, ...} (pen grips are tuned for one hand shape and
-           do not generalise yet; other models can fail the gates)
+           tripod with the writing orientation of the whole hand, which needs `posture` (below) or a `track`; pen
+           grips were tuned on one hand shape (Una and Maki also pass their gates; another hand can still miss them)
+        grip = "pen:barrel" + track   the pen rides the hand and its nib FOLLOWS A PATH over the page:
+           track = "nib" (the project's tracks/nib.json) | "tracks/nib.json" (any .json path), channel = "target":
+              {"frames": [Blender frames], "<channel>": [[x, y, z] world metres per frame]}, held before its first and
+              after its last frame. One grip is solved (finger rotations, the pen in the wrist, the writing orientation
+              of the pen); then on every frame of the build the wrist goal is `pen_frame @ inv(target_in_wrist)` with
+              the pen frame's origin on the track (LINEAR keys), and the pen prop is bone-parented to the wrist in the
+              solved grip, so its origin (the nib) lands on the track within the IK's accuracy: pin it with a
+              `contact` check of obj("pen").loc against the track. The stage logs the worst IK miss over the track.
+           posture = {...}  keys of the writing posture (mkmmd.solvers.grip _Posture) the stage completes from the
+              scene: nib (the track's mean x, y at paper_z), paper_z (the track's lowest z), shoulder (where the
+              shoulder is in the seated pose at the end of the settle), facing (the character's heading), pole (the
+              arm IK's elbow pole), upper / fore (the model's arm); table = "table:top" (a prop's use.rest plane ->
+              {z, center, radius}) or {z, center, radius}: the forearm stays above it; target = {elevation, azimuth,
+              tilt, extension, ulnar: [deg, tolerance]} the writing posture wanted
+           wobble = deg | {deg, tau = 18 (frames), seed = 3}  slow random tilt of the pen about the world X and Y
+              (the writing orientation is constant otherwise), the way a hand is never perfectly still
         grip = "rest" with rest = "prop:edge" (+ along, offset, lift = 0.0 m, face = "palm" | "back", dir): the relaxed
            hand lies ON the surface; the palm centre is at the rest point, `dir` is the hand's heading
         Every solve is cached (<project>/.mk/cache/grip); the stage output and the log carry each hand's digest
         (contact gaps, penetration, finger clash in mm, seconds, warnings past 3 / 1 / 1 mm).
   fingers = {L = preset, R = preset}  without arm IK
+  [[pose.<cast>.drape]]       static cloth draped over a seat (a skirt, a scarf): chain = ["bone", ...] root -> tip (Blender,
+        PMX or semantic names), dirs = [[x, y, z], ...] the direction each bone points along in the character's axes (x its
+        left, y behind it, z up; the least rotation from the bone's rest direction, whatever the bones above do),
+        scale = [1, 0.75, ...] optional length scale per bone (bunched cloth). Eased in over the settle like the rest of
+        the base pose; the bones stay keyed (not simulated), so hair collides with their bodies
 World-axis rotations are keyed with mkmmd.blender.keys (q_child = D_parent^-1 D_want)."""
 import math
+import os
 import time
 
 import bpy
 import numpy as np
 from mathutils import Euler, Matrix, Quaternion, Vector
 
+from ...core import fingers as FG
 from ...core import gripframe as GF
+from ...core import pentrack as PT
 from .. import keys as K
 from .. import scene as S
 from . import BuildError, collection, targets
-
-FINGER_PRESETS = {             # curl per joint (deg) for (finger 1, 2, 3); thumb separately
-    "flat": ((0, 0, 0), (0, 0, 0)),
-    "relaxed": ((14, 22, 14), (8, 10, 8)),
-    "curled": ((35, 50, 35), (14, 18, 14)),
-    "fist": ((80, 95, 65), (25, 35, 40)),
-    "point": ((80, 95, 65), (25, 35, 40)),
-}
 
 
 def _q(axis, deg):
     return Quaternion(Vector(axis).normalized(), math.radians(deg))
 
 
-def seat_frame(ctx, spec):
-    """World seat: hip point, facing (unit, horizontal), floor z, pelvis tilt, back angle, prop (or None)."""
+def seat_frame(ctx, spec, offset=None):
+    """World seat: hip point, facing (unit, horizontal), floor z, pelvis tilt, back angle, prop (or None). `offset`
+    [x, y, z] (m) slides the hip point, in the seat prop's frame (in the world's for a `sit` table)."""
+    off = Vector(offset) if offset is not None else Vector()
     if isinstance(spec, str):
         prop_name, _, use = spec.partition(":")
         if prop_name not in ctx.props:
@@ -63,11 +86,11 @@ def seat_frame(ctx, spec):
         u = p.use("sit", use or None)
         f = p.world_dir(u.get("facing", (0, -1, 0)))
         floor = (p.root.matrix_world @ Vector((0, 0, u.get("floor_z", 0.0)))).z
-        return {"hip": p.world(u["hip"]), "facing": Vector((f.x, f.y, 0)).normalized(), "floor_z": floor,
-                "pelvis": float(u.get("pelvis_deg", 6.0)), "back": float(u.get("back_deg", 0.0)), "prop": p,
-                "use": u}
+        return {"hip": p.world(Vector(u["hip"]) + off), "facing": Vector((f.x, f.y, 0)).normalized(),
+                "floor_z": floor, "pelvis": float(u.get("pelvis_deg", 6.0)), "back": float(u.get("back_deg", 0.0)),
+                "prop": p, "use": u}
     f = Vector(spec.get("facing", (0, -1, 0)))
-    return {"hip": Vector(spec["hip"]), "facing": Vector((f.x, f.y, 0)).normalized(),
+    return {"hip": Vector(spec["hip"]) + off, "facing": Vector((f.x, f.y, 0)).normalized(),
             "floor_z": float(spec.get("floor_z", 0.0)), "pelvis": float(spec.get("pelvis_deg", 6.0)),
             "back": float(spec.get("back_deg", 0.0)), "prop": None, "use": spec}
 
@@ -90,49 +113,97 @@ def _world_head(arm, bone):
     return arm.matrix_world @ arm.data.bones[bone].head_local
 
 
+def _reparent(obj, parent):
+    """Parent `obj` to `parent` keeping its world placement. matrix_world lags `.location` and `.parent` until the
+    depsgraph updates, so a copy taken right after setting them is STALE and parenting would move the object (an
+    elbow pole that ended at the world origin): update before copying and before writing it back."""
+    bpy.context.view_layer.update()
+    mw = obj.matrix_world.copy()
+    obj.parent = parent
+    obj.matrix_parent_inverse.identity()
+    bpy.context.view_layer.update()
+    obj.matrix_world = mw
+
+
 def _axes(m):
     """The model's world axes at rest: lateral (its left), back, up."""
     R = m.arm.matrix_world.to_3x3().normalized()
     return R @ Vector((1, 0, 0)), R @ Vector((0, 1, 0)), Vector((0, 0, 1))
 
 
-def _spine(m, smap, lean, turn, head):
+def _spine(m, smap, lean, turn, head, shares=(0.6, 0.6)):
     """Base rotations of the spine and head in the ARMATURE's axes (the model faces -Y): {semantic: rotation the bone
-    adds} and the composed chain (D2 chest, Dn neck, Dh head)."""
+    adds} and the composed chain (D2 chest, Dn neck, Dh head). `shares` = the shares of the lean and the turn that
+    `upper_body` takes (the rest is `upper_body2`'s; a model without one takes it all); `head["neck"]` = the share of
+    the chest-to-head rotation the neck carries (0.4)."""
     lat, back, up = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))
-    q_up1 = _q(up, turn * 0.6) @ _q(lat, lean * 0.6)
     has2 = "upper_body2" in smap
-    q_up2 = _q(up, turn * 0.4) @ _q(lat, lean * 0.4) if has2 else Quaternion()
+    s_lean, s_turn = (shares if has2 else (1.0, 1.0))
+    q_up1 = _q(up, turn * s_turn) @ _q(lat, lean * s_lean)
+    q_up2 = _q(up, turn * (1.0 - s_turn)) @ _q(lat, lean * (1.0 - s_lean)) if has2 else Quaternion()
     D2 = q_up1 @ q_up2
     Dh = _q(back, head.get("roll", 0.0)) @ _q(up, head.get("yaw", 0.0)) @ _q(lat, head.get("pitch", 0.0))
-    Dn = D2.slerp(Dh, 0.4)
+    Dn = D2.slerp(Dh, float(head.get("neck", 0.4)))
     out = {"upper_body": q_up1, "neck": D2.inverted() @ Dn, "head": Dn.inverted() @ Dh}
     if has2:
         out["upper_body2"] = q_up2
     return out, {"D2": D2, "Dn": Dn, "Dh": Dh}
 
 
+def _drape(ctx, m, name, specs, f0, f1):
+    """[[pose.<cast>.drape]]: each bone of a chain points along a direction of the author's choosing (a skirt over the
+    lap, a scarf), by the least rotation from its rest direction, whatever the bones above it do (mkmmd.core.drape).
+    Keys ease in from the rest pose over the settle like the rest of the base pose. Returns the number of bones keyed."""
+    from ...core import drape as DR
+    arm, sc = m.arm, bpy.context.scene
+    keep = sc.frame_current
+    sc.frame_set(f1)                                       # the pelvis and spine are keyed: read what the chain hangs from
+    ae = arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    n = 0
+    for k, dr in enumerate(specs):
+        where = f"pose.{name}.drape[{k}]"
+        try:
+            chain = [S.resolve_bone(arm, b) for b in dr["chain"]]
+            dirs = [list(d) for d in dr["dirs"]]
+            bones = [arm.data.bones[b] for b in chain]
+            par = bones[0].parent
+            parent = None if par is None else np.array(
+                (ae.pose.bones[par.name].matrix.to_3x3().normalized() @
+                 par.matrix_local.to_3x3().normalized().inverted()))
+            keys, _ = DR.chain_keys([np.array(b.tail_local - b.head_local) for b in bones], dirs, parent)
+        except (KeyError, ValueError) as e:
+            raise BuildError(f"{where}: {e}")
+        scale = dr.get("scale") or [1.0] * len(chain)
+        if len(scale) != len(chain):
+            raise BuildError(f"{where}: {len(scale)} scales for {len(chain)} bones")
+        for b, q, s in zip(chain, keys, scale):
+            K.key_bone_arm(arm, b, [f0, f1], [Quaternion(), Matrix(q.tolist()).to_quaternion()], interp="BEZIER")
+            if abs(float(s) - 1.0) > 1e-9:                 # bunched cloth: the bone is shorter
+                K.key_prop(arm, f'pose.bones["{b}"].scale', [f0, f1], [1.0, float(s)], index=1)
+            n += 1
+    sc.frame_set(keep)
+    return n
+
+
 def _finger_quats(arm, smap, side, preset):
     """Bone -> local quaternion curling each finger toward the palm about its own flexion axis (finger direction x
-    palm normal, from the rest pose)."""
-    if preset not in FINGER_PRESETS:
-        raise BuildError(f"finger preset {preset!r} (have {sorted(FINGER_PRESETS)})")
+    palm normal, from the rest pose). `preset`: a name of mkmmd.core.fingers.PRESETS or a table {finger: [a, b, c]}."""
     from ...core import bonemap
-    fing, thumb = FINGER_PRESETS[preset]
+    try:
+        angles = FG.curls(preset)
+    except ValueError as e:
+        raise BuildError(str(e))
     if not all(f"{k}.{side}" in smap for k in ("wrist", "index1", "little1")):
         return {}
     palm = palm_normal(arm, smap, side)
     out = {}
     for name, sems in bonemap.FINGERS.items():
-        angles = thumb if name == "thumb" else fing
-        if preset == "point" and name == "index":
-            angles = (0, 0, 0)
         bones = [smap[f"{s}.{side}"] for s in sems if f"{s}.{side}" in smap]
         if len(bones) < 2:
             continue
         d = (_world_head(arm, bones[1]) - _world_head(arm, bones[0])).normalized()
         axis = d.cross(palm).normalized()
-        for b, deg in zip(bones[:3], angles):
+        for b, deg in zip(bones[:3], angles[name]):
             B = K.rest_rot(arm, b)
             out[b] = (B.inverted() @ _q(axis, deg).to_matrix() @ B).to_quaternion()
     return out
@@ -235,17 +306,63 @@ def _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1):
     return mats
 
 
-def _grip(ctx, m, smap, name, side, h, back, out_dir):
+def _hand_track(ctx, where, h):
+    """(frames, positions) of a hand's `track`: a bare name is the project's tracks/<name>.json, anything ending in
+    .json a file path; `channel` (default "target") names the positions."""
+    ref = str(h["track"])
+    path = ref if ref.endswith(".json") else os.path.join("tracks", f"{ref}.json")
+    try:
+        return PT.load(ctx.path(path), h.get("channel", "target"))
+    except (OSError, ValueError) as e:
+        raise BuildError(f"{where}: track {ref!r}: {e}")
+
+
+def _table_of(ctx, ref, where):
+    """The posture's `table` from a prop's use.rest plane ("table:top")."""
+    prop_name, _, use = ref.partition(":")
+    if prop_name not in ctx.props:
+        raise BuildError(f"{where}: posture table {ref!r}: no prop {prop_name!r}")
+    p = ctx.props[prop_name]
+    u = p.use("rest", use or None)
+    if "center" not in u:
+        raise BuildError(f"{where}: posture table {ref!r} is not a plane (a use.rest entry with a `center`)")
+    return PT.table_spec({"center": tuple(p.world(u["center"])), "radius": u.get("radius")})
+
+
+def _pen_posture(ctx, m, smap, side, h, positions, pole, where):
+    """The solver's writing posture for a pen hand with a track (mkmmd.core.pentrack.posture): the user's `posture`
+    keys win; the nib is the track's writing spot, the shoulder is where it really is in the settled seated pose, the
+    heading is the character's, the elbow pole is the IK's own, and `table = "prop:use"` reads a prop's rest plane."""
+    sc, arm = bpy.context.scene, m.arm
+    keep = sc.frame_current
+    sc.frame_set(ctx.start + ctx.settle)
+    ae = arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    shoulder = ae.matrix_world @ ae.pose.bones[smap[f"arm.{side}"]].head
+    back = ae.matrix_world.to_3x3() @ Vector((0.0, 1.0, 0.0))
+    sc.frame_set(keep)
+    user = dict(h.get("posture") or {})
+    if isinstance(user.get("table"), str):
+        user["table"] = _table_of(ctx, user["table"], where)
+    if user.get("pole") is None and pole is not None:
+        user["pole"] = list(pole)
+    return PT.posture(user, positions, (-back.x, -back.y, 0.0), shoulder)
+
+
+def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
     """Solve the grip of one hand (docs/design.md: Grips): the grip frame G in the world from the prop's card and its
     current transform, the solver's finger rotations and `target_in_wrist`, and the IK goal that puts the wrist where
-    G @ inv(target_in_wrist) says. Returns {goal (Matrix), bones {bone: quaternion}, digest}."""
+    G @ inv(target_in_wrist) says. Returns {goal (Matrix), bones {bone: quaternion}, digest}; a pen hand with a
+    `track` also returns `pen` = {prop, T (target_in_wrist), R (the pen's writing orientation in the world), track}."""
     from ..ops_hand import hand_arrays
     arm, where = m.arm, f"pose.{name}.hands.{side}"
     wrist = smap[f"wrist.{side}"]
     toward = (_world_head(arm, smap["arm.L"]) + _world_head(arm, smap["arm.R"])) / 2      # the character's side
     ref = h["grip"]
+    track = None
     try:
         if ref == "rest":
+            if h.get("track"):
+                raise BuildError(f"{where}: a track needs a pen grip (grip = \"pen:barrel\"), not \"rest\"")
             if not h.get("rest"):
                 raise BuildError(f"{where}: grip = \"rest\" needs rest = \"prop:edge\" (a prop's use.rest point)")
             prop_name, _, use = h["rest"].partition(":")
@@ -264,7 +381,13 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir):
                 raise BuildError(f"{where}: grip {ref!r}: no prop {prop_name!r}")
             p = ctx.props[prop_name]
             u = p.use("grip", use or None)
-            style, prop, params = GF.card_style(u, h)
+            hh = h
+            if h.get("track"):
+                track = _hand_track(ctx, where, h)
+                hh = dict(h, posture=_pen_posture(ctx, m, smap, side, h, track[1], pole, where))
+            style, prop, params = GF.card_style(u, hh)
+            if track is not None and style != "pen":
+                raise BuildError(f"{where}: a track needs a pen grip, {ref!r} is a {style} grip")
             if style == "wheel":
                 G, info = GF.ring_frame(p.world(u["center"]), p.world_dir(u["axis"]), u["radius"],
                                         p.world_dir((0, 0, 1)), GF.clock_of(h, side), toward)
@@ -296,12 +419,38 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir):
         ctx.log("WARNING", where, "grip misses its gates:", "; ".join(warn))
     _W, goal = GF.wrist_goal(G, res["target_in_wrist"], arm.data.bones[wrist].length)
     bones = {str(b): tuple(float(x) for x in q) for b, q in zip(res["bones"], res["quats"])}
-    return {"goal": K.mat(goal), "bones": bones, "digest": digest}
+    out = {"goal": K.mat(goal), "bones": bones, "digest": digest}
+    if track is not None:
+        if "frame_world_quat" not in rep:
+            raise BuildError(f"{where}: the pen solve returned no writing orientation (frame_world_quat)")
+        digest["writing"] = r.get("writing")
+        digest["track"] = {"frames": [int(track[0][0]), int(track[0][-1])],
+                           "nib_mm": [round(float(v) * 1000, 1) for v in np.ptp(track[1], axis=0)]}
+        out["pen"] = {"prop": p, "T": np.asarray(res["target_in_wrist"], float),
+                      "R": PT.quat_matrix(rep["frame_world_quat"]), "track": track}
+    return out
+
+
+def _pen_goals(ctx, m, wrist, h, grip):
+    """The pen rides the wrist bone in the solved grip, and the wrist goes where the pen frame on the track says:
+    [(frame, IK goal matrix)] for every frame of the build. The writing orientation is the solver's (docs/design.md:
+    Grips); `wobble = deg` or {deg, tau (frames), seed} tilts it slowly (the hand is never perfectly still)."""
+    pen, arm = grip["pen"], m.arm
+    frames = ctx.frames
+    pos = PT.positions_at(pen["track"][0], pen["track"][1], frames)
+    wob = h.get("wobble") or {}
+    wob = {"deg": wob} if isinstance(wob, (int, float)) else wob
+    tilt = PT.tilt_wobble(len(frames), float(wob.get("deg", 0.0)), float(wob.get("tau", 18.0)), int(wob.get("seed", 3)))
+    R = PT.pen_rotations(pen["R"], tilt if wob.get("deg") else None, len(frames))
+    goals = PT.goals(PT.pen_frames(pos, R), pen["T"], arm.data.bones[wrist].length)
+    attach_to_bone(pen["prop"].root, arm, wrist, K.mat(pen["T"]))
+    return [(int(f), K.mat(g)) for f, g in zip(frames, goals)]
 
 
 def run(ctx):
     out = {}
     f0, f1 = ctx.start, ctx.start + ctx.settle
+    probe = np.array([f1])                                # frames the IK misses are measured on (+ a moving track's)
     bpy.context.scene.frame_set(f0)                       # vehicles may have moved the props: one consistent frame
     for name, m in ctx.cast.items():
         spec = ctx.section("pose", name)
@@ -310,7 +459,7 @@ def run(ctx):
         arm = m.arm
         smap = S.semantic_map(arm)
         info = {}
-        seat = seat_frame(ctx, spec["sit"]) if spec.get("sit") else None
+        seat = seat_frame(ctx, spec["sit"], spec.get("sit_offset")) if spec.get("sit") else None
         if seat:
             _place_root(m, seat)
             m.seat = seat
@@ -325,7 +474,8 @@ def run(ctx):
             info["hip_offset"] = [round(v, 4) for v in off]
         # spine and head
         lean = float(spec.get("lean", 0.0)) + (-seat["back"] if seat else 0.0)
-        base, chain = _spine(m, smap, lean, float(spec.get("turn", 0.0)), spec.get("head", {}))
+        base, chain = _spine(m, smap, lean, float(spec.get("turn", 0.0)), spec.get("head", {}),
+                             (float(spec.get("lean_share", 0.6)), float(spec.get("turn_share", 0.6))))
         for sem, q in base.items():
             K.key_bone_arm(arm, smap[sem], [f0, f1], [Quaternion(), q], interp="BEZIER")
         m.base = {"spine": base, "chain": chain}
@@ -363,6 +513,9 @@ def run(ctx):
                 z_rest = rest.z
                 goal = Vector((tgt.x, tgt.y, z_rest))
                 K.key_bone_locs(arm, ik, [f0, f1], [(0, 0, 0), tuple(goal - rest)])
+        # cloth draped over the seat: chains whose bones point along chosen directions
+        if spec.get("drape"):
+            info["drape_bones"] = _drape(ctx, m, name, spec["drape"], f0, f1)
         # arms
         hands = spec.get("hands", {})
         for side in ("L", "R"):
@@ -378,24 +531,25 @@ def run(ctx):
                 pole.location = targets.point(ctx, h["pole"])
             else:
                 pole.location = sh + out_dir * 0.45 + back * 0.25 - up * 0.30
+            pole_w = pole.location.copy()
             if seat and seat["prop"] is not None:          # IK goals ride with the prop
                 for o in (tgt, pole):
-                    mw = o.matrix_world.copy()
-                    o.parent = seat["prop"].root
-                    o.matrix_world = mw
+                    _reparent(o, seat["prop"].root)
             if h.get("ride"):                              # ... or with one of its parts (a steering wheel)
                 ob = bpy.data.objects.get(h["ride"])
                 if ob is None:
                     raise BuildError(f"pose.{name}.hands.{side}: ride object {h['ride']!r} not found")
-                mw = tgt.matrix_world.copy()
-                tgt.parent = ob
-                tgt.matrix_world = mw
-            frames, grip = [], None
+                _reparent(tgt, ob)
+            frames, grip, interp = [], None, "BEZIER"
             if h.get("grip"):
                 if h.get("keys"):
                     raise BuildError(f"pose.{name}.hands.{side}: grip and keys cannot be combined")
-                grip = _grip(ctx, m, smap, name, side, h, back, out_dir)
-                mats = [(f1, grip["goal"])]
+                grip = _grip(ctx, m, smap, name, side, h, back, out_dir, pole_w)
+                if grip.get("pen"):                        # the nib follows a track: a goal on every frame
+                    mats, interp = _pen_goals(ctx, m, wrist, h, grip), "LINEAR"
+                    probe = np.union1d(probe, ctx.frames[ctx.frames >= f1][::6])
+                else:
+                    mats = [(f1, grip["goal"])]
                 info.setdefault("grip", {})[side] = grip["digest"]
                 ctx.log("grip", name, side, grip["digest"])
             else:
@@ -408,8 +562,8 @@ def run(ctx):
                 frames.append(fr)
                 locs.append(tuple(Ml.translation))
                 rots.append(tuple(Ml.to_quaternion()))
-            K.key_vec(tgt, "location", frames, locs, interp="BEZIER")
-            K.key_vec(tgt, "rotation_quaternion", frames, K.continuous(rots), interp="BEZIER")
+            K.key_vec(tgt, "location", frames, locs, interp=interp)
+            K.key_vec(tgt, "rotation_quaternion", frames, K.continuous(rots), interp=interp)
             c = arm.pose.bones[wrist].constraints["mk_arm_ik"]
             K.key_prop(arm, f'pose.bones["{wrist}"].constraints["mk_arm_ik"].influence', [f0, f1], [0.0, 1.0])
             c.influence = 1.0
@@ -427,7 +581,7 @@ def run(ctx):
         ctx.log("pose", name)
     out["attached"] = attach_props(ctx)
     bpy.context.view_layer.update()
-    errs = ik_errors(ctx, f1)
+    errs = ik_errors(ctx, probe)
     if errs:
         out["ik_error_mm"] = errs
     return out
@@ -437,22 +591,27 @@ IK_TOLERANCE_MM = 5.0
 
 
 def ik_errors(ctx, frame):
-    """How far each arm IK's wrist tail ends from its goal at `frame` (mm), keyed "<cast>.<side>". A goal beyond the
-    arm's reach leaves the hand short of the prop, so it is logged as a warning."""
+    """How far each arm IK's wrist tail ends from its goal (mm), keyed "<cast>.<side>": at `frame`, or the worst over
+    several frames when `frame` is a list (hands with a moving track). A goal beyond the arm's reach leaves the hand
+    short of the prop, so it is logged as a warning."""
     sc = bpy.context.scene
     keep = sc.frame_current
-    sc.frame_set(int(frame))
-    dg = bpy.context.evaluated_depsgraph_get()
     errs = {}
-    for name, m in ctx.cast.items():
-        smap = S.semantic_map(m.arm)
-        ae = m.arm.evaluated_get(dg)
-        for side, (tgt, _pole) in m.ik.items():
-            tail = ae.matrix_world @ ae.pose.bones[smap[f"wrist.{side}"]].tail
-            errs[f"{name}.{side}"] = round((tail - tgt.evaluated_get(dg).matrix_world.translation).length * 1000, 1)
-            if errs[f"{name}.{side}"] > IK_TOLERANCE_MM:
-                ctx.log("WARNING", f"pose.{name}.hands.{side}: the wrist ends {errs[f'{name}.{side}']} mm short of its "
-                                   f"goal (out of reach: move the seat, lean forward or bring the prop closer)")
+    for fr in np.atleast_1d(frame):
+        sc.frame_set(int(fr))
+        dg = bpy.context.evaluated_depsgraph_get()
+        for name, m in ctx.cast.items():
+            smap = S.semantic_map(m.arm)
+            ae = m.arm.evaluated_get(dg)
+            for side, (tgt, _pole) in m.ik.items():
+                tail = ae.matrix_world @ ae.pose.bones[smap[f"wrist.{side}"]].tail
+                miss = round((tail - tgt.evaluated_get(dg).matrix_world.translation).length * 1000, 1)
+                errs[f"{name}.{side}"] = max(miss, errs.get(f"{name}.{side}", 0.0))
+    for key, miss in errs.items():
+        if miss > IK_TOLERANCE_MM:
+            name, _, side = key.rpartition(".")
+            ctx.log("WARNING", f"pose.{name}.hands.{side}: the wrist ends {miss} mm short of its goal (out of "
+                               f"reach: move the seat, lean forward or bring the prop closer)")
     sc.frame_set(keep)
     return errs
 

@@ -4,6 +4,9 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
 [perform.<cast>] keys (times in clip seconds; targets as in mkmmd.blender.build.targets)
   look = target                      idle gaze target (default: ahead at eye height)
   gaze = [{t, at, hold = 1.0, back = 0.4, rise = 0.3}]   look-at events
+  glance = [{t, at, dur = 0.8, pitch = 2.75, rise = 0.12, fall = 0.25, blink = true}]   eye-only glances (the eyes
+                                     lead to `at`, the head lifts `pitch` deg, the lids open, a blink follows); the
+                                     head and neck do not turn
   head_share = 0.7                   share of a gaze turn taken by head + neck (the eyes do the rest, up to eye_max)
   neck_share = 0.35                  share of the head's turn carried by the neck
   eye_max = 24 (deg)
@@ -83,7 +86,8 @@ def run(ctx):
         fwd = -back
         # ---- targets: idle look + gaze events (eye height, 3 m ahead by default)
         events = sorted(spec.get("gaze", []), key=lambda ev: ev["t"])
-        refs = [spec.get("look")] + [ev["at"] for ev in events]
+        glances = sorted(spec.get("glance", []), key=lambda g: g["t"])
+        refs = [spec.get("look")] + [ev["at"] for ev in events] + [g["at"] for g in glances]
         idle_ahead = refs[0] is None
         refs = [r if r is not None else [0, 0, 0] for r in refs]
         A, E, T = _sample_pass(ctx, m, refs, frames)
@@ -93,21 +97,32 @@ def run(ctx):
                              i + 1, ev.get("rise", 0.3)) for i, ev in enumerate(events)])
         W = gz.weights(ts) if events else np.zeros((0, len(ts)))
         W_eye = gz.weights(ts + 0.07) if events else W           # the eyes lead the head
+        gl = [(g["t"], g.get("dur", 0.8), g.get("rise", 0.12), g.get("fall", 0.25)) for g in glances]
+        G = PF.glance_weights(ts, gl) if gl else np.zeros((0, len(ts)))
+        G_eye = PF.glance_weights(ts + 0.05, gl) if gl else G    # the eyes lead
         Tn = np.array([[tuple(v) for v in T[i]] for i in range(len(refs))])     # (targets, F, 3)
         En = np.array([tuple(e) for e in E])
         Dirs = Tn - En[None]                                     # unit directions from the eyes: targets at any
         Dirs /= np.maximum(np.linalg.norm(Dirs, axis=2, keepdims=True), 1e-9)   # distance blend evenly
 
-        def blend(Wm):
+        def blend(Wm, Wg=None):
             d = Dirs[0] * (1.0 - Wm.sum(0))[:, None]
             for i in range(Wm.shape[0]):
                 d = d + Dirs[i + 1] * Wm[i][:, None]
+            if Wg is not None and Wg.shape[0]:                   # a glance takes the eyes where no gaze event has them
+                free = 1.0 - Wm.sum(0)
+                for j in range(Wg.shape[0]):
+                    w = (Wg[j] * free)[:, None]
+                    d = d * (1.0 - w) + Dirs[len(events) + 1 + j] * w
             d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
             return En + d                                        # a point 1 m along the blended direction
 
-        look_eye = PF.lowpass(blend(W_eye), 1.5)
+        look_eye = PF.lowpass(blend(W_eye, G_eye), 1.5)
         look_head = PF.lowpass(blend(W), 3.0) + PF.drift(len(ts), seed=zlib.crc32(name.encode()) % 1000) * 0.3
         w_away = W.sum(0) if len(W) else np.zeros(len(ts))
+        lift = np.zeros(len(ts))                                  # degrees the head lifts during glances
+        if glances:
+            lift = PF.lowpass((G * np.array([g.get("pitch", 2.75) for g in glances])[:, None]).sum(0)[:, None], 3.0)[:, 0]
         # ---- body life
         br = spec.get("breath", {})
         sw = spec.get("sway", {})
@@ -148,7 +163,7 @@ def run(ctx):
             Dh_base = Dn_base @ q4b
             eye_pos = E[i]
             R_full = (Dh_base @ fwd).rotation_difference((Vector(look_head[i]) - eye_pos).normalized())
-            pitch = Quaternion(lat, nod[i] + bob[i])
+            pitch = Quaternion(lat, nod[i] + bob[i] - math.radians(lift[i]))
             Dn = Quaternion().slerp(R_full, k_head * k_neck) @ Dn_base
             Dh = pitch @ Quaternion().slerp(R_full, k_head) @ Dh_base
             R_eye = (Dh @ fwd).rotation_difference((Vector(look_eye[i]) - eye_pos).normalized())
@@ -165,14 +180,15 @@ def run(ctx):
                 Ri = R.inverted()
                 loc = [tuple((Ri @ q.to_matrix() @ R).to_quaternion()) for q in qs]
                 K.key_bone_quats(arm, b, frames, loc, interp="LINEAR")
-        info = {"gaze_events": len(events), "frames": len(frames)}
+        info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames)}
         # ---- face: blinks + lids
         bl = spec.get("blink", {})
         blink_m = _morph(m, "blink")
         blinks = PF.blink_schedule(ts[0], ts[-1], bl.get("per_min", 15.0), seed=bl.get("seed", 0),
                                    extra=[tuple(x) for x in bl.get("extra", [])] +
-                                   [(ev["t"] + 0.03, PF.BLINK_S) for ev in events if ev.get("blink", True)])
-        lids = float(spec.get("lids", 0.0)) * (1 - w_away)
+                                   [(ev["t"] + 0.03, PF.BLINK_S) for ev in events if ev.get("blink", True)] +
+                                   [(g["t"] + 0.02, PF.BLINK_S) for g in glances if g.get("blink", True)])
+        lids = float(spec.get("lids", 0.0)) * (1 - w_away) * (1 - np.minimum(G.sum(0), 1.0))
         vals = np.maximum(PF.blink_curve(ts, blinks), lids * settle)
         info["blinks"] = len(blinks)
         n_blink = K.key_morph(m.meshes, blink_m, frames, vals, interp="LINEAR")
