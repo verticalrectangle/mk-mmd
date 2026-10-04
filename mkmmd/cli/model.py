@@ -1,9 +1,9 @@
 """mk model: build an original character model from a spec (part builders in code -> PMX -> rig.json -> review .blend)."""
 import argparse
 import json
+import os
 import random
 import re
-import shutil
 import time
 import traceback
 from pathlib import Path
@@ -58,6 +58,34 @@ def add(sub):
     i.add_argument("--only", metavar="PARTS")
     i.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides")
     i.set_defaults(func=run_info)
+    s = ss.add_parser("studio", help="copy a built scene with the neutral review studio (grey world, floor, lights)")
+    s.add_argument("scene", metavar="SCENE.blend")
+    s.add_argument("--out", required=True, metavar="OUT.blend")
+    s.add_argument("--floor", action="append", default=[], metavar="X,Y", help="a floor disc at x,y (repeatable)")
+    s.add_argument("--lights", action="store_true", help="add key/fill/rim suns (default: the scene has its own)")
+    s.add_argument("--height", type=float, default=1.6, help="model height for aiming the lights")
+    s.set_defaults(func=run_studio)
+
+
+def run_studio(args):
+    scene = Path(args.scene).expanduser()
+    if not scene.exists():
+        raise UsageError(f"{scene} does not exist")
+    floors = [[float(v) for v in f.split(",")] for f in args.floor] or [[0.0, 0.0]]
+    res = _studio(scene, args, floors)
+    emit(res)
+    return 0
+
+
+def _studio(scene, args, floors):
+    for attempt in range(4):
+        try:
+            return bridge.run("model_studio", {"out": str(Path(args.out).expanduser().resolve()), "lights": args.lights,
+                                               "floors": floors, "height": args.height}, blend=scene, timeout=600)
+        except bridge.BlenderError as e:
+            if attempt == 3 or not any(s in str(e) for s in ("could not be found", "opencc", "No module named")):
+                raise
+            repair_wheels()
 
 
 def repair_wheels():
@@ -135,6 +163,15 @@ def rig_report(rig):
     }
 
 
+def _lock(path):
+    """Exclusive advisory lock on `path` for the life of the returned handle: two `mk model build` runs into the same
+    folder (a modeller and a QA pass) take turns instead of deleting each other's PMX and textures."""
+    import fcntl
+    fh = open(path, "w")
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    return fh
+
+
 def run_build(args):
     t_all = time.time()
     spec, cfg, only = _load(args)
@@ -146,11 +183,17 @@ def run_build(args):
     tex_dir = out / "tex"
     report = {"spec": str(spec.path), "files": [str(f) for f in spec.files], "name": name, "out": str(out),
               "only": only, "seconds": {}}
-    if tex_dir.exists():
-        shutil.rmtree(tex_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for stale in (f"{name}.pmx", f"{name}.blend", f"{name}.rig.json", "build.json"):
-        (out / stale).unlink(missing_ok=True)                    # a failed build must not leave the last one looking current
+    (out / ".mk").mkdir(exist_ok=True)
+    lock = _lock(out / ".mk" / "build.lock")           # a second build into this folder waits for the first
+    # nothing is deleted up front: other projects may be casting the last good PMX right now; every file is replaced
+    # atomically when its new version is ready, and build.json says "running" (ok false) until this build is done
+    (out / "build.json").write_text(json.dumps({"ok": False, "stage": "running", "pid": os.getpid()}), encoding="utf-8")
+
+    def finish(rep):
+        """Print the report and keep it as build.json (failures too: it tells whether the files here are current)."""
+        (out / "build.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        emit(rep)
 
     # ---- 1. the parts (numpy + PIL, no Blender)
     t0 = time.time()
@@ -159,7 +202,7 @@ def run_build(args):
         parts = BD.run(spec, only=only, ctx=ctx)
     except BD.BuildError as e:
         report.update(ok=False, stage="parts", error=str(e), trace=traceback.format_exc(), log=ctx.logs[-30:])
-        emit(report)
+        finish(report)
         return CHECK_FAILED
     report["seconds"]["parts"] = round(time.time() - t0, 2)
     report["parts"] = [part_stats(p, ctx.timings.get(p.name)) for p in parts]
@@ -176,12 +219,12 @@ def run_build(args):
     report["textures"] = len(ctx.textures)
     if missing:
         report.update(ok=False, stage="parts", error=f"textures referenced but not written: {missing[:8]}")
-        emit(report)
+        finish(report)
         return CHECK_FAILED
     if args.no_export:
         report["ok"] = True
         report["seconds"]["total"] = round(time.time() - t_all, 2)
-        emit(report)
+        finish(report)
         return 0
 
     # ---- 2. assemble and write the PMX
@@ -193,10 +236,16 @@ def run_build(args):
         asm.pmx.validate()
     except (ValueError, KeyError) as e:
         report.update(ok=False, stage="assemble", error=f"{type(e).__name__}: {e}", trace=traceback.format_exc())
-        emit(report)
+        finish(report)
         return CHECK_FAILED
     pmx_path = out / f"{name}.pmx"
-    pmx_io.write(asm.pmx, pmx_path)
+    tmp_pmx = pmx_path.with_name(f".{pmx_path.name}.{os.getpid()}.tmp")
+    pmx_io.write(asm.pmx, tmp_pmx)
+    os.replace(tmp_pmx, pmx_path)
+    keep = set(ctx.textures)
+    for f in tex_dir.glob("*"):                      # textures of an earlier build that nothing writes any more
+        if f.name not in keep:
+            f.unlink(missing_ok=True)
     exp_prefix = out / ".mk" / "expected"
     exp_prefix.parent.mkdir(exist_ok=True)
     asm.save_expected(str(exp_prefix))
@@ -221,7 +270,7 @@ def run_build(args):
             "scale": cfg["scale"], "verify": not args.no_verify, "height": height}, timeout=1800)
     except bridge.BlenderError as e:
         report.update(ok=False, stage="blender", error=str(e).splitlines()[0], log_file=e.log)
-        emit(report)
+        finish(report)
         return CHECK_FAILED
     report["seconds"]["blender"] = round(time.time() - t0, 2)
     ok = True
@@ -232,7 +281,9 @@ def run_build(args):
     if "rig" in res:
         rig = res["rig"]
         rig_path = out / f"{name}.rig.json"
-        rig_path.write_text(json.dumps(rig, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp_rig = rig_path.with_name(f".{rig_path.name}.{os.getpid()}.tmp")
+        tmp_rig.write_text(json.dumps(rig, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp_rig, rig_path)
         report["rig_json"] = str(rig_path)
         report["rig"] = rig_report(rig)
         if not report["rig"]["quirks"]:
@@ -242,6 +293,5 @@ def run_build(args):
         report["blend"] = res["blend"]
     report["ok"] = bool(ok)
     report["seconds"]["total"] = round(time.time() - t_all, 2)
-    (out / "build.json").write_text(json.dumps(report, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
-    emit(report)
+    finish(report)
     return 0 if ok else CHECK_FAILED

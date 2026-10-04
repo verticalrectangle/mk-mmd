@@ -824,6 +824,7 @@ stems are cached by a hash of the audio span (`<project>/.mk/cache/timeline/stem
 Reference clips (`mk ref`) live outside the project: `~/.cache/mk/ref/<project name | default>/<set>/` holds
 `clips.json`, the capped downloads, `track/<id>.npz` and the contact sheet; `mk ref clean` deletes everything but
 `clips.json`. Only the small measurement JSON is kept with the project (`<project>/ref/<set>.json`).
+
 ## Characters (`mk model`)
 
 `mk model build SPEC.toml` builds an original character in code: part builders (numpy and Pillow, no Blender) make
@@ -894,8 +895,13 @@ semantic bones missing, morph map (semantic -> morph), chain families with bone 
 the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk look <name>.blend --view front,3q
 --target "bone('head').head" --dist 1.2` works), `<name>.rig.json` (what `mk inspect` writes; pass it as `rig =` to a
 `[[cast]]` with `pmx =`), `build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
-`--no-export` only runs and checks the builders; `mk model info SPEC` shows the plan. Exit codes as everywhere: 1 when a
-check or verification fails.
+`--no-export` only runs and checks the builders; `mk model info SPEC` shows the plan; `mk model studio SCENE.blend --out
+OUT.blend [--floor X,Y ...] [--lights]` copies a built scene with the neutral review studio (grey world, soft floor discs,
+optionally key/fill/rim suns) so sheets of several models compare side by side. Exit codes as everywhere: 1 when a
+check or verification fails. A build never deletes the previous files first, because other projects may be casting the
+PMX at that moment: the PMX and rig.json are replaced atomically when ready, textures are overwritten in place (stale ones
+removed after the PMX is written), `.mk/build.lock` makes two builds into one folder take turns, and `build.json` reads
+`{"ok": false, "stage": "running"}` until the build ends (failures are kept there too).
 
 Blender note: a Blender session that resets the add-on preferences (a script started with `--factory-startup` that
 touches add-ons) can delete mmd_tools' bundled opencc wheel, and every PMX import then fails with "bpy.ops.mmd_tools.

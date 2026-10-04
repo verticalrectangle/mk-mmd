@@ -27,7 +27,7 @@ def _world():
     bpy.context.scene.world = w
 
 
-def _floor(radius=4.0):
+def _floor(radius=4.0, at=(0.0, 0.0)):
     import bmesh
     me = bpy.data.meshes.new("studio_floor")
     bm = bmesh.new()
@@ -83,13 +83,18 @@ def _sun(name, color, power, at, angle_deg, shadow, target):
     return ob
 
 
-def setup(height=1.6):
-    """Add the studio to the current scene. Returns the object names it created."""
+def setup(height=1.6, lights=True, floors=((0.0, 0.0),)):
+    """Add the studio to the current scene: flat grey world, a soft floor disc under each (x, y) in `floors`, and (when
+    `lights`) the key/fill/rim suns aimed at a point 62 % up the model. Returns the object names it created."""
     sc = bpy.context.scene
     _world()
-    made = [_floor().name]
+    made = []
+    for at in floors:
+        fl = _floor(at=at)
+        fl.location = (float(at[0]), float(at[1]), 0.0)
+        made.append(fl.name)
     target = (0.0, 0.0, 0.62 * height)
-    for name, color, power, at, ang, shadow in LIGHTS:
+    for name, color, power, at, ang, shadow in (LIGHTS if lights else ()):
         made.append(_sun(name, color, power, at, ang, shadow, target).name)
     sc.view_settings.view_transform = "Standard"
     sc.view_settings.look = "None"

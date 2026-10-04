@@ -76,3 +76,16 @@ def model_finish(args):
         bpy.ops.wm.save_as_mainfile(filepath=blend, compress=True)
         out["blend"] = blend
     return out
+
+
+@op("model_studio")
+def model_studio(args):
+    """args: out (.blend to write), lights (false: the scene brings its own), floors ([[x, y], ...]), height. Adds the
+    neutral review studio (grey world, floor discs, optionally key/fill/rim) to the scene `mk model studio` opened and
+    saves it elsewhere, so a project's own .blend is left alone."""
+    made = studio.setup(float(args.get("height", 1.6)), lights=bool(args.get("lights", False)),
+                        floors=[tuple(f) for f in args.get("floors", [(0.0, 0.0)])])
+    out = os.path.abspath(os.path.expanduser(args["out"]))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    bpy.ops.wm.save_as_mainfile(filepath=out, compress=True)
+    return {"out": out, "made": made}
