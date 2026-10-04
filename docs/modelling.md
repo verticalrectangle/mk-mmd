@@ -119,7 +119,8 @@ for m in (pad, bezel, strip):
 
 ```python
 from mkmmd.blender.library import shell
-body = shell.shell_object(f"{name}_body", cage, coll, root, mat_of, levels=2, bevel=(0.003, 2), cutters=cutters)
+body = shell.shell_object(f"{name}_body", cage, coll, root, mat_of, levels=2, bevel=(0.003, 2), cutters=cutters,
+                          bake_it=True)                                   # bake what moves or is cut
 part = shell.mesh_object(f"{name}_lamp", mesh, coll, root, mat_of)       # a plain part, smooth normals
 sticker = shell.exempt(shell.mesh_object(f"{name}_label", ribbon, coll, root, mat_of))   # a graphic layer
 surface = shell.probe(body)                                              # the evaluated shell as a ray target
@@ -127,12 +128,18 @@ hit = surface.ray((0.3, -3.0, 0.6), (0, 1, 0))                           # (t, p
 ```
 
 * `shell_object` = cage -> mesh with `crease_edge` -> Subdivision Surface (`levels` in the viewport, `levels + 1` on
-  render) -> Boolean DIFFERENCE for every cutter (EXACT) -> Bevel on the edges the cut leaves hard. Modifiers stay live: the
-  `.blend` carries the cage and evaluates the smooth surface. Level 2 of a 1500-quad cage costs ~0.1 s, the four arch
-  Booleans ~1.7 s on top (use `solver="FAST"` for a quick look).
-* A Catmull-Clark surface pulls in from its control polygon (up to a few millimetres on a tight curve): never place a
-  part on the cage polygon. Put it on `shell.probe(...)` hits and sink its back 5-15 mm into the body, so no sliver of
-  gap shows.
+  render) -> Boolean DIFFERENCE for every cutter -> Bevel on the edges the cut leaves hard. With `bake_it=True` the stack is
+  applied at the render level into a plain mesh (the cutters are deleted). **Bake anything that moves or is cut by a
+  Boolean**: a live modifier stack is re-evaluated whenever its object (or a cutter) moves, which is about a second per
+  frame for a car body, i.e. an animated vehicle can no longer be built, simulated or rendered. Static furniture may stay
+  live (the `.blend` then carries the small cage). Cost on a 2300-point cage at level 3: Subdivision 0.1 s, four arch
+  Booleans 3 s with `solver="EXACT"`, 1 s with `"FAST"` (`S.smooth(..., solver=...)`).
+* A section that crosses itself (a floor below the underside, a wall through a wall) is not a solid: `loft` refuses it, and
+  a Boolean on such a body silently returns nothing.
+* A Catmull-Clark surface pulls in from its control polygon (up to a few millimetres on a tight curve, a hand on a fat
+  corner): never place a part on the cage polygon. Put it on `shell.probe(...)` hits and sink its back 4-15 mm into the
+  body, so no sliver of gap shows. `shell.probe` is a ray cast on Blender's BVH tree (microseconds per ray on a million
+  triangles); the numpy `core.shell.Probe` brute-forces every triangle and is for tests and small meshes.
 * A material index stays on the quads when they are subdivided: assign materials on the cage, not on the result.
 
 ## Recipes
@@ -149,10 +156,33 @@ hit = surface.ray((0.3, -3.0, 0.6), (0, 1, 0))                           # (t, p
 | a grille / louvres | `rounded_frame` for the surround, `sweep` blades of a lens section, never box bars |
 | upholstery | `cage` with creased trough rings (pleats), subdivided, with a lighter roll on the edges |
 
+## Worked example: the convertible
+
+`mkmmd/blender/library/props/convertible*.py` (card `library:convertible_80s`), modelled in proportion on a 1984-86 Dodge 600
+convertible with no badge or lettering. `convertible_layout.py` holds every number the parts agree on, measured on a
+side-on photograph at the known length (4.59 m) and wheelbase (2.62 m): the shoulder crease at 0.83 m the whole way along
+the side, the door top at 0.915 m, the foot of the glass at 0.925 m with the windshield raked 44 degrees up to a header at
+1.32 m, a hood that rises from 0.80 m at the nose to 0.99 m at its rear edge and drops to the glass.
+
+| part | how |
+|---|---|
+| `convertible_body` | ONE lofted shell: 19 named points per half section, stations every metre or so (a closed top for hood and deck, a U with a door-top cap, inner walls and a floor for the cockpit, hard stations between), creases on the shoulder and the rub strip, ring gaps for the hood, doors and deck lid, four flared arch cutters (Boolean). Subdivided, cut and bevelled by the builder, then baked |
+| `convertible_exterior` | grille (chrome slats), headlamps (bezel, two lenses), corner lamps, swept bumpers with rub strips and guards, plates, the ribbed tail-lamp band: lofts, sweeps and `rounded_frame`/`rounded_panel`, put on the body with ray casts |
+| `convertible_trim` | rub strips and rocker mouldings that follow the side, the lip round each opening, door pulls, fender vents, hood vents, mirrors (a lofted pod on a stalk), wipers, antenna, exhaust tip, the dark shut lines (graphic layers) |
+| `convertible_seats`, `convertible_dash` | cages with creased pleats, a rolled dash brow, lathed knobs, swept spokes |
+
+The builder (`convertible.py`) makes the shells first, bakes them, builds ray-cast probes on them, then asks the other modules for
+their meshes with those probes (`static_parts(probes)`), so a lamp is placed on the real surface. Reference checks used: the
+side silhouette laid over the photograph (orthographic render at the photo's scale), and the car beside the photographs at the
+same angle (`review/refcmp.sh` in the test project).
+
 ## Reviewing
 
 * Render the prop alone from named views and set it beside the reference photo at the same angle and lens: front 3/4
   left, rear 3/4 left, side, front, and close-ups of every detail (`mk look --view yaw:elev --target ... --lens ...`).
-* A proportion error is a silhouette error: fix it with the profile curves, not with details.
+* A proportion error is a silhouette error: fix it with the profile curves, not with details. For a side profile render the
+  prop with an orthographic camera at the photograph's scale (the length and wheelbase give pixels per metre; the wheel
+  centres give the ground line) and lay its outline over the photo: a few centimetres of hood height, glass rake or sill
+  height show at once, where a perspective comparison hides them.
 * Run `mk check` (the `form` metric): no cuboid parts, no unbevelled hard edges on the visible parts of the prop.
 * Keep the build under about 3 s per prop; evaluate `levels` 2 first, add the render level last.

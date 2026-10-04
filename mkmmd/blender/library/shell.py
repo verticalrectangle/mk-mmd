@@ -114,13 +114,36 @@ def cutter_object(name, mesh, coll, parent, mat_of, loc=(0.0, 0.0, 0.0), rot=(0.
     return o
 
 
+def bake(o, level=None):
+    """Replace the object's mesh by its evaluated mesh (every modifier applied, the Subdivision Surface at `level`, default
+    its render level) and drop the modifiers. Do this for anything that MOVES or is cut by a Boolean: a live Boolean is
+    re-evaluated (about a second for a car body) whenever its object or its cutter moves, i.e. at every frame of an
+    animated vehicle. Returns the object."""
+    for md in o.modifiers:
+        if md.type == "SUBSURF":
+            md.levels = int(md.render_levels if level is None else level)
+    dg = bpy.context.evaluated_depsgraph_get()
+    me = bpy.data.meshes.new_from_object(o.evaluated_get(dg), preserve_all_data_layers=False, depsgraph=dg)
+    old = o.data
+    o.modifiers.clear()
+    o.data = me
+    me.name = o.name
+    for a in ("crease_edge",):
+        if a in me.attributes:
+            me.attributes.remove(me.attributes[a])
+    if old.users == 0:
+        bpy.data.meshes.remove(old)
+    return o
+
+
 def shell_object(name, cage, coll, parent, mat_of, levels=2, render_levels=None, bevel=None, cutters=(),
-                 cutter_role=None, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0), solver="EXACT"):
+                 cutter_role=None, loc=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0), solver="EXACT", bake_it=False):
     """A cage (`core.shell.Mesh` with creases) as a smooth shell: a Subdivision Surface of `levels` (creases respected;
     `render_levels` for renders, default levels + 1), then a Boolean DIFFERENCE for every cutter object (the faces the cut
     creates take the material `cutter_role` through the cutter's own material: build the cutter with it), then a Bevel
     `bevel = (width m, segments)` on the edges sharper than 30 degrees (what the cuts leave hard). The modifiers stay live
-    (no apply): a saved .blend carries the cage and renders the smooth surface."""
+    (a saved .blend carries the cage and renders the smooth surface) unless bake_it: then the result is baked into a plain
+    mesh at the render level and the cutter objects are deleted (see `bake`: for anything that moves)."""
     purge(name)
     me, used = mesh_data(name, cage, mat_of, normals=False)
     slot = None
@@ -150,6 +173,13 @@ def shell_object(name, cage, coll, parent, mat_of, levels=2, render_levels=None,
         bv.limit_method = "ANGLE"
         bv.angle_limit = math.radians(30.0)
         bv.harden_normals = False
+    if bake_it:
+        bake(o)
+        for cut in cutters:
+            data = cut.data
+            bpy.data.objects.remove(cut)
+            if data.users == 0:
+                bpy.data.meshes.remove(data)
     return o
 
 
@@ -177,17 +207,41 @@ def evaluated_mesh(o):
     return V.reshape(-1, 3).astype(np.float64), T.reshape(-1, 3).astype(np.int64)
 
 
+class BVHProbe:
+    """`core.shell.Probe`'s interface (`ray`, `height`) on Blender's BVH tree: a ray costs microseconds on a body of a million
+    triangles, where the numpy probe brute-forces every triangle (30 ms)."""
+
+    def __init__(self, tree):
+        self.tree = tree
+
+    def ray(self, origin, direction):
+        """Nearest hit of the ray origin + t * direction (t > 0): (t, point, unit normal facing the origin) or None."""
+        from mathutils import Vector
+        d = Vector(direction).normalized()
+        hit = self.tree.ray_cast(Vector(origin), d)
+        if hit[0] is None:
+            return None
+        n = np.array(hit[1], float)
+        n /= np.linalg.norm(n)
+        if n @ np.array(d) > 0:
+            n = -n
+        return float(hit[3]), np.array(hit[0], float), n
+
+    def height(self, x, y, z0=10.0):
+        h = self.ray((x, y, z0), (0.0, 0.0, -1.0))
+        return None if h is None else float(h[1][2])
+
+
 def probe(o):
-    """A `core.shell.Probe` on the object's evaluated surface: ray casts that put trims, lamps and plates exactly on a
-    subdivided shell (whose limit surface lies inside its control cage)."""
-    from ...core.shell import Probe
-    return Probe(*evaluated_mesh(o))
+    """A ray-cast probe (`ray`, `height`) on the object's evaluated surface, in the object's own frame: puts trims, lamps and
+    plates exactly on a subdivided shell (whose limit surface lies inside its control cage)."""
+    from mathutils.bvhtree import BVHTree
+    return BVHProbe(BVHTree.FromObject(o, bpy.context.evaluated_depsgraph_get()))
 
 
 def evaluate_cage(cage, levels=2):
-    """A `core.shell.Probe` on the Subdivision Surface of a cage (`Mesh` with creases), before any object exists: lets a
+    """A ray-cast probe (see `probe`) on the Subdivision Surface of a cage (`Mesh` with creases), before any object exists: lets a
     part module place its panels and lamps on the limit surface of the cage it is about to return. Leaves nothing behind."""
-    from ...core.shell import Probe
     me, _ = mesh_data("_mk_probe", cage, lambda role: None, normals=False)
     o = bpy.data.objects.new("_mk_probe", me)
     bpy.context.scene.collection.objects.link(o)
@@ -195,7 +249,7 @@ def evaluate_cage(cage, levels=2):
         md = o.modifiers.new("Subdivision", "SUBSURF")
         md.levels = md.render_levels = int(levels)
         md.use_creases = True
-        return Probe(*evaluated_mesh(o))
+        return probe(o)
     finally:
         bpy.data.objects.remove(o)
         bpy.data.meshes.remove(me)

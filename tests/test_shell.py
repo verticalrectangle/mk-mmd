@@ -151,6 +151,18 @@ def test_an_open_top_region_makes_a_u_section():
     assert cabin.volume() < closed.volume() - 0.5                      # the opening takes volume out of the solid
 
 
+def test_a_section_that_crosses_itself_is_refused():
+    assert not S.section_crosses_itself(S.rrect(1.0, 0.5, 0.1))
+    bow = np.array([[0, 0], [1, 1], [1, 0], [0, 1.0]])                       # a bow tie
+    assert S.section_crosses_itself(bow)
+    # a floor below the underside: the half section dips through itself
+    bad = [S.pt("keel", 0.0, 0.3), S.pt("bot", 0.8, 0.3), S.pt("top", 0.8, 0.8), S.pt("floor", 0.6, 0.2), S.pt("tc", 0.0, 0.2)]
+    ok = [S.pt("keel", 0.0, 0.1), S.pt("bot", 0.8, 0.1), S.pt("top", 0.8, 0.8), S.pt("floor", 0.6, 0.2), S.pt("tc", 0.0, 0.2)]
+    with pytest.raises(ValueError, match="crosses itself"):
+        S.loft([S.station(0.0, bad), S.station(1.0, bad)])
+    assert S.loft([S.station(0.0, ok), S.station(1.0, ok)]).mesh.is_closed()
+
+
 def test_loft_rejects_mismatched_stations():
     with pytest.raises(ValueError):
         S.loft([S.station(0.0, box_section(0.5, 0.2, 0.6)), S.station(1.0, box_section(0.5, 0.2, 0.6)[:-1] + [S.pt("oops", 0.0, 0.7)])])
@@ -346,7 +358,89 @@ def test_shell_contract_and_part_tuple():
     cage = pod().mesh
     sh = S.smooth(cage, levels=3, bevel=(0.003, 2), cutters=[S.arch_cutter((0, 0.3), 0.3, 0.4, 0.8)], cutter_role=4)
     assert sh.mesh is cage and sh.levels == 3 and sh.bevel == (0.003, 2) and len(sh.cutters) == 1 and sh.cutter_role == 4
+    assert sh.solver == "EXACT" and S.smooth(cage, solver="FAST").solver == "FAST"
     assert S.Part(cage, (0, 0, 0), (0, 0, 0)).origin == (0, 0, 0)
+
+
+# ======================================================================================================== the primitives
+def test_rounded_box_volume_against_the_steiner_formula():
+    a, b, c, r = 0.4, 0.6, 0.2, 0.03
+    m = S.rounded_box((a, b, c), r=r, k=4)
+    p, q, s = a - 2 * r, b - 2 * r, c - 2 * r                       # the rounded box is the inner box grown by r
+    exact = p * q * s + 2 * (p * q + q * s + s * p) * r + math.pi * r ** 2 * (p + q + s) + 4 / 3 * math.pi * r ** 3
+    assert m.is_closed()
+    assert exact * 0.995 < m.volume() <= exact                       # inscribed facets: a hair under the exact value
+
+
+def test_rounded_box_keeps_its_extent_and_is_symmetric():
+    m = S.rounded_box((0.5, 0.3, 0.2), center=(1.0, 2.0, 3.0), r=0.02, k=2, div=0.05)
+    lo, hi = m.bbox()
+    assert lo == pytest.approx((0.75, 1.85, 2.9)) and hi == pytest.approx((1.25, 2.15, 3.1))
+    assert m.is_closed()
+    c = m.V - (1.0, 2.0, 3.0)
+    assert key(c) == key(c * (-1, 1, 1)) == key(c * (1, -1, 1))
+
+
+def test_sharp_extrusion_volume_is_area_times_width():
+    bottom = np.array([[-1.0, 0.2], [0.0, 0.2], [1.0, 0.2]])
+    top = np.array([[-1.0, 0.8], [0.5, 0.9], [1.0, 0.8]])
+    m = S.extrude_profile(bottom, top, -0.5, 0.5, 0.0, 0.0)
+    area = 0.5 * (0.6 + 0.7) * 1.5 + 0.5 * (0.7 + 0.6) * 0.5
+    assert m.is_closed() and m.volume() == pytest.approx(area * 1.0)
+
+
+def test_rounded_extrusion_loses_only_the_rim():
+    bottom = np.array([[-1.0, 0.2], [1.0, 0.2]])
+    top = np.array([[-1.0, 0.8], [1.0, 0.8]])
+    r = 0.05
+    m = S.extrude_profile(bottom, top, -0.5, 0.5, r, r, 4, 4, flush=(False, False))
+    assert m.is_closed()
+    sharp = 2.0 * 0.6 * 1.0
+    perimeter = 2 * (2.0 + 0.6)
+    rim_total = 2 * (1 - math.pi / 4) * r ** 2 * perimeter           # both sides lose a rounded rim all round
+    assert m.volume() == pytest.approx(sharp - rim_total, abs=0.15 * rim_total)
+
+
+def test_lathe_cylinder_volume():
+    m = S.lathe([(0.3, 0.0), (0.3, 0.5)], seg=96, closed_ends=True)
+    assert m.is_closed() and m.volume() == pytest.approx(math.pi * 0.09 * 0.5, rel=0.002)
+
+
+def test_tube_volume_and_ring_closure():
+    path = np.stack([np.zeros(40), np.zeros(40), np.linspace(0, 1.0, 40)], 1)
+    t = S.tube(path, 0.05, sides=48)
+    assert t.is_closed() and t.volume() == pytest.approx(math.pi * 0.0025 * 1.0, rel=0.01)
+    ring = S.tube(S.torus_path(0.2, 72), 0.02, sides=24, closed=True).weld()
+    # a 24-gon section holds 98.9 % of the circle's area
+    assert ring.is_closed() and ring.volume() == pytest.approx(2 * math.pi ** 2 * 0.2 * 0.02 ** 2 * 0.9886, rel=0.005)
+
+
+def test_fillet_arcs_are_tangent_with_the_requested_radius():
+    pts = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])
+    f = S.fillet(pts, [0, 0.2, 0], n=16)
+    centre = np.array([0.8, 0.2])
+    on_arc = np.abs(np.hypot(f[:, 0] - centre[0], f[:, 1] - centre[1]) - 0.2) < 1e-9
+    assert on_arc.sum() == 17                                        # n + 1 points of the arc
+    assert f[0] == pytest.approx((0, 0)) and f[-1] == pytest.approx((1, 1))
+    assert f[on_arc][0] == pytest.approx((0.8, 0.0)) and f[on_arc][-1] == pytest.approx((1.0, 0.2))   # tangent points
+    assert not np.any(np.all(np.isclose(f, (1.0, 0.0)), axis=1))      # the sharp corner is gone
+
+
+def test_weld_turns_collapsed_quads_into_triangles():
+    V = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [1, 1, 0.0], [0, 1, 0]], float)      # vertices 2 and 3 coincide
+    m = S.Mesh(V, [[0, 1, 2, 4], [1, 3, 4, 4]]).weld()
+    assert len(m.V) == 4
+    assert len(m.Q) == 1 and len(m.T) == 1                           # one honest quad, one collapsed to a triangle
+    assert S.Mesh(V, [[2, 3, 3, 2]]).weld().nfaces == 0              # a fully collapsed face is dropped
+
+
+def test_vertex_normals_are_area_weighted():
+    # a big flat floor next to a tiny steep strip: the shared vertices keep the floor's normal
+    V = np.array([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [10, 10.001, 0.001], [0, 10.001, 0.001]], float)
+    m = S.Mesh(V, [[0, 1, 2, 3], [3, 2, 4, 5]])
+    n = m.vertex_normals()
+    assert n[0] == pytest.approx((0, 0, 1))
+    assert n[2][2] > 0.999
 
 
 # ======================================================================================================== docs/modelling.md

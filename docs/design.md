@@ -296,6 +296,7 @@ form_exempt = [...] }`; `exclude` removes objects altogether. Calibration on the
 | Scene (`mk check ... form`) | value |
 |---|---|
 | the rejected car, `convertible_80s` modelled from cuboids: whole prop / exterior / body | 0.51 / 0.59 / 0.71 |
+| `convertible_80s` rebuilt on the shell toolkit (one lofted body shell, swept and framed trim) | 0.14 |
 | `car_mockup` (stacked boxes) | 0.90 |
 | a car body lofted and subdivided with the shell toolkit (the docs/modelling.md example: long flat flanks, creased shoulder) | 0.08 |
 | café iPod, the highest of the passing set | 0.09 |
@@ -344,7 +345,10 @@ neon tube; its floor, walls, `use.rest` and obstacles are what the placement rul
 `cafe_chair` does), `desk_lamp` (owns its spot light, `power` and `on`), `cassette_player` (`glow`), `cassette_tape`
 (label colour by name), `bed_single` (a Memphis quilt, pillows), `rug_80s` (`flat`), `poster_80s` (five designs),
 `alarm_clock` (`glow`, `colon`, `alarm`), `bedroom_nightstand`, `wall_shelf`); their options are the non-colour
-`slots` keys documented in each module's docstring (`mkmmd/blender/library/props/bedroom_*.py`).
+`slots` keys documented in each module's docstring (`mkmmd/blender/library/props/bedroom_*.py`). `convertible_80s` is an
+80s convertible (Dodge 600 proportions, top folded) with two seats and the driver on +X, wheels, steering, a dash with
+`SPEED_GRID` / `BAR_GRAPH` surfaces and a cassette, and `lamps` (0..1: headlamp lenses and spot lights with a warm-up
+flicker); its card documents every `use` point.
 
 The character eases from its rest pose (at `start`) into the base pose over `settle_frames`; secondary motion settles
 in the same pre-roll. Rotations are composed in the armature's axes (the model faces -Y): a bone's posed rotation

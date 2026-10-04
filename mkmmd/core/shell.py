@@ -32,12 +32,13 @@ Part = namedtuple("Part", "mesh origin rot")
 # A cage the builder turns into a smooth object: a Subdivision Surface of `levels` over the creased `mesh`, Boolean
 # DIFFERENCE by every mesh of `cutters` (their cut faces take the material role `cutter_role`), then a Bevel
 # `bevel = (width m, segments)` on the edges the cuts leave hard.
-Shell = namedtuple("Shell", "mesh levels bevel cutters cutter_role")
+Shell = namedtuple("Shell", "mesh levels bevel cutters cutter_role solver")
 
 
-def smooth(mesh, levels=2, bevel=None, cutters=(), cutter_role=None):
-    """A `Shell`: what a part module returns from `static_shells()` for a cage that is to be subdivided."""
-    return Shell(mesh, int(levels), bevel, tuple(cutters), cutter_role)
+def smooth(mesh, levels=2, bevel=None, cutters=(), cutter_role=None, solver="EXACT"):
+    """A `Shell`: what a part module returns from `static_shells()` for a cage that is to be subdivided. `solver` is the
+    Boolean solver of the cuts ("EXACT" is robust, "FAST" about three times quicker on a dense body)."""
+    return Shell(mesh, int(levels), bevel, tuple(cutters), cutter_role, solver)
 
 
 # ===================================================================================================================
@@ -360,7 +361,7 @@ def fillet(pts, radius, n=4, closed=False):
         t = min(r * math.tan(phi / 2), 0.5 * l0 if (closed or i - 1 > 0) else l0, 0.5 * l1 if (closed or i + 1 < N - 1) else l1)
         r_eff = t / math.tan(phi / 2)
         s = 1.0 if cross > 0 else -1.0                           # left turn: the centre is on the left
-        start, end = p - d0 * t, p + d1 * t
+        start = p - d0 * t
         normal = np.array([-d0[1], d0[0]]) * s
         centre = start + normal * r_eff
         a_s = math.atan2(start[1] - centre[1], start[0] - centre[0])
@@ -966,6 +967,26 @@ def gap(y, width=0.006, depth=0.003, cols=None, mat=0):
     return Gap(float(y), float(width), float(depth), cols, int(mat))
 
 
+def section_crosses_itself(P):
+    """True when the closed polygon P (n, 2) crosses itself: two edges that are not neighbours intersect properly. A body
+    whose section does that is not a solid (a Boolean on it returns nothing)."""
+    P = np.asarray(P, float)
+    n = len(P)
+    A, B = P, np.roll(P, -1, axis=0)
+
+    def side(p, q, r):                                   # orientation of r about the line p -> q, all pairs broadcast
+        return (q[..., 0] - p[..., 0]) * (r[..., 1] - p[..., 1]) - (q[..., 1] - p[..., 1]) * (r[..., 0] - p[..., 0])
+
+    Ai, Bi, Aj, Bj = A[:, None], B[:, None], A[None, :], B[None, :]
+    tol = 1e-12
+    d1, d2 = side(Ai, Bi, Aj), side(Ai, Bi, Bj)
+    d3, d4 = side(Aj, Bj, Ai), side(Aj, Bj, Bi)
+    cross = (d1 * d2 < -tol) & (d3 * d4 < -tol)
+    i, j = np.indices((n, n))
+    far = (np.abs(i - j) > 1) & (np.abs(i - j) != n - 1)
+    return bool((cross & far).any())
+
+
 def loft(stations, spacing=0.06, mirror=True, caps=("fan", "fan"), cap_bulge=(0.0, 0.0), cap_rings=2, gaps=(), uv=False,
          mat=0):
     """Loft a body from sections along y (the loft axis; rotate the result for another axis).
@@ -1031,6 +1052,9 @@ def loft(stations, spacing=0.06, mirror=True, caps=("fan", "fan"), cap_bulge=(0.
         PX[r, k0:k1 + 1] -= g.depth * nv[k0:k1 + 1, 0]
         PZ[r, k0:k1 + 1] -= g.depth * nv[k0:k1 + 1, 1]
         gap_rows.append((r, k0, k1, g))
+    for r in range(R):                                       # every section must be a simple polygon, or the body is no solid
+        if section_crosses_itself(np.stack([PX[r], PZ[r]], 1)):
+            raise ValueError(f"the section at y = {ys[r]:.3f} crosses itself (a floor below the underside, a wall through a wall?)")
     if mirror:
         order = np.concatenate([np.arange(K), np.arange(K - 2, 0, -1)])
         sign = np.concatenate([np.ones(K), -np.ones(K - 2)])
@@ -1245,13 +1269,18 @@ def _roll(r, n):
     return [(r * (1.0 - math.cos(t)), r * (1.0 - math.sin(t))) for t in a]
 
 
-def rounded_panel(outline, thickness, r_edge=0.003, n=3, dome=0.0, rings=2, uv=False, mat=0):
+def rounded_panel(outline, thickness, r_edge=0.003, n=3, dome=0.0, rings=2, uv=False, mat=0, r_back=0.0):
     """A plate with a rolled rim, its back at z = 0 and its face at z = thickness: the closed 2D `outline` (m, 2), the top
     edge rounded with radius r_edge (n segments; keep it below the outline's own corner radii) and the face domed up by
-    `dome` at the centre. Closed, outward normals. uv=True maps the outline's bounding box onto 0..1 (a grain along x:
-    make the outline longer along x)."""
+    `dome` at the centre. r_back > 0 rolls the back edge over too (a pane seen from both sides). Closed, outward normals.
+    uv=True maps the outline's bounding box onto 0..1 (a grain along x: make the outline longer along x)."""
     r = min(r_edge, thickness)
-    prof = [(0.0, 0.0), (0.0, thickness - r)] + [(d, thickness - dh) for d, dh in _roll(r, n)]
+    rb = min(r_back, thickness - r) if r_back > 0 else 0.0
+    prof = [(0.0, rb), (0.0, thickness - r)] + [(d, thickness - dh) for d, dh in _roll(r, n)]
+    if rb > 0:                                   # the back edge: a quarter round from the base (inset rb) up to the wall
+        a = np.linspace(0.0, 0.5 * math.pi, n + 1)[:-1]
+        prof = [(rb * (1.0 - math.sin(t)), rb * (1.0 - math.cos(t))) for t in a] + prof
+    prof = [q for k, q in enumerate(prof) if k == 0 or abs(q[0] - prof[k - 1][0]) + abs(q[1] - prof[k - 1][1]) > 1e-9]
     R = offset_rings(outline, prof)
     m = cage(R, closed=True, caps=("fan", "fan"), cap_axes=((0, 0, -1), (0, 0, 1)), cap_bulge=(0.0, dome), cap_rings=rings,
              mat=mat)
@@ -1261,11 +1290,12 @@ def rounded_panel(outline, thickness, r_edge=0.003, n=3, dome=0.0, rings=2, uv=F
     return m
 
 
-def rounded_frame(outer, inner, height, r_out=0.003, r_in=0.002, n=3, floor=None, mat=0):
+def rounded_frame(outer, inner, height, r_out=0.003, r_in=0.002, n=3, floor=None, mat=0, draft=0.0):
     """A frame (bezel, grille surround, vent): the closed 2D outlines `outer` and `inner` (inside it) pulled up to `height`
     from z = 0 with both top edges rolled over (r_out, r_in). floor=None: a through opening; floor=d: the opening is a
-    pocket whose floor lies d below the top face (a closed lid on the back). Closed, outward normals. The outlines are
-    resampled to the same point count when they differ."""
+    pocket whose floor lies d below the top face (a closed lid on the back). `draft` leans the outer wall in by that much
+    at the top (a moulded bezel is never a straight wall). Closed, outward normals. The outlines are resampled to the same
+    point count when they differ."""
     A, B = np.asarray(outer, float), np.asarray(inner, float)
     if polygon_area(A) < 0:
         A = A[::-1]
@@ -1276,8 +1306,8 @@ def rounded_frame(outer, inner, height, r_out=0.003, r_in=0.002, n=3, floor=None
         A, B = resample_loop(A, m), resample_loop(B, m)
     ro, ri = min(r_out, height), min(r_in, height)
     ring = lambda P, d, h: offset_rings(P, [(d, h)])[0]
-    R = [ring(A, 0.0, 0.0), ring(A, 0.0, height - ro)]
-    R += [ring(A, d, height - dh) for d, dh in _roll(ro, n)]
+    R = [ring(A, 0.0, 0.0), ring(A, draft, height - ro)]
+    R += [ring(A, draft + d, height - dh) for d, dh in _roll(ro, n)]
     a = np.linspace(0.0, 0.5 * math.pi, n + 1)
     R += [ring(B, -ri + ri * math.sin(t), height - ri + ri * math.cos(t)) for t in a]
     bottom = 0.0 if floor is None else max(height - floor, 0.0)
