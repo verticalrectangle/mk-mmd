@@ -186,6 +186,15 @@ next to the files in the asset library.
 }
 ```
 
+Fields the placement rules and the build add (all optional; see Placement and PMX props): `bounds` {min, max} (the
+visible geometry in the prop's frame; the props stage measures it when a card has none), `front` (`-Y`: the axis a person
+faces), `flat` (true: other props may stand on or overlap it, a rug), `blocks` (false: it does not occupy its footprint),
+`origin` (`wall_center` for something hung on a wall: its origin lies on the wall plane), `use.rest` planes with `size`
+[w, d] or `radius`, `use.surface` panels (`center`, `normal`, `up`, `size` [w, h]), and for imported props `parts`,
+`armature` and `stats`. A **set** card may carry `use.rest` (its `floor`) and `obstacles`, `[{name, min, max}]`
+axis-aligned boxes in the set's frame that placed props keep clear of (windows, doors, built-ins). A project can merge
+its own entries over any card with `card_extra`.
+
 ## Asset registry
 
 `<assets>/registry.json`: a list of entries, one per model, motion, prop, vehicle, audio file, reference clip,
@@ -269,6 +278,14 @@ of the edge length around large patches), `worst_parts` (`object`, `part`, `area
 `at` in the prop's frame), `worst_objects`, `sharp_panels` (the biggest flat patches with unbevelled rims) and `exempt`.
 Hidden or internal surfaces count (no occlusion test): `exclude` what nobody sees.
 
+The props stage runs the same maths on every library prop it places (`mkmmd/blender/build/form_warn.py`; pmx and appended
+.blend props are someone else's modelling and are skipped) and logs `WARNING prop 'car': form 0.51 > 0.25 (car_body part 25:
+a box: ...)` when one is over its limit. The prop's card says what is fair: `form_max` (default 0.25; a thing that is a box
+by nature says 0.7; 1 or more switches the guard off) and `form_exempt` (object names or fnmatch patterns counted at weight
+0), in the builder's card or the project's `[[prop]] card_extra`. Results are cached in `<project>/.mk/cache/form/` by a
+hash of the evaluated geometry in the prop's own frame and of `core/form.py`, so an unchanged prop costs a mesh evaluation
+and no analysis; a prop over 600 000 triangles is not measured.
+
 Limits: `max` defaults to 0.25, the limit for hero props (anything the camera sees large); a project overrides it per check.
 Furniture and gadgets that are boxes by nature (a boombox, a nightstand) read 0.2-0.7 even when well made: judge them by
 eye and give them their own `max`. Architecture (walls, gantries, barriers) is legitimately boxy: `exempt = [names or
@@ -300,7 +317,7 @@ in order and each reads its own sections:
 |---|---|---|
 | scene | `[scene]` (`start`, `end`, `settle_frames`) | empty scene, fps, frame range including the pre-roll before `frame0` |
 | sets | `[[set]]` (`name`, `kind`, `at`, `yaw`, builder keys) | library set builders with their paths, surfaces and lights (see the list below) |
-| props | `[[prop]]` (`name`, `card`, `at`, `yaw` or `rot`, `parent`, `slots`, `attach`, `anchor_to`) | library props or card files; builders get the project palette as slots; their use points and colliders |
+| props | `[[prop]]` (`name`, `card`, `at`, `yaw` or `rot`, `parent`, `slots`, `card_extra`, `place`, `attach`, `anchor_to`; `scale` and `origin` for PMX props), `[[scatter]]` | library props (`library:<name>`), card files, MMD accessory models (`pmx:PATH` or a registered prop slug, see PMX props); builders get the project palette as slots; their use points and colliders; `bounds` measured on every card; placement rules and clutter (see Placement) with a per-prop report (position, yaw, clearance) |
 | vehicles | `[[vehicle]]` (`prop`, `path`, `lane`, `speed`, `at`, `roll`, `pitch`, `wheelbase`, `steer_ratio`) | a prop drives a set path's lane: position and heading per frame, body roll and pitch, wheels spinning, the steering wheel turning with the curvature |
 | cast | `[[cast]]` (`name`, `asset` or `pmx`, `armature`, `at`, `yaw`, `parent`, `physics`) | models imported without Bullet (`physics = "mk"`), named, placed |
 | pose | `[pose.<cast>]` | sit on a prop's seat (`sit_offset` slides the hips on it), feet on targets (leg IK), lean / turn / head (`lean_share`, `turn_share`, `head.neck` split them over the spine and neck), arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets or curl tables, grips (the hand holds a prop's `use.grip` entry or lies on a `use.rest` surface, a pen's nib can follow a track on every frame, see Grips), `[[pose.<cast>.drape]]` (a bone chain such as a skirt pointed along chosen directions, optionally bunched); `[[prop]] attach = "cast:bone"` puts props on bones. The stage reports each arm IK's miss in mm (`ik_error_mm`, the worst over a moving track) and logs a WARNING past 5 mm: a goal beyond the arm's reach leaves the hand short of the prop |
@@ -308,6 +325,7 @@ in order and each reads its own sections:
 | perform | `[perform.<cast>]` | gaze events over an idle target, eye-only glances (`glance`: the eyes lead, the head lifts a little, the lids open), breathing, sway, nod, beat bob, startles, blinks, lids, expressions, lip sync, twitches |
 | shots | `[[shot]]` | the cut, see Shots |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure |
+| text | `[[text]]` (`name`, `on` or `mount` / `at` / `facing` / `box`, `text` or `value`, `font`, `size` or `fit`, `align`, `offset`, `color`, `glow`, `depth`, `reveal`, `blink`, `flicker`; see Text) | type on set and prop surfaces: fitted, palette-coloured, a typewriter reveal, a keyed number; geometry nodes with keyed inputs, so EEVEE needs no Python at render time |
 | keys | `[[key]]` (`target`, `prop`, `index`, `keys = [[t, v], ...]`, `interp`, `relative`) | keys on set, prop and object properties: a set's storm and fog, a car's lamps, any RNA path (`location`, `data.energy`); `relative = true` adds the values as offsets to what the property already does (a value another stage solved, such as a hand's grip target) and keeps its animation outside the keys' span |
 | sim | `[sim.<cast>]` (`families`, `params`, `colliders`, `props`, `fingers`, `floor`, `wind`) | secondary motion solved outside Blender (`mkmmd.solvers.strands`) and baked to keys; branching chains solve as trunk then branches; `wind.carrier = "car"` makes the air relative to a vehicle. `params.<family>`: `sag`, `drag`, `zeta`, `radius`, `radius_max`, `friction`, `wind_drag`, and for sheets (skirts) `lateral` (0..1, default 0.5: the chains of a skirt are tied to their neighbours in a ring found from the rest positions, and the cloth between them is kept out of seats and thighs; 0 = independent chains), `lateral_collide`, `anchor_free`. Strands stay inextensible, so the baked bones render the solved particles |
 | save | | the `.blend` |
@@ -316,11 +334,17 @@ Library sets (`kind`; every key is documented in the builder's docstring): `test
 stars, moon with light, horizon glow, clouds, EEVEE ray tracing), `highway` (divided road with lanes as card
 paths, lamps with baked spill, gantries and billboards as `use.surface`, tunnels, trees, wet asphalt), `skyline`
 (a city arc or band with lit windows and aviation lights), `cafe_room` (the rainy café: window with rain and fog,
-street, storm; its animatable state is custom properties on the set root). Library props (`library:<key>`):
-| text | `[[text]]` (`name`, `on` or `mount` / `at` / `facing` / `box`, `text` or `value`, `font`, `size` or `fit`, `align`, `offset`, `color`, `glow`, `depth`, `reveal`, `blink`, `flicker`; see Text) | type on set and prop surfaces: fitted, palette-coloured, a typewriter reveal, a keyed number; geometry nodes with keyed inputs, so EEVEE needs no Python at render time |
-`car_mockup`, `chair`, and the café props (`cafe_chair`, `cafe_table`, `cafe_page`, `cafe_pen`, `cafe_mug`,
+street, storm; its animatable state is custom properties on the set root), `bedroom_80s` (an 80s bedroom at night:
+striped wallpaper, parquet, trim, a door, a window with a half-raised venetian blind and a lit city behind it, a
+neon tube; its floor, walls, `use.rest` and obstacles are what the placement rules work on; `blinds`, `slat_angle`,
+`window_glow`, `city_glow` and `neon` are custom properties on the set root). Library props (`library:<key>`):
+`car_mockup`, `chair`, the café props (`cafe_chair`, `cafe_table`, `cafe_page`, `cafe_pen`, `cafe_mug`,
 `cafe_saucer`, `cafe_ipod`, `cafe_earbuds`, `cafe_vase`, `cafe_fairy_lights`, `cafe_poster`, `cafe_pothos`,
-`cafe_haworthia`, `cafe_monstera`).
+`cafe_haworthia`, `cafe_monstera`) and the bedroom props (`bedroom_desk`, `desk_chair` (seats a character exactly as
+`cafe_chair` does), `desk_lamp` (owns its spot light, `power` and `on`), `cassette_player` (`glow`), `cassette_tape`
+(label colour by name), `bed_single` (a Memphis quilt, pillows), `rug_80s` (`flat`), `poster_80s` (five designs),
+`alarm_clock` (`glow`, `colon`, `alarm`), `bedroom_nightstand`, `wall_shelf`); their options are the non-colour
+`slots` keys documented in each module's docstring (`mkmmd/blender/library/props/bedroom_*.py`).
 
 The character eases from its rest pose (at `start`) into the base pose over `settle_frames`; secondary motion settles
 in the same pre-roll. Rotations are composed in the armature's axes (the model faces -Y): a bone's posed rotation
@@ -333,6 +357,85 @@ Targets anywhere in the build spec are `[x, y, z]` (world), `{prop = "car", poin
 
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python and are cached in `<project>/.mk/cache/`
 by a hash of their inputs.
+
+## Placement
+
+`[[prop]] place = {...}` puts a prop's footprint on a surface instead of giving it `at` and `yaw`, and `[[scatter]]`
+fills a surface with clutter. The maths is `mkmmd/core/place.py` (numpy only, tested without Blender); the props stage
+(`mkmmd/blender/build/place.py`) gathers the scene and writes the result as the prop root's world matrix. A prop's
+footprint is the plan rectangle of its card's `bounds` (measured from its visible geometry when the card has none); its
+lowest point rests on the surface.
+
+**Surfaces** (`on = "<prop or set>:<name>"`; the name may go when the owner has exactly one rest plane): a `use.rest`
+plane (a table top, a set's `floor`: horizontal, `size` [w, d] or `radius`, rectangle or disc), a `use.rest` edge (the
+footprint's centre goes on the segment), or a `use.surface` panel (a wall: `center`, `normal` pointing into the room,
+`size` [w, h]; the prop hangs on it facing out, its back, or its origin when the card's `origin` is `wall_*`, on the
+plane). `(u, v)` are metres from the surface's centre along its axes: on a plane u is the owner's +X and v its +Y (its
+front is -v), on a wall u runs right as seen from the room and v up.
+
+| `place` key | Meaning |
+|---|---|
+| `on` | the surface, as above |
+| `at` | `[u, v]` (the footprint's centre; one number on an edge), `"center"`, `"near:<target>"` (below) or a region `[[u0, v0], [u1, v1]]` (a seeded spot inside it); default `"center"` |
+| `distance`, `bearing` | with `near:` — the gap between footprints (m, default `clear`; negative = overlapping that much, a chair tucked under a desk) and where around the target (deg from its front: 0 in front of it, +90 toward its left; candidates in 15 degree steps, nearest the bearing first) |
+| `facing` | a target (the prop's `front` axis turns toward it, per candidate position) or a number of degrees; default the prop's `yaw`. Yaws are relative to the surface's frame, so a prop on a turned desk turns with it; on a wall the prop always faces out |
+| `align` | `"edge:front"` (or back, left, right; top, bottom on a wall), or a list for a corner: the footprint is pushed against that edge of the surface, `clear` inside it, replacing that coordinate of `at`. front / back are -v / +v, left / right -u / +u |
+| `clear` | metres (0.02): the gap kept to other props and to the surface's edges |
+| `avoid` | prop names (and `<set>:<obstacle>`) to keep clear of whatever the heights |
+| `seed` | integer: breaks ties between mirror candidates, drives regions and scatters |
+
+A placed prop blocks the new one when their plan footprints come closer than `clear` while their heights overlap
+(standing on top of something does not overlap). A prop occupies its **height layers**, not one box: the stage slices its
+visible geometry into layers of about 5 cm and gives each the plan bounding box of its surface points, kept on the card as
+`layers` ([[z0, z1, x0, y0, x1, y1], ...] in the prop's frame), so a chair is wide at the seat and only a backrest above,
+and a lamp is a small base under a long shade: a mug stands under the shade, the lamp clears the chair tucked under the
+desk. The prop that owns the surface (`on = "desk:top"`) never blocks what stands on it, even where its bounds rise above
+the surface (a headboard). A card with `flat` (a rug) never blocks and is never blocked (it lies under things),
+`blocks = false` opts a prop out, a set's `obstacles` (windows, doors) block like props, and an `avoid` entry blocks
+whatever the heights. The `near:` target may be overlapped (its gap is `distance`). Targets of `near:` and `facing` are a
+prop name (its footprint and heading), `prop:use` or `set:use` points, or `[x, y]` / `[x, y, z]` in the world; `cast:`
+and `camera` do not exist yet when props are built. A card can carry a second `use.rest` plane for the part of a surface
+that is really free (a desk top under a window sill: `card_extra = { use = { rest = [{ name = "work", ... }] } }`), and
+things that stand up are placed on that.
+
+`[[scatter]]` (`name`, `props` [card refs], `on`, `count`, `region` [[u0, v0], [u1, v1]] for the footprint centres,
+`min_dist` (m between scattered footprints), `yaw` [lo, hi] (deg, relative to the surface), `seed`, `clear`, `avoid`,
+`slots`, `card_extra`) builds `count` props `<name>_0`, `<name>_1`, ... picking cards from `props` (seeded) and drops
+them one after another at random spots that fit; it runs after every `[[prop]]`, works on walls too, and fails when an
+item finds no spot in 300 tries.
+
+Everything is deterministic for a seed. The stage output carries each placed prop's `placement` (`on`, `position` of the
+origin, `yaw_deg`, `uv`, `clearance_mm`: the margin to the surface's edge and the nearest blocking prop) and the log a
+line per placement. When a rule cannot be met the build fails with the numbers and the prop in the way: `place on
+'desk:top': the footprint is 90 mm too close to the right edge (clear 20 mm)`, `overlaps 'lamp' by 12 mm`, `400
+candidates tried (overlap 'lamp' x400)`. Cards read by the rules: `bounds`, `layers`, `front`, `flat`, `blocks`, `origin`,
+`use.rest` planes with `size` or `radius`, `use.surface` panels, and on set cards `obstacles` ([{name, min, max}] boxes
+in the set's frame). The `bedroom` test project (`~/Projects/mk-tests/bedroom`) is the worked example: desk on the
+floor against the window wall, the chair tucked under its edge facing it, the lamp and the player pushed into the desk's
+corners, tapes scattered, posters on the walls, the bed in a corner.
+
+## PMX props
+
+`[[prop]] card = "pmx:PATH"` (a `.pmx` / `.pmd` file or a folder holding one; relative paths from the project) or an
+asset slug registered as kind `prop` (its path is a model, a card file or a folder with a `card.json`) imports an MMD
+accessory or prop model with mmd_tools (scale 0.08) as a plain prop under its root; `scale` resizes it and `origin`
+(`floor_center` default, `center`, `keep`) puts the origin at the bottom centre of its bounds, the centre, or where the
+author had it. The model keeps its own materials and shape keys (`slots` are ignored, with a warning). Rigid body, joint
+and mmd root objects are removed. A model with no moving parts becomes static (no armature); one whose bones move
+separate parts (more than one bone carrying at least 8 vertices and 1% of them besides a single base bone) keeps its
+armature as `<name>_arm`, listed in the card as `parts` (bone, head, tail in the prop frame, vertices), so a project can
+pose them (`[[key]] target = "<name>_arm", prop = 'pose.bones["bone"].rotation_quaternion', index = 0`).
+
+The card is made from the geometry (`mkmmd/core/propcard.py`): `size` and `bounds`, `front` `-Y`, a `look` point
+`center`, a `use.rest` plane `top` (`size` [w, d], or `radius` for a round top) when the model is roughly flat-topped
+(the highest level covering 40% of its footprint lies within max(2 cm, 12% of the height) of its highest point: a desk,
+a mixer, a crate; not a cup, a cap, a figure), and `colliders` from the model's static rigid bodies (spheres and
+capsules riding on the root, boxes as hidden `<name>_col<i>` objects; dynamic bodies are soft parts and are skipped),
+else one box over the bounds. `stats` says what was found (triangles, rigid bodies, top face, textures missing or
+relinked). `card_extra = {...}` (any prop) is merged over the card: tables key by key, lists of entries with a `name` by
+name (an entry with a known name replaces it, a new name is appended, an empty list clears), anything else replaces:
+`card_extra = { front = "+X", use = { rest = [{ name = "top", center = [0, 0, 0.74], size = [1, 0.5] }] } }`. Colliders
+and moving parts are rest-pose approximations, they do not follow a moving part.
 
 ## Grips
 

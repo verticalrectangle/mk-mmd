@@ -97,6 +97,10 @@ a vehicle, furniture, a set element) follow this loop, and do not call a prop do
    rebuild, check again: a prop usually needs three or four rounds. Furniture and gadgets that are boxes by nature (a
    boombox, a nightstand) may be judged at `max` 0.5-0.7 once you have looked at them; walls, gantries and barriers are
    `exempt = ["wall*"]` (measured and listed, not scored) or `exclude`d. Do not raise `max` to make a hero prop pass.
+   `mk build` runs the same maths on every library prop it places and logs `WARNING prop 'car': form 0.51 > 0.25 (car_body
+   part 25: a box: ...)` when one is over its limit, so a box-built prop is noticed in the build log. A prop's card says
+   what is fair for it: `form_max` (its limit; a boombox says 0.7; 1 switches the guard off), `form_exempt` (object names or
+   patterns that are architecture or graphic layers), from the builder's card or the project's `[[prop]] card_extra`.
 6. **Compare side by side and look.** `mk look build/scene.blend --frames 1 --view 35:12,90:8 --target 'obj("car").matrix @
    Vector((0, 0, 0.6))' --dist 7.5 --ref refs/dodge600/front_left.jpg,refs/dodge600/side.jpg` writes `ref.jpg`: photo i
    beside view i at the same height. Choose `yaw:elev` to match the photo's angle (the photo's horizon and perspective tell

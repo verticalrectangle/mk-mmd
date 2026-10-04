@@ -442,3 +442,113 @@ def test_the_real_sample_op_hands_over_what_a_render_shows(tmp_path):
                         {"name": "w", "metric": "form", "args": {"prop": "gadget"}}], CH.Context(out, None))
     assert bad["ok"] is False and "no such object" in bad["error"] and "gadget_crate" in bad["error"]      # similar names
     assert good["value"] == pytest.approx(res["value"])                                                  # the other check ran
+
+
+# ---------------------------------------------------------------- the build-time guard: its policy (pure) and the real build
+def test_cards_set_the_limit_and_the_exemptions():
+    assert FM.card_limit({}) == FM.HERO_MAX == 0.25 and FM.card_limit({"form_max": 0.7}) == 0.7
+    assert FM.is_library("library:chair", {}) and FM.is_library("cards/x.json", {"builder": "library:cassette_player"})
+    assert not FM.is_library("pmx:models/mug.pmx", {}) and not FM.is_library("props/x", {"source": "x.blend"})
+    names = ["gadget_body", "gadget_label", "gadget_leg_1", "gadget_leg_2", "wall"]
+    assert FM.card_exempt(names, ["wall"], {"form_exempt": ["gadget_label", "gadget_leg_*"]}) == \
+        ["gadget_label", "gadget_leg_1", "gadget_leg_2", "wall"]
+    assert FM.card_exempt(names, [], {"form_exempt": "gadget_body"}) == ["gadget_body"] and FM.card_exempt(names, [], {}) == []
+
+
+def test_headline_names_the_worst_part_and_fingerprint_ignores_placement():
+    V, T, owner = merge(rounded_box((0.5, 0.4, 0.3), 0.0, 4), (sphere(0.5, 8)[0] + [2, 0, 0], sphere(0.5, 8)[1]))
+    r = score(V, T, owner, ["crate", "ball"])
+    assert FM.headline(r).startswith("crate part 0: a box: flat faces on three axes make up 100%")
+    assert FM.headline(score(*sphere(1.0, 8))) is None
+    M = np.eye(4)
+    M[:3, :3] = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+    M[:3, 3] = [10.0, -4.0, 2.0]
+    world = V @ M[:3, :3].T + M[:3, 3]                                   # the same prop placed and turned in the world
+    back = FM.to_frame(world, M)
+    assert np.allclose(back, V, atol=1e-9)
+    names = ["crate", "ball"]
+    key = FM.fingerprint(back + 1e-6, T, owner, names, "src", ["a"])      # float noise below 0.1 mm: the same key
+    assert key == FM.fingerprint(V, T, owner, names, "src", ["a"])
+    assert key != FM.fingerprint(V + 1e-3, T, owner, names, "src", ["a"])           # a moved vertex: another key
+    assert key != FM.fingerprint(V, T, owner, names, "other source", ["a"])
+    assert key != FM.fingerprint(V, T, owner, names, "src", ["a", "crate"])
+
+
+GUARD_PROJECT = """[project]
+name = "guard"
+fps = 30
+frame0 = 1
+duration = 1.0
+blend = "build/guard.blend"
+
+[look]
+palette = "rose-pine-moon"
+
+[[prop]]
+name = "mock"
+card = "library:car_mockup"
+at = [0, 0, 0]
+
+[[prop]]
+name = "mock_free"
+card = "library:car_mockup"
+card_extra = { form_max = 1.0 }
+at = [8, 0, 0]
+
+[[prop]]
+name = "mock_exempt"
+card = "library:car_mockup"
+card_extra = { form_exempt = ["*"] }
+at = [16, 0, 0]
+
+[[prop]]
+name = "mock_limit"
+card = "library:car_mockup"
+card_extra = { form_max = 0.95 }
+at = [24, 0, 0]
+
+[[prop]]
+name = "mug"
+card = "library:cafe_mug"
+at = [32, 0, 0]
+"""
+
+
+@pytest.mark.skipif(not have_blender(), reason="Blender not available")
+def test_the_props_stage_warns_about_blocky_library_props(tmp_path, capsys):
+    import json
+
+    from mkmmd.cli import main as MAIN
+    (tmp_path / "mk.toml").write_text(GUARD_PROJECT, encoding="utf-8")
+
+    def build():
+        with pytest.raises(SystemExit) as e:
+            MAIN.main(["build", "--until", "props", "--project", str(tmp_path)])
+        assert e.value.code == 0
+        out = json.loads(capsys.readouterr().out)
+        return [ln.split("] ", 1)[1] for ln in out["log"] if "WARNING" in ln]            # without the time stamp
+    warnings = build()
+    assert len(warnings) == 1 and warnings[0].startswith(
+        "WARNING prop 'mock': form 0.90 > 0.25 (mock_tub part 0: flat panels with sharp edges")
+    cache = sorted((tmp_path / ".mk" / "cache" / "form").glob("*.json"))
+    assert len(cache) == 3                               # mock, mock_limit, mug: free and fully exempt props are not measured
+    assert build() == warnings and sorted((tmp_path / ".mk" / "cache" / "form").glob("*.json")) == cache      # from the cache
+
+
+@pytest.mark.skipif(not have_blender(), reason="Blender not available")
+def test_the_library_chair_has_rounded_rims_and_keeps_its_card(tmp_path, capsys):
+    import json
+
+    from mkmmd.cli import main as MAIN
+    (tmp_path / "mk.toml").write_text(
+        '[project]\nname = "chair"\nfps = 30\nframe0 = 1\nduration = 1.0\nblend = "build/chair.blend"\n'
+        '[[prop]]\nname = "chair"\ncard = "library:chair"\nat = [0, 0, 0]\n', encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        MAIN.main(["build", "--until", "props", "--project", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert e.value.code == 0 and not [ln for ln in out["log"] if "WARNING" in ln]            # the guard has nothing to say
+    rep = out["stages"]["props"]["chair"]
+    assert rep["uses"] == {"sit": ["seat"], "feet": ["floor"]} and rep["colliders"] == 2 and rep["size"] == [0.43, 0.48, 0.9]
+    (res,) = CH.run([{"name": "chair form", "metric": "form", "args": {"prop": "chair"}}],
+                    CH.Context(tmp_path / "build" / "chair.blend", None))
+    assert res["ok"] and res["value"] < 0.05 and res["detail"]["flat_sharp"] < 0.05       # was 0.55: sharp seat rims, boxy rail

@@ -36,6 +36,7 @@ BOX_SHARE = (0.60, 0.85)    # share of a part's surface on its three axes: not a
 BOX_SECOND = (0.10, 0.22)   # share on the second strongest axis: below it the part is a plate or a rod, not a box
 MIN_PART = 1e-4             # parts below this share of diameter^2 are too small to be tested for a box
 EXEMPT_WEIGHT = 0.0         # weight of exempt parts (1 = like every other part)
+HERO_MAX = 0.25             # the limit for hero props: the `form` check's default and the build guard's
 NEAR_PERP = 0.26            # a part's second axis comes from patches within this |cos| of perpendicular to the first
 
 
@@ -335,3 +336,60 @@ def analyse(V, T, owner=None, names=None, exempt=(), exempt_weight=EXEMPT_WEIGHT
             rows.append((row["share"] * row["score"], nm, row))
     out["by_object"] = {nm: row for _, nm, row in sorted(rows, key=lambda r: -r[0])}
     return out
+
+
+# ---------------------------------------------------------------- shared by the check and the build-time guard
+def to_frame(V, M):
+    """Vertices (n,3) in the frame of a prop whose world matrix is M (4,4): the rigid inverse (scale stays metres)."""
+    R = M[:3, :3] / np.maximum(np.linalg.norm(M[:3, :3], axis=0), 1e-12)
+    return (np.asarray(V, float) - M[:3, 3]) @ R
+
+
+def why(c):
+    """What is wrong with a part (an entry of `analyse`'s `components`), in one phrase."""
+    if c["cuboid"] >= 0.5:
+        return f"a box: flat faces on three axes make up {sum(c['axes']) * 100:.0f}% of its surface"
+    if c["flat_hard"] >= 0.3:
+        return f"flat panels with sharp edges ({c['flat_hard'] * 100:.0f}% of its surface)"
+    return "partly boxy"
+
+
+def headline(r):
+    """One line about the worst part of an `analyse` result (None when nothing is boxy): which object and part, why, and how
+    much of the prop it is."""
+    if not r["components"]:
+        return None
+    c = r["components"][0]
+    return f"{c['object']} part {c['part']}: {why(c)}, {c['share'] * 100:.0f}% of the prop"
+
+
+def fingerprint(V, T, owner, names, *params):
+    """Hex digest of a geometry (vertices to 0.1 mm, triangles, owners, object names) and of `params`: the key of a cached
+    result. The same prop built at another place or turn gives the same key when passed through `to_frame`."""
+    import hashlib
+    import json
+    h = hashlib.sha256()
+    h.update(np.ascontiguousarray(np.round(np.asarray(V, float) * 1e4).astype(np.int64)).tobytes())
+    h.update(np.ascontiguousarray(np.asarray(T, np.int64)).tobytes())
+    h.update(np.ascontiguousarray(np.asarray(owner, np.int64)).tobytes())
+    h.update(json.dumps([list(names), list(params)], sort_keys=True, default=str).encode())
+    return h.hexdigest()[:24]
+
+
+def is_library(ref, card):
+    """Is a prop built by a library builder (`library:<name>`, or a card file naming one)? Only those are modelled here."""
+    return str(ref).startswith("library:") or str(card.get("builder", "")).startswith("library:")
+
+
+def card_limit(card):
+    """The limit of a prop: its card's `form_max` (a thing that is a box by nature says 0.7), else HERO_MAX."""
+    return float(card.get("form_max", HERO_MAX))
+
+
+def card_exempt(names, tagged, card):
+    """The objects of a prop that count at weight 0: in `tagged` (`mk_form_exempt` in the scene) or matching an entry
+    (object name or fnmatch pattern) of the card's `form_exempt`."""
+    from fnmatch import fnmatchcase
+    patterns = card.get("form_exempt") or []
+    patterns = [patterns] if isinstance(patterns, str) else list(patterns)
+    return [n for n in names if n in tagged or any(fnmatchcase(n, p) for p in patterns)]

@@ -1,8 +1,25 @@
 """Basic props: a bentwood cafe chair and an open two-seat car cabin mock-up."""
 import math
 
+import bmesh
+
 from ..mesh import box, cylinder, material, torus
 from . import register
+
+
+def _round_edges(o, width, segments=3, rim=False):
+    """Fillets instead of hard edges on a primitive: bevel its edges `width` m wide in `segments` steps (only the rims of
+    its n-gon caps when `rim`), the new faces smooth shaded. Hard edges catch no light (docs/modelling.md)."""
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    edges = [e for e in bm.edges if not rim or any(len(f.verts) > 4 for f in e.link_faces)]
+    made = bmesh.ops.bevel(bm, geom=edges, offset=width, offset_type="OFFSET", segments=segments, profile=0.5,
+                           affect="EDGES")
+    for f in made["faces"]:
+        f.smooth = True
+    bm.to_mesh(o.data)
+    bm.free()
+    return o
 
 
 @register("chair")
@@ -11,14 +28,15 @@ def chair(name, coll, root, slots=None):
     s = dict({"wood": "#b4637a", "cane": "#ea9d34"}, **(slots or {}))
     wood, cane = material(f"{name}_wood", s["wood"], 0.45), material(f"{name}_cane", s["cane"], 0.7)
     seat_z, r = 0.45, 0.205
-    cylinder(f"{name}_seat", (0, 0, seat_z - 0.02), r, 0.04, coll, root, mat=cane)
+    _round_edges(cylinder(f"{name}_seat", (0, 0, seat_z - 0.02), r, 0.04, coll, root, mat=cane), 0.014, 4, rim=True)
     for i, a in enumerate((45, 135, 225, 315)):
         x, y = 0.15 * math.cos(math.radians(a)), 0.15 * math.sin(math.radians(a))
         cylinder(f"{name}_leg{i}", (x, y, (seat_z - 0.04) / 2), 0.014, seat_z - 0.04, coll, root, mat=wood, segments=12)
     for i, x in enumerate((-0.17, 0.17)):
         cylinder(f"{name}_post{i}", (x, 0.17, seat_z + 0.22), 0.012, 0.44, coll, root, rot=(-8, 0, 0), mat=wood,
                  segments=12)
-    box(f"{name}_backrail", (0, 0.20, seat_z + 0.40), (0.36, 0.03, 0.06), coll, root, rot=(-8, 0, 0), mat=wood)
+    _round_edges(box(f"{name}_backrail", (0, 0.20, seat_z + 0.40), (0.36, 0.03, 0.06), coll, root, rot=(-8, 0, 0),
+                     mat=wood), 0.012, 3)
     cols = [box(f"{name}_col_back", (0, 0.19, seat_z + 0.30), (0.38, 0.05, 0.30), coll, root, rot=(-8, 0, 0),
                 collider=True),
             cylinder(f"{name}_col_seat", (0, 0, seat_z - 0.02), r, 0.04, coll, root, collider=True)]

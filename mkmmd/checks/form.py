@@ -5,8 +5,6 @@ is mkmmd.core.form. Props are measured at one frame, in the frame of their root 
 the card's use points."""
 from fnmatch import fnmatchcase
 
-import numpy as np
-
 from ..core import form as FM
 from . import CheckError, Metric, metric
 
@@ -44,14 +42,6 @@ def _vec(v, n=2):
     return [round(float(x), n) + 0.0 for x in v]
 
 
-def _why(c):
-    if c["cuboid"] >= 0.5:
-        return f"a box: flat faces on three axes make up {sum(c['axes']) * 100:.0f}% of its surface"
-    if c["flat_hard"] >= 0.3:
-        return f"flat panels with sharp edges ({c['flat_hard'] * 100:.0f}% of its surface)"
-    return "partly boxy"
-
-
 def report(r, worst=6):
     """The numbers and the parts to fix, from core.form.analyse's result."""
     detail = {"cuboid": _r(r["cuboid_share"]), "flat": _r(r["flat_share"]), "hard_edges": _r(r["hard_edge_share"]),
@@ -59,7 +49,7 @@ def report(r, worst=6):
               "diameter_m": _r(r["diameter"], 2), "objects": r["objects"], "parts": r["parts"],
               "triangles": r["triangles"],
               "worst_parts": [{"object": c["object"], "part": c["part"], "area_m2": _r(c["area"]),
-                               "share": _r(c["share"]), "boxiness": _r(c["score"]), "why": _why(c),
+                               "share": _r(c["share"]), "boxiness": _r(c["score"]), "why": FM.why(c),
                                "size_m": _vec(c["size"]), "at": _vec(c["at"])} for c in r["components"][:worst]],
               "worst_objects": {nm: {"area_m2": _r(o["area"]), "share": _r(o["share"]), "boxiness": _r(o["score"])}
                                 for nm, o in list(r["by_object"].items())[:worst] if o["score"] > 0.01},
@@ -101,7 +91,7 @@ class Form(Metric):
             "hard_edge_deg": "dihedral angle above which an edge is hard (default 65)",
             "worst": "how many parts, objects and panels the detail lists (default 6)"}
     uses_frames = False
-    default_max = 0.25
+    default_max = FM.HERO_MAX
 
     def needs(self, args, ctx, need):
         props, objects = _list(args.get("prop")), _list(args.get("objects"))
@@ -120,9 +110,7 @@ class Form(Metric):
             raise CheckError("form: no visible geometry (colliders and objects hidden from render do not count)")
         space = "world"
         if len(mesh["roots"]) == 1:                     # prop frame: rigid inverse of the root (scale stays metres)
-            M = next(iter(mesh["roots"].values()))
-            R = M[:3, :3] / np.maximum(np.linalg.norm(M[:3, :3], axis=0), 1e-12)
-            V, space = (V - M[:3, 3]) @ R, "prop"
+            V, space = FM.to_frame(V, next(iter(mesh["roots"].values()))), "prop"
         patterns = _list(args.get("exempt")) + _card_exempt(ctx, st["props"])
         exempt = [n for n in names if n in mesh["exempt"] or _matches(n, patterns)]
         worst = int(args.get("worst", 6))
