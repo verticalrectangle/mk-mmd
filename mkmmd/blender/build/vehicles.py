@@ -9,7 +9,8 @@
   height = 0.0                  extra height above the path (m)
   roll = 1.2, pitch = 0.8       body roll / pitch (deg per g of lateral / longitudinal acceleration)
   wheelbase = 2.6, steer_ratio = 14.0
-Card keys used: "wheels": [{object, radius, axis = [1, 0, 0] (local spin axis)}], "steering": {object, axis =
+Card keys used: "wheels": [{object, radius, axis = [1, 0, 0] (local spin axis pointing to the car's left: the wheel
+rolls forward)}], "steering": {object, axis =
 [0, 0, 1] (local), ratio}. The steering object turns by atan(wheelbase * curvature) * ratio; the hands gripping it
 follow when their IK targets ride on it (pose stage, grip on a ring with an object)."""
 import math
@@ -80,10 +81,10 @@ def run(ctx):
                 raise BuildError(f"vehicle {name!r}: wheel object {w['object']!r} missing")
             ob.rotation_mode = "QUATERNION"
             q0 = ob.rotation_quaternion.copy()
-            ax = Vector(w.get("axis", (1, 0, 0))).normalized()
-            ang = s / float(w["radius"])
+            ax = Vector(w.get("axis", (1, 0, 0))).normalized()  # local axis pointing to the car's left (+X)
+            ang = s / float(w["radius"])                        # + about the left axis: the tyre top moves forward (-Y)
             K.key_vec(ob, "rotation_quaternion", frames,
-                      K.continuous([tuple(q0 @ Quaternion(ax, -a)) for a in ang]), interp="LINEAR")
+                      K.continuous([tuple(q0 @ Quaternion(ax, a)) for a in ang]), interp="LINEAR")
         # steering wheel follows the road's curvature
         sw = prop.card.get("steering")
         if sw:
