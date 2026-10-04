@@ -235,7 +235,7 @@ def test_the_floor_holds_a_blown_strand_lowered_onto_it_and_it_lies_along_the_fl
     F = 24
     drop = np.stack([0 * np.arange(F), 0 * np.arange(F), -0.15 * np.arange(F) / (F - 1)], 1)       # anchor sinks 15 cm
     poses = {0: (drop, np.tile([1.0, 0, 0, 0], (F, 1)))}
-    wind = strands.Wind({"direction": [1, 0, 0], "speed": 3.0})        # a straight, inextensible strand cannot fold alone
+    wind = strands.Wind({"direction": [1, 0, 0], "speed": 3.0})        # a straight strand cannot fold alone
     free = run(scene(straight_rig(), F, poses=poses), wind=wind)
     shapes = geom.Shapes()
     shapes.floor_z = 1.15
@@ -557,3 +557,177 @@ def test_the_command_line_refuses_bad_jobs_with_a_usage_code(tmp_path, capsys):
              rest_p=np.zeros((0, 3)), spec=np.array(json.dumps(spec)))
     assert strands.main([str(inp), str(tmp_path / "out.npz")]) == 2
     assert "spec.sources lacks" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- lateral coupling of sheet-like families (skirts)
+def ring_rig(n=8, nb=3, radius=0.12, seg=0.08, shared=True, family="skirt", angles=None):
+    """A skirt: n chains of nb bones hanging straight down from a ring of roots (radius, height TOP) around the z axis,
+    all from one anchor bone `hips` (shared) or from one anchor bone each."""
+    angles = 2.0 * np.pi * np.arange(n) / n if angles is None else np.asarray(angles, float)
+    bones, chains = {"hips": {"head": [0, 0, TOP]}}, []
+    for c, th in enumerate(angles):
+        x, y = radius * np.cos(th), radius * np.sin(th)
+        anchor = "hips" if shared else f"anchor{c}"
+        bones.setdefault(anchor, {"head": [x, y, TOP]})
+        names = [f"s{c}b{i}" for i in range(nb)]
+        for i, name in enumerate(names):
+            bones[name] = {"head": [x, y, TOP - i * seg]}
+        chains.append({"family": family, "root": names[0], "anchor": anchor, "bones": names,
+                       "parents": list(range(-1, nb - 1)), "ends": [[x, y, TOP - (i + 1) * seg] for i in range(nb)],
+                       "body_radius": [0.02] * nb})
+    return {"bones": bones, "chains": chains, "bodies": []}
+
+
+def ring_scene(rig, F, shapes=None, poses=None):
+    """Like scene() but every anchor bone is its own source (an object frame, identity at rest); poses maps an anchor
+    bone to (positions (F,3), quaternions (F,4))."""
+    chains = geom.Chains(rig, None)
+    shapes = geom.Shapes() if shapes is None else shapes
+    src = {a: shapes.src("object", "", a) for a in sorted(set(chains.anchor))}
+    S = len(shapes.sources)
+    pos, quat = np.zeros((F, S, 3)), np.zeros((F, S, 4))
+    quat[..., 0] = 1.0
+    for a, (p, q) in (poses or {}).items():
+        pos[:, src[a]], quat[:, src[a]] = p, q
+    return dict(chains=chains, shapes=shapes, src_pos=pos, src_quat=quat, rest_R=np.tile(np.eye(3), (S, 1, 1)),
+                rest_p=np.zeros((S, 3)), anchor_src=np.array([src[a] for a in chains.anchor]), rig=rig, F=F)
+
+
+def circle(angles_deg, radius=0.12):
+    th = np.radians(angles_deg)
+    root = np.stack([radius * np.cos(th), radius * np.sin(th), np.full(len(th), TOP)], 1)
+    return root, root - np.array([0.0, 0.0, 0.3])
+
+
+def test_ring_neighbours_follow_the_angle_around_the_skirt_and_close_a_full_ring():
+    root, tip = circle(np.arange(8) * 45.0)
+    assert strands.ring_neighbours(root, tip) == [(0, 1), (0, 7), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7)]
+    order = np.random.default_rng(3).permutation(8)                     # the chains' order in the rig does not matter
+    got = strands.ring_neighbours(root[order], tip[order])
+    assert got == sorted({tuple(sorted((int(np.where(order == a)[0][0]), int(np.where(order == b)[0][0]))))
+                          for a, b in strands.ring_neighbours(root, tip)})
+    assert strands.ring_neighbours(*circle([0.0, 120.0, 240.0])) == [(0, 1), (0, 2), (1, 2)]      # three close up too
+
+
+def test_ring_neighbours_leave_a_slit_an_arc_and_distant_chains_open():
+    keep = [a for a in np.arange(12) * 30.0 if a not in (0.0, 30.0)]            # a 90 deg slit in a 12-chain skirt
+    pairs = strands.ring_neighbours(*circle(keep))
+    assert len(pairs) == 9 and (0, 9) not in pairs                              # first and last chain are not tied
+    assert len(strands.ring_neighbours(*circle([0.0, 30.0, 60.0, 90.0, 120.0]))) == 4          # an arc: n - 1 links
+    assert strands.ring_neighbours(*circle([0.0, 180.0])) == []                 # opposite sides of the body
+    assert strands.ring_neighbours(*circle([0.0, 40.0])) == []                  # two chains are no ring
+    assert strands.ring_neighbours(*circle([10.0])) == []
+
+
+def test_ring_neighbours_keep_groups_apart():
+    root, tip = circle(np.concatenate([np.arange(6) * 60.0, np.arange(6) * 60.0 + 7.0]))
+    pairs = strands.ring_neighbours(root, tip, group=[0] * 6 + [1] * 6)
+    assert len(pairs) == 12 and all((a < 6) == (b < 6) for a, b in pairs)
+
+
+def test_lateral_defaults_couple_skirts_only_and_are_validated():
+    assert strands.resolve_params(["skirt"])["skirt"]["lateral"] > 0
+    assert all(strands.resolve_params([f])[f]["lateral"] == 0.0 for f in strands.FAMILY_DEFAULTS if f != "skirt")
+    assert strands.resolve_params(["hair"], {"hair": {"lateral": 0.3}})["hair"]["lateral_collide"] == 1.0
+    for bad in ({"lateral": 1.5}, {"lateral": -0.1}, {"lateral_collide": 0.5}):
+        with pytest.raises(ValueError):
+            strands.resolve_params(["skirt"], {"skirt": bad})
+
+
+def test_without_lateral_coupling_chains_do_not_know_each_other():
+    F = 16
+    ramp = np.zeros((F, 3))
+    ramp[:, 1] = np.linspace(0.0, 0.08, F)                                  # chain 0's anchor slides to its neighbour
+    poses = {"anchor0": (ramp, np.tile([1.0, 0, 0, 0], (F, 1)))}
+    off = {"skirt": {"lateral": 0.0}}
+    ring = run(ring_scene(ring_rig(shared=False), F, poses=poses), off)
+    alone = run(ring_scene(ring_rig(n=1, shared=False), F, poses=poses), off)
+    still = run(ring_scene(ring_rig(shared=False), F), off)
+    assert ring.links.shape == (0, 2)
+    assert np.array_equal(ring.x[:, :3], alone.x)                           # chain 0 behaves as if it hung alone
+    assert np.array_equal(ring.x[:, 3:], still.x[:, 3:])                    # and the others do not notice it moving
+    coupled = run(ring_scene(ring_rig(shared=False), F, poses=poses))
+    assert coupled.links.shape == (8 * 3, 2) and np.abs(coupled.x[:, 21:] - ring.x[:, 21:]).max() > 1e-3
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_lateral_ties_drag_the_neighbours_along_and_keep_lengths_exact(engine):
+    F = 21
+    ramp = np.zeros((F, 3))
+    ramp[:, 1] = np.linspace(0.0, 0.08, F)                                  # chain 0's anchor slides 8 cm toward +y
+    q = np.tile([1.0, 0, 0, 0], (F, 1))
+    tips = {}
+    for lateral in (0.0, 0.8):
+        sc = ring_scene(ring_rig(shared=False), F, poses={"anchor0": (ramp, q)})
+        res = run(sc, {"skirt": {"lateral": lateral}}, engine=engine)
+        tips[lateral] = res.x[:, [2, 5, 8, 11, 14, 17, 20, 23][::1]][:, :, :]
+        seg = np.linalg.norm(res.x[:, 1:] - res.x[:, :-1], axis=2)[:, [i for i in range(23) if i % 3 != 2]]
+        assert np.abs(seg / 0.08 - 1.0).max() < 1e-9                        # still inextensible with the ties
+    moved = lambda t: np.linalg.norm(t[-1, 7] - t[0, 7])                     # the tip of chain 7, next to chain 0
+    assert moved(tips[0.0]) < 1e-3 < 0.01 < moved(tips[0.8])
+    gap = lambda t: np.linalg.norm(t[-1, 0] - t[-1, 7])                      # chain 0 to its neighbour: its tie
+    assert gap(tips[0.8]) < gap(tips[0.0]) - 0.01
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_the_cloth_between_chains_is_pushed_out_of_a_pillar_its_chord_cuts(engine):
+    """Three strands hang against a pillar 60 deg apart: each touches it, but the straight cloth between two of them
+    cuts 14 mm deep into it. The midpoints must push the pair out; the report counts the cloth too."""
+    shapes = geom.Shapes()
+    M = np.eye(4)
+    M[2, 3] = TOP - 0.5
+    shapes.add("cylinder", ("world", "", ""), "pillar", M=M, R=0.1, hh=0.9, rnd=0.0)
+    rig = ring_rig(n=3, nb=4, radius=0.1105, angles=np.radians([0.0, 60.0, 120.0]))
+    deep = {}
+    for collide in (0.0, 1.0):
+        res = run(ring_scene(rig, 12, shapes), {"skirt": {"lateral": 0.6, "lateral_collide": collide}}, engine=engine)
+        deep[collide] = res.pen[:, 0].max()
+    assert res.links.shape == (2 * 4, 2)                                    # two links of four rows (an arc, not a ring)
+    assert deep[0.0] > 0.012                                                # the chord cuts in, and the report says so
+    assert deep[1.0] < 0.004                                                # pushed out
+
+
+def test_a_pair_whose_cloth_overlaps_a_body_at_rest_does_not_collide_with_it():
+    """A sphere that clears every particle at rest but pokes through the cloth between them is the author's own overlap:
+    the pair skips it, as a chain skips the bodies it overlaps at rest."""
+    rig = ring_rig(n=8, nb=3)
+    rig["bodies"] = [{"bone": "hips", "group": 0, "no_collide": [], "geom": {"kind": "sphere", "c": [0, 0, TOP - 0.1],
+                                                                            "R": 0.105}}]
+    shapes = geom.Shapes()
+    chains = geom.Chains(rig, None)
+    geom.model_shapes(shapes, rig, "", skip_bones=chains.chain_bones)
+    sc = ring_scene(rig, 4, shapes)
+    sc["rest_p"][shapes.sources.index(("bone", "", "hips"))] = [0.0, 0.0, 0.0]
+    args = (sc["chains"], shapes, sc["src_pos"], sc["src_quat"], sc["rest_R"], sc["rest_p"], sc["anchor_src"])
+    model = strands._Model(*args, None, (0, 3), rig, 30.0, 5, None, False, geom.ANCHOR_FREE)
+    assert model.enable["sphere"].all()          # a coupled sheet collides with the body it hangs from near its roots
+    row0 = model.link_a % 3 == 0                                             # the links of the first row of every chain
+    low = model.link_a % 3 == 2                                              # the last row of every chain
+    assert not model.link_enable["sphere"][~low].any()                       # the cloth of the upper rows overlaps it
+    assert model.link_enable["sphere"][low].all()                            # the cloth lower down does not: collides
+    assert row0.sum() == 8
+    loose = strands._Model(*args, {"skirt": {"lateral": 0.0}}, (0, 3), rig, 30.0, 5, None, False, geom.ANCHOR_FREE)
+    assert not loose.enable["sphere"].any()      # uncoupled chains keep the rule: the anchor's body is skipped
+
+
+@needs_numba
+def test_numba_engine_reproduces_the_numpy_engine_with_lateral_links(monkeypatch):
+    shapes = geom.Shapes()
+    M = np.eye(4)
+    M[:3, 3] = [0.1, 0.1, TOP - 0.2]
+    shapes.add("cylinder", ("world", "", ""), "post", M=M, R=0.05, hh=0.3, rnd=0.01)
+    shapes.add("sphere", ("world", "", ""), "ball", c=[-0.14, 0.0, TOP - 0.12], R=0.06)
+    shapes.floor_z = TOP - 0.3
+    F = 25
+    t = np.arange(F) / 30.0
+    swing = np.array([rot_z(25.0 * np.sin(6 * s)) for s in t])
+    hips = (np.stack([0.03 * np.sin(8 * t), 0 * t, 0 * t], 1), swing)
+    sc = ring_scene(ring_rig(n=6, nb=4, shared=True), F, shapes, poses={"hips": hips})
+    wind = strands.Wind({"direction": [1, 0.4, 0], "speed": 3.0, "gust": 1.5, "turbulence": 1.0, "seed": 2})
+    a = run(sc, wind=wind, engine="numpy")
+    b = run(sc, wind=wind, engine="numba", threads=1)
+    c = run(sc, wind=wind, engine="numba", threads=4)
+    assert a.links.shape[0] == 6 * 4 and np.array_equal(a.links, b.links)
+    assert np.array_equal(b.x, c.x) and np.array_equal(b.pen, c.pen)
+    assert np.abs(a.x - b.x).max() < 1e-7 and np.abs(a.D - b.D).max() < 1e-6 and np.abs(a.pen - b.pen).max() < 1e-7
+    assert a.pen[:, 0].max() > 1e-4                                          # the skirt does touch the shapes

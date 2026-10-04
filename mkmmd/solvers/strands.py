@@ -28,6 +28,18 @@ Model (position-based strands)
              tips; the tension that shortened a child also pulls its parent (dynamic FTL, Mueller et al. 2012: parent
              velocity -= FTL_DAMP * the child's move / dt), which keeps the swing: a strand in a 22 m/s carrier's wind is
              half as jerky (median) and four times calmer at the 95th percentile than with FTL_DAMP = 0.
+  sheets     `lateral` (0..1, default 0.5 for skirts, 0 elsewhere) ties the chains of a sheet-like family into a cloth:
+             neighbouring chains are found from the rest positions (ring_neighbours: the chains of a family ordered by
+             the angle of their roots around the skirt's axis, a ring when no slit interrupts it), the particles of the
+             same row of neighbours are held at their rest distance (a distance constraint per iteration removing
+             `lateral` of the error: the cloth stretches and bunches under contact instead of splaying apart or
+             collapsing), and the cloth between the chains, sampled like a chain's own segments at the midpoints of
+             each pair of segments, is pushed out of the shapes by the two particles of the pair (`lateral_collide`,
+             default 1): the visible surface that skinning interpolates between chains no longer sinks into a seat or a
+             thigh. A sheet also collides with the body it hangs from near its roots (`anchor_free` 0 instead of the
+             global zone, unless set per family). A midpoint skips what either chain skips and what it overlaps at
+             rest. Linked chains advance together (one thread per ring); with lateral 0 chains stay independent and
+             results are those of the uncoupled solver. Penetration (pen, worst) includes the cloth midpoints.
   output     world rotation deltas D (bone world = D @ rest), keyed bone-locally by `local_quats`.
   engines    numpy: whole chains at once, level by level (the reference; minutes for 160 bones x 900 frames x 10
              substeps). numba (pip install 'mk-mmd[fast]', used when present): one chain at a time in compiled loops,
@@ -49,6 +61,9 @@ Model (position-based strands)
     friction    1/s                  velocity damping while touching something
     wind_drag   1/s (default drag)   how strongly the air pushes the strand: it reaches wind_drag / drag of the air
                                      speed
+    lateral     0..1 (skirt 0.5)     tie stiffness of neighbouring chains (above); 0 = independent chains
+    lateral_collide  0 | 1           push the cloth between tied chains out of the shapes (default 1)
+    anchor_free m (default global)   zone near the roots where the anchor's body is skipped; 0 for tied sheets
 Wind (`Wind`)
   The air velocity at a point is: constant wind + carrier_vel * (1 - exposure) + gust + turbulence. `carrier_vel` is the
   world velocity of the vehicle the characters ride in; exposure is the share of its motion the air does NOT follow (0:
@@ -95,7 +110,7 @@ try:                                                 # pip install mk-mmd[fast]
 except Exception:                                    # not installed, or not built for this numpy
     HAVE_NUMBA = False
 
-VERSION = 2                                          # bump when results change (cache keys)
+VERSION = 3                                          # bump when results change (cache keys)
 GRAVITY = np.array([0.0, 0.0, -9.81])
 SMOOTH = 0.01                                        # soft-union width (m): creases between shapes fill this much
 ITERS = 4                                            # constraint + collision iterations per substep
@@ -108,8 +123,11 @@ LEVER_CAP = 1.5                                      # push multiplier for point
 CONTACT_EPS = 1e-7                                   # a push longer than this (m) counts as touching
 REACH = 25.0 * SMOOTH                               # a shape whose surface is this much (m) farther than the nearest
                                                     # weighs < e^-25 in the soft union: skipped by the numba kernels
+RING_GAP = 2.5                                       # neighbouring chains: roots at most this x the median gap apart
+RING_MAX_GAP = 2.2                                   # ... and at most this many radians (126 deg) apart
 
-PARAM_KEYS = ("sag", "drag", "zeta", "radius", "radius_max", "friction", "wind_drag")
+PARAM_KEYS = ("sag", "drag", "zeta", "radius", "radius_max", "friction", "wind_drag", "lateral", "lateral_collide",
+              "anchor_free")
 FAMILY_DEFAULTS = {
     # tuned on a seated close-up: calm back hair (jitter ratio 0.38), lively side locks (0.68), stiff bangs and ears
     "ears":       dict(sag=(0.6, 1.2), drag=5.0, zeta=1.0, radius=0.45, radius_max=0.020, friction=10.0),
@@ -121,7 +139,8 @@ FAMILY_DEFAULTS = {
     "braid":      dict(sag=(15.0, 60.0), drag=8.0, zeta=0.9, radius=0.5, radius_max=0.022, friction=25.0),
     "hair":       dict(sag=(15.0, 70.0), drag=6.0, zeta=0.8, radius=0.5, radius_max=0.020, friction=20.0),
     "tail":       dict(sag=(10.0, 45.0), drag=4.0, zeta=0.6, radius=0.5, radius_max=0.040, friction=15.0),
-    "skirt":      dict(sag=(4.0, 14.0), drag=4.0, zeta=0.9, radius=0.5, radius_max=0.030, friction=12.0),
+    "skirt":      dict(sag=(4.0, 14.0), drag=4.0, zeta=0.9, radius=0.5, radius_max=0.030, friction=12.0,
+                       lateral=0.5),
     "ribbon":     dict(sag=(20.0, 80.0), drag=3.5, zeta=0.5, radius=0.5, radius_max=0.010, friction=10.0),
     "breasts":    dict(sag=(1.0, 2.0), drag=8.0, zeta=1.0, radius=0.5, radius_max=0.050, friction=10.0),
     "sleeve":     dict(sag=(6.0, 25.0), drag=5.0, zeta=0.8, radius=0.5, radius_max=0.030, friction=15.0),
@@ -146,17 +165,65 @@ def resolve_params(families, params=None):
         if bad:
             raise ValueError(f"strands: unknown parameter(s) {bad} for {fam} (have {list(PARAM_KEYS)})")
         p.update(user)
+        p.setdefault("lateral", 0.0)
+        p.setdefault("lateral_collide", 1.0)
+        if p.get("anchor_free") is None:                # a coupled sheet also collides with the body it hangs from
+            p["anchor_free"] = 0.0 if p.get("lateral", 0.0) > 0 else None
         sag = np.broadcast_to(np.asarray(p["sag"], float), (2,))
         p["sag"] = (float(sag[0]), float(sag[1]))
         p["wind_drag"] = p["drag"] if p.get("wind_drag") is None else p["wind_drag"]
         for key in PARAM_KEYS[1:]:
-            p[key] = float(p[key])
+            if p.get(key) is not None:
+                p[key] = float(p[key])
         if min(p["sag"]) < 0 or min(p["drag"], p["zeta"], p["friction"], p["wind_drag"]) < 0 or \
-                min(p["radius"], p["radius_max"]) <= 0:
-            raise ValueError(f"strands: {fam}: sag, drag, zeta, friction, wind_drag must be >= 0 and radius, "
-                             f"radius_max > 0, got {p}")
+                min(p["radius"], p["radius_max"]) <= 0 or not 0.0 <= p["lateral"] <= 1.0 or \
+                p["lateral_collide"] not in (0.0, 1.0) or (p["anchor_free"] is not None and p["anchor_free"] < 0):
+            raise ValueError(f"strands: {fam}: sag, drag, zeta, friction, wind_drag must be >= 0, radius, radius_max "
+                             f"> 0, lateral within 0..1 and lateral_collide 0 or 1, got {p}")
         out[fam] = p
     return out
+
+
+def ring_neighbours(root, tip, group=None, gap_factor=RING_GAP):
+    """Pairs (a, b), a < b, of neighbouring chains of a sheet-like family (a skirt), from the rest positions of the
+    chains' roots (n,3) and tips (n,3). The chains of one group (group: (n,) labels, default all) are ordered by the
+    angle of their roots around the group's axis (the mean root-to-tip direction) through the centre of the circle the
+    roots lie on (their centroid when no sane circle fits); consecutive chains are neighbours unless the angular gap
+    between them is more than gap_factor times the median gap
+    (a slit) or RING_MAX_GAP. The last links back to the first under the same test: a full skirt closes into a ring.
+    A group of fewer than three chains has no neighbours."""
+    root, tip = np.asarray(root, float).reshape(-1, 3), np.asarray(tip, float).reshape(-1, 3)
+    group = np.zeros(len(root), int) if group is None else np.asarray(group)
+    pairs = set()
+    for g in np.unique(group):
+        ids = np.where(group == g)[0]
+        if len(ids) < 3:
+            continue
+        d = tip[ids] - root[ids]
+        d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-12)
+        axis = d.mean(0)
+        axis = axis / np.linalg.norm(axis) if np.linalg.norm(axis) > 1e-6 else np.array([0.0, 0.0, -1.0])
+        u = np.cross(axis, np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0]))
+        u /= np.linalg.norm(u)
+        w = np.cross(axis, u)
+        rel = root[ids] - root[ids].mean(0)
+        pts = np.stack([rel @ u, rel @ w], 1)
+        mid = np.zeros(2)                                          # the circle centre: a slit must not shift the angles
+        if len(ids) >= 3:
+            sol, _, rank, _ = np.linalg.lstsq(np.column_stack([2.0 * pts, np.ones(len(ids))]), (pts ** 2).sum(1),
+                                              rcond=None)
+            if rank == 3 and np.linalg.norm(sol[:2]) <= 3.0 * max(float(np.abs(pts).max()), 1e-9):
+                mid = sol[:2]
+        ang = np.arctan2(pts[:, 1] - mid[1], pts[:, 0] - mid[0])
+        order = np.argsort(ang, kind="stable")
+        a = ang[order]
+        gaps = np.diff(np.append(a, a[0] + 2.0 * np.pi))          # gap k: order[k] -> order[k + 1]; the last wraps round
+        limit = min(gap_factor * float(np.median(gaps)), RING_MAX_GAP)
+        for k in range(len(ids)):
+            if gaps[k] <= limit + 1e-9:
+                i, j = int(ids[order[k]]), int(ids[order[(k + 1) % len(ids)]])
+                pairs.add((min(i, j), max(i, j)))
+    return sorted(pairs)
 
 
 # ---------------------------------------------------------------- wind
@@ -425,8 +492,17 @@ class _Model:
         self.own = np.repeat(np.arange(N), len(self.samples))
         self.frac = np.tile(self.samples, N)
         self.rr = self.rad[self.own]
-        enable = geom.enable_matrix(chains, P, rig, geom.world(P, self.rest_R, self.rest_p), radius=self.rad,
-                                    use_masks=use_masks, anchor_free=anchor_free)
+        rest_W = geom.world(P, self.rest_R, self.rest_p)
+        af = np.array([anchor_free if pr[f]["anchor_free"] is None else pr[f]["anchor_free"] for f in fam], float)
+        enable = {}
+        for v in dict.fromkeys(af.tolist()):            # the zone near the root where the anchor's body is skipped
+            ev = geom.enable_matrix(chains, P, rig, rest_W, radius=self.rad, use_masks=use_masks, anchor_free=v)
+            rows = af == v
+            for kind, E in ev.items():
+                if kind not in enable:
+                    enable[kind] = E if rows.all() else np.ones_like(E)
+                if not rows.all():
+                    enable[kind][rows] = E[rows]
         self.enable = enable
         self.enable_u = np.concatenate([enable[k] for k in geom.KINDS if k in enable], axis=1) if enable else \
             np.zeros((N, 0), bool)
@@ -439,6 +515,60 @@ class _Model:
         self.labels.append("floor")
         self.anchor_pos = self.src_pos[:, self.a_src]
         self.anchor_rot = geom.quat_to_mat(self.src_quat[:, self.a_src].reshape(-1, 4)).reshape(F, N, 3, 3)
+        # ---- lateral coupling of sheet-like families: particles of the same row of neighbouring chains are tied
+        lat, latc = get("lateral"), get("lateral_collide")
+        self.chain_lists = []
+        for r in self.roots:
+            b = [int(r)]
+            while self.child[b[-1]] >= 0:
+                b.append(int(self.child[b[-1]]))
+            self.chain_lists.append(b)
+        self.chain_of = np.zeros(N, int)
+        for c, b in enumerate(self.chain_lists):
+            self.chain_of[b] = c
+        ids = np.where(np.array([lat[b[0]] > 0 for b in self.chain_lists], bool))[0]
+        fam_code = {f: i for i, f in enumerate(sorted(set(self.family)))}
+        pairs = ring_neighbours(self.head[[self.chain_lists[c][0] for c in ids]],
+                                self.end[[self.chain_lists[c][-1] for c in ids]],
+                                [fam_code[self.family[self.chain_lists[c][0]]] for c in ids]) if len(ids) > 1 else []
+        la, lb = [], []
+        for ca, cb in pairs:
+            A, B = self.chain_lists[ids[ca]], self.chain_lists[ids[cb]]
+            for i in range(min(len(A), len(B))):
+                la.append(A[i])
+                lb.append(B[i])
+        la, lb = np.array(la, int), np.array(lb, int)
+        colour, used = np.zeros(len(la), int), {}                     # edge colouring: a colour shares no particle
+        for k in range(len(la)):
+            taken = used.setdefault(int(la[k]), set()) | used.setdefault(int(lb[k]), set())
+            colour[k] = next(c for c in range(len(taken) + 1) if c not in taken)
+            used[int(la[k])].add(int(colour[k]))
+            used[int(lb[k])].add(int(colour[k]))
+        order = np.argsort(colour, kind="stable")
+        la, lb, colour = la[order], lb[order], colour[order]
+        self.link_a, self.link_b = la, lb
+        self.nlinks = nl = len(la)
+        self.link_k = np.minimum(lat[la], lat[lb])
+        self.link_mid = np.minimum(latc[la], latc[lb]) > 0
+        self.link_runs = [(int(np.searchsorted(colour, c)), int(np.searchsorted(colour, c, "right")))
+                          for c in range(int(colour.max()) + 1)] if nl else []
+        self.link_d0 = np.linalg.norm(self.end[la] - self.end[lb], axis=1)
+        self.link_rr = 0.5 * (self.rad[la] + self.rad[lb])
+        self.link_own = np.repeat(np.arange(nl), len(self.samples))
+        self.link_frac = np.tile(self.samples, nl)
+        self.link_enable = {}                       # a link's midpoints skip what either chain skips, and rest overlaps
+        if nl and enable:
+            Hr, Pr = 0.5 * (self.head[la] + self.head[lb]), 0.5 * (self.end[la] + self.end[lb])
+            Xr = Hr[self.link_own] + self.link_frac[:, None] * (Pr[self.link_own] - Hr[self.link_own])
+            pen_rest = geom.penetration(Xr, self.link_rr[self.link_own], geom.world(P, self.rest_R, self.rest_p), None)
+            for kind, E in enable.items():
+                E = E[la] & E[lb]
+                for k in range(P[kind]["n"]):
+                    if P[kind]["model"][k] is not None:
+                        E[(pen_rest[kind][0][:, k] > 0).reshape(nl, -1).any(1), k] = False
+                self.link_enable[kind] = E
+        self.link_enable_u = np.concatenate([self.link_enable[k] for k in geom.KINDS if k in self.link_enable], axis=1) \
+            if self.link_enable else np.zeros((nl, 0), bool)
 
     def block(self, ks, taus, ts, settle=False):
         """Kinematics at substeps (frame ks[i] + taus[i], clock ts[i] s). settle: pose held, the air taken in the
@@ -529,27 +659,34 @@ class _NumpyEngine:
             p[I] = new
         return corr
 
-    def points(self, p, H0):
+    def heads(self, p, H0):
+        """(N, 3) where every segment starts: its chain's world head, or its parent's particle."""
         M = self.M
         H = np.empty_like(p)
         H[M.roots] = H0
         H[M.has_par] = p[M.par[M.has_par]]
+        return H
+
+    def points(self, p, H0):
+        M = self.M
+        H = self.heads(p, H0)
         return H[M.own] + M.frac[:, None] * (p[M.own] - H[M.own])
 
-    def collide(self, p, H0, W):
-        """Points along every segment against the union of all enabled shapes. Pushes use a smooth union (log-sum-exp
-        soft minimum of the signed distances, k = SMOOTH): its normal is a continuous blend, so a lock lying in the
-        crease between overlapping body capsules settles instead of being bounced from one capsule into the other."""
-        M, N = self.M, self.M.N
-        X = self.points(p, H0)
+    def union_push(self, X, rr, own, frac, enable, n, W):
+        """The collision push of n segments from their sample points X (n * samples, 3) of radius rr against the union
+        of all enabled shapes (own: the segment of each point, enable: per kind (segments, shapes)). Pushes use a smooth
+        union (log-sum-exp soft minimum of the signed distances, k = SMOOTH): its normal is a continuous blend, so a
+        lock lying in the crease between overlapping body capsules settles instead of being bounced from one capsule
+        into the other. Returns the push (n, 3) of the hardest-pushed sample and whether it touches."""
+        M = self.M
         Ss, Ns = [], []
-        for kind, (pen, n) in geom.penetration(X, M.rr, W, M.floor_z).items():
-            if kind in M.enable:
-                pen = np.where(M.enable[kind][M.own], pen, -1.0)
+        for kind, (pen, nrm_k) in geom.penetration(X, rr, W, M.floor_z).items():
+            if kind in enable:
+                pen = np.where(enable[kind][own], pen, -1.0)
             Ss.append(-pen)
-            Ns.append(n)
+            Ns.append(nrm_k)
         if not Ss:
-            return np.zeros_like(p), np.zeros(N, bool)
+            return np.zeros((n, 3)), np.zeros(n, bool)
         S, Nn = np.concatenate(Ss, 1), np.concatenate(Ns, 1)
         smin = S.min(1)
         e = np.exp(-(S - smin[:, None]) / SMOOTH)
@@ -557,12 +694,46 @@ class _NumpyEngine:
         nrm = np.einsum("mk,mkj->mj", e, Nn)
         nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-12)[:, None]
         best = np.maximum(-soft, 0.0)
-        lever = np.minimum(1.0 / M.frac, LEVER_CAP)                                 # points near the root: capped lever
-        push = (nrm * (best * lever)[:, None]).reshape(N, len(M.samples), 3)
+        lever = np.minimum(1.0 / frac, LEVER_CAP)                                   # points near the root: capped lever
+        push = (nrm * (best * lever)[:, None]).reshape(n, len(M.samples), 3)
         mag = np.linalg.norm(push, axis=2)
         j = np.argmax(mag, axis=1)
-        m = mag[np.arange(N), j]
-        return push[np.arange(N), j] * (np.minimum(m, PUSH_CAP) / np.maximum(m, 1e-12))[:, None], m > CONTACT_EPS
+        m = mag[np.arange(n), j]
+        return push[np.arange(n), j] * (np.minimum(m, PUSH_CAP) / np.maximum(m, 1e-12))[:, None], m > CONTACT_EPS
+
+    def collide(self, p, H0, W):
+        """Points along every segment against the union of all enabled shapes (union_push)."""
+        M = self.M
+        return self.union_push(self.points(p, H0), M.rr, M.own, M.frac, M.enable, M.N, W)
+
+    def lateral(self, p):
+        """Distance constraints between the linked particles of neighbouring chains (stiffness link_k: the share of the
+        error removed per call), Gauss-Seidel over the colour classes."""
+        M = self.M
+        for s, e in M.link_runs:
+            a, b = M.link_a[s:e], M.link_b[s:e]
+            dv = p[b] - p[a]
+            dist = np.linalg.norm(dv, axis=1)
+            f = (0.5 * M.link_k[s:e] * (dist - M.link_d0[s:e]) / np.maximum(dist, 1e-12))[:, None]
+            p[a] += dv * f
+            p[b] -= dv * f
+
+    def link_points(self, p, H0):
+        """Sample points of the cloth between linked chains: the segments joining the midpoints of both heads and of
+        both particles, sampled like a chain's own segments."""
+        M = self.M
+        H = self.heads(p, H0)
+        Hm = 0.5 * (H[M.link_a] + H[M.link_b])
+        Pm = 0.5 * (p[M.link_a] + p[M.link_b])
+        return Hm[M.link_own] + M.link_frac[:, None] * (Pm[M.link_own] - Hm[M.link_own])
+
+    def collide_links(self, p, H0, W):
+        """The cloth midpoints of the links against the shapes: the push (nlinks, 3) each pair of particles shares."""
+        M = self.M
+        push, c = self.union_push(self.link_points(p, H0), M.link_rr[M.link_own], M.link_own, M.link_frac,
+                                  M.link_enable, M.nlinks, W)
+        push[~M.link_mid] = 0.0
+        return push, c & M.link_mid
 
     def substep(self, blk, r, decay):
         M, dt = self.M, self.M.dt
@@ -576,13 +747,21 @@ class _NumpyEngine:
         self.shape_pass(p, H0, Da, True)
         contact = np.zeros(M.N, bool)
         pushed = np.zeros_like(p)
-        for _ in range(ITERS):                          # lengths, then collisions
+        for _ in range(ITERS):                          # lengths, lateral ties, collisions
             for _ in range(M.sweeps):
                 self.relax(p, H0)
+            if M.nlinks:
+                self.lateral(p)
             push, c = self.collide(p, H0, W)
             contact |= c
             p += push
             pushed += push
+            if M.nlinks and M.link_mid.any():           # the cloth between chains is pushed out by its two particles
+                push, c = self.collide_links(p, H0, W)
+                for ends in (M.link_a, M.link_b):
+                    np.add.at(p, ends, push)
+                    np.add.at(pushed, ends, push)
+                    contact[ends[c]] = True
         corr = self.project(p, H0)                      # exact lengths: the bones keyed from these frames render this
         self.shape_pass(p, H0, Da, False)               # final frames and targets from the settled positions
         vn = (p - self.x) / dt
@@ -614,12 +793,22 @@ class _NumpyEngine:
 
     def record(self, f, blk, r):
         M, out = self.M, self.out
+        W = _world_row(blk.W, r)
         X = self.points(self.x, blk.H0[r])
-        pen, sid = geom.measure(X, M.rr, _world_row(blk.W, r), M.floor_z, M.P, M.enable, M.own)
+        pen, sid = geom.measure(X, M.rr, W, M.floor_z, M.P, M.enable, M.own)
         per, who = pen.reshape(M.N, -1), sid.reshape(M.N, -1)
         c = np.argmax(per, 1)
         out.dep[f], out.who[f] = per[np.arange(M.N), c], who[np.arange(M.N), c]
         out.xs[f], out.Ds[f] = self.x, self.D
+        if M.nlinks:                                    # the cloth between chains counts for its first particle
+            pen, sid = geom.measure(self.link_points(self.x, blk.H0[r]), M.link_rr[M.link_own], W, M.floor_z, M.P,
+                                    M.link_enable, M.link_own)
+            per, who = pen.reshape(M.nlinks, -1), sid.reshape(M.nlinks, -1)
+            c = np.argmax(per, 1)
+            deep, which = per[np.arange(M.nlinks), c], who[np.arange(M.nlinks), c]
+            for k in range(M.nlinks):
+                if deep[k] > out.dep[f, M.link_a[k]]:
+                    out.dep[f, M.link_a[k]], out.who[f, M.link_a[k]] = deep[k], which[k]
 
     def run(self, blk, f_first):
         """The substeps of blk (M.substeps per frame); the last of each frame is recorded as f_first, f_first + 1..."""
@@ -910,117 +1099,241 @@ if HAVE_NUMBA:
                     Ds[f, j, i, k] = Dst[j, i, k]
 
     @_jit
+    def _nb_head(j, r, H0, chain_of, is_root, q):
+        """Where the segment of bone j starts: its chain's world head on substep row r, or the previous particle."""
+        if is_root[j]:
+            c = chain_of[j]
+            return H0[r, c, 0], H0[r, c, 1], H0[r, c, 2]
+        return q[j - 1, 0], q[j - 1, 1], q[j - 1, 2]
+
+    @_jit
+    def _nb_link_seg(k, r, H0, chain_of, is_root, q, la, lb):
+        """The segment of link k (the numpy engine's link_points): midpoints of its two heads and its two particles."""
+        a, b = la[k], lb[k]
+        ax, ay, az = _nb_head(a, r, H0, chain_of, is_root, q)
+        bx, by, bz = _nb_head(b, r, H0, chain_of, is_root, q)
+        return (0.5 * (ax + bx), 0.5 * (ay + by), 0.5 * (az + bz), 0.5 * (q[a, 0] + q[b, 0]),
+                0.5 * (q[a, 1] + q[b, 1]), 0.5 * (q[a, 2] + q[b, 2]))
+
+    @_jit
+    def _nb_lateral(la, lb, ld0, lk, p):
+        """Distance constraints between linked particles, in link order (the numpy engine's lateral)."""
+        for k in range(la.shape[0]):
+            a, b = la[k], lb[k]
+            dx, dy, dz = p[b, 0] - p[a, 0], p[b, 1] - p[a, 1], p[b, 2] - p[a, 2]
+            dist = np.sqrt(dx * dx + dy * dy + dz * dz)
+            f = 0.5 * lk[k] * (dist - ld0[k]) / max(dist, 1e-12)
+            p[a, 0] += dx * f
+            p[a, 1] += dy * f
+            p[a, 2] += dz * f
+            p[b, 0] -= dx * f
+            p[b, 1] -= dy * f
+            p[b, 2] -= dz * f
+
+    @_jit
+    def _nb_mid(r, H0, chain_of, is_root, la, lb, lrr, len_, lmid, p, pushed, cont, bsc, bsr, sc, sb, sm, skind, sk,
+                floor_z, has_floor, samp, cand, Sb, Nb, cut, tpush, lpush, lhit):
+        """Cloth midpoints of the links against the shapes; the push goes to both particles of a link."""
+        for k in range(la.shape[0]):
+            ux, uy, uz, hit = 0.0, 0.0, 0.0, False
+            if lmid[k]:
+                hx, hy, hz, px, py, pz = _nb_link_seg(k, r, H0, chain_of, is_root, p, la, lb)
+                nc, near = _nb_gather(hx, hy, hz, px, py, pz, lrr[k], len_[k], bsc, bsr, cand, cut, tpush)
+                if has_floor and min(hz, pz) - floor_z - lrr[k] <= tpush:
+                    near += 1
+                if near > 0:
+                    ux, uy, uz, hit = _nb_push(hx, hy, hz, px, py, pz, lrr[k], cand, nc, sc, sb, sm, skind, sk, floor_z,
+                                               has_floor, samp, Sb, Nb)
+            lpush[k, 0], lpush[k, 1], lpush[k, 2] = ux, uy, uz
+            lhit[k] = hit
+        for k in range(la.shape[0]):
+            a, b = la[k], lb[k]
+            for i in range(3):
+                p[a, i] += lpush[k, i]
+                p[b, i] += lpush[k, i]
+                pushed[a, i] += lpush[k, i]
+                pushed[b, i] += lpush[k, i]
+            if lhit[k]:
+                cont[a] = True
+                cont[b] = True
+
+    @_jit
+    def _nb_record_links(f, r, H0, chain_of, is_root, x, la, lb, lrr, len_, sc, sb, sm, bsc, bsr, skind, sk, floor_z,
+                         has_floor, samp, cand, Sb, Nb, dep, who):
+        """The cloth between linked chains counts for the first particle of each link: deepest penetration so far."""
+        for k in range(la.shape[0]):
+            hx, hy, hz, px, py, pz = _nb_link_seg(k, r, H0, chain_of, is_root, x, la, lb)
+            nc, _ = _nb_gather(hx, hy, hz, px, py, pz, lrr[k], len_[k], bsc, bsr, cand, 0.0, 0.0)
+            d, w = _nb_measure(hx, hy, hz, px, py, pz, lrr[k], cand, nc, sc, sb, sm, skind, sk, floor_z, has_floor,
+                               samp, Sb, Nb)
+            a = la[k]
+            if d > dep[f, a]:
+                dep[f, a] = d
+                who[f, a] = w
+
+    @_jit
+    def _nb_pre(n, j0, r, x, v, dec, wgain, wmean, wdisp, wt, kv, ae, ph, om, use_wind, use_turb, dt, gdt2,
+                pl, ubl, H0r, Dar, Dg, tg, Lg, dg, ag, pushedl, contl):
+        """One chain: drag toward the air, the verlet prediction, the pull toward the rest shape."""
+        for jj in range(n):
+            j = j0 + jj
+            if use_wind:
+                ux, uy, uz = _nb_air(x[j, 0], x[j, 1], x[j, 2], r, wmean, wdisp, wt, kv, ae, ph, om, use_turb)
+                ubl[jj, 0], ubl[jj, 1], ubl[jj, 2] = ux, uy, uz
+                v[j, 0] = v[j, 0] * dec[j] + ux * wgain[j]
+                v[j, 1] = v[j, 1] * dec[j] + uy * wgain[j]
+                v[j, 2] = v[j, 2] * dec[j] + uz * wgain[j]
+            else:
+                v[j, 0] *= dec[j]
+                v[j, 1] *= dec[j]
+                v[j, 2] *= dec[j]
+            pl[jj, 0] = x[j, 0] + v[j, 0] * dt
+            pl[jj, 1] = x[j, 1] + v[j, 1] * dt
+            pl[jj, 2] = (x[j, 2] + v[j, 2] * dt) + gdt2
+        _nb_shape_pass(n, H0r, Dar, pl, Dg, tg, Lg, dg, ag, True)
+        for jj in range(n):
+            contl[jj] = False
+            pushedl[jj, 0], pushedl[jj, 1], pushedl[jj, 2] = 0.0, 0.0, 0.0
+
+    @_jit
+    def _nb_chain_push(n, j0, H0r, pl, pushl, hitl, rr, enable, bsc, bsr, sc, sb, sm, skind, sk, floor_z, has_floor,
+                       samp, cand, Sb, Nb, cut, tpush):
+        """One chain: the collision push of every bone's segment (bone j0 + jj)."""
+        for jj in range(n):
+            j = j0 + jj
+            if jj == 0:
+                hx, hy, hz = H0r[0], H0r[1], H0r[2]
+            else:
+                hx, hy, hz = pl[jj - 1, 0], pl[jj - 1, 1], pl[jj - 1, 2]
+            nc, near = _nb_gather(hx, hy, hz, pl[jj, 0], pl[jj, 1], pl[jj, 2], rr[j], enable[j], bsc, bsr, cand, cut,
+                                  tpush)
+            if has_floor and min(hz, pl[jj, 2]) - floor_z - rr[j] <= tpush:
+                near += 1
+            if near > 0:
+                ux, uy, uz, hitl[jj] = _nb_push(hx, hy, hz, pl[jj, 0], pl[jj, 1], pl[jj, 2], rr[j], cand, nc, sc, sb, sm,
+                                                skind, sk, floor_z, has_floor, samp, Sb, Nb)
+            else:
+                ux, uy, uz, hitl[jj] = 0.0, 0.0, 0.0, False
+            pushl[jj, 0], pushl[jj, 1], pushl[jj, 2] = ux, uy, uz
+
+    @_jit
+    def _nb_apply(n, pl, pushl, hitl, pushedl, contl):
+        """One chain: move the particles by their pushes."""
+        for jj in range(n):
+            if hitl[jj]:
+                contl[jj] = True
+            for i in range(3):
+                pl[jj, i] += pushl[jj, i]
+                pushedl[jj, i] += pushl[jj, i]
+
+    @_jit
+    def _nb_post(n, j0, r, x, v, pl, ubl, pushedl, contl, corrl, H0r, Dar, Dg, tg, Lg, dg, ag, tgt_prev, sdec, stick, dt,
+                 ftl, use_wind, wcar):
+        """One chain: exact lengths, the bone frames and the new velocities; the particles become the state."""
+        _nb_project(n, H0r, pl, Lg, corrl)
+        _nb_shape_pass(n, H0r, Dar, pl, Dg, tg, Lg, dg, ag, False)
+        for jj in range(n):                             # velocities
+            j = j0 + jj
+            vnx, vny, vnz = (pl[jj, 0] - x[j, 0]) / dt, (pl[jj, 1] - x[j, 1]) / dt, (pl[jj, 2] - x[j, 2]) / dt
+            if jj + 1 < n:                              # dynamic FTL: the child's move pulls its parent
+                vnx, vny, vnz = (vnx - ftl * corrl[jj + 1, 0] / dt, vny - ftl * corrl[jj + 1, 1] / dt,
+                                 vnz - ftl * corrl[jj + 1, 2] / dt)
+            vpx, vpy, vpz = pushedl[jj, 0] / dt, pushedl[jj, 1] / dt, pushedl[jj, 2] / dt
+            fp = 1.0 - min(1.0, PUSH_SPEED / max(np.sqrt(vpx * vpx + vpy * vpy + vpz * vpz), 1e-12))
+            vnx, vny, vnz = vnx - vpx * fp, vny - vpy * fp, vnz - vpz * fp
+            vtx, vty, vtz = (tg[jj, 0] - tgt_prev[j, 0]) / dt, (tg[jj, 1] - tgt_prev[j, 1]) / dt, \
+                (tg[jj, 2] - tgt_prev[j, 2]) / dt
+            vnx, vny, vnz = (vtx + (vnx - vtx) * sdec[j], vty + (vny - vty) * sdec[j], vtz + (vnz - vtz) * sdec[j])
+            rel = np.sqrt((vnx - vtx) ** 2 + (vny - vty) ** 2 + (vnz - vtz) ** 2)
+            cap = MAX_SPEED
+            if use_wind:
+                cap = MAX_SPEED + np.sqrt((ubl[jj, 0] - wcar[r, 0]) ** 2 + (ubl[jj, 1] - wcar[r, 1]) ** 2 +
+                                          (ubl[jj, 2] - wcar[r, 2]) ** 2)
+            sp = min(1.0, cap / max(rel, 1e-12))
+            vnx, vny, vnz = vtx + (vnx - vtx) * sp, vty + (vny - vty) * sp, vtz + (vnz - vtz) * sp
+            for i in range(3):
+                tgt_prev[j, i] = tg[jj, i]
+            if contl[jj]:
+                cx, cy, cz = 0.0, 0.0, 0.0
+                if use_wind:
+                    cx, cy, cz = wcar[r, 0], wcar[r, 1], wcar[r, 2]
+                vnx, vny, vnz = (cx + (vnx - cx) * stick[j], cy + (vny - cy) * stick[j], cz + (vnz - cz) * stick[j])
+            v[j, 0], v[j, 1], v[j, 2] = vnx, vny, vnz
+            x[j, 0], x[j, 1], x[j, 2] = pl[jj, 0], pl[jj, 1], pl[jj, 2]
+
+    @_jit
     def _nb_advance(cids, cptr, nsteps, rstride, rec_every, rec_f0, rec_start,
                     Lc, d0, alpha, dec, wgain, stick, sdec, rr, enable,
                     x, v, tgt_prev, Dst, tgt,
                     H0, Da, sc, sb, sm, bsc, bsr, wmean, wdisp, wt, wcar,
                     skind, sk, floor_z, has_floor,
                     kv, ae, ph, om, use_wind, use_turb,
-                    dt, samp, sweeps, ftl, xs, Ds, dep, who):
-        """Advance chains cids by nsteps substeps (substep i uses block row i * rstride), with velocity decay `dec`;
-        every rec_every steps store a frame (first rec_f0), and rec_start >= 0 stores the current state first as that
-        frame. State arrays x v tgt_prev Dst tgt are per bone in chain-major order and updated in place."""
+                    dt, samp, sweeps, ftl, xs, Ds, dep, who,
+                    la, lb, ld0, lk, lrr, len_, lmid, chain_of, is_root):
+        """Advance the chains cids (one coupled group, or independent chains) by nsteps substeps in lockstep (substep i
+        uses block row i * rstride), with velocity decay `dec`; every rec_every steps store a frame (first rec_f0), and
+        rec_start >= 0 stores the current state first as that frame. State arrays x v tgt_prev Dst tgt are per bone in
+        chain-major order and updated in place. la lb ld0 lk lrr len_ lmid: the lateral links of these chains."""
         K = skind.shape[0]
+        N = x.shape[0]
+        nl = la.shape[0]
         cand = np.empty(K + 1, np.int64)
         Sb, Nb = np.empty(K + 1), np.empty((K + 1, 3))
+        p, pushed, push, ub, corr = np.empty((N, 3)), np.zeros((N, 3)), np.zeros((N, 3)), np.zeros((N, 3)), \
+            np.zeros((N, 3))
+        hit, cont = np.zeros(N, np.bool_), np.zeros(N, np.bool_)
+        lpush, lhit = np.zeros((nl, 3)), np.zeros(nl, np.bool_)
         gdt2 = (-9.81 * dt) * dt
         tpush = SMOOTH * np.log(K + 1.0) + 1e-6                 # nearer than this (m) to a shape, a push is possible
         cut = tpush + REACH
-        for ci in range(cids.shape[0]):
-            c = cids[ci]
-            j0, j1 = cptr[c], cptr[c + 1]
-            n = j1 - j0
-            p, pushed, push, ub = np.empty((n, 3)), np.empty((n, 3)), np.empty((n, 3)), np.zeros((n, 3))
-            hit, cont = np.zeros(n, np.bool_), np.zeros(n, np.bool_)
-            corr = np.empty((n, 3))
-            Lg, dg, ag, Dg, tg = Lc[j0:j1], d0[j0:j1], alpha[j0:j1], Dst[j0:j1], tgt[j0:j1]
-            if rec_start >= 0:
-                _nb_record(rec_start, j0, n, H0[0, c], x, Dst, rr, enable, sc[0], sb[0], sm[0], bsc[0], bsr[0], skind,
-                           sk, floor_z, has_floor, samp, cand, Sb, Nb, xs, Ds, dep, who)
-            for step in range(nsteps):
-                r = step * rstride
-                H0r, Dar = H0[r, c], Da[r, c]
-                for jj in range(n):                             # drag toward the air, then the verlet prediction
-                    j = j0 + jj
-                    if use_wind:
-                        ux, uy, uz = _nb_air(x[j, 0], x[j, 1], x[j, 2], r, wmean, wdisp, wt, kv, ae, ph, om, use_turb)
-                        ub[jj, 0], ub[jj, 1], ub[jj, 2] = ux, uy, uz
-                        v[j, 0] = v[j, 0] * dec[j] + ux * wgain[j]
-                        v[j, 1] = v[j, 1] * dec[j] + uy * wgain[j]
-                        v[j, 2] = v[j, 2] * dec[j] + uz * wgain[j]
-                    else:
-                        v[j, 0] *= dec[j]
-                        v[j, 1] *= dec[j]
-                        v[j, 2] *= dec[j]
-                    p[jj, 0] = x[j, 0] + v[j, 0] * dt
-                    p[jj, 1] = x[j, 1] + v[j, 1] * dt
-                    p[jj, 2] = (x[j, 2] + v[j, 2] * dt) + gdt2
-                _nb_shape_pass(n, H0r, Dar, p, Dg, tg, Lg, dg, ag, True)
-                for jj in range(n):
-                    cont[jj] = False
-                    pushed[jj, 0], pushed[jj, 1], pushed[jj, 2] = 0.0, 0.0, 0.0
-                for it in range(ITERS):                         # lengths, then collisions
+        if rec_start >= 0:
+            for ci in range(cids.shape[0]):
+                c = cids[ci]
+                j0, j1 = cptr[c], cptr[c + 1]
+                _nb_record(rec_start, j0, j1 - j0, H0[0, c], x, Dst, rr, enable, sc[0], sb[0], sm[0], bsc[0], bsr[0],
+                           skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, xs, Ds, dep, who)
+            _nb_record_links(rec_start, 0, H0, chain_of, is_root, x, la, lb, lrr, len_, sc[0], sb[0], sm[0], bsc[0],
+                             bsr[0], skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, dep, who)
+        for step in range(nsteps):
+            r = step * rstride
+            for ci in range(cids.shape[0]):
+                c = cids[ci]
+                j0, j1 = cptr[c], cptr[c + 1]
+                _nb_pre(j1 - j0, j0, r, x, v, dec, wgain, wmean, wdisp, wt, kv, ae, ph, om, use_wind, use_turb, dt, gdt2,
+                        p[j0:j1], ub[j0:j1], H0[r, c], Da[r, c], Dst[j0:j1], tgt[j0:j1], Lc[j0:j1], d0[j0:j1],
+                        alpha[j0:j1], pushed[j0:j1], cont[j0:j1])
+            for it in range(ITERS):                             # lengths, lateral ties, collisions
+                for ci in range(cids.shape[0]):
+                    c = cids[ci]
+                    j0, j1 = cptr[c], cptr[c + 1]
                     for sw in range(sweeps):
-                        _nb_relax(n, H0r, p, Lg)
-                    for jj in range(n):
-                        j = j0 + jj
-                        if jj == 0:
-                            hx, hy, hz = H0r[0], H0r[1], H0r[2]
-                        else:
-                            hx, hy, hz = p[jj - 1, 0], p[jj - 1, 1], p[jj - 1, 2]
-                        nc, near = _nb_gather(hx, hy, hz, p[jj, 0], p[jj, 1], p[jj, 2], rr[j], enable[j], bsc[r],
-                                              bsr[r], cand, cut, tpush)
-                        if has_floor and min(hz, p[jj, 2]) - floor_z - rr[j] <= tpush:
-                            near += 1
-                        if near > 0:
-                            ux, uy, uz, hit[jj] = _nb_push(hx, hy, hz, p[jj, 0], p[jj, 1], p[jj, 2], rr[j], cand, nc,
-                                                           sc[r], sb[r], sm[r], skind, sk, floor_z, has_floor, samp,
-                                                           Sb, Nb)
-                        else:
-                            ux, uy, uz, hit[jj] = 0.0, 0.0, 0.0, False
-                        push[jj, 0], push[jj, 1], push[jj, 2] = ux, uy, uz
-                    for jj in range(n):
-                        if hit[jj]:
-                            cont[jj] = True
-                        for i in range(3):
-                            p[jj, i] += push[jj, i]
-                            pushed[jj, i] += push[jj, i]
-                _nb_project(n, H0r, p, Lg, corr)
-                _nb_shape_pass(n, H0r, Dar, p, Dg, tg, Lg, dg, ag, False)
-                for jj in range(n):                             # velocities
-                    j = j0 + jj
-                    vnx, vny, vnz = (p[jj, 0] - x[j, 0]) / dt, (p[jj, 1] - x[j, 1]) / dt, (p[jj, 2] - x[j, 2]) / dt
-                    if jj + 1 < n:                              # dynamic FTL: the child's move pulls its parent
-                        vnx, vny, vnz = (vnx - ftl * corr[jj + 1, 0] / dt, vny - ftl * corr[jj + 1, 1] / dt,
-                                         vnz - ftl * corr[jj + 1, 2] / dt)
-                    vpx, vpy, vpz = pushed[jj, 0] / dt, pushed[jj, 1] / dt, pushed[jj, 2] / dt
-                    fp = 1.0 - min(1.0, PUSH_SPEED / max(np.sqrt(vpx * vpx + vpy * vpy + vpz * vpz), 1e-12))
-                    vnx, vny, vnz = vnx - vpx * fp, vny - vpy * fp, vnz - vpz * fp
-                    vtx, vty, vtz = (tg[jj, 0] - tgt_prev[j, 0]) / dt, (tg[jj, 1] - tgt_prev[j, 1]) / dt, \
-                        (tg[jj, 2] - tgt_prev[j, 2]) / dt
-                    vnx, vny, vnz = (vtx + (vnx - vtx) * sdec[j], vty + (vny - vty) * sdec[j],
-                                     vtz + (vnz - vtz) * sdec[j])
-                    rel = np.sqrt((vnx - vtx) ** 2 + (vny - vty) ** 2 + (vnz - vtz) ** 2)
-                    cap = MAX_SPEED
-                    if use_wind:
-                        cap = MAX_SPEED + np.sqrt((ub[jj, 0] - wcar[r, 0]) ** 2 + (ub[jj, 1] - wcar[r, 1]) ** 2 +
-                                                  (ub[jj, 2] - wcar[r, 2]) ** 2)
-                    sp = min(1.0, cap / max(rel, 1e-12))
-                    vnx, vny, vnz = vtx + (vnx - vtx) * sp, vty + (vny - vty) * sp, vtz + (vnz - vtz) * sp
-                    for i in range(3):
-                        tgt_prev[j, i] = tg[jj, i]
-                    if cont[jj]:
-                        cx, cy, cz = 0.0, 0.0, 0.0
-                        if use_wind:
-                            cx, cy, cz = wcar[r, 0], wcar[r, 1], wcar[r, 2]
-                        vnx, vny, vnz = (cx + (vnx - cx) * stick[j], cy + (vny - cy) * stick[j],
-                                         cz + (vnz - cz) * stick[j])
-                    v[j, 0], v[j, 1], v[j, 2] = vnx, vny, vnz
-                    x[j, 0], x[j, 1], x[j, 2] = p[jj, 0], p[jj, 1], p[jj, 2]
-                if rec_every > 0 and (step + 1) % rec_every == 0:
-                    _nb_record(rec_f0 + (step + 1) // rec_every - 1, j0, n, H0r, x, Dst, rr, enable, sc[r], sb[r],
-                               sm[r], bsc[r], bsr[r], skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, xs, Ds,
-                               dep, who)
+                        _nb_relax(j1 - j0, H0[r, c], p[j0:j1], Lc[j0:j1])
+                if nl > 0:
+                    _nb_lateral(la, lb, ld0, lk, p)
+                for ci in range(cids.shape[0]):
+                    c = cids[ci]
+                    j0, j1 = cptr[c], cptr[c + 1]
+                    _nb_chain_push(j1 - j0, j0, H0[r, c], p[j0:j1], push[j0:j1], hit[j0:j1], rr, enable, bsc[r], bsr[r],
+                                   sc[r], sb[r], sm[r], skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, cut, tpush)
+                    _nb_apply(j1 - j0, p[j0:j1], push[j0:j1], hit[j0:j1], pushed[j0:j1], cont[j0:j1])
+                if nl > 0:
+                    _nb_mid(r, H0, chain_of, is_root, la, lb, lrr, len_, lmid, p, pushed, cont, bsc[r], bsr[r], sc[r],
+                            sb[r], sm[r], skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, cut, tpush, lpush, lhit)
+            for ci in range(cids.shape[0]):
+                c = cids[ci]
+                j0, j1 = cptr[c], cptr[c + 1]
+                _nb_post(j1 - j0, j0, r, x, v, p[j0:j1], ub[j0:j1], pushed[j0:j1], cont[j0:j1], corr[j0:j1], H0[r, c],
+                         Da[r, c], Dst[j0:j1], tgt[j0:j1], Lc[j0:j1], d0[j0:j1], alpha[j0:j1], tgt_prev, sdec, stick, dt,
+                         ftl, use_wind, wcar)
+            if rec_every > 0 and (step + 1) % rec_every == 0:
+                f = rec_f0 + (step + 1) // rec_every - 1
+                for ci in range(cids.shape[0]):
+                    c = cids[ci]
+                    j0, j1 = cptr[c], cptr[c + 1]
+                    _nb_record(f, j0, j1 - j0, H0[r, c], x, Dst, rr, enable, sc[r], sb[r], sm[r], bsc[r], bsr[r], skind,
+                               sk, floor_z, has_floor, samp, cand, Sb, Nb, xs, Ds, dep, who)
+                _nb_record_links(f, r, H0, chain_of, is_root, x, la, lb, lrr, len_, sc[r], sb[r], sm[r], bsc[r], bsr[r],
+                                 skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, dep, who)
 
 
 class _NumbaEngine:
@@ -1029,12 +1342,7 @@ class _NumbaEngine:
 
     def __init__(self, M, out, threads):
         self.M, self.out = M, out
-        chains = []
-        for r in M.roots:
-            b = [int(r)]
-            while M.child[b[-1]] >= 0:
-                b.append(int(M.child[b[-1]]))
-            chains.append(b)
+        chains = M.chain_lists
         o = self.order = np.concatenate(chains).astype(np.int64)
         self.cptr = np.concatenate([[0], np.cumsum([len(b) for b in chains])]).astype(np.int64)
 
@@ -1063,15 +1371,45 @@ class _NumbaEngine:
         F, N = M.F, M.N
         self.xs, self.Ds = np.zeros((F, N, 3)), np.zeros((F, N, 3, 3))
         self.dep, self.who = np.full((F, N), -1e300), np.full((F, N), -1, np.int64)
+        # chains tied by lateral links form groups that advance together; a group is one unit of work for a thread
+        inv = np.empty(M.N, np.int64)
+        inv[o] = np.arange(M.N)
+        self.chain_of = np.repeat(np.arange(len(chains)), [len(b) for b in chains]).astype(np.int64)
+        self.is_root = np.zeros(M.N, np.bool_)
+        self.is_root[self.cptr[:-1]] = True
+        la, lb = inv[M.link_a], inv[M.link_b]
+        top = list(range(len(chains)))
+
+        def find(c):
+            while top[c] != c:
+                top[c] = top[top[c]]
+                c = top[c]
+            return c
+
+        for a, b in zip(self.chain_of[la], self.chain_of[lb]):
+            top[find(a)] = find(b)
+        members, joined = {}, {}
+        for c in range(len(chains)):
+            members.setdefault(find(c), []).append(c)
+        for k in range(len(la)):
+            joined.setdefault(find(self.chain_of[la[k]]), []).append(k)
+        units = sorted(members.items(), key=lambda kv: -sum(len(chains[c]) for c in kv[1]))     # biggest first
         want = threads if threads else (os.cpu_count() or 1)
-        # longest chains first, each onto the lightest thread
-        bins = [[] for _ in range(max(1, min(int(want), len(chains))))]
+        bins = [[] for _ in range(max(1, min(int(want), len(units))))]
         load = [0] * len(bins)
-        for c in sorted(range(len(chains)), key=lambda c: -len(chains[c])):
+        for top_c, cs in units:                                 # each unit onto the lightest thread
             t = load.index(min(load))
-            bins[t].append(c)
-            load[t] += len(chains[c])
-        self.groups = [np.array(sorted(b), np.int64) for b in bins if b]
+            bins[t].append(top_c)
+            load[t] += sum(len(chains[c]) for c in cs)
+        self.groups = []
+        for b in bins:
+            if b:
+                cids = np.array(sorted(c for top_c in b for c in members[top_c]), np.int64)
+                idx = np.array(sorted(k for top_c in b for k in joined.get(top_c, [])), np.int64)
+                self.groups.append((cids, la[idx], lb[idx], np.ascontiguousarray(M.link_d0[idx]),
+                                    np.ascontiguousarray(M.link_k[idx]), np.ascontiguousarray(M.link_rr[idx]),
+                                    np.ascontiguousarray(M.link_enable_u[idx]),
+                                    np.ascontiguousarray(M.link_mid[idx]).astype(np.bool_)))
         self.pool = ThreadPoolExecutor(len(self.groups)) if len(self.groups) > 1 else None
 
     def _shapes(self, blk):
@@ -1112,13 +1450,13 @@ class _NumbaEngine:
             wind = (blk.wmean, blk.wdisp, blk.wt, blk.wcar, kv, ae, ph, om, 1, int(bool(blk.wind.turbulence)))
         floor = (0.0, 0) if M.floor_z is None else (float(M.floor_z), 1)
 
-        def go(cids):
-            _nb_advance(cids, self.cptr, nsteps, rstride, rec_every, rec_f0, rec_start, self.Lc, self.d0, self.alpha,
+        def go(grp):
+            _nb_advance(grp[0], self.cptr, nsteps, rstride, rec_every, rec_f0, rec_start, self.Lc, self.d0, self.alpha,
                         dec, self.wgain, self.stick, self.sdec, self.rr, self.enable, self.x, self.v, self.tgt_prev,
                         self.Dst, self.tgt, blk.H0, blk.Da, sc, sb, sm, bsc, bsr,
                         *[np.ascontiguousarray(a) for a in wind[:4]], self.skind, self.sk, floor[0], floor[1],
                         *wind[4:8], wind[8], wind[9], M.dt, M.samples, M.sweeps, M.ftl, self.xs, self.Ds, self.dep,
-                        self.who)
+                        self.who, *grp[1:], self.chain_of, self.is_root)
 
         if self.pool is None:
             go(self.groups[0])
@@ -1219,6 +1557,7 @@ def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, para
                  for k in range(F)]
     res.labels = M.labels
     res.anchor_pos, res.anchor_rot, res.anchor_rest_rot = M.anchor_pos, M.anchor_rot, M.rest_R[M.a_src]
+    res.links, res.link_rest = np.stack([M.link_a, M.link_b], 1), M.link_d0
     res.engine = eng.name
     res.timings = {"setup": round(t1 - t0, 3), "settle": round(t2 - t1, 3), "run": round(t3 - t2, 3)}
     return res
