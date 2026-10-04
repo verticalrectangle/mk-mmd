@@ -77,7 +77,7 @@ def project(**extra):
     return data
 
 
-def build(root, data, anchor=(0.5, 0.95)):
+def build(root, data, anchor=(0.5, 0.95), per_metre=0.5):
     """Write the cut's frames and every layer the plan demands; returns (plan, CutFx)."""
     plan = TR.plan(data, FPS, F0, MOON)
     for f in range(F0, F0 + 300):
@@ -91,7 +91,7 @@ def build(root, data, anchor=(0.5, 0.95)):
                 save_rgb(root / TR.back_rel(it["shot"], f), flat(COL[it["shot"]]))
             else:
                 (root / TR.point_rel(it["key"], f)).parent.mkdir(parents=True, exist_ok=True)
-                (root / TR.point_rel(it["key"], f)).write_text(json.dumps({"p": list(anchor), "depth": 5.0}))
+                (root / TR.point_rel(it["key"], f)).write_text(json.dumps({"p": list(anchor), "depth": 5.0, "m": per_metre}))
     return plan, CF.CutFx(plan, root, (W, H), "t")
 
 
@@ -360,3 +360,65 @@ def test_per_aspect_geometry_changes_the_bubble(tmp_path):
     img2 = fx2.frame(ins["f0"] + 20, P.read(tmp_path / "default" / f"{ins['f0'] + 20:05d}.png"))
     assert (np.abs(img - flat(COL["l2"])).max(axis=2) > 0.05).sum() < (np.abs(img2 - flat(COL["l2"])).max(axis=2) > 0.05).sum()
     assert big is None and frame_of_default is None
+
+
+# ---------------------------------------------------------------- the trail of the thought bubble
+def test_the_trail_runs_from_the_edge_of_the_head_to_the_cloud_with_growing_circles():
+    fx = CF.CutFx(TR.plan(project(), FPS, F0, MOON), "/nonexistent", (960, 540), "t")
+    a, b = 120.0, 80.0
+    start, centre = (100.0, 300.0), (100.0, 100.0)                         # the cloud straight above where the trail begins
+    dots = fx._dots(start, centre, a, b)
+    assert len(dots) == 3
+    ys = [y for _, y, _ in dots]
+    rs = [r for _, _, r in dots]
+    assert all(x == pytest.approx(100.0) for x, _, _ in dots)              # on the line between them
+    assert ys[0] > ys[1] > ys[2] > centre[1] + b                           # nearest the head first, none inside the cloud
+    assert rs[0] < rs[1] < rs[2]                                           # and growing toward the cloud
+    assert start[1] - (ys[0] + rs[0]) > 0                                  # the first circle begins beyond the head's edge ...
+    assert start[1] - ys[0] < 0.2 * (start[1] - centre[1] - b)             # ... right at it
+    assert (ys[2] - rs[2]) - (centre[1] + b) > 0                           # the last does not touch the cloud
+
+
+def test_the_trail_has_no_circles_when_the_head_reaches_the_cloud():
+    fx = CF.CutFx(TR.plan(project(), FPS, F0, MOON), "/nonexistent", (960, 540), "t")
+    assert fx._dots((100.0, 170.0), (100.0, 100.0), 120.0, 80.0) == []     # 10 px between the head's edge and the rim: too few
+
+
+def test_no_circle_lies_on_the_head(tmp_path):
+    data = project()
+    for ins in data["insert"]:
+        ins["radius"] = 0.11
+        ins["size"] = 0.3
+    plan, fx = build(tmp_path, data, per_metre=1.5)                         # the head: 0.11 m * 1.5 * 54 px = 8.9 px about the anchor
+    ins = plan["inserts"][0]
+    img = fx.frame(ins["f0"] + 20, P.read(tmp_path / f"{ins['f0'] + 20:05d}.png"))
+    anchor = (0.5 * W - 0.5, 0.95 * H - 0.5)
+    ys, xs = np.mgrid[0:H, 0:W]
+    on_head = np.hypot(xs - anchor[0], ys - anchor[1]) < 8.9 - 1.0
+    changed = np.abs(img - flat(COL["l2"])).max(axis=2) > 0.02
+    assert not (changed & on_head).any()                                   # the host's head is left alone
+    assert (changed & (np.hypot(xs - anchor[0], ys - anchor[1]) < 24)).any()   # but the trail is there, just beyond it
+
+
+def test_a_radius_of_zero_starts_the_trail_at_the_anchor(tmp_path):
+    data = project()
+    data["insert"][0].update(radius=0.0, size=0.3)
+    plan, fx = build(tmp_path, data, per_metre=1.5)
+    ins = plan["inserts"][0]
+    img = fx.frame(ins["f0"] + 20, P.read(tmp_path / f"{ins['f0'] + 20:05d}.png"))
+    anchor = (0.5 * W - 0.5, 0.95 * H - 0.5)
+    ys, xs = np.mgrid[0:H, 0:W]
+    changed = np.abs(img - flat(COL["l2"])).max(axis=2) > 0.02
+    assert (changed & (np.hypot(xs - anchor[0], ys - anchor[1]) < 7)).any()
+
+
+def test_a_point_layer_from_before_its_scale_was_stored_is_missing_and_unusable(tmp_path):
+    plan, fx = build(tmp_path, project())
+    ins = plan["inserts"][0]
+    rel = TR.point_rel("i0", ins["f0"] + 3)
+    (tmp_path / rel).write_text(json.dumps({"p": [0.5, 0.9], "depth": 5.0}))      # the old format
+    assert rel in fx.missing(range(F0, F0 + 300))
+    with pytest.raises(FileNotFoundError, match="before its scale"):
+        fx.frame(ins["f0"] + 3, P.read(tmp_path / f"{ins['f0'] + 3:05d}.png"))
+    TR.clear_claims(tmp_path)                                               # what mk render does first: the stale file goes
+    assert not (tmp_path / rel).exists() and (tmp_path / TR.point_rel("i0", ins["f0"] + 4)).exists()

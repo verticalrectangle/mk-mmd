@@ -23,8 +23,8 @@ from .core import tween as TW
 
 COVER_MARGIN = 1.02                      # the scale that fills the frame, with a little to spare
 DOT_RADII = (0.12, 0.19, 0.28)           # the trailing circles' radii, as shares of the bubble's half-height
-DOT_FIT = (0.085, 0.13, 0.18)            # and at most these shares of the gap between the bubble and the anchor
-DOT_AT = (0.14, 0.42, 0.74)              # where they sit in that gap, as shares measured from the anchor
+DOT_FIT = (0.085, 0.13, 0.18)            # and at most these shares of the trail's length (head edge to cloud rim)
+DOT_AT = (0.12, 0.40, 0.75)              # where they sit along it, as shares measured from the head edge
 
 
 class CutFx:
@@ -49,13 +49,13 @@ class CutFx:
         return frame in self.at
 
     def missing(self, frames):
-        """The layer files the given frames' effects need that are not on disk (or are empty)."""
+        """The layer files the given frames' effects need that are not on disk, are empty, or (a point) predate its scale."""
         out = []
         for f, items in TR.demands(self.plan, frames).items():
             for item in items:
                 for rel in TR.rel_paths(item, f):
                     p = self.dir / rel
-                    if not p.exists() or p.stat().st_size == 0:
+                    if not p.exists() or p.stat().st_size == 0 or (item["kind"] == "point" and TR.stale_point(p)):
                         out.append(rel)
         return out
 
@@ -95,13 +95,14 @@ class CutFx:
         return np.asarray(im, np.float32) / 255.0
 
     def _point(self, key, frame):
-        """A projected point (index coordinates) from point/<key>/<frame>.json: {"p": [x, y]} frame fractions."""
+        """(index coordinates, frame heights per metre at its depth) of a projected point, point/<key>/<frame>.json."""
         rel = TR.point_rel(key, frame)
         try:
             data = json.loads((self.dir / rel).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            raise FileNotFoundError(f"{self.dir / rel}: layer missing or unreadable (mk render makes it)") from None
-        return M.frac_to_px(data["p"], self.size)
+            return M.frac_to_px(data["p"], self.size), float(data["m"])
+        except (OSError, ValueError, KeyError):
+            raise FileNotFoundError(f"{self.dir / rel}: layer missing, unreadable or from before its scale was stored "
+                                    f"(mk render makes it)") from None
 
     def _plate(self, shot, frame, main):
         """What `shot` shows at `frame`: the cut's own frame when it is the shot in the cut there, else its plate."""
@@ -119,7 +120,7 @@ class CutFx:
         if cen["mode"] == "subject":
             p = M.inside_point(S, M.centroid(alpha), max(1.0, 0.35 * float(-S.min())))
         else:
-            at = M.frac_to_px(cen["at"], self.size) if cen["mode"] == "frame" else self._point(f"t{tr['index']}", frame)
+            at = M.frac_to_px(cen["at"], self.size) if cen["mode"] == "frame" else self._point(f"t{tr['index']}", frame)[0]
             p = M.inside_point(S, ((at[0] + 0.5) * k - 0.5, (at[1] + 0.5) * k - 0.5), 0.5 * k)
         c = None if p is None else ((p[0] + 0.5) / k - 0.5, (p[1] + 0.5) / k - 0.5)
         return M.AlphaField(S, k), c
@@ -182,10 +183,10 @@ class CutFx:
         return M.paint(out, tr["color"], M.coverage(np.abs(s - pos) - tr["width"] * diag / 2.0))
 
     # ---------------------------------------------------------------- insert
-    def _dots(self, anchor, centre, a, b):
-        """[(x, y, radius)] of the three circles in the gap between the bubble (half-axes a, b) and the anchor, nearest the
-        anchor first; [] when the anchor is on the bubble."""
-        dx, dy = anchor[0] - centre[0], anchor[1] - centre[1]
+    def _dots(self, start, centre, a, b):
+        """[(x, y, radius)] of the three circles of the trail between `start` (the edge of the head, where the trail begins)
+        and the bubble (centre, half-axes a, b), nearest the head first; [] when there is no room between them."""
+        dx, dy = start[0] - centre[0], start[1] - centre[1]
         dist = float(np.hypot(dx, dy))
         if dist < 1e-3:
             return []
@@ -215,7 +216,7 @@ class CutFx:
         geo = TR.insert_for(ins, self.output)
         st = TR.insert_state(ins, frame)
         ring, col = ins["outline"]["width"] * self.px, ins["outline"]["color"]
-        anchor = self._point(f"i{ins['index']}", frame)
+        anchor, per_metre = self._point(f"i{ins['index']}", frame)
         b = geo["size"] * h / 2.0
         a = b * geo["ratio"]
         pad = ring + 0.015 * h
@@ -224,7 +225,11 @@ class CutFx:
         bx = (w - 1) / 2.0 if a + pad > (w - 1) / 2.0 else min(max(bx, a + pad), w - 1 - a - pad)
         by = (h - 1) / 2.0 if b + pad > (h - 1) / 2.0 else min(max(by, b + pad), h - 1 - b - pad)
         out = main
-        for (x, y, r), s in zip(self._dots(anchor, (bx, by), a, b), st["dots"]):
+        dx, dy = bx - anchor[0], by - anchor[1]                              # the trail begins where the head (a sphere of
+        dist = float(np.hypot(dx, dy))                                       # `radius` metres about the anchor) ends,
+        reach = min(ins["radius"] * per_metre * h, dist)                     # on the side of the bubble
+        start = (anchor[0] + dx / dist * reach, anchor[1] + dy / dist * reach) if dist > 1e-3 else anchor
+        for (x, y, r), s in zip(self._dots(start, (bx, by), a, b), st["dots"]):
             if s > 0.01:
                 out = M.paint(out, col, M.coverage(M.disc(self.size, (x, y), r * s)))
         cloud = M.CloudField(a, b)

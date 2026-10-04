@@ -407,3 +407,27 @@ def test_an_expanding_insert_holds_then_grows_to_fill_the_frame_on_the_last_fram
     assert grow[0]["dots"] == pytest.approx([1.0, 1.0, 1.0]) and grow[-1]["dots"] == [0.0, 0.0, 0.0]
     assert all(s["bubble"] == 1.0 for s in grow)
     assert TR.insert_state(i, i["f0"] - 1)["phase"] == "none"
+
+
+# ---------------------------------------------------------------- the head the trail starts at
+def test_an_insert_stands_for_a_head_of_radius_metres_and_never_a_negative_one():
+    assert TR.normalize_insert(INSERT, MOON)["radius"] == 0.11
+    assert TR.normalize_insert({**INSERT, "radius": 0.2}, MOON)["radius"] == 0.2
+    assert TR.normalize_insert({**INSERT, "radius": 0}, MOON)["radius"] == 0.0
+    with pytest.raises(TR.TransitionError, match="radius"):
+        TR.normalize_insert({**INSERT, "radius": -0.1}, MOON)
+
+
+def test_a_point_file_without_its_scale_is_stale_and_goes_with_the_claims(tmp_path):
+    import json
+    good, old, empty = (tmp_path / "point/i0/00001.json", tmp_path / "point/i0/00002.json", tmp_path / "point/i0/00003.json")
+    good.parent.mkdir(parents=True)
+    good.write_text(json.dumps({"p": [0.5, 0.5], "depth": 3.0, "m": 0.8}))
+    old.write_text(json.dumps({"p": [0.5, 0.5], "depth": 3.0}))
+    empty.write_bytes(b"")
+    plate = tmp_path / "plate/s/00001.png"
+    plate.parent.mkdir(parents=True)
+    plate.write_bytes(b"png")
+    assert [TR.stale_point(p) for p in (good, old, empty)] == [False, True, True]
+    TR.clear_claims(tmp_path)
+    assert good.exists() and not old.exists() and not empty.exists() and plate.exists()

@@ -584,7 +584,7 @@ post and look. A **window** is the run of frames an effect changes: the `dur` se
 own camera and look (`plate/<shot>/<frame>.png`; a shot that is in the cut at that frame is its own plate: the cut's frame);
 an expand / collapse also needs the silhouette shot's figure alone as coverage, drawn at twice the frame's size
 (`matte/<shot>/`) and its frame without the figure (`back/<shot>/`); `point/<key>/<frame>.json` holds a projected anchor or
-centre. Layers are claimed with an empty file like frames (the finishing file is written last), so a stopped render resumes,
+centre (`p`, and `m`: frame heights per metre at its depth, which sizes things given in metres). Layers are claimed with an empty file like frames (the finishing file is written last), so a stopped render resumes,
 `--jobs N` shares them, and the disk check counts them; `mk build` keys the camera of a shot that lends frames (`keyed` in the
 shot table) and refuses a window that starts before `[scene] start`. Windows may not overlap and lie inside one shot of the cut.
 
@@ -615,7 +615,9 @@ from = 12.40
 to = 13.50
 shot = "g2_love"             # any [[shot]]: one in the cut, or `plate = true`
 shape = "thought"
-anchor = 'bone("head", "Reisen_arm").head'   # a `mk q` expression, projected through the host shot's camera on every frame
+anchor = 'bone("head", "Reisen_arm").center'   # a `mk q` expression, projected through the host shot's camera on every frame:
+                             #   the CENTRE of the head (this model's head bone ends at the crown, so `.center` is its middle)
+radius = 0.11                # metres: the anchor stands for a head of this radius; the trail of circles starts at its edge
 size = 0.34                  # the bubble's height, a fraction of the frame height; ratio = 1.35 is its width / height
 offset = [0.12, -0.30]       # from the anchor to the bubble's centre, fractions of the frame height (kept inside the frame)
 outline = { color = "text", width = 5 }
@@ -633,7 +635,17 @@ with the band on screen in each. Frames of the outgoing shot at the cut stay the
 cover the whole composite. `scale`'s top is raised to what fills the frame when the number is too small, and `matte_scale` in
 the `mk post` report gives `needed` per transition: a number far above it spends the window with the new shot already full.
 An insert's picture is its shot's whole frame scaled to cover the cloud (`warp_scaled`), growing with the bubble; the cloud
-is a union of discs on an ellipse (`CloudField`), the circles lie between the anchor and the bubble, never on either.
+is a union of discs on an ellipse (`CloudField`).
+
+The trail is three circles in the outline colour between the head and the cloud, the smallest first, popping one after another
+before the cloud. The anchor stands for a head, a sphere of `radius` metres about it seen at the anchor's depth (`m` of the point
+layer), so one number serves both aspects and a moving camera: the circles begin at its edge on the side of the bubble, never
+over the head, and shrink to the room between that edge and the cloud's rim (none under 3 px: move or shrink the bubble with
+`size` and `offset`). Give the anchor the head's middle, not a joint (`bone("head", ...).head` is the neck's end and puts the
+trail on the face); `radius = 0` starts the circles at the anchor itself. The montage's tunnel shot, anchor `.center`, `radius
+= 0.11`, 16x9 `size = 0.28` `offset = [0.17, -0.40]`, 9x16 `size = 0.2` `offset = [0.0, -0.34]` `ratio = 1.0`: the circles rise
+from the hair's crown to the cloud in both. Point layers drawn before `m` was stored are deleted by `mk render` (with the empty
+claims) and drawn again; `mk post` and `mk look` call them missing.
 
 **Matte maths** (`mkmmd/matte.py`, numpy and OpenCV): a figure is kept as a signed distance field (negative inside), so
 turning and scaling it moves the contour exactly and the edge stays one pixel wide and true to the shape at any zoom: a

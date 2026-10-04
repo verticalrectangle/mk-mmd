@@ -7,14 +7,15 @@ and `mk look` (composite them, mkmmd.cutfx) all read the one plan, `plan()`, mad
         expand / collapse: scale = [1, "fill"], turn = [0, 90], center = "subject" | [x, y] | [x, y, z] | "<expression>",
                            edge = {color, width}
         slash:             angle = -20, width = 0.3, color = "love", second = {color, width, offset}, dir = "right"
-    [[insert]]      from, to, shot, shape = "thought", anchor, size, offset, ratio, outline = {color, width},
+    [[insert]]      from, to, shot, shape = "thought", anchor, radius, size, offset, ratio, outline = {color, width},
                     pop = {dur, overshoot}, out = "pop" | "expand", expand = {dur, turn, ease}, aspect.<output>
 
 A window is a run of frames over which an effect changes the picture: the `dur` seconds that END at the cut (`at`) for a
 transition, the whole `from`..`to` for an insert. Frames of the other shot inside a window are *plates*, rendered next to
 the cut's frames (`plate/<shot>/<frame>.png`); the silhouette whose figure is the matte of an expand / collapse is rendered
 as `matte/` (its coverage) and `back/` (its frame without the figure); anchors and centres that need Blender (a bone seen
-through a camera) are `point/<key>/<frame>.json`."""
+through a camera) are `point/<key>/<frame>.json`: {"p": [x, y] frame fractions, "depth", "m": frame heights per metre there}."""
+import json
 import math
 from pathlib import Path
 
@@ -32,7 +33,7 @@ _COMMON = {"at", "kind", "dur", "ease"}
 TRANSITION_KEYS = {"expand": _COMMON | {"scale", "turn", "center", "edge"},
                    "collapse": _COMMON | {"scale", "turn", "center", "edge"},
                    "slash": _COMMON | {"angle", "width", "color", "second", "dir"}}
-INSERT_KEYS = {"from", "to", "shot", "shape", "anchor", "size", "offset", "ratio", "outline", "pop", "out", "expand",
+INSERT_KEYS = {"from", "to", "shot", "shape", "anchor", "radius", "size", "offset", "ratio", "outline", "pop", "out", "expand",
                "aspect"}
 
 
@@ -155,7 +156,8 @@ def normalize_insert(spec, palette):
         if k not in spec:
             raise TransitionError(f"{what}: needs `{k}`")
     out = {"from": float(spec["from"]), "to": float(spec["to"]), "shot": str(spec["shot"]),
-           "shape": spec.get("shape", "thought"), "anchor": str(spec["anchor"]), "size": float(spec.get("size", 0.34)),
+           "shape": spec.get("shape", "thought"), "anchor": str(spec["anchor"]), "radius": float(spec.get("radius", 0.11)),
+           "size": float(spec.get("size", 0.34)),
            "offset": _pair(spec.get("offset", [0.12, -0.30]), "offset"), "ratio": float(spec.get("ratio", 1.35)),
            "outline": _ring(spec.get("outline", {}), palette, f"{what}: outline", 5.0), "aspect": {}}
     if out["to"] <= out["from"]:
@@ -164,6 +166,8 @@ def normalize_insert(spec, palette):
         raise TransitionError(f"{what}: shape = {out['shape']!r}, expected one of {SHAPES}")
     if not 0.0 < out["size"] <= 1.0:
         raise TransitionError(f"{what}: size = {out['size']}: expected a fraction of the frame height in (0, 1]")
+    if out["radius"] < 0:
+        raise TransitionError(f"{what}: radius = {out['radius']}: expected metres, not negative")
     if out["ratio"] <= 0:
         raise TransitionError(f"{what}: ratio must be positive")
     pop = spec.get("pop", {})
@@ -413,12 +417,21 @@ def pending_items(frames_dir, dem):
     return out
 
 
+def stale_point(path):
+    """Whether a point file is empty, unreadable or from before `m` was stored (it cannot size anything in metres)."""
+    try:
+        return "m" not in json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+
+
 def clear_claims(frames_dir):
-    """Delete the empty files a stopped render left in the layer folders: claims nobody finished."""
+    """Delete the layer files that cannot be used: the empty files a stopped render left (claims nobody finished) and point
+    files from before their scale `m` was stored. `mk render` draws what is missing afterwards."""
     root = Path(frames_dir)
     for sub in LAYER_DIRS:
         for p in (root / sub).rglob("*"):
-            if p.is_file() and p.stat().st_size == 0:
+            if p.is_file() and (p.stat().st_size == 0 or (sub == "point" and stale_point(p))):
                 p.unlink()
 
 
