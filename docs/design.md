@@ -244,23 +244,10 @@ the union of their frames.
 | `camera_inside` | frames with the camera inside a closed mesh | |
 | `flicker` | worst frame's 99th percentile of temporal luma noise | on rendered frames |
 | `palette` | near-black share (or median distance to a palette) | on rendered frames; `rose-pine-moon`, `rose-pine`, `rose-pine-dawn` built in |
+| `form` | boxiness 0..1 of a prop's evaluated geometry: area-weighted over loose parts, `1 - (1 - cuboid)(1 - flat_sharp)` | what a render shows at one frame, in the prop's frame; hero props stay under the default `max` 0.25; `detail.worst_parts` names the objects to fix (see Form below) |
 
 `mk check --list` prints every metric's arguments.
 
-## Looking
-
-`mk look` renders views without touching the file: the cut (scene camera with its timeline markers) per output
-aspect, named cameras, or orbit presets around any target expression relative to a cast member's facing. It writes
-one JPEG per view, aspect and frame, plus optional contact sheets, strips, A/B pairs against another scene and
-framing guides.
-
-## Building
-
-`mk build` assembles the scene from `mk.toml` in one Blender session and saves it to `[project] blend`. Stages run
-| `form` | boxiness 0..1 of a prop's evaluated geometry: area-weighted over loose parts, `1 - (1 - cuboid)(1 - flat_sharp)` | what a render shows at one frame, in the prop's frame; hero props stay under the default `max` 0.25; `detail.worst_parts` names the objects to fix (see Form below) |
-in order and each reads its own sections:
-
-| Stage | Sections | Does |
 **Form** (`form`; docs/AGENTS.md: Modelling props) measures how blocky a prop is. `prop = "car"` takes every object a render
 shows under that prop root (colliders, objects hidden from render and characters are left out), `objects = [...]` names
 objects as they are, `exclude = [...]` drops names or fnmatch patterns, `frame` picks the frame (default the project's
@@ -297,6 +284,19 @@ form_exempt = [...] }`; `exclude` removes objects altogether. Calibration on the
 | café iPod, the highest of the passing set | 0.09 |
 | café mug, chair, table, vase, saucer, plants, page, poster, lights, pen; the MMD characters | 0.00-0.01 |
 
+## Looking
+
+`mk look` renders views without touching the file: the cut (scene camera with its timeline markers) per output
+aspect, named cameras, or orbit presets around any target expression relative to a cast member's facing. It writes
+one JPEG per view, aspect and frame, plus optional contact sheets, strips, A/B pairs against another scene and
+framing guides.
+
+## Building
+
+`mk build` assembles the scene from `mk.toml` in one Blender session and saves it to `[project] blend`. Stages run
+in order and each reads its own sections:
+
+| Stage | Sections | Does |
 |---|---|---|
 | scene | `[scene]` (`start`, `end`, `settle_frames`) | empty scene, fps, frame range including the pre-roll before `frame0` |
 | sets | `[[set]]` (`name`, `kind`, `at`, `yaw`, builder keys) | library set builders with their paths, surfaces and lights (see the list below) |
