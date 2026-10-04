@@ -9,7 +9,8 @@
               layout = {kind = "stack", dir = "up", rows = 4}, colors = ["love", "gold", "pine"]}
 
 The timeline is read here and nowhere else; the words never reach a log line, an error, a report or an object property
-(objects are `<name>_l<line>w<word>` and carry `mk_lyric = [line, word]`)."""
+(objects are `<name>_l<line>w<word>`, `..._<shot>` with `lyrics.zones`, and carry `mk_lyric = [line, word]`). With `zones` the
+cut (the project's `[[shot]]` names and times) is handed to the expansion, and every zone's panel is asked for on its own."""
 import json
 
 from ...core import wordtype as LY
@@ -50,20 +51,33 @@ def _panel(ctx, spec):
     return panels[0]
 
 
+def _shots(ctx):
+    """The project's cut as [{name, from, to}] clip seconds, for `lyrics.zones` (a shot that only lends frames has none)."""
+    return [{"name": s["name"], "from": s["from"], "to": s["to"]} for s in ctx.data.get("shot", [])
+            if s.get("name") and "from" in s and "to" in s]
+
+
 def expand(ctx, spec, measure=None, report=None):
-    """The word texts of a lyrics entry. `measure` (string -> ink box, see mkmmd.core.wordtype.expand) serves the layouts
-    that put words next to each other; `report` (a dict) receives the summary: counts and (line, word) numbers."""
+    """The word texts of a lyrics entry. `measure` (string[, font] -> ink box, see mkmmd.core.wordtype.expand) serves the
+    layouts that put words next to each other; `report` (a dict) receives the summary: counts and (line, word) numbers."""
     name = spec.get("name", "?")
     tl = _timeline(ctx, spec)
+    zoned = (spec.get("lyrics") or {}).get("zones") is not None       # each zone's panel is its own: asked per block
     try:
-        specs, summary = LY.expand(spec, tl, fps=ctx.fps, frame0=ctx.frame0, panel=_panel(ctx, spec), measure=measure)
+        specs, summary = LY.expand(spec, tl, fps=ctx.fps, frame0=ctx.frame0, panel=None if zoned else _panel(ctx, spec),
+                                   measure=measure, shots=_shots(ctx), panel_of=lambda e: _panel(ctx, e))
     except LY.LyricsError as e:
         raise BuildError(str(e)) from None
     for key in ("first_frame", "last_frame", "cut_frame"):      # clip frames -> Blender frames (what `mk look` takes)
         if summary.get(key) is not None:
             summary[key] += ctx.frame0
+    for b in summary.get("blocks", []):
+        for key in ("first_frame", "last_frame"):
+            if b.get(key) is not None:
+                b[key] += ctx.frame0
     if report is not None:
         report.update(summary)
     ctx.log("lyrics", name, f"{summary['words']} word(s) of line(s) {summary['lines']}, Blender frames "
-            f"{summary['first_frame']}..{summary['last_frame']}, cut at {summary['cut_frame']}")
+            f"{summary['first_frame']}..{summary['last_frame']}, cut at {summary['cut_frame']}"
+            + (f", {len(summary['blocks'])} shot(s)" if summary.get("blocks") else ""))
     return specs

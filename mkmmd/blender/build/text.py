@@ -52,7 +52,21 @@ are packed into the .blend.
   outline = {color = "text", width = 0.05, alpha = 0.5}   a soft ring of another colour behind the letters (width in em)
                             so they read on any background; it moves and fades with the word
   ink = {...}               handwriting on a surface: build/ink.py
-The text frame is the card's: x right (up x normal), y up, z out of the surface."""
+  screen = true | {anchor = "top", side = "left", margin = 0.04, height = 0.25, width = 1.0}   type of the PICTURE, not of the
+                            scene: laid over the finished frame of whichever shot is cutting (a second pass of
+                            mkmmd/blender/styles.py, kept as `screen/<frame>.png` for `mk post`), measured in frame
+                            heights from the picture's centre (x right, y up; `size`, `box`, `at`, `offset` too), so it
+                            is placed once for every shot and both outputs; the band is the margin-inset frame (anchor: a
+                            strip of `height` at the top, bottom or middle; side: against the left or right margin,
+                            `width` the share of the room). Needs no surface
+  knockout = true           screen type reversed out of a silhouette shot (the figure's ink on the colour, the colour on
+                            the figure; with no strip or ring); in any other shot it is ordinary screen type
+  aspect.<output> = {...}   an output's own version of the entry: its keys laid over the entry's (tables merge, anything
+                            else is replaced). An entry with `screen` or `aspect` is built once per output (objects end
+                            `@<output>` when the project has several, rendered for that output only)
+  extends = "name", abstract = true   an entry that is the named entry with its own keys laid over it; an `abstract` entry
+                            is only a base and is never built (a look that eight lyric lines share is written once)
+The text frame is the card's: x right (up x normal), y up, z out of the surface; screen type's is the picture's."""
 import json
 import math
 import os
@@ -61,6 +75,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix
 
+from ...core import screentype as SR
 from ...core import wordtype as LY
 from ...core import typefx as FX
 from ...core import typeset as T
@@ -71,7 +86,9 @@ from . import BuildError, collection
 
 KNOWN = {"name", "on", "mount", "at", "facing", "up", "box", "text", "value", "font", "size", "fit", "align", "valign",
          "offset", "color", "glow", "lit", "depth", "lift", "tracking", "word_spacing", "leading", "reveal", "blink",
-         "flicker", "fade", "ghost", "halo", "haze", "back", "kinetic", "lyric", "backing", "outline"}
+         "flicker", "fade", "ghost", "halo", "haze", "back", "kinetic", "lyric", "backing", "outline", "screen", "knockout",
+         "_aspect", "_multi", "_shot"}
+MAX_NAME = 50                  # characters of a text's name: Blender keeps 63, and the node group's `mk_text_` takes 8
 LIFT = 0.002                    # m in front of the surface
 GHOST_BACK = 0.0006             # m the unlit segments sit behind the lit ones
 GHOST_STRENGTH = 0.10           # brightness of the unlit segments as displayed, as a share of the lit ones
@@ -253,10 +270,32 @@ def _mount(ctx, name):
     return ob
 
 
+def _output_size(ctx, output):
+    """(w, h) pixels of a project output."""
+    for o in ctx.project.get("outputs") or []:
+        if o["name"] == output:
+            return int(o["size"][0]), int(o["size"][1])
+    sc = bpy.context.scene
+    return int(sc.render.resolution_x), int(sc.render.resolution_y)
+
+
 def _place(ctx, spec):
     """Where the text goes: parent object, its parent-inverse (None = identity), the frame (4x4, in the parent's frame
-    or the world), the panel (w, h) or None, the owner (kind, name) and a label."""
+    or the world), the panel (w, h) or None, the owner (kind, name) and a label. Screen type has no parent: it stands on the
+    plane z = 0 of the world, one unit per frame height (docs/design.md: Text, Screen type)."""
     name = spec["name"]
+    screen = SR.screen_spec(spec)
+    if screen is not None:
+        clash = [k for k in ("on", "mount", "facing", "up") if spec.get(k) is not None]
+        if clash:
+            raise BuildError(f"text {name!r}: screen text is placed in frame heights (`at`, `box`, `screen = {{anchor, "
+                             f"margin, height}}`); drop {clash}")
+        output = spec.get("_aspect")
+        if output is None:
+            raise BuildError(f"text {name!r}: screen text is built per output (the text stage sets that up)")
+        at, box = SR.panel(screen, _output_size(ctx, output), spec.get("at"), spec.get("box"))
+        F = T.surface_matrix((at[0], at[1], 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0), float(spec.get("lift", 0.0)))
+        return None, None, F, tuple(box), ("screen", output), f"screen@{output}"
     lift = float(spec.get("lift", LIFT))
     if spec.get("on"):
         ref = str(spec["on"])
@@ -899,10 +938,16 @@ def _one(ctx, coll, spec, cache):
     unknown = sorted(set(spec) - KNOWN)
     if unknown:
         raise BuildError(f"text {name!r}: unknown keys {unknown} (known: {sorted(KNOWN)})")
+    if len(name) > MAX_NAME:                    # Blender cuts names at 63 characters: two texts would end up sharing one
+        raise BuildError(f"text {name!r}: the name is {len(name)} characters, over {MAX_NAME} (the object is 63 at most and its "
+                         "node group adds a prefix); a lyric word's is <name>_l<line>w<word>[_<shot>][@<output>]")
     if bpy.data.objects.get(name) is not None:
         raise BuildError(f"text {name!r}: an object of that name exists already")
     kin = FX.kinetic_spec(spec)
     backing = FX.backing_spec(spec)
+    if backing and SR.screen_spec(spec) is not None:
+        if "glow" not in (spec["backing"] if isinstance(spec["backing"], dict) else {}):
+            backing["glow"] = 1.0                   # the screen layer has no lights: the paper is its own emission
     outline = FX.outline_spec(spec)
     if (backing or outline) and kin is None:      # a strip or ring behind a plain text: the kinetic tree builds it too
         kin = FX.kinetic_spec({**spec, "kinetic": {}})
@@ -1005,8 +1050,21 @@ def _one(ctx, coll, spec, cache):
             ob.matrix_parent_inverse = inverse
         ob.matrix_basis = M
     ob.visible_shadow = P["depth"] > 0
+    if SR.screen_spec(spec) is not None:           # type of the picture: drawn by the screen layer, never by a scene render
+        ob["mk_screen"] = 1
+        ob.hide_render = ob.hide_viewport = True
+        show = (kin or {}).get("show")             # the frames it is on screen: the layer skips the pass without it
+        if show:
+            ob["mk_show"] = [int(round(ctx.frame(show[0]))),
+                             int(round(ctx.frame(show[1]))) if len(show) > 1 else 1_000_000]
     if lyric is not None:                  # which sung word this is, as numbers (the text itself lives in the nodes)
         ob["mk_lyric"] = [int(lyric[0]), int(lyric[1])]
+    if spec.get("_aspect") is not None and spec.get("_multi"):     # rendered in that output only (scene.bind_aspect)
+        ob["mk_aspect"] = str(spec["_aspect"])
+    if spec.get("knockout"):                       # reversed over silhouette shots whatever their `knockout` table says
+        ob["mk_knockout"] = 1
+    if spec.get("_shot") is not None:
+        ob["mk_shot"] = str(spec["_shot"])
 
     # time: keys on node inputs (a number, the typewriter ramp, the emission gain, kinetic channels), nothing else moves
     n_keys = 0
@@ -1054,15 +1112,23 @@ def _one(ctx, coll, spec, cache):
 
 
 def _measure_fn(ctx, coll, cache, spec):
-    """callable(string) -> {w, y0, y1, cap}: the ink box of a string at em size 1 in the font, tracking and spacing of
-    `spec` (centred), for the lyrics stage's layouts. Nothing about the string reaches an error message."""
-    font, label = _font(ctx, spec.get("font"), cache)
-    tracking, words = float(spec.get("tracking", 1.0)), float(spec.get("word_spacing", 1.0))
-    meas = _measurer(coll, cache, font, label, "center", tracking, words)
-    cap = meas.cap_ratio()
-    ls = float(spec.get("leading", 1.5)) * cap
+    """callable(string[, font[, tracking]]) -> {w, y0, y1, cap}: the ink box of a string at em size 1 in the font (the entry's,
+    or the registry slug / file `font`) and tracking (the entry's, or `tracking`), word spacing and leading of `spec`
+    (centred), for the lyrics stage's layouts. Nothing about the string reaches an error message."""
+    words = float(spec.get("word_spacing", 1.0))
+    by_look = {}
 
-    def measure(s):
+    def tools(ref, tracking):
+        if (ref, tracking) not in by_look:
+            font, label = _font(ctx, ref, cache)
+            meas = _measurer(coll, cache, font, label, "center", tracking, words)
+            cap = meas.cap_ratio()
+            by_look[(ref, tracking)] = (meas, cap, float(spec.get("leading", 1.5)) * cap)
+        return by_look[(ref, tracking)]
+
+    def measure(s, font=None, tracking=None):
+        meas, cap, ls = tools(spec.get("font") if font is None else font,
+                              float(spec.get("tracking", 1.0)) if tracking is None else float(tracking))
         b = meas.ink(s, ls)
         if b is None:
             raise T.TextError("the font draws nothing for one of the words")
@@ -1071,12 +1137,20 @@ def _measure_fn(ctx, coll, cache, spec):
     return measure
 
 
+def _outputs(ctx):
+    return [o["name"] for o in (ctx.project.get("outputs") or [])] or ["main"]
+
+
 def run(ctx):
-    specs = ctx.data.get("text", [])
+    try:                                                  # `extends` / `abstract`: a look shared by several entries
+        specs = SR.resolve_entries(ctx.data.get("text", []))
+    except T.TextError as e:
+        raise BuildError(str(e)) from None
     if not specs:
         return {}
     coll = collection("Text")
     cache = {"fonts": {}, "measure": {}, "kmats": {}}
+    outputs = _outputs(ctx)
     out = {}
     try:
         for spec in specs:
@@ -1085,28 +1159,38 @@ def run(ctx):
                 out[spec.get("name", "ink")] = INK.build(ctx, coll, spec)
                 ctx.log("ink", spec.get("name", "ink"), out[spec.get("name", "ink")].get("strokes"))
                 continue
-            if spec.get("lyrics") is not None:            # lyric type: one text per word, built from the timeline
-                from . import wordtype as LYB
-                report = {}
-                try:
-                    subs = LYB.expand(ctx, spec, _measure_fn(ctx, coll, cache, spec), report)
-                except T.TextError as e:
-                    raise BuildError(f"text {spec.get('name', '?')!r}: {e}") from None
-                out[spec["name"]] = {"lyrics": report}
-            else:
-                subs = [spec]
-            for sub in subs:
-                name = sub.get("name", "?")
-                try:
-                    out[name] = _one(ctx, coll, sub, cache)
-                except T.TextError as e:
-                    raise BuildError(f"text {name!r}: {e}") from None
-                except BuildError as e:
-                    if not str(e).startswith("text "):
+            try:                                          # `screen` / `aspect.<output>`: one set of objects per output
+                variants = SR.per_output(spec, outputs)
+            except T.TextError as e:
+                raise BuildError(f"text {spec.get('name', '?')!r}: {e}") from None
+            for asp, vspec in variants:
+                suffix = f"@{asp}" if asp is not None and len(outputs) > 1 else ""
+                if asp is not None:
+                    vspec = {**vspec, "_aspect": asp, "_multi": len(outputs) > 1}
+                if vspec.get("lyrics") is not None:       # lyric type: one text per word, built from the timeline
+                    from . import wordtype as LYB
+                    report = {}
+                    try:
+                        subs = LYB.expand(ctx, vspec, _measure_fn(ctx, coll, cache, vspec), report)
+                    except T.TextError as e:
+                        raise BuildError(f"text {vspec.get('name', '?')!r}: {e}") from None
+                    out[f"{vspec['name']}{suffix}"] = {"lyrics": report}
+                else:
+                    subs = [vspec]
+                for sub in subs:
+                    if suffix:
+                        sub = {**sub, "name": f"{sub.get('name', '?')}{suffix}"}
+                    name = sub.get("name", "?")
+                    try:
+                        out[name] = _one(ctx, coll, sub, cache)
+                    except T.TextError as e:
                         raise BuildError(f"text {name!r}: {e}") from None
-                    raise
-            ctx.log("text", spec.get("name", "?"),
-                    f"{len(subs)} object(s)" if len(subs) != 1 else out[subs[0]["name"]]["on"])
+                    except BuildError as e:
+                        if not str(e).startswith("text "):
+                            raise BuildError(f"text {name!r}: {e}") from None
+                        raise
+                ctx.log("text", f"{vspec.get('name', '?')}{suffix}",
+                        f"{len(subs)} object(s)" if len(subs) != 1 else out[subs[0]["name"] + suffix]["on"])
     finally:
         for m in cache["measure"].values():
             m.close()

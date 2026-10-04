@@ -15,18 +15,35 @@ with an ease-out cubic, then relaxes with a 0.13 s time constant) and a louder `
 word's own level sets the base, the voice breathes it while the note is held. When the line ends before the cut and a
 tempo tick falls between its last word and `to - 0.4 s`, the letters drip away on that tick (stretch downward from
 their tops and fall like drops, the first one leaving on the tick's frame); otherwise the line holds to the cut, i.e.
-the text is hidden from the first frame of the next shot, `round(frame0 + to * fps)` as the shots stage cuts."""
+the text is hidden from the first frame of the next shot, `round(frame0 + to * fps)` as the shots stage cuts.
+
+The tape look (`slide` arrival, `wow`, `leave = "rewind"`, the `rows` of a flow) is `mkmmd/core/tapefx.py`'s; which words
+stand out (`punch`: the loudest, or by number or level, in a font, size and style of their own) and how the type is set
+shot by shot (`zones`: a line set again in every shot it crosses, the words that were up at the cut landing again, still,
+in the new zone; `mkmmd/core/typezones.py` decides who is in which shot) are here. The layout of a zone is always the whole
+line's, so a word that carries across a cut keeps its place when the zone does not change."""
 import math
 from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import tapefx as TF
+from . import typefx as FX
+from .screentype import deep_merge
+from .typezones import plan_blocks, split_words
+
 LYRICS_KEYS = {"timeline", "line", "lines", "words", "case", "clean", "style", "arrive", "from", "to", "leave", "drip",
                "spread", "weight", "colors", "color_by", "sizes", "offsets", "layout", "tilt", "recycle", "recolor",
-               "backing"}
+               "backing", "scales", "punch", "write", "wow", "rewind", "carry", "zones"}
 CASES = ("keep", "lower", "upper", "title")
-STYLES = ("pop", "drop", "rise", "slap", "type", "none")
+STYLES = ("pop", "drop", "rise", "slap", "slide", "type", "none")
 LAYOUTS = ("same", "flow", "stack", "slots")
+LEAVES = ("cut", "drip", "rewind")
+CARRIES = ("land", "still")
+LOOK_KEYS = {"font", "color", "glow", "outline", "scale", "backing", "style", "arrive", "tilt", "weight", "reveal"}
+PUNCH_KEYS = LOOK_KEYS | {"above", "top", "words"}     # which words (the louder ones), then the look they take
+WRITE_KEYS = LOOK_KEYS | {"min_hold"}                  # which words (the held ones), then the look they take
+LIFT_STEP = 0.002                                   # frame heights between the words of screen type, so strips never z-fight
 
 DB_FLOOR, DB_RANGE, DB_GAMMA = -34.0, 29.0, 0.9     # vocal_db (dB re the vocal peak) mapped to a 0..1 weight level
 SMOOTH_SIGMA, SMOOTH_HALF = 1.6, 5                  # frames: the Gaussian that smooths vocal_db for the breathing
@@ -323,6 +340,8 @@ def arrival(style, tau, p):
         else:
             pop = 1.0
         c["scale"] = pop
+    elif style == "slide":
+        c.update(TF.slide_state(tau, p))
     return c
 
 
@@ -336,8 +355,9 @@ STYLE_DEFAULTS = {
              "base": None},
     "type": {"alpha0": 1.0, "alpha_frames": 2.0},
     "none": {"alpha0": 1.0, "alpha_frames": 2.0},
+    "slide": dict(TF.SLIDE_DEFAULTS),
 }
-STYLE_SPAN = {"pop": 0.6, "slap": 0.6, "drop": 1.0, "rise": 0.0, "type": 0.0, "none": 0.0}      # s the arrival can last
+STYLE_SPAN = {"pop": 0.6, "slap": 0.6, "drop": 1.0, "rise": 0.0, "type": 0.0, "none": 0.0, "slide": 0.6}   # s an arrival can last
 
 
 def style_params(style, over, fps):
@@ -349,6 +369,13 @@ def style_params(style, over, fps):
         raise LyricsError(f"lyrics: arrive keys {unknown} do not belong to style {style!r} (known: {sorted(p)})")
     p.update(over or {})
     p["fps"] = float(fps)
+    if style == "slide":
+        try:
+            TF.slide_side(p["from"], 0)
+        except ValueError as e:
+            raise LyricsError(f"lyrics: {e}") from None
+        if not p["dur"] > 0:
+            raise LyricsError("lyrics: slide dur must be positive")
     return p
 
 
@@ -404,22 +431,26 @@ def _cycle(seq, k, default=None):
     return seq[k % len(seq)]
 
 
-def layout_flow(boxes, rows, panel, fit, size, cap, gap=0.28, leading=1.5):
+def layout_flow(boxes, rows, panel, fit, size, cap, gap=0.28, leading=1.5, min_pitch=0.0, align="center"):
     """Words side by side along rows (`rows` = row of each word, one row per lyric line), the block centred on the panel.
     `boxes` = per word (w, y0, y1): the ink box in em with the baseline at 0 (widths include the spread headroom); `gap`
-    in em. Returns (em, [(u, v)]): metres from the panel's centre to each word's ink-box centre."""
+    in em; rows are `leading` cap heights apart, or `min_pitch` em when that is more; `align` sets each row against the
+    panel's left or right margin (the share `fit` of its width) instead of centring it. Returns (em, [(u, v)]): metres from
+    the panel's centre to each word's ink-box centre."""
     n_rows = max(rows) + 1
     count = [rows.count(r) for r in range(n_rows)]
     row_w = [sum(b[0] for b, r in zip(boxes, rows) if r == i) + gap * max(count[i] - 1, 0) for i in range(n_rows)]
     top = max(b[2] for b in boxes)
     bot = min(b[1] for b in boxes)
-    pitch = leading * cap
+    pitch = max(leading * cap, min_pitch)
     block_h = (top - bot) + (n_rows - 1) * pitch
     em = fit_em(max(row_w), block_h, panel, fit, size, cap)
+    half = 0.5 * float(panel[0]) * (0.9 if fit is None else float(fit)) / em if panel else 0.5 * max(row_w)
     used = [0.0] * n_rows
     out = []
     for (w, y0, y1), r in zip(boxes, rows):
-        x = -row_w[r] / 2 + used[r] + w / 2
+        left = {"center": -row_w[r] / 2, "left": -half, "right": half - row_w[r]}[align]
+        x = left + used[r] + w / 2
         used[r] += w + gap
         base = 0.5 * block_h - top - r * pitch                  # baseline of row r from the block's centre line
         out.append((x * em, (base + 0.5 * (y0 + y1)) * em))
@@ -464,7 +495,7 @@ def recycle_hide(lands, slots, gap=0):
 
 
 # ------------------------------------------------------------------------------------------------------ expand
-FLOW_KEYS, STACK_KEYS, SLOT_KEYS = {"gap"}, {"rows", "pitch", "dir", "align", "shift", "tilt"}, {"slots", "assign"}
+FLOW_KEYS, STACK_KEYS, SLOT_KEYS = {"gap", "rows", "align"}, {"rows", "pitch", "dir", "align", "shift", "tilt"}, {"slots", "assign"}
 DRIP_KEYS = {"g", "stretch", "life", "gap", "min_run", "order"}
 RECYCLE_KEYS = {"gap", "fade", "assign"}
 RECOLOR_KEYS = {"color", "from", "over", "ease", "words"}
@@ -504,18 +535,58 @@ def _accent(w, lyr, entry):
     return colors[((w.line - 1) if by == "line" else w.k) % len(colors)]
 
 
-def _word_boxes(words, measure, what):
+def _word_boxes(words, measure, what, fonts=None, rel=None, look=None, pads=None):
+    """(boxes, cap): per word (w, y0, y1), the ink box in em with the baseline at 0 (widths include the spread headroom), and
+    the cap height per em of the entry's own font. A word in a font of its own (`fonts[k]`) or at another size (`rel[k]`, a
+    share of the common cap height) is returned in the common em: its box is scaled so that its cap height comes out
+    `rel[k]` times the common one. `look` = {font, tracking} of the entry when it names them (the measure is then asked for
+    those too: a zone's overlay may change them). `pads[k]` = (pad x, pad y, height) in the word's em of the strip of tape
+    behind it, or None: the box is that strip's, wider and taller than the ink, so that neighbours never overlap."""
     if measure is None:
         raise LyricsError(f"lyrics: layout {what!r} measures the words; the build supplies that")
-    boxes, cap = [], None
-    for w in words:
-        m = measure(w.text)
-        cap = m["cap"] if cap is None else cap
-        boxes.append((m["w"] * (1.0 + spread_max(w.start, w.voiced_end)), m["y0"], m["y1"]))
+    n = len(words)
+    fonts = fonts or [None] * n
+    rel = rel or [1.0] * n
+    own = {k: v for k, v in (look or {}).items() if v is not None}
+
+    def ask(w, font):
+        if font is None and "tracking" not in own:
+            return measure(w.text)
+        return measure(w.text, font, own.get("tracking"))
+    ms = [ask(w, fonts[k] if fonts[k] is not None else own.get("font")) for k, w in enumerate(words)]
+    base = next((k for k in range(n) if fonts[k] is None), None)
+    cap = ms[base]["cap"] if base is not None else ask(words[0], own.get("font"))["cap"]
+    boxes = []
+    for k, (w, m, r) in enumerate(zip(words, ms, rel)):
+        f = r * cap / m["cap"]
+        x, y0, y1 = m["w"] * (1.0 + spread_max(w.start, w.voiced_end)) * f, m["y0"] * f, m["y1"] * f
+        if pads is not None and pads[k] is not None:
+            px, py, h = pads[k]
+            x += 2.0 * px * f
+            if h is not None:                              # a strip of a fixed height, centred on the ink
+                mid = 0.5 * (y0 + y1)
+                y0, y1 = min(y0, mid - 0.5 * h * f), max(y1, mid + 0.5 * h * f)
+            else:
+                y0, y1 = y0 - py * f, y1 + py * f
+        boxes.append((x, y0, y1))
     return boxes, cap
 
 
-def _places(words, entry, lyr, panel, measure):
+def _auto_rows(boxes, gap, panel, fit, size, cap, leading, min_pitch=0.0, align="center"):
+    """How many rows a flow takes when it is left to decide: the fewest that let the words be set at `size`, or, without a
+    size, the number that sets them biggest (fewer rows on a tie)."""
+    widths = [b[0] for b in boxes]
+    best = None
+    for r in range(1, len(boxes) + 1):
+        em, _ = layout_flow(boxes, TF.wrap_rows(widths, r, gap), panel, fit, size, cap, gap, leading, min_pitch, align)
+        if size is not None and em >= float(size) / cap - 1e-9:
+            return r
+        if best is None or em > best[0] * (1.0 + 1e-9):
+            best = (em, r)
+    return best[1]
+
+
+def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None):
     """Where every word goes: (places, slot of each word, common cap-height size or None). A place is {"spec": keys for
     the word's text, "offset": (u, v) metres from the panel's centre or None, "tilt": degrees or None}."""
     n = len(words)
@@ -536,12 +607,28 @@ def _places(words, entry, lyr, panel, measure):
     if kind == "same":
         return kind, places, slot_of, size
     fit, sz = entry.get("fit"), entry.get("size")
-    boxes, cap = _word_boxes(words, measure, kind)
+    boxes, cap = _word_boxes(words, measure, kind, fonts, rel,
+                             {"font": entry.get("font"), "tracking": entry.get("tracking")}, pads)
     if kind == "flow":
-        lines = sorted({w.line for w in words})
-        rows = [lines.index(w.line) for w in words]
         gap = float(lay.get("gap", 0.28)) * float(entry.get("word_spacing", 1.0))
-        em, off = layout_flow(boxes, rows, panel, fit, sz, cap, gap, float(entry.get("leading", 1.5)))
+        leading = float(entry.get("leading", 1.5))
+        scr = entry.get("screen")                          # rows follow the side of a screen band unless told otherwise
+        side = scr.get("side") if isinstance(scr, dict) else None
+        row_align = lay.get("align") or {"left": "left", "right": "right"}.get(side, "center")
+        if row_align not in ("left", "center", "right"):
+            raise LyricsError("lyrics: flow align is left, center or right")
+        floor = 1.05 * (max(b[2] for b in boxes) - min(b[1] for b in boxes)) if pads is not None else 0.0   # no strip overlaps
+        nrows = lay.get("rows")
+        if nrows is None:                                   # one row per lyric line
+            lines = sorted({w.line for w in words})
+            rows = [lines.index(w.line) for w in words]
+        else:                                               # the words wrapped into that many rows of even width
+            if nrows == "auto":
+                nrows = _auto_rows(boxes, gap, panel, fit, sz, cap, leading, floor, row_align)
+            elif isinstance(nrows, bool) or not isinstance(nrows, int) or nrows < 1:
+                raise LyricsError("lyrics: flow rows is a whole number of rows (at least 1) or 'auto'")
+            rows = TF.wrap_rows([b[0] for b in boxes], nrows, gap)
+        em, off = layout_flow(boxes, rows, panel, fit, sz, cap, gap, leading, floor, row_align)
         slot_of = list(range(n))
         aligns = ["center"] * n
         tilts = [None] * n
@@ -590,7 +677,7 @@ def _with_offset(places, off0):
             pl["spec"]["offset"] = [off0[0] + pl["offset"][0], off0[1] + pl["offset"][1]]
 
 
-def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None):
+def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None, shots=None, panel_of=None):
     """Turn a `[[text]]` entry with `lyrics = {...}` into (specs, summary): one ordinary text spec per selected word that
     is ever on screen, plus numbers only (no lyric text) about what was built.
 
@@ -599,10 +686,13 @@ def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None):
     tl       the loaded timeline (dict)
     fps, frame0   the project's; `from` / `to` are rounded to frames exactly as the shots stage rounds its cuts
     panel    (w, h) metres of the entry's surface or `box`, for the stack / flow / slots layouts and panel-sized motion
-    measure  callable(string) -> {"w", "y0", "y1", "cap"}: the ink box of `string` at em size 1 (centred, baseline at 0)
-             and the cap height per em; only layouts that put words next to each other need it
-    Each spec has `name` `<name>_l<line>w<word>`, `text`, `lyric = [line, word]` and a `kinetic` table (docs/design.md:
-    Text, lyrics) of keys the text stage turns into node inputs."""
+    measure  callable(string[, font]) -> {"w", "y0", "y1", "cap"}: the ink box of `string` at em size 1 (centred, baseline at
+             0) and the cap height per em, in the entry's font or in `font`; only layouts that put words next to each
+             other need it
+    shots    [{"name", "from", "to"}] clip seconds of the project's cut, for `lyrics.zones` (a line set again in every shot)
+    panel_of callable(entry) -> (w, h): the panel of an entry with a zone's overlay laid over it (zones only)
+    Each spec has `name` `<name>_l<line>w<word>` (`..._<shot>` with zones), `text`, `lyric = [line, word]` and a `kinetic`
+    table (docs/design.md: Text, lyrics) of keys the text stage turns into node inputs."""
     name = entry.get("name")
     if not name:
         raise LyricsError("[[text]] with lyrics needs a name")
@@ -616,13 +706,83 @@ def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None):
         if bad in entry:
             raise LyricsError(f"text {name!r}: a lyrics entry takes its words from the timeline: drop `{bad}`")
     try:
+        if lyr.get("zones") is not None:
+            return _expand_zones(entry, name, lyr, tl, float(fps), int(frame0), shots, panel_of or (lambda e: panel), measure)
         return _expand(entry, name, lyr, tl, float(fps), int(frame0), panel, measure)
     except LyricsError as e:
         msg = str(e)
         raise LyricsError(msg if msg.startswith("text ") else f"text {name!r}: {msg}") from None
 
 
-def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
+def _check_look(tab, what):
+    """The look a punch or write table gives its words has to make sense even when no word takes it."""
+    if tab.get("style") == "rise":
+        raise LyricsError(f"lyrics: a {what} word cannot arrive as steam; give the whole line style 'rise'")
+    if not float(tab.get("scale", 1.0)) > 0:
+        raise LyricsError(f"lyrics: {what} scale must be positive")
+
+
+def _punch(lyr, words):
+    """(table or None, flag per word): the words `lyrics.punch` picks, by level (`above`, dB re the vocal peak, against the
+    mean `vocal_db` over the note), the `top` loudest of the selection, and / or by number (`words`, 1-based within the
+    selection)."""
+    pun = _table(lyr, "punch", PUNCH_KEYS)
+    flags = [False] * len(words)
+    if pun is None:
+        return None, flags
+    above, idx, top = pun.get("above"), pun.get("words"), pun.get("top")
+    if above is None and idx is None and top is None:
+        raise LyricsError("lyrics: punch needs `above` (a level in dB), `top` (a number of words) or `words` (numbers "
+                          "within the selection)")
+    if above is not None:
+        _seconds(above, "punch above")
+    if top is not None and (isinstance(top, bool) or not isinstance(top, int) or top < 1):
+        raise LyricsError("lyrics: punch top is a whole number of words (at least 1)")
+    if idx is not None and not (isinstance(idx, (list, tuple))
+                                and all(isinstance(i, int) and not isinstance(i, bool) for i in idx)):
+        raise LyricsError("lyrics: punch words is a list of whole numbers (1-based, within the selection)")
+    _check_look(pun, "punch")
+    loudest = set(sorted(range(len(words)), key=lambda k: (-words[k].db, k))[:top]) if top is not None else set()
+    for k, w in enumerate(words):
+        flags[k] = (above is not None and w.db >= float(above)) or (idx is not None and k + 1 in idx) or k in loudest
+    return pun, flags
+
+
+def _write(lyr, words, taken):
+    """(table or None, flag per word): the words `lyrics.write` picks, those not already punch whose note is held for at least
+    `min_hold` seconds (0.6): they take a look of their own, typically `reveal = true`, written letter by letter over the note
+    (the marker lettering of a held word, in the hand it is sung in)."""
+    wr = _table(lyr, "write", WRITE_KEYS)
+    flags = [False] * len(words)
+    if wr is None:
+        return None, flags
+    hold = _seconds(wr.get("min_hold", 0.6), "write min_hold")
+    _check_look(wr, "write")
+    for k, w in enumerate(words):
+        flags[k] = not taken[k] and w.voiced_end - w.start >= hold
+    return wr, flags
+
+
+def _scales(lyr, var, n):
+    """Per word, its cap height as a share of the line's common one: `lyrics.scales` cycled over the words times the `scale`
+    of the punch or write table the word takes its look from (`var[k]`, or None)."""
+    scales = lyr.get("scales")
+    if scales is not None:
+        scales = [scales] if isinstance(scales, (int, float)) and not isinstance(scales, bool) else scales
+        if not (isinstance(scales, (list, tuple)) and scales
+                and all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 for x in scales)):
+            raise LyricsError("lyrics: scales is a list of positive numbers (cap heights as shares of the common one)")
+    rel = [float(_cycle(scales, k, 1.0)) for k in range(n)]
+    for k, v in enumerate(var):
+        if v is not None:
+            s = float(v.get("scale", 1.0))
+            if not s > 0:
+                raise LyricsError("lyrics: a punch or write scale must be positive")
+            rel[k] *= s
+    return rel
+
+
+def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
     words = select(tl, lyr.get("line"), lyr.get("lines"), lyr.get("words"), fps, lyr.get("case", "keep"),
                    lyr.get("clean", False))
     n = len(words)
@@ -633,7 +793,54 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
     cut = cut_frame(t_to, fps, frame0)
     lands = [landing_frame(w.start, fps, first) for w in words]
 
-    kind, places, slot_of, size = _places(words, entry, lyr, panel, measure)
+    # words that stand out in a look of their own (`punch`: the loudest; `write`: held long) and words already up when this
+    # block starts (`carry`)
+    pun, is_punch = _punch(lyr, words)
+    wri, is_write = _write(lyr, words, is_punch)
+    var = [pun if is_punch[k] else (wri if is_write[k] else None) for k in range(n)]
+    rel = _scales(lyr, var, n)
+    fonts = [v.get("font") if v else None for v in var]
+    carry = lyr.get("carry", "land")
+    if carry not in CARRIES:
+        raise LyricsError(f"lyrics: carry is one of {list(CARRIES)}")
+    carried = [first is not None and int(math.floor(w.start * fps + 0.4)) < first for w in words]
+    styles = {}
+
+    def params_of(k):                                       # (style, its numbers) of word k
+        v = var[k]
+        if carry == "still" and carried[k]:
+            s, over = "none", None
+        elif v is not None and v.get("style"):
+            s, over = v["style"], v.get("arrive")
+        else:
+            s, over = style, lyr.get("arrive")
+        if (s, repr(over)) not in styles:
+            styles[(s, repr(over))] = p if (s, over) == (style, lyr.get("arrive")) else style_params(s, over, fps)
+        return s, styles[(s, repr(over))]
+
+    backing = lyr.get("backing")
+    if backing is not None and not isinstance(backing, (dict, list, tuple, bool)):
+        raise LyricsError("lyrics: backing is a table or a list of tables (cycled over the words)")
+
+    bare = bool(entry.get("knockout"))                      # type that is reversed out of a figure has no strip or ring
+
+    def back_of(k):                                         # the strip behind word k, as the loop below will give it
+        if bare:
+            return None
+        if var[k] is not None and "backing" in var[k]:
+            return var[k]["backing"]
+        if backing is not None:
+            return _cycle(backing, k) if isinstance(backing, (list, tuple)) else backing
+        return entry.get("backing")
+
+    pads = []                                               # a strip is wider and taller than its ink: the layout leaves room
+    for k in range(n):
+        b = FX.backing_spec({"backing": back_of(k)})
+        pads.append(None if b is None else (b["pad"][0], b["pad"][1], b["height"]))
+    kind, places, slot_of, size = _places(words, entry, lyr, panel, measure,
+                                          fonts if any(f is not None for f in fonts) else None,
+                                          rel if any(r != 1.0 for r in rel) else None,
+                                          pads if any(x is not None for x in pads) else None)
     _with_offset(places, entry.get("offset") or (0.0, 0.0))
     tilts = lyr.get("tilt")
     tilt_rnd = 0.0
@@ -643,11 +850,12 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
         tilt_rnd, tilts = float(tilts.get("random", 0.0)), None
     tilts = [tilts] if isinstance(tilts, (int, float)) and not isinstance(tilts, bool) else tilts
 
-    # when each word is gone: the cut, its drip, the next word taking its slot
+    # when each word is gone: the cut, its drip or rewind, the next word taking its slot
     hide = [cut] * n
     leave = lyr.get("leave", "cut")
-    if leave not in ("cut", "drip"):
-        raise LyricsError("lyrics: leave is 'cut' (hold to the cut) or 'drip' (drip away on a tempo tick when one fits)")
+    if leave not in LEAVES:
+        raise LyricsError(f"lyrics: leave is one of {list(LEAVES)}: hold to the cut, drip away or rewind on a tempo tick "
+                          "when one fits")
     drip = _table(lyr, "drip", DRIP_KEYS) or {}
     t_drip = None
     drip_t0 = [None] * n
@@ -661,6 +869,22 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
         for k in range(n):
             drip_t0[k] = t_drip + float(drip.get("gap", 0.0)) * ranks[k]
             hide[k] = min(hide[k], int(math.ceil(drip_end(drip_t0[k], 0.0, float(drip.get("life", 0.55))) * fps)) + 1)
+    rew = dict(TF.REWIND_DEFAULTS, **(_table(lyr, "rewind", set(TF.REWIND_DEFAULTS)) or {}))
+    t_rew, rew_t0 = None, [None] * n
+    if leave == "rewind":
+        if not rew["life"] > 0:
+            raise LyricsError("lyrics: rewind life must be positive")
+        try:
+            ranks = TF.rewind_ranks(rew["order"], n)
+        except ValueError as e:
+            raise LyricsError(f"lyrics: {e}") from None
+        t_rew = exit_tick(ticks_of(tl), max(w.voiced_end for w in words), t_to, fps, float(rew["min_run"]))
+        if t_rew is not None:
+            for k in range(n):
+                rew_t0[k] = t_rew + float(rew["gap"]) * ranks[k]
+                hide[k] = min(hide[k], int(math.ceil((rew_t0[k] + float(rew["life"])) * fps)) + 1)
+    wow = _table(lyr, "wow", set(TF.WOW_DEFAULTS))
+    wow_p = None if wow is None else dict(TF.WOW_DEFAULTS, **wow)
     rec = _table(lyr, "recycle", RECYCLE_KEYS)
     group = slot_of
     if rec is not None:
@@ -672,8 +896,8 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
             if h is not None:
                 hide[k] = min(hide[k], h)
 
-    keep = [k for k in range(n) if hide[k] > lands[k]]              # a word that is never on screen drops out
-    skipped = [[words[k].line, words[k].index] for k in range(n) if k not in keep]
+    keep = [k for k in range(n) if hide[k] > lands[k] and (only is None or k in only)]   # never on screen: drops out
+    skipped = [[words[k].line, words[k].index] for k in range(n) if k not in keep and (only is None or k in only)]
     t_last = lands[keep[-1]] / fps if keep else 0.0                 # the last word's landing (steam words stop then)
     spread = lyr.get("spread", True)
     spread_k = 0.0 if spread is False else float((_table(lyr, "spread", SPREAD_KEYS) or {}).get("scale", 1.0))
@@ -711,11 +935,9 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
     if offsets is not None and (not isinstance(offsets, (list, tuple)) or not offsets or not all(
             isinstance(o, (list, tuple)) and len(o) == 2 and all(isinstance(x, (int, float)) for x in o) for o in offsets)):
         raise LyricsError("lyrics: offsets is a list of [u, v] metres (cycled over the words)")
-    backing = lyr.get("backing")
-    if backing is not None and not isinstance(backing, (dict, list, tuple, bool)):
-        raise LyricsError("lyrics: backing is a table or a list of tables (cycled over the words)")
     inherit = {k: v for k, v in entry.items() if k not in ("lyrics", "name", "on")}
     surfaces = entry.get("on")
+    screen_type = entry.get("screen") not in (None, False)
     specs = []
     for k in keep:
         w = words[k]
@@ -737,7 +959,9 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
             sub["size"] = float(_cycle(sizes, k))
         if size is not None:
             sub.pop("fit", None)
-            sub["size"] = size
+            sub["size"] = size * rel[k]
+        elif rel[k] != 1.0 and sub.get("size") is not None:             # a layout that leaves the size alone: scale it
+            sub["size"] = float(sub["size"]) * rel[k]
         if places[k]["tilt"] is not None:
             tilt = places[k]["tilt"]
         elif tilt_rnd:
@@ -746,24 +970,122 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure):
             tilt = _cycle(tilts, k, 0.0)
         if backing is not None:
             sub["backing"] = _cycle(backing, k) if isinstance(backing, (list, tuple)) else backing
-        pw = dict(p)
-        if style == "rise":
+        wt_k = wt
+        v = var[k]
+        if v is not None:                                               # a word that stands out has its own look
+            for key in ("font", "color", "glow", "outline", "backing"):
+                if key in v:
+                    sub[key] = v[key]
+            if "tilt" in v:
+                tilt = float(v["tilt"])
+            if v.get("weight") is not None:
+                wt_k = _table(v, "weight", WEIGHT_KEYS) or {}
+        if bare:
+            sub.pop("backing", None)
+            sub.pop("outline", None)
+        if screen_type:                                                 # stacked in depth: strips never z-fight
+            sub["lift"] = float(inherit.get("lift", 0.0)) + LIFT_STEP * (k + 1)
+        k_style, pk = params_of(k)
+        pw = dict(pk)
+        if k_style == "slide":
+            pw["side"] = TF.slide_side(pw["from"], k)
+        if k_style == "rise":
             pw["span"] = max(t_last - lands[k] / fps, 0.0)
             off = places[k]["offset"]
             pw["dxp0"] = (base_off[0] - off[0]) / panel[0] if pw["span"] > 0 else 0.0
             pw["dyp0"] = (base_off[1] - off[1]) / panel[1] if pw["span"] > 0 else 0.0
             pw["phi"] = 2.0 * math.pi * h01(w.line, w.index, 3)
         rcw = rc if rc is not None and (rc_words is None or rc_words[0] <= k + 1 <= rc_words[1]) else None
-        sub["kinetic"] = _kinetic(w, k, n, lands, hide[k], style, pw, fps, spread_k, wt, rcw, vs, tilt, drip, drip_t0[k],
-                                  rec, group, t_last)
-        if style == "type":
+        wow_k = (wow_p, 2.0 * math.pi * h01(w.line, w.index, 41)) if wow_p and TF.wow_held(w.start, w.voiced_end, wow_p) else None
+        rew_k = (rew_t0[k], rew) if rew_t0[k] is not None else None
+        sub["kinetic"] = _kinetic(w, k, n, lands, hide[k], k_style, pw, fps, spread_k, wt_k, rcw, vs, tilt, drip, drip_t0[k],
+                                  rec, group, t_last, wow_k, rew_k)
+        if k_style == "type" or (v is not None and v.get("reveal")):    # written letter by letter over the note
             t_from = lands[k] / fps
             sub["reveal"] = {"from": t_from, "to": max(w.voiced_end, t_from + 1.0 / fps)}
         specs.append(sub)
     summary = {"words": len(specs), "lines": sorted({w.line for w in words}), "style": style, "layout": kind,
                "skipped": skipped, "first_frame": min(lands[k] for k in keep) if keep else None,
                "last_frame": max(lands[k] for k in keep) if keep else None, "cut_frame": cut,
-               "drip_from": None if t_drip is None else round(t_drip, 4)}
+               "drip_from": None if t_drip is None else round(t_drip, 4),
+               "rewind_from": None if t_rew is None else round(t_rew, 4),
+               "carried": [[words[k].line, words[k].index] for k in keep if carried[k]],
+               "punch": [[words[k].line, words[k].index] for k in keep if is_punch[k]],
+               "write": [[words[k].line, words[k].index] for k in keep if is_write[k]]}
+    return specs, summary
+
+
+def _expand_zones(entry, name, lyr, tl, fps, frame0, shots, panel_of, measure):
+    """A line set again in every shot it is on screen in (`lyrics.zones = {<shot> = {overlay}}`, docs/design.md: Lyrics).
+    The words that are up at a cut come with it and land again on the first frame of the next shot (`carry`), each shot's block
+    is the entry with that shot's overlay laid over it (`deep_merge`: `screen`, `font`, `color`, `lyrics = {backing, layout,
+    ...}`, anything), and its objects are named `<name>_l<line>w<word>_<shot>`. Only the last block takes the line's own `leave`;
+    the others hold to their shot's end."""
+    zones = lyr["zones"]
+    if not isinstance(zones, dict) or not zones:
+        raise LyricsError("lyrics: zones is a table of `<shot> = {overlay}` tables")
+    if lyr.get("line") is None or lyr.get("lines") is not None:
+        raise LyricsError("lyrics: zones set one `line` shot by shot (not `lines`)")
+    cut_shots = sorted((s for s in (shots or []) if s.get("from") is not None and s.get("to") is not None),
+                       key=lambda s: float(s["from"]))
+    if not cut_shots:
+        raise LyricsError("lyrics: zones need the project's [[shot]]s (the build gives the cut to the lyrics stage)")
+    shot_names = [s["name"] for s in cut_shots]
+    for z, over in zones.items():
+        if z not in shot_names:
+            raise LyricsError(f"lyrics: zones name the shot {z!r}, which the project does not cut to (shots: {shot_names})")
+        if not isinstance(over, dict):
+            raise LyricsError(f"lyrics: zone {z!r} is a table of overrides")
+    words = select(tl, lyr["line"], None, lyr.get("words"), fps, lyr.get("case", "keep"), lyr.get("clean", False))
+    n = len(words)
+    t_from = _seconds(lyr["from"], "from") if lyr.get("from") is not None else None
+    first = cut_frame(t_from, fps, frame0) if t_from is not None else None
+    t_to = _seconds(lyr["to"], "to") if lyr.get("to") is not None else max(w.voiced_end for w in words)
+    cut = cut_frame(t_to, fps, frame0)
+    lands = [landing_frame(w.start, fps, first) for w in words]
+    spans = [(s["name"], cut_frame(float(s["from"]), fps, frame0), cut_frame(float(s["to"]), fps, frame0)) for s in cut_shots]
+    blocks = plan_blocks(lands, [cut] * n, spans)
+    if not blocks:
+        raise LyricsError(f"lyrics: no word of line {lyr['line']} is on screen in a shot of the cut")
+    base = {k: v for k, v in entry.items() if k != "lyrics"}
+    specs, summary = [], {"words": 0, "lines": [int(lyr["line"])], "skipped": [[words[k].line, words[k].index]
+                                                                                for k in split_words(blocks, n)],
+                          "blocks": [], "carried": [], "punch": [], "write": [], "cut_frame": cut, "first_frame": None,
+                          "last_frame": None, "drip_from": None, "rewind_from": None}
+    for i, b in enumerate(blocks):
+        idx = b["words"]
+        if idx != list(range(idx[0], idx[-1] + 1)):
+            raise LyricsError(f"lyrics: the words on screen in shot {b['shot']!r} are not a run of the line")
+        shot = next(s for s in cut_shots if s["name"] == b["shot"])
+        merged = deep_merge({**base, "lyrics": {k: v for k, v in lyr.items() if k != "zones"}}, zones.get(b["shot"]))
+        ml = {k: v for k, v in merged["lyrics"].items() if k != "zones"}
+        blk = {"words": [words[idx[0]].index, words[idx[-1]].index]}      # reported as numbers; the layout takes the whole line
+        ml["from"] = float(shot["from"]) if t_from is None else max(t_from, float(shot["from"]))
+        if i == 0:                                           # a word that began before its first shot lands there as usual
+            ml["carry"] = "land"
+        if i < len(blocks) - 1:                              # a shot that the line goes on past: hold to its end
+            ml["to"], ml["leave"] = float(shot["to"]), "cut"
+        else:
+            ml["to"] = t_to
+        merged["lyrics"] = ml
+        sub, summ = _expand(merged, name, ml, tl, fps, frame0, panel_of(merged), measure, only=set(idx))
+        for s in sub:
+            s["name"] = f"{s['name']}_{b['shot']}"
+            s["_shot"] = b["shot"]
+        specs += sub
+        summary["words"] += summ["words"]
+        summary["skipped"] += summ["skipped"]
+        summary["carried"] += summ["carried"]
+        for key in ("punch", "write"):
+            summary[key] += [x for x in summ[key] if x not in summary[key]]
+        summary["blocks"].append({"shot": b["shot"], "words": blk["words"], "style": summ["style"], "layout": summ["layout"],
+                                  "first_frame": summ["first_frame"], "last_frame": summ["last_frame"]})
+        for key, pick in (("first_frame", min), ("last_frame", max)):
+            if summ[key] is not None:
+                summary[key] = summ[key] if summary[key] is None else pick(summary[key], summ[key])
+        for key in ("drip_from", "rewind_from"):
+            summary[key] = summary[key] if summ[key] is None else summ[key]
+    summary["style"], summary["layout"] = summary["blocks"][0]["style"], summary["blocks"][0]["layout"]
     return specs, summary
 
 
@@ -783,6 +1105,8 @@ def _arrive_keys(style, land, hide, p, fps):
     span = STYLE_SPAN.get(style, 0.0)
     if style == "rise":
         span = p["span"] + 0.25
+    if style == "slide":
+        span = p["dur"] + 0.4
     if p.get("alpha0", 1.0) < 1.0:
         span = max(span, p["alpha_frames"] / fps)
     last = min(land + int(math.ceil(span * fps)) + 1, hide - 1)
@@ -794,7 +1118,48 @@ def _arrive_keys(style, land, hide, p, fps):
     return rows
 
 
-def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, drip, drip_t0, rec, slot_of, t_last):
+REST = {"scale": 1.0, "sx": 1.0, "sy": 1.0, "dx": 0.0, "dy": 0.0, "dxp": 0.0, "dyp": 0.0, "rot": 0.0, "alpha": 1.0}
+
+
+def _held(keys, c0, c1, fps, rest):
+    """{frame: value} on frames c0 .. c1 of linear keys on whole frames: the last key's value is held after the keys."""
+    by = {int(round(t * fps)): v for t, v in keys}
+    out, cur = {}, rest
+    for c in range(c0, c1 + 1):
+        cur = by.get(c, cur)
+        out[c] = cur
+    return out
+
+
+def _tape(arr, w, land, last, fps, wow, rew):
+    """The tape effects added onto the arrival's channels, frame by frame (in place): the wow and flutter of a held note
+    (`wow` = (numbers, phase)) from the landing until the note has faded out, and the rewind (`rew` = (start s, numbers)) from
+    its start to the last frame the word is up."""
+    c1 = land
+    if wow is not None:
+        c1 = max(c1, min(last, int(math.ceil((w.voiced_end + wow[0]["tail"]) * fps))))
+    if rew is not None:
+        c1 = max(c1, last)
+    cur = {ch: _held(arr[ch], land, c1, fps, REST[ch]) for ch in ("dx", "dy", "dxp", "sx", "rot", "alpha")}
+    for c in range(land, c1 + 1):
+        t = c / fps
+        if wow is not None:
+            a = TF.wow_at(t, w.start, w.voiced_end, wow[0], wow[1])
+            cur["dx"][c] += a["dx"]
+            cur["dy"][c] += a["dy"]
+            cur["rot"][c] += a["rot"]
+            cur["sx"][c] *= 1.0 + a["sx"]
+        if rew is not None and t >= rew[0]:
+            r = TF.rewind_state((t - rew[0]) / float(rew[1]["life"]), rew[1])
+            cur["dxp"][c] += r["dxp"]
+            cur["sx"][c] *= r["sx"]
+            cur["alpha"][c] *= r["alpha"]
+    for ch, by in cur.items():
+        arr[ch] = [(c / fps, v) for c, v in by.items()]
+
+
+def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, drip, drip_t0, rec, slot_of, t_last,
+             wow=None, rew=None):
     """The `kinetic` table of one word (the keys are listed in mkmmd/core/typefx.py)."""
     land = lands[k]
     last = hide - 1
@@ -804,6 +1169,8 @@ def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, dr
         arr["dx"] = [(t, v * (2.0 * h01(w.line, w.index, 21) - 1.0)) for t, v in arr["dx"]]
     if p.get("wobble") and k % 2 == 0:
         arr["rot"] = [(t, -v) for t, v in arr["rot"]]
+    if wow is not None or rew is not None:          # the held note's wow and flutter, the rewind: on top of the arrival
+        _tape(arr, w, land, last, fps, wow, rew)
     for ch in ("scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot"):
         keys = arr[ch]
         if ch == "rot" and tilt:

@@ -23,6 +23,10 @@ from the passes that do work, all inside the one render call of a frame and comp
          emission shows them, keyed opacity (the alpha attribute of kinetic words) included.
   knock  the same, alpha only, for the `knockout` objects: ink colour on the background, background colour where it
          overlaps the silhouette.
+  screen the text stage's screen type (objects with `mk_screen`, hidden from every scene render): the same pass through an
+         orthographic camera one frame height tall, kept off the frame as its own RGBA layer file (`render(path, layer=...)`;
+         `mk post` lays it over the cut and its effects; `prepare` answers "screen" for a shot with no look of its own); its
+         `knockout` type goes into the knock pass of a silhouette, in the picture.
 No file is left behind and nothing in the scene stays changed.
 
 reflection. A plane light probe at the glass object and, in the glass material, a mirror layer in front of the glass
@@ -35,6 +39,7 @@ import tempfile
 import bpy
 import numpy as np
 
+from ..core import screentype as SR
 from ..core import shotstyle as SS
 from . import mirror as MR
 
@@ -115,6 +120,26 @@ def _save(path, rgb, quality=90):
             img.save()
     finally:
         bpy.data.images.remove(img)
+
+
+def _save_rgba(path, rgba):
+    """Write straight RGBA (h, w, 4) float in 0..1, top row first, as an 8-bit PNG with the values untouched (Blender's own
+    writer, a byte image: no premultiplying); the file appears whole or not at all, and its folder is made."""
+    h, w, _ = rgba.shape
+    buf = np.clip(rgba, 0.0, 1.0).astype(np.float32)[::-1]
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp.png"
+    img = bpy.data.images.new("mk_screen_out", w, h, alpha=True, float_buffer=False)
+    try:
+        img.colorspace_settings.name = "Non-Color"
+        img.alpha_mode = "STRAIGHT"
+        img.pixels.foreach_set(buf.reshape(-1))
+        img.filepath_raw = tmp
+        img.file_format = "PNG"
+        img.save()
+    finally:
+        bpy.data.images.remove(img)
+    os.replace(tmp, path)
 
 
 def _truthy_props(ob):
@@ -233,6 +258,9 @@ class Looks:
         self.info = {}
         self.cl = {}
         self.tint_values = []
+        self.screen_names = [o.name for o in self.sc.objects if "mk_screen" in o.keys()]
+        self.screen = ([], [])            # (type over the frame, type reversed out of a silhouette) at the prepared frame
+        self.screen_cam = None
 
     # ---------------------------------------------------------------- state machine
     def spec_at(self, frame, aspect=None, shot=None):
@@ -254,8 +282,9 @@ class Looks:
         return entry["name"], kind, look[kind]
 
     def prepare(self, frame, aspect=None, shot=None):
-        """Bring the scene into the look of `frame` (call after `frame_set`), or of `shot` when one is named. Returns the
-        active kind or None."""
+        """Bring the scene into the look of `frame` (call after `frame_set`), or of `shot` when one is named (the plates of
+        a transition or insert: no screen type). Returns the active kind, "screen" when only screen type is on the frame,
+        or None."""
         name, kind, spec = self.spec_at(frame, aspect, shot)
         key = (name, aspect, kind)
         if key != self.key:
@@ -266,7 +295,10 @@ class Looks:
                 getattr(self, "_enter_" + kind)(name, spec)
         if self.kind == "silhouette":
             self._update_silhouette()
-        return self.kind
+        self.screen = self._screen_live(frame, aspect) if shot is None and self.screen_names else ([], [])
+        if self.kind != "silhouette":              # nothing to reverse out of: all of it goes over the frame
+            self.screen = (self.screen[0] + self.screen[1], [])
+        return self.kind or ("screen" if self.screen[0] else None)
 
     def leave(self):
         if self.kind is not None:
@@ -274,15 +306,96 @@ class Looks:
             self.kind, self.spec = None, None
         self.key = None
 
-    close = leave
+    def close(self):
+        self.leave()
+        if self.screen_cam is not None:
+            data = self.screen_cam.data
+            bpy.data.objects.remove(self.screen_cam)
+            bpy.data.cameras.remove(data)
+            self.screen_cam = None
 
-    def render(self, path):
+    def render(self, path, layer=None):
         """Render the current frame to `path` in the active look (a plain render for the reflection, whose image settings
-        are the scene's; the composed silhouette is written as the file type of `path`)."""
+        are the scene's; the composed silhouette is written as the file type of `path`). The screen type of the frame goes
+        into its own RGBA file `layer` (written first: a frame on disk always has its layer) and is left off the picture, so
+        `mk post` can lay it over whatever the cut effects make of the frame; with no `layer` it is laid over the picture
+        here. A silhouette's `knockout` type belongs to its figure and is always in the picture."""
+        over = self.screen[0]
+        rgba = self._screen_pass(over, "screen") if over else None
+        if rgba is not None and layer is not None:
+            _save_rgba(layer, rgba)
+            rgba = None
         if self.kind == "silhouette":
-            return self._render_silhouette(path)
-        self.sc.render.filepath = path
-        bpy.ops.render.render(write_still=True)
+            img = self.compose(self.passes())
+        elif rgba is not None:
+            img = self._shoot_scene()
+        else:
+            self.sc.render.filepath = path
+            bpy.ops.render.render(write_still=True)
+            return
+        if rgba is not None:
+            img = SR.composite(img, rgba)
+        _save(path, img)
+
+    # ---------------------------------------------------------------- screen type
+    def _screen_live(self, frame, aspect):
+        """(names of the screen type on screen at `frame` in an output, those of them to reverse out of a silhouette): the
+        objects made for that output (`mk_aspect`) whose `mk_show` frames [on, off) hold the frame."""
+        over, knock = [], []
+        for n in self.screen_names:
+            o = bpy.data.objects[n]
+            if aspect is not None and "mk_aspect" in o.keys() and o["mk_aspect"] != aspect:
+                continue
+            show = o.get("mk_show")
+            if show is not None and not show[0] <= frame < show[1]:
+                continue
+            (knock if "mk_knockout" in o.keys() else over).append(n)
+        return over, knock
+
+    def _screen_camera(self):
+        """The orthographic camera that frames the plane z = 0 one frame height tall (made once, removed by `close`)."""
+        if self.screen_cam is None:
+            cd = bpy.data.cameras.new("mk_screen_layer")
+            cd.type, cd.sensor_fit, cd.clip_start, cd.clip_end = "ORTHO", "AUTO", 0.1, 100.0
+            ob = bpy.data.objects.new("mk_screen_layer", cd)
+            ob.location = (0.0, 0.0, 10.0)                            # looks down -z at the plane, +y up
+            self.sc.collection.objects.link(ob)
+            self.screen_cam = ob
+        return self.screen_cam
+
+    def _screen_pass(self, names, tag):
+        """The given screen type as its emission shows it (lights off, black world), through the screen camera -> straight
+        RGBA, one pixel per pixel of the frame. The shot markers are set aside meanwhile: a render would switch the camera
+        back to the shot's."""
+        sc, rs = self.sc, Restore()
+        try:
+            cam = self._screen_camera()
+            r = sc.render
+            cam.data.ortho_scale = SR.ortho_scale((r.resolution_x, r.resolution_y))
+            marks = [(m.name, m.frame, m.camera) for m in sc.timeline_markers]
+            rs.attr(sc, "camera", cam)
+            for m in list(sc.timeline_markers):
+                sc.timeline_markers.remove(m)
+
+            def put_back():
+                for mname, f, c in marks:
+                    sc.timeline_markers.new(mname, frame=f).camera = c
+            rs.call(put_back)
+            for n in names:
+                rs.attr(bpy.data.objects[n], "hide_render", False)
+            return self._type(names, tag=tag)
+        finally:
+            rs.run()
+
+    def _shoot_scene(self):
+        """The scene's own render of the frame (its engine, light and view transform) as display values -> (h, w, 3)."""
+        rs, ims = Restore(), self.sc.render.image_settings
+        try:
+            for k, val in (("file_format", "PNG"), ("color_mode", "RGB"), ("color_depth", "8"), ("compression", 0)):
+                rs.attr(ims, k, val)
+            return self._shoot("scene")[..., :3]
+        finally:
+            rs.run()
 
     # ---------------------------------------------------------------- passes
     def _objects(self):
@@ -419,7 +532,7 @@ class Looks:
         """The given objects as their emission shows them (lights off, black world) -> straight RGBA."""
         sc, rs = self.sc, Restore()
         try:
-            self._film(rs, EEVEE, "Standard", self.spec["samples"])
+            self._film(rs, EEVEE, "Standard", (self.spec or {}).get("samples"))
             for o in sc.objects:
                 if o.type == "LIGHT" and not o.hide_render:
                     rs.attr(o, "hide_render", True)
@@ -440,12 +553,8 @@ class Looks:
         rs = self.rs
         objs = [o for o in self._objects() if not o.hide_render]
         recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
-        tagged = {o.name for o in objs if "mk_knockout" in o.keys()}       # type that asks to be knocked out (text `knockout`)
-        knock = (set(SS.select(recs, spec["knockout"]["objects"])) if spec["knockout"] else set()) | tagged
-        if tagged and not spec["knockout"]:         # without a table of the shot's: the figure's own ink
-            spec = dict(spec, knockout={"objects": [], "color": spec["colors"]["subject"]})
-            self.spec = spec
-        hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"])) - knock
+        hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
+        knock = set(SS.select(recs, spec["knockout"]["objects"])) if spec["knockout"] else set()
         accent = set(SS.select(recs, spec["accent"]))
         cols = spec["colors"]
         cl = {k: [] for k in ("hide", "subject", "hard", "soft", "type", "knock")}
@@ -488,6 +597,11 @@ class Looks:
         live = [n for n in cl["knock"] if not bpy.data.objects[n].hide_render]
         if self.spec["knockout"] and live:
             out["knock"] = self._type(live, tag="knock")
+        if self.screen[1]:                         # screen type to reverse out: ink on the background, the background on her
+            if not self.spec["knockout"]:          # no table of the shot's: the figure's own ink
+                self.spec = dict(self.spec, knockout={"objects": [], "color": self.spec["colors"]["subject"]})
+            k = self._screen_pass(self.screen[1], "knock")
+            out["knock"] = k if "knock" not in out else np.maximum(out["knock"], k)
         return out
 
     def compose(self, p, subject=True):

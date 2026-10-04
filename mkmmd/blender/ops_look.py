@@ -7,13 +7,15 @@ dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out 
 only [object names: hide every other mesh]; styles (default true: shots with a render-time look, `style = "silhouette"` or
 `reflection`, are rendered in it, see mkmmd.blender.styles); layers {dir, demands} (the layers transitions and inserts need
 for the cut's frames, drawn per size into <dir>/<size name>/ before the views: mkmmd.blender.transition; the CLI composites
-them over the cut's images)."""
+them over the cut's images). Each image of a shot view reports `screen`: the RGBA layer of its screen type
+(<out>/<size name>/screen/<frame>.png, mkmmd.core.screentype) or None; the CLI lays it over the image last, as `mk post` does."""
 import math
 import os
 
 import bpy
 from mathutils import Vector
 
+from ..core import screentype as SRT
 from . import scene as S
 from . import styles as ST
 from . import transition as TRN
@@ -120,11 +122,16 @@ def look(args):
                 if looks is not None and kind is None:
                     looks.leave()
                 if kind:
-                    looks.render(path)
+                    layer = os.path.join(args["out"], size["name"], SRT.layer_rel(int(f)))
+                    if os.path.exists(layer):
+                        os.unlink(layer)                  # nothing stale: a frame with no screen type has no layer
+                    looks.render(path, layer=layer)
                 else:
+                    layer = None
                     bpy.ops.render.render(write_still=True)
                 out.append({"view": v["name"], "size": size["name"], "frame": int(f), "path": path,
-                            "camera": sc.camera.name if sc.camera else None})
+                            "camera": sc.camera.name if sc.camera else None,
+                            "screen": layer if layer and os.path.exists(layer) else None})
     if looks is not None:
         looks.close()
     return out

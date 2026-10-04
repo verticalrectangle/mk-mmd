@@ -4,12 +4,14 @@ it starts again). Frames are named <frame>.png (Blender frame numbers). Shots wi
 "silhouette"`, `reflection = {...}`, see mkmmd.blender.styles) are rendered in that look; args["styles"] = false
 renders every shot as it is lit. args["demands"] ({frame: [item]}, mkmmd.core.transition.demands) are the layers the
 transitions and inserts of the project need next to those frames (plates, mattes, projected points: see
-mkmmd.blender.transition), drawn on the same terms."""
+mkmmd.blender.transition), drawn on the same terms. Screen type (docs/design.md: Text, Screen type) is kept off the frame:
+`screen/<frame>.png` (RGBA, written before the frame) holds it, for `mk post` to lay over the cut's frame and its effects."""
 import os
 import time
 
 import bpy
 
+from ..core import screentype as SRT
 from . import scene as S
 from . import styles as ST
 from . import transition as TRN
@@ -66,7 +68,7 @@ def render_frames(args):
                 kind = looks.prepare(f, args.get("aspect")) if looks else None
                 if kind:
                     kinds[kind] = kinds.get(kind, 0) + 1
-                    looks.render(path)
+                    looks.render(path, layer=os.path.join(out_dir, SRT.layer_rel(f)))
                 else:
                     bpy.ops.render.render(write_still=True)
                 done += 1

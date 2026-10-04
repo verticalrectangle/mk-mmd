@@ -7,6 +7,7 @@ from pathlib import Path
 from .. import cutfx as CF
 from .. import post as P
 from ..core import palette as PAL
+from ..core import screentype as SRT
 from ..core import transition as TR
 from .common import add_project_arg, cut_plan, emit, get_project, UsageError
 
@@ -17,7 +18,8 @@ the audio of [audio] (file, start = song seconds at clip time 0). Missing frames
 
 [[transition]] and [[insert]] entries (docs/design.md: Shots: Transitions and inserts) are composited from the layers mk
 render drew next to the frames, before the grade: the grade, grain and vignette cover the whole frame. A missing layer is
-an error unless --allow-gaps (then the plain cut shows there); --no-transitions leaves the effects out.
+an error unless --allow-gaps (then the plain cut shows there); --no-transitions leaves the effects out. Screen type
+([[text]] with `screen`, docs/design.md: Text) is laid over the result: <frames>/screen/<frame>.png, drawn by mk render.
 
 Examples:
   mk post --preset draft
@@ -95,24 +97,28 @@ def run(args):
         suffix = "" if args.preset == "final" else f"_{args.preset}"
         out = od / f"{proj.name}_{o.name}{suffix}.mp4"
         ff = encode(frames, size, proj.fps, out, audio, args.crf)
-        prev, lmin, bare = None, 1.0, 0
+        prev, prev_layer, lmin, bare, typed = None, None, 1.0, 0, 0
         for k, f in enumerate(frames):
             raw = P.read(files[f], size) if f in files else prev
+            layer = P.read_rgba(src / SRT.layer_rel(f), size) if f in files else prev_layer
             img = raw
             if fx and fx.active(f):
                 try:
                     img = fx.frame(f, raw)
                 except FileNotFoundError:                         # layers missing (allowed): the plain cut shows
                     bare += 1
+            if layer is not None:                                 # screen type: over the cut and what its effects made of it
+                img = SRT.composite(img, layer)
+                typed += 1
             g = grade(img, k)
             lmin = min(lmin, P.luma_min(g))
             ff.stdin.write(P.to_u8(g).tobytes())
-            prev = raw
+            prev, prev_layer = raw, layer
         ff.stdin.close()
         if ff.wait() != 0:
             raise UsageError(f"ffmpeg failed for {out}")
         report[o.name] = {"video": str(out), "frames": len(frames), "missing": len(missing), "size": list(size),
-                          "min_luma": round(lmin, 4)}
+                          "min_luma": round(lmin, 4), "screen_type_frames": typed}
         if fx:
             report[o.name]["effects"] = {"transitions": len(plan["transitions"]), "inserts": len(plan["inserts"]),
                                          "frames_without_layers": bare, "matte_scale": fx.notes}

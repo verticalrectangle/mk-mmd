@@ -184,10 +184,26 @@ def shot_table(sc=None):
     return json.loads(sc.get("mk_shots", "[]"))
 
 
-def bind_aspect(aspect, sc=None):
-    """Point every shot marker at the given output aspect's camera. Returns False when the scene has no shot table
-    or no cameras for that aspect (its markers are left alone)."""
+def show_aspect(aspect, sc=None):
+    """Render only the objects made for this output: an object with the custom property `mk_aspect` (per-output type, see
+    the text stage) is hidden from the render of every other output. Screen type (`mk_screen`) is not touched: it is hidden
+    from every scene render and drawn, for its own output, by the screen layer (mkmmd.blender.styles). Returns how many
+    objects it hid."""
     sc = sc or bpy.context.scene
+    hidden = 0
+    for ob in sc.objects:
+        if "mk_aspect" in ob.keys() and "mk_screen" not in ob.keys():
+            ob.hide_render = ob["mk_aspect"] != aspect
+            hidden += int(ob.hide_render)
+    return hidden
+
+
+def bind_aspect(aspect, sc=None):
+    """Point every shot marker at the given output aspect's camera and show the objects made for that output only
+    (`show_aspect`). Returns False when the scene has no shot table or no cameras for that aspect (its markers are left
+    alone)."""
+    sc = sc or bpy.context.scene
+    show_aspect(aspect, sc)
     by = {s["name"]: s["cameras"].get(aspect) for s in shot_table(sc)}
     if not any(by.values()):
         return False

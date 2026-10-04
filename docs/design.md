@@ -655,7 +655,7 @@ property is set on the object).
 | `hide`, `keep` | objects not rendered (walls, outside, rain), minus `keep` |
 | `accent` | objects in the accent colour. One with a transparent material (a lightning bolt) keeps its softness; the others (earbud cords) are painted over everything and grown by `grow` px (1, counted at 1080 wide) so a thin wire reads |
 | `tint = [{object, prop, color, gain, glow}]` | the background moves toward `color` by min(1, gain × the custom property `prop` of `object`): a lightning flash. `glow = {at = [x, y], size = [sx, sy]}` makes it a gaussian bloom from that point (fractions of the frame from the top left) |
-| `knockout = {objects, color}` | type reversed over the silhouette: `color` on the background, the background colour where it overlaps the silhouette. These objects are drawn over everything; other type is hidden behind what stands in front of it |
+| `knockout = {objects, color}` | type reversed over the silhouette: `color` on the background, the background colour where it overlaps the silhouette. These objects are drawn over everything; other type is hidden behind what stands in front of it. Screen type asks for it on the text itself (`knockout = true`, ink = this shot's `subject` colour: Text, Screen type), no table needed |
 | `samples = 16` | EEVEE samples of the passes below |
 | `reflection = {object, strength, dim, roughness, hide, only, bend, world, tint}` | her image in a window pane (below) |
 
@@ -805,6 +805,10 @@ and before `keys`, so `[[key]]` can toggle a text's `hide_render` or move it.
 | `kinetic` | `{show, scale, sx, sy, dx, dy, dxp, dyp, rot, pivot, tracking, weight, opacity, tint, drip}`: motion keyed on node inputs, written by `lyrics` (see Lyrics) or by hand |
 | `lyrics` | `{timeline, line, words, style, ...}`: one text per sung word, read from the timeline, see Lyrics below |
 | `ink` | `{strokes \| track, on, width, lift, color, dry, glossy, from, to}`: handwriting instead of type, a pen's strokes that appear behind the nib; the entry carries only `name` and `ink`, see Ink below |
+| `screen` | `true` or `{anchor, side, margin, height, width}`: type of the picture, laid over the finished frame of whichever shot is cutting (see Screen type below); `at`, `box`, `size`, `offset` are in frame heights |
+| `knockout` | `true`: screen type reversed out of a silhouette shot (its colour is the figure's ink, the colour of the shot where it crosses the figure), with no strip or ring; in any other shot ordinary screen type |
+| `aspect.<output>` | `{...}` an output's own version of the entry: its keys laid over the entry's (tables merge key by key, everything else is replaced). An entry with `screen` or `aspect` is built once per output; with several outputs the objects end `@<output>` and exist for that output only |
+| `extends`, `abstract` | `extends = "<name>"`: the entry is that entry (resolved first, chains work) with its own keys laid over it; `abstract = true` makes an entry a base that is never built, so a look that eight lyric lines share is written once |
 
 ```toml
 [[text]]                              # a highway sign panel: two lines, fitted to 80 % of the panel
@@ -885,10 +889,20 @@ is left out (the report lists it by number). Frames in the stage report are Blen
 | `tilt`, `sizes`, `offsets` | per word: degrees, cap heights (m), `[u, v]` nudges (m) on top of where the word stands: a number or a list cycled over the words (`tilt = {random = deg}`: seeded by the word) |
 | `backing` | a `backing` table, or a list of them cycled over the words |
 | `recycle` | `true` or `{gap, fade, assign}`: a word is gone `gap` frames before the next word of its slot lands and fades over the `fade` frames before; `assign` lists group numbers cycled over the words, apart from where they stand |
+| `style = "slide"` | a strip fed into the deck: the word comes in from one side by `arrive.dist` (0.5) shares of the panel over `arrive.dur` (0.16 s), decelerating, tilted `tilt` degrees (4) that straighten as it arrives, and clunks home with a damped squash of its length (`clunk` 0.07, 50 ms); `from` is `left`, `right` or `alt` (alternating, the first from the right); opaque from the first frame (`alpha0` 1.0: a word at 40 % opacity is hashed grain). `mkmmd/core/tapefx.py` |
+| `leave = "rewind"` | the line leaves like a tape being rewound, on the same tick rule as `drip`: every word shoots back by `dist` (0.6) shares of the panel with an ease-in, stretched to `1 + stretch` (3) times its length, fading over the second half of its `life` (0.2 s); `rewind = {life, dist, stretch, gap, order, min_run}`: `gap` 0.02 s between words, `order` `first_first` / `last_first` / `none`, `min_run` 0.4 s of shot left |
+| `wow` | `true` or `{amount, rate, flutter, flutter_rate, pitch, tilt, min_hold, attack, tail}`: while a note is held (`min_hold` 0.3 s or more) the strip drifts like a tape with wow and flutter, fading in over `attack` s and out over `tail` s after the note: a slow sway of position (`amount` 0.12 em at `rate` 1.4 Hz), length (`pitch` 5 %) and angle (`tilt` 2.5 degrees) and a fast flutter (`flutter` 0.03 em at 9 Hz); added to the arrival |
+| `punch` | the words that stand out take a look of their own: `{top, above, words, ...look}` picks them (the `top` loudest by `vocal_db`, those at or `above` a level in dB, `words` by number within the selection) and `font`, `color`, `glow`, `outline`, `backing` (`false`: no strip), `scale` (cap height relative to the line's), `style` / `arrive`, `tilt`, `weight`, `reveal` set how they look; a word in its own font is measured in it, so the layout fits |
+| `write` | the same for words whose note is held for `min_hold` seconds (0.6) or more and that are not punch words; `reveal = true` writes the word out letter by letter over its note (the typewriter's ramp on the marker lettering: first letter on the landing, last when the note ends) |
+| `scales` | per word cap heights as shares of the line's common one, cycled over the words (the layouts that fit one size to the panel use them: `flow`) |
+| `carry` | what a word does that is already up when its block starts (a `from` after its onset, a new shot with `zones`): `land` (default) arrives again, `still` is simply there in its new place |
+| `zones` | `{<shot> = {overlay}}`: the line is set again in every shot it crosses, each shot's block being the entry with that shot's overlay laid over it (any `[[text]]` key, `lyrics = {...}` included); objects are named `<name>_l<line>w<word>_<shot>`. See Cassette type below |
 | `layout` | `same` (default: every word in the entry's panel, centred), `flow`, `stack` or `slots`, below |
 
 Layouts. `flow` (`gap` 0.28 em): words side by side in reading order, one row per lyric line, the block centred on the panel
-and fitted to it (one cap height for all). `stack` (`rows`, `pitch` 1.3 em, `dir` `down` | `up`, `align` and `shift` cycled by
+and fitted to it (one cap height for all); `rows = N` sets the words in N rows of nearly equal width instead (`"auto"`: the fewest
+rows that let them be set at `size`, or the number that sets them biggest), rows never closer than the tallest strip, and `align`
+(`left` / `center` / `right`; default the `screen` band's side) sets each row against a margin of the panel. `stack` (`rows`, `pitch` 1.3 em, `dir` `down` | `up`, `align` and `shift` cycled by
 row, `tilt` per row): word k on row `k mod rows`, the first on top (`down`) or at the bottom (`up`). `slots` (`slots = [{at,
 box, align, tilt, size}]`, `assign`): `at = [u, v]` and `box = [w, h]` are shares of the panel (u right, v up from its centre),
 the word is fitted into its box and aligned there; word k takes slot `assign[k]` (default k mod len). A layout needs a panel
@@ -943,6 +957,106 @@ The stage report has one entry per `lyrics` text, `{words, lines, style, layout,
 drip_from}` (Blender frames; `skipped` as `[line, word]` pairs), and per word the usual text numbers with `lyric` [line, word],
 `chars`, `kinetic_keys` and `frames` [on, off); the string itself (`widest`) is not reported.
 
+The report of a lyrics text also has `rewind_from` (seconds), `carried` and `punch` / `write` (`[line, word]` pairs) and, with
+`zones`, `blocks` (`{shot, words, style, layout, first_frame, last_frame}` per shot).
+
+### Screen type
+
+A `[[text]]` with `screen = ...` is type of the picture, not of the scene. The text stage builds it as an ordinary text object
+on the plane z = 0 of the world, one unit per FRAME HEIGHT (1 is the height of the picture, x right and y up from its centre; a
+16:9 frame is 1.78 wide, a 9:16 one 0.56), hidden from every scene render. A frame that has any of it on screen gets a second pass
+from `mk render` and `mk look` (`Looks.render` in `mkmmd/blender/styles.py`): the type alone, as its emission shows it (lights off,
+black world, the plain view transform: a palette colour is that colour), through an orthographic camera one frame height tall. The
+pass is kept off the frame, in a file of its own beside it, `<frames>/screen/<frame>.png` (straight RGBA, written first, so a
+frame on disk always has its layer); `mk post` lays it over the cut's frame AFTER the cut effects and before the grade
+(`mkmmd.core.screentype.composite`, tested without Blender), so a slash, an expanding figure or a growing bubble passes under
+the words and the grade covers them like the rest, and `mk look` does the same for the images it shows. It stays where it is put
+whichever camera is cutting, whatever stands in front of it and however the shot is lit.
+Rigging the text to the shot cameras was tried first (an empty that copies the cut's camera, keyed per shot, scaled to the lens) and
+the numbers were right to a thousandth of a frame height, but a plane a hand from the lens is hidden by anything nearer, blurred by
+depth of field, tone mapped to dusty colours and, because the world is single precision, jitters by about a pixel at 85 mm with the
+camera 700 m down the road: a graphic layer has none of that. Text that belongs to the world and must be seen at an angle keeps
+`mount` and `on` (`mount = "<shot>@<output>"` puts a plane on a camera).
+
+`screen = true` is the whole frame inside a margin of 0.04; `screen = {anchor = "top" | "bottom" | "center", side = "left" |
+"center" | "right", margin, height, width}` is a band: `height` frame heights tall (0.25) against that edge, `width` the share
+of what the margins leave (1.0), `side` against the left or right margin (or centred). `at`, `box`, `size`, `fit`, `offset` are
+in frame heights and win over the band. Because the unit is the picture, a size, a margin or a band means the same in every
+shot; the outputs differ only in the frame's width, so `aspect.<output>` gives each its version (below).
+
+`aspect.<output> = {...}` (any `[[text]]`): the entry as an output sees it, `mkmmd.core.screentype.deep_merge` of its table over
+the entry's (tables merge key by key, anything else is replaced). An entry with `screen` or `aspect` is built once per output; with
+several outputs the objects are named `<name>@<output>` and carry `mk_aspect`, and `mkmmd.blender.scene.show_aspect` /
+`bind_aspect` keep the other outputs' out of a render (screen type is left to the screen layer, which asks for the output it is
+drawing: `Looks.prepare(frame, aspect)`).
+
+`knockout = true` goes into the silhouette's own passes instead: the type is the figure's ink (the subject colour of the shot)
+where it lies on the colour and the colour where it crosses the figure, drawn after everything else in the shot, with no strip or ring (they would
+be alpha of the same kind). In a shot that is not a silhouette it is ordinary screen type. A shot's own `knockout = {objects,
+color}` still serves type that belongs to the scene.
+
+Limits. The words are one more layer over the whole frame: a transition or an insert never hides them (a `slash` band passes under
+them, the montage's line 4 shows its words over the growing bubble). What belongs to a figure is the exception: a silhouette's
+`knockout` type is part of that shot's picture, so an expanding or collapsing figure takes it along. `mk render --no-styles` and `mk
+look --no-styles` leave screen type out (it is part of the looks). The layer files are small (the type is mostly transparent: about 40 kB
+at 960 x 540) and a frame with nothing on screen has none. The pass is one more EEVEE render of a frame that has any
+type on it (the type objects are hidden from everything else, so a frame with none costs nothing). A stale `screen/` folder of an
+earlier build stays on disk with the frames it belongs to: delete `renders/<preset>` when the type changes, as for any frame.
+
+### Cassette type
+
+The lyrics of the night-drive montage are set like a mixtape: hand-lettered on strips of label tape, the loud words in a tape-brand
+face. Nothing is special to that project; each part is a general key. `mkmmd/core/tapefx.py` (numpy only, tested) is the motion
+and the row breaks, `mkmmd/core/typezones.py` decides who stands in which shot, `mkmmd/core/wordtype.py` assembles them.
+
+- Strips: `backing` (a list cycled over the words: plain, striped, in the palette's pastel colours), ink in `base`, the lettering
+  Permanent Marker (hand lettering, a J-card). The layout leaves room for each strip (`pad`), and rows are never closer than the
+  tallest of them. Screen type is unlit, so the paper is its colour exactly.
+- The loud words (`punch = {top = 2, ...}`) are Audiowide, 1.25 times as tall, with a ring and no strip, and arrive as a `slap`;
+  the others `slide` in from alternating sides and clunk home.
+- A note held for 0.3 s or more `wow`s and flutters; one held for 0.6 s or more is `write`n out over its note (`reveal`).
+- The line leaves with `leave = "rewind"` on the first tempo tick that leaves room (`rewind.min_run` 0.2): the words shoot back
+  and smear.
+- Across a cut a line is set again: `zones = {<shot> = {...}}` gives every shot its own overlay of the entry, a `screen` band
+  where the faces are not (the top left where they are low and to the right, the bottom where they are high or the picture is all
+  face, the middle where nobody is) and `knockout = true` over a silhouette. The layout of a zone is the whole line's, so a word
+  that carries over a cut keeps its place when the band does not change; when it does, the words that were up land again on the
+  first frame of the new shot, still (`carry = "still"`: no second arrival), in the new band. The choice is made per shot, not per
+  line, so the table lives once, in an `abstract` entry that every line `extends`:
+
+```toml
+[[text]]
+name = "ly"
+abstract = true
+screen = { anchor = "top", side = "left", width = 0.58, height = 0.28 }     # 16:9: a block in the top left
+font = "permanent_marker"
+size = 0.06
+color = "base"
+aspect.9x16 = { screen = { anchor = "bottom", side = "center", width = 1.0, height = 0.3 }, size = 0.05 }
+
+[text.lyrics]
+timeline = "audio/timeline.json"
+style = "slide"
+carry = "still"
+wow = {}
+leave = "rewind"
+backing = [{ color = "text" }, { color = "rose" }, { color = "gold" }, { color = "foam" }]
+layout = { kind = "flow", rows = "auto" }
+punch = { top = 2, font = "audiowide", color = "text", scale = 1.25, backing = false, style = "slap", outline = { color = "base" } }
+write = { min_hold = 0.6, reveal = true }
+zones = { rin_cu = { screen = { anchor = "bottom", side = "center", width = 1.0 } }, g1_hero = { knockout = true } }
+
+[[text]]
+name = "ly3"
+extends = "ly"
+lyrics = { line = 3, to = 11.57 }          # the line, and where it is let go: only what differs
+```
+
+The test project's whole set (a base, an entry per line, a zone per shot, 9:16 touches) is `~/Videos/jwin_mv/fragments/lyrics.toml`.
+`mk look build/x.blend --frames F --output 9x16 --size 800 --out DIR` shows a word landing (frames are Blender frames: the report's
+`first_frame` and the words' `frames`), `mk render --preset draft --output 16x9 --frames t=8:18.7 --jobs 2` then `mk post --preset
+draft --output 16x9 --allow-gaps` a stretch with its motion.
+
 ### Ink
 
 A `[[text]]` with `ink = {...}` is handwriting: the strokes of a pen, drawn on a surface, that appear exactly behind the nib
@@ -991,12 +1105,13 @@ hl_high. Sets, props, lights and the grade colour by slot, never by hard-coded v
 processes share the frames; a disk check refuses to start when the frames would not fit. Shots with a render-time look (Shots:
 silhouette, reflection) are finished flat frames on disk, composed inside the render job; `--no-styles` renders them as lit.
 `[[transition]]` and `[[insert]]` (Shots: Transitions and inserts) add the layers they need next to the frames
-(`plate/`, `matte/`, `back/`, `point/`; `--no-transitions` leaves them out).
+(`plate/`, `matte/`, `back/`, `point/`; `--no-transitions` leaves them out). Screen type (Text: Screen type) is `screen/<frame>.png`,
+straight RGBA, for the frames that have any.
 
-`mk post` composites those effects over the cut's frames, then grades the frames (`[post]`: contrast around a pivot, saturation,
-split toning, a palette floor with a soft toe so nothing is black, halation from blurred highlights, vignette, grain) and encodes
-`<project>/out/<name>_<output>[_<preset>].mp4` with `[audio]` (`file`, `start` = song seconds at clip time 0); a missing layer is
-an error unless `--allow-gaps`.
+`mk post` composites those effects over the cut's frames, lays the screen type over the result, then grades the frames (`[post]`:
+contrast around a pivot, saturation, split toning, a palette floor with a soft toe so nothing is black, halation from blurred
+highlights, vignette, grain) and encodes `<project>/out/<name>_<output>[_<preset>].mp4` with `[audio]` (`file`, `start` = song
+seconds at clip time 0); a missing layer is an error unless `--allow-gaps`. `mk look` composes the same way for the images it shows.
 
 ## Timeline
 

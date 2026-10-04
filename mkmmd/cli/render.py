@@ -32,6 +32,9 @@ other shot's frames (plates), a silhouette's figure (mattes) and projected ancho
 in <output>/{plate,matte,back,point}/ on the same terms (claimed, resumable, counted in the disk check); mk post
 composites them. --no-transitions leaves them out (and --no-styles does too: a figure needs its silhouette look).
 
+Screen type ([[text]] with `screen`, docs/design.md: Text: Screen type) is kept off the frames, in <output>/screen/<frame>.png
+(RGBA, only for the frames that have any); mk post lays it over the cut and its effects. --no-styles leaves it out.
+
 Examples:
   mk render --preset draft                     # every output, the whole clip
   mk render --output 9x16 --frames t=0:5 --jobs 2

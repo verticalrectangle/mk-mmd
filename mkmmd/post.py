@@ -99,6 +99,19 @@ def read(path, size=None):
     return np.asarray(im, np.float32) / 255.0
 
 
+def read_rgba(path, size=None):
+    """A screen layer (straight RGBA PNG) as float (h, w, 4), or None when the file is missing or unreadable; cut (not
+    resampled) to `size` when it is a pixel or two larger."""
+    try:
+        im = Image.open(path).convert("RGBA")
+    except (OSError, ValueError):
+        return None
+    if size and im.size != tuple(size):
+        w, h = size
+        im = im.crop((0, 0, w, h)) if im.size[0] - w in (0, 1) and im.size[1] - h in (0, 1) else im.resize((w, h), Image.BILINEAR)
+    return np.asarray(im, np.float32) / 255.0
+
+
 def to_u8(img):
     return (np.clip(img, 0, 1) * 255 + 0.5).astype(np.uint8)
 

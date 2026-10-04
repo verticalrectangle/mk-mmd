@@ -10,6 +10,7 @@ from .. import bridge
 from .. import config as CFG
 from .. import cutfx as CF
 from .. import post as P
+from ..core import screentype as SRT
 from ..core import transition as TR
 from ..ref.photos import ascii_text
 from .common import add_project_arg, cut_plan, emit, get_project, parse_frames, scene_path, UsageError
@@ -230,25 +231,48 @@ def run(args):
         extra = {"layers": layers} if layers and tag == "a" else {}
         shots[tag] = bridge.run("look", {**job, **extra, "out": str(out / tag if args.ab else out)}, blend=sc, project=proj,
                                 timeout=3600)
-    effects, fxs = [], {}
-    for s in shots["a"] if layers else []:           # composite the effects over the cut's frames, as mk post does
-        if s["view"] != "cut":
-            continue
-        im = Image.open(s["path"]).convert("RGB")
-        fx = fxs.setdefault(s["size"], CF.CutFx(plan, Path(layers["dir"]) / s["size"], im.size, s["size"]))
-        if not fx.active(int(s["frame"])):
-            continue
-        try:
-            fx.check([int(s["frame"])])
-            composed = fx.frame(int(s["frame"]), np.asarray(im, np.float32) / 255.0)
-        except (TR.TransitionError, FileNotFoundError) as e:
-            raise UsageError(str(e)) from None
-        Image.fromarray(P.to_u8(composed)).save(s["path"], quality=90)
-        effects.append({"frame": s["frame"], "size": s["size"]})
+    effects, fxs, typed = [], {}, 0
+    for tag in shots:
+        for s in shots[tag]:                         # composite the effects, then the screen type, over the cut's frames
+            if s["view"] != "cut":
+                continue
+            fx = None
+            if layers and tag == "a":
+                fx = fxs.get(s["size"])
+                if fx is None:
+                    fx = fxs[s["size"]] = CF.CutFx(plan, Path(layers["dir"]) / s["size"], Image.open(s["path"]).size, s["size"])
+            has_fx = fx is not None and fx.active(int(s["frame"]))
+            layer = P.read_rgba(s["screen"], Image.open(s["path"]).size) if s.get("screen") else None
+            if not has_fx and layer is None:
+                continue
+            im = np.asarray(Image.open(s["path"]).convert("RGB"), np.float32) / 255.0
+            if has_fx:
+                try:
+                    fx.check([int(s["frame"])])
+                    im = fx.frame(int(s["frame"]), im)
+                except (TR.TransitionError, FileNotFoundError) as e:
+                    raise UsageError(str(e)) from None
+                effects.append({"frame": s["frame"], "size": s["size"]})
+            if layer is not None:
+                im = SRT.composite(im, layer)
+                typed += 1
+            Image.fromarray(P.to_u8(im)).save(s["path"], quality=90)
+    for tag in shots:                                # the layers were for the composite: no files left beside the images
+        for s in shots[tag]:
+            if s.get("screen"):
+                lp = Path(s["screen"])
+                lp.unlink(missing_ok=True)
+                for d in (lp.parent, lp.parent.parent):
+                    try:
+                        d.rmdir()
+                    except OSError:
+                        pass
     res = {"scene": str(blend), "out": str(out), "seconds": round(time.time() - t0, 1),
            "images": [s["path"] for s in shots["a"]]}
     if effects:
         res["effects"] = effects                      # frames shown with their transition / insert composited
+    if typed:
+        res["screen_type_frames"] = typed             # frames with screen type laid over them ([[text]] with `screen`)
     if args.ab:
         res["images_b"] = [s["path"] for s in shots["b"]]
         pairs = []
