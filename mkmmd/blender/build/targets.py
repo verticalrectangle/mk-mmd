@@ -62,7 +62,12 @@ def point(ctx, ref, frame=None):
         return path_point(ctx, ref)
     if isinstance(ref, str):
         if ref == "camera":
-            return bpy.context.scene.camera.matrix_world.translation.copy()
+            cam = bpy.context.scene.camera
+            if cam is None:
+                raise BuildError("target \"camera\": there is no camera yet (the shots stage makes them), so `camera` is only valid "
+                                 "in a [[light]] `look` (the lights stage runs after shots) or in a stage after shots, and "
+                                 "the project needs a [[shot]]")
+            return cam.matrix_world.translation.copy()
         if ref.startswith("cast:"):
             name, _, bone = ref[5:].partition(".")
             m = ctx.cast.get(name)

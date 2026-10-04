@@ -1,5 +1,5 @@
-"""convertible_80s: a 1980s American convertible, built procedurally (no downloaded model, no textures): the
-Rin-and-Reisen night-highway car. Generic and unbadged, modelled in proportion on a 1984-86 Dodge 600 convertible (see
+"""convertible_80s: a 1980s American convertible, built procedurally (no downloaded model, no textures), made for
+night-highway scenes. Generic and unbadged, modelled in proportion on a 1984-86 Dodge 600 convertible (see
 docs/modelling.md for how: the body is ONE lofted, subdivided shell, every other piece a profile, sweep or lathe): long flat
 hood and deck, a shoulder crease along the whole side, flush rectangular headlamps beside a barred grille, a full-width
 ribbed tail-lamp band, swept rubber bumpers with end caps, a two-tone body split at the rub strip, 15 inch turbine alloys, a

@@ -20,8 +20,8 @@ from .typeset import TextError
 #                          falls (`g` px/s^2 at a 150 px em, `stretch` extra height, gone after `life` s), the first
 #                          letter on t, the rest within 0.1 s; opacity fades per letter
 #   headroom               share the fit allows for the letters' spread (the lyrics stage sets it from the spread)
-KINETIC_KEYS = {"show", "lyric", "scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot", "tracking", "weight", "opacity",
-                "tint", "drip", "pivot", "headroom"}
+KINETIC_KEYS = {"show", "scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot", "tracking", "weight", "opacity", "tint",
+                "drip", "pivot", "headroom"}
 MOTION = ("scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot")
 KEYED = MOTION + ("tracking", "weight", "opacity")          # channels that are plain key lists
 DRIP_KEYS = {"t", "g", "stretch", "life", "seed"}

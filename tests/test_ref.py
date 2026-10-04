@@ -478,10 +478,15 @@ def test_recommendation_with_no_usable_face_says_why():
     assert "no clip has a usable face" in skipped["blink.per_min"]
 
 
-def test_blink_duration_conversion_uses_the_blink_curve_of_the_performance_stage():
-    ratio = RC.blink_curve_fwhm_ratio()
-    c = PF.blink_curve(np.linspace(-0.05, 1.05, 2201), [(0.0, 1.0)])
-    assert ratio == pytest.approx(0.575, abs=0.01) and c.max() == pytest.approx(1.0)
+def test_the_recommended_blink_table_holds_only_keys_the_performance_stage_reads():
+    from mkmmd.core import tables as TB
+    results = {1: _clip(20, 60.0, shifts=12, gaze_s=60.0), 2: _clip(10, 60.0, shifts=6, gaze_s=60.0)}
+    rec, why, _skipped = RC.recommend(ME.pool(results), results, fps=30.0)
+    assert rec["blink"] and set(rec["blink"]) <= set(TB.PERFORM["blink"])                  # per_min; no duration key is read
+    assert "blink.duration_s" not in why
+
+
+def test_the_rise_that_reproduces_a_measured_turn_runs_through_the_performance_follower():
     r = RC.rise_for_turn(0.5, 30.0, 3.0)
     assert RC.turn_time(r, 30.0, 3.0) == pytest.approx(0.5, abs=0.01)
     assert RC.rise_for_turn(0.1, 30.0, 3.0) == 0.1                          # the follower alone is slower than that

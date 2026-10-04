@@ -2,14 +2,13 @@
 twitch bones are exactly the ear-family bones whose parent is not an ear bone, weights sum to 1, `part.check` passes, bones
 are connected, clearances against the body's static colliders and the head, determinism, vertex budgets.
 
-bpy-free: the stand-in head and body of tests/hair_fixtures.py (plus, when the project's spec is at hand, the real body part).
-Run: ~/.local/share/uv/tools/mk-mmd/bin/python -m pytest -q tests/test_model_hair_cats.py"""
-from pathlib import Path
-
+bpy-free: the stand-in head and body of tests/hair_fixtures.py (plus, when MK_TEST_RIN_MODEL names a character project, the
+real body part). Run: pytest -q tests/test_model_hair_cats.py"""
 import numpy as np
 import pytest
 
 from hair_fixtures import make_ctx
+from local_project import SPEC, WHY
 from mkmmd.core import families
 from mkmmd.model import build as BD
 from mkmmd.model import part as P
@@ -542,15 +541,12 @@ def test_tail_path_config_changes_the_shape(tmp_path):
 
 
 # ------------------------------------------------------------------------------------------------------ the real body
-SPEC = Path.home() / "Projects/mk-tests/rin_model/model.toml"
-
-
-@pytest.mark.skipif(not SPEC.exists(), reason="the project spec of the Rin model is not at hand")
+@pytest.mark.skipif(SPEC is None, reason=WHY)
 def test_tails_against_the_real_body_part(tmp_path):
     from mkmmd.model import spec as SP
     try:
         body = BD.run(SP.load(str(SPEC)), only="body", tex_dir=str(tmp_path / "tex"))[0]
-    except Exception as e:                                              # the real body is under construction elsewhere
+    except Exception as e:                                              # the project's body may not build here
         pytest.skip(f"real body part does not build: {e}")
     ctx = make_ctx(tmp_path, {})
     ctx.parts["body"] = body

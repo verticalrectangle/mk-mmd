@@ -6,6 +6,7 @@ bar phase and the periodic line split need more than a short clip to be reliable
 phase half a bar off). Everything is then shifted and cropped to the clip."""
 import numpy as np
 
+from .. import config as CFG
 from . import signal as S
 
 TIME_KEYS = ("start", "end", "ctc_start", "voiced_end")
@@ -40,8 +41,11 @@ def _shift_words(lines, dt, duration, tol=0.02):
     return out
 
 
-def analyse(audio, start=0.0, duration=30.0, fps=30, cache_dir="/tmp/mk-timeline", words=True, lyrics=None,
+def analyse(audio, start=0.0, duration=30.0, fps=30, cache_dir=None, words=True, lyrics=None,
             whisper_model="large-v3", language="en", context=20.0, log=print):
+    """The timeline of a song span (see the module docstring). `cache_dir` holds the cached Demucs stems (default:
+    `timeline` in the user cache, `MK_CACHE`)."""
+    cache_dir = CFG.cache_dir() / "timeline" if cache_dir is None else cache_dir
     mix, pre, span = load_window(audio, start, duration, context)     # span: the window read (short at the file's end)
     post = max(0.0, span - pre - duration)
     mono = mix.mean(0)

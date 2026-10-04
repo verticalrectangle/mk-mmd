@@ -1,11 +1,10 @@
 """bpy-free invariants of the hair part: head fit, swept clumps, chain rigging, the built part (families, weights, scalp
 coverage, bangs vs eyes, clearance, determinism). The head and body are the stand-ins of hair_fixtures.py."""
-from pathlib import Path
-
 import numpy as np
 import pytest
 
 import hair_fixtures as HF
+from local_project import SPEC, WHY
 from mkmmd.core import families
 from mkmmd.model import build as BD
 from mkmmd.model import part as PT
@@ -382,15 +381,12 @@ def test_chain_clearance_from_static_bodies(head_only):
     assert worst >= 0.005, f"closest chain capsule to a static collider: {worst * 1000:.1f} mm"
 
 
-# ---------------------------------------------------------------- against the real head part (skipped without the project)
-SPEC = Path("~/Projects/mk-tests/rin_model/model.toml").expanduser()
-
-
+# ---------------------------------------------------------------- against the real head part (skipped without MK_TEST_RIN_MODEL)
 @pytest.fixture(scope="module")
 def real_head(tmp_path_factory):
-    """The head hair built on the real head part of the Rin project (whatever face it currently has)."""
-    if not SPEC.exists():
-        pytest.skip("the Rin project spec is not available")
+    """The head hair built on the real head part of the character project (whatever face it currently has)."""
+    if SPEC is None:
+        pytest.skip(WHY)
     from mkmmd.model import spec as SP
     sp = SP.load(SPEC)
     tmp = tmp_path_factory.mktemp("hair_real")

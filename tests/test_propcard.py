@@ -138,7 +138,7 @@ def test_one_box_over_the_bounds_has_a_minimum_thickness():
 # ---------------------------------------------------------------- the card
 def test_make_card_of_a_desk_with_a_flat_top_and_no_bodies():
     t = box_tris((-0.7, -0.25, 0.0), (0.7, 0.25, 0.94))
-    card, shapes = PC.make_card("desk", "/x/desk.pmx", t)
+    card, shapes = PC.make_card("desk", "desk.pmx", t)
     assert card["kind"] == "pmx" and card["origin"] == "floor_center" and card["front"] == "-Y"
     assert card["size"] == pytest.approx([1.4, 0.5, 0.94]) and card["bounds"]["min"] == pytest.approx([-0.7, -0.25, 0.0])
     assert card["use"]["look"] == [{"name": "center", "point": [0.0, 0.0, 0.47]}]

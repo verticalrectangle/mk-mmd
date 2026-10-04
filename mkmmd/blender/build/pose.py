@@ -1,12 +1,14 @@
 """pose: each cast member's base pose, eased in from the rest pose over the first `settle_frames` of the pre-roll.
 
 [pose.<cast>] keys
-  sit = "prop:seat" | {hip, facing, seat_z, floor_z, pelvis_deg, back_deg}   place the hips on a seat (root follows
+  sit = "prop:seat" | {hip, facing, floor_z, pelvis_deg, back_deg}   place the hips on a seat (root follows
         the prop); without sit the model stands where the cast stage put it
   sit_offset = [x, y, z]      slides the hip point on the seat (metres, in the seat prop's frame): sit further forward
-  feet = "prop:feet" | "floor" | {L = [x, y, z|nan], R = [...]}               ankle targets (leg IK); z omitted / nan =
+  feet = "seat" | "floor" | "prop:feet" | {L = [x, y, z|nan], R = [...]}      ankle targets (leg IK); z omitted / nan =
         the model's own ankle height above the floor; a foot may also be a target reference (`{cast = "name", point =
-        [x, y, 0]}`: only x and y count), so a standing pose written in the character's own frame moves with it
+        [x, y, 0]}`: only x and y count), so a standing pose written in the character's own frame moves with it.
+        Seated, "seat" (the default) is the seat prop's own feet and "floor" puts the feet in front of the knees;
+        standing, "floor" keeps the feet on the floor under the hips (what no `feet` does too) and "seat" is an error
   lean, turn (deg)            upper body forward lean / turn toward the model's left, on top of the seat's back angle
   lean_share, turn_share = 0.6   the share of each that `upper_body` takes (`upper_body2` takes the rest)
   hips = {shift = [x, y, z], roll = deg, yaw = deg}   the pelvis of a standing or seated body, eased in over the settle: `shift`
@@ -22,7 +24,7 @@
      rest = "prop:edge" (+ along = 0..1, lift = m): the hand lies on an edge use point
      keys = [{t, at, dir, palm}]  moving targets (clip seconds, eased)
      ride = "<object>" | "cast:NAME.BONE"   the goal FOLLOWS something: an object (a steering wheel), or a bone of this
-        character (NAME is its own name: the chest, `cast:reisen.upper_body2`). The goal and the elbow pole are then
+        character (NAME is its own name: the chest, `cast:rin.upper_body2`). The goal and the elbow pole are then
         bone-parented to the bone (Blender parents to its TAIL) and their keys are computed from the world goal as the bone
         stands in the settled base pose (frame start + settle: this stage's own spine keys; perform's breathing, sway and
         lean / turn / tilt keys ride on top), so the hand is where the world target said at the end of the settle and then
@@ -41,7 +43,7 @@
            faces the character), wrap = -1 (fingers round the outside of the rim), seeds, skin_radius (0.16 m);
            pinch -> thumb-index pad pinch of the strap (prop width, span, length; edge = 0.004 m); pen -> a lateral
            tripod with the writing orientation of the whole hand, which needs `posture` (below) or a `track`; pen
-           grips were tuned on one hand shape (Una and Maki also pass their gates; another hand can still miss them)
+           grips were tuned on one hand shape (two other reference hands also pass their gates; another hand can still miss them)
         grip = "pen:barrel" + track   the pen rides the hand and its nib FOLLOWS A PATH over the page:
            track = "nib" (the project's tracks/nib.json) | "tracks/nib.json" (any .json path), channel = "target":
               {"frames": [Blender frames], "<channel>": [[x, y, z] world metres per frame]}, held before its first and
@@ -68,6 +70,8 @@
         left, y behind it, z up; the least rotation from the bone's rest direction, whatever the bones above do),
         scale = [1, 0.75, ...] optional length scale per bone (bunched cloth). Eased in over the settle like the rest of
         the base pose; the bones stay keyed (not simulated), so hair collides with their bodies
+A table with no keys poses nothing (the log says so), but a prop `[[prop]] wear` puts on that member is still worn. A table
+named after no cast member or holding a key this stage does not read is refused (mkmmd.core.tables).
 World-axis rotations are keyed with mkmmd.blender.keys (q_child = D_parent^-1 D_want)."""
 import json
 import math
@@ -564,13 +568,19 @@ def _pen_goals(ctx, m, wrist, h, grip):
 
 
 def run(ctx):
+    ctx.check_tables("pose")
     out = {}
     f0, f1 = ctx.start, ctx.start + ctx.settle
     probe = np.array([f1])                                # frames the IK misses are measured on (+ a moving track's)
     bpy.context.scene.frame_set(f0)                       # vehicles may have moved the props: one consistent frame
     for name, m in ctx.cast.items():
         spec = ctx.section("pose", name)
-        if not spec:
+        if not spec:                                      # no keys, nothing to pose: but a prop it wears is still put on it
+            worn = WEAR.apply(ctx, name, m)
+            if worn:
+                out[name] = {"wear": worn}
+            elif name in ctx.section("pose"):
+                ctx.log("WARNING", f"pose.{name}: the table is empty, so nothing is posed (give it keys, or remove it)")
             continue
         arm = m.arm
         smap = S.semantic_map(arm)
@@ -606,6 +616,10 @@ def run(ctx):
         m.base = {"spine": base, "chain": chain}
         # feet on the floor / pedals (leg IK bones move to the ankle targets)
         feet = spec.get("feet", "seat" if seat else None)
+        if feet == "seat" and not seat:
+            raise BuildError(f"pose.{name}.feet = \"seat\" is the feet of the seat the character sits on, and there is no `sit`: "
+                             f"write feet = \"floor\" (standing: the feet stay on the floor under the hips), \"prop:feet\" or "
+                             f"{{L = [x, y], R = [x, y]}}")
         if feet:
             if feet == "seat" or feet == "floor":
                 fd = None
@@ -619,14 +633,20 @@ def run(ctx):
                 pts = {s: (seat["prop"].world(list(fd[s][:2]) + [0.0]) if fd else None) for s in ("L", "R")}
             elif isinstance(feet, str):
                 prop_name, _, use = feet.partition(":")
+                if prop_name not in ctx.props:
+                    raise BuildError(f"pose.{name}.feet = {feet!r}: no prop {prop_name!r} (props: {sorted(ctx.props)})")
                 p = ctx.props[prop_name]
                 fd = p.use("feet", use or None)
                 pts = {s: p.world(fd[s][:2] + [0.0]) for s in ("L", "R")}
             else:
+                if not isinstance(feet, dict) or any(s not in feet for s in ("L", "R")):
+                    raise BuildError(f"pose.{name}.feet: a table gives both feet, {{L = [x, y], R = [x, y]}} (or a target each)")
                 pts = {s: _foot_point(ctx, feet[s]) for s in ("L", "R")}
             for s in ("L", "R"):
                 ik = smap.get(f"leg_ik.{s}")
                 if not ik:
+                    continue
+                if pts[s] is None and seat is None:    # standing on `floor`: the foot stays where the model stands, under the hips
                     continue
                 rest = _world_head(arm, ik)
                 if pts[s] is None:                     # in front of the knee, legs as relaxed as the seat allows
@@ -638,9 +658,7 @@ def run(ctx):
                 z_rest = rest.z
                 goal = Vector((tgt.x, tgt.y, z_rest))
                 K.key_bone_locs(arm, ik, [f0, f1], [(0, 0, 0), tuple(goal - rest)])
-        for s, deg in (spec.get("toes") or {}).items():          # foot yaw about the vertical through the ankle
-            if s not in ("L", "R"):
-                raise BuildError(f"pose.{name}.toes: the keys are L and R, not {s!r}")
+        for s, deg in (spec.get("toes") or {}).items():          # foot yaw about the vertical through the ankle (L and R)
             if smap.get(f"leg_ik.{s}") and float(deg):
                 K.key_bone_arm(arm, smap[f"leg_ik.{s}"], [f0, f1], [Quaternion(), _q((0, 0, 1), float(deg))], interp="BEZIER")
             info.setdefault("toes", {})[s] = float(deg)

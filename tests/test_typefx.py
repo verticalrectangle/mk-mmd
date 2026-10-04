@@ -25,6 +25,7 @@ def test_kinetic_keys_come_back_sorted_and_numeric():
     ({"scale": 3}, "scale is a list of [t, value] keys"),
     ({"show": [1, 2, 3]}, "show is [t_on] or [t_on, t_off]"),
     ({"pivot": "left"}, "pivot is one of"),
+    ({"lyric": [1, 2]}, "unknown kinetic keys ['lyric']"),             # a text key, never a kinetic one
     ({"tint": {"color": "foam"}}, "tint is {color"),
     ({"drip": {"g": 1}}, "t required"),
     ({"drip": {"t": 1, "speed": 2}}, "t required"),

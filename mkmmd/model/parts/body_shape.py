@@ -1,6 +1,6 @@
 """Proportions of the body part: every number that sets the body's size and shape is resolved here from the spec
 (`proportions.toml`: landmarks, torso cuts, limb diameters, foot, segments; then the `[body]` table of body.toml), over
-defaults that are the same numbers RinStudy measured for Rin, so the part also builds without a spec.
+defaults that are the numbers measured for Rin, so the part also builds without a spec.
 
 `resolve(prop, cfg)` returns `Shape`: `land` (semantic bone name -> head position, plus extra non-bone points such as
 `toe_end.L`), `hand` (layout and radii, finger joints regenerated at anatomical proportions between the given knuckle and
@@ -13,7 +13,7 @@ import numpy as np
 
 from .body_geom import unit
 
-# ---------------------------------------------------------------- defaults (RinStudy's numbers for Rin)
+# ---------------------------------------------------------------- defaults (the numbers measured for Rin)
 LAND = {
     "root": (0.0, -0.0027, -0.0036),
     "center": (0.0, -0.0167, 0.8419),

@@ -13,7 +13,7 @@ Included files are merged first, in order (later files override earlier ones), t
 on top. Tables merge key by key; every other value (lists included) is replaced. Included files may have their own
 `[model] include`. The merged dict keeps no `include` key; `Spec.files` lists every file read, in merge order.
 
-    spec = load("~/Projects/mk-tests/rin_model/model.toml")
+    spec = load("model.toml")
     spec["hair"]["length"]        # a plain dict
     spec.get_path("model.out")    # Path with `~` expanded
     spec.digest()                 # sha1 of the merged content (cache keys)

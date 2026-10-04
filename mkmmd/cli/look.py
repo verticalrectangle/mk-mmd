@@ -272,6 +272,10 @@ def run(args):
                         d.rmdir()
                     except OSError:
                         pass
+    if args.guides:                                  # last, so the thirds and the safe area sit over effects and type
+        for lst in shots.values():
+            for s in lst:
+                guides(s["path"])
     res = {"scene": str(blend), "out": str(out), "seconds": round(time.time() - t0, 1),
            "images": [s["path"] for s in shots["a"]]}
     if effects:

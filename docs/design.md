@@ -544,7 +544,7 @@ a target that rides a moving prop or a posed bone moves with it.
 | `{path = "road:road", s = 640, offset = -6.0, z = 1.2}` | a point beside a set's path: arc length `s` (m), `offset` (m left of the centre line, or a lane name such as `"fwd1"`), `z` above the road |
 | `"car:road"` | a prop use point by name (the first match in the order look, rest, grip, sit, anchor, surface, pose); a use point that rides an object follows it |
 | `"cast:rin"`, `"cast:rin.head"` | another character's eyes, or one of their bones (a semantic name) |
-| `"camera"` | the active camera at that frame; it exists only from the lights stage on (after shots), so only a `[[light]] look` can use it; poses, performance, placement and shots fail on it |
+| `"camera"` | the active camera at that frame; it exists only from the lights stage on (after shots, and only when the project has a `[[shot]]`), so only a `[[light]] look` can use it; poses, performance, placement and shots stop with a BuildError that says so |
 
 A `[[shot]] at` takes a list or a dict target only (no strings); a list of three numbers as `frame.subject` reads as three targets (write `[[x, y, z]]`): see [Shots](#shots).
 
@@ -605,8 +605,8 @@ strength 1.5}`: relative weights of the lit colours), `aviation` (12 red lights)
 `use.look` `downtown` and `skyline`.
 
 **`cafe_room`** keys (all optional): `frame0` and `duration` (default the project's), `ticks` (clip seconds at which a rain splat lands
-on the glass; default every 1.5 s) or `timeline` (a file whose `ticks` or `tempo.ticks` are read; `mk timeline analyze` writes
-neither, so pass `ticks = [...]`), `seed` (4242), `pendant` ([x, y], default [0, -0.48]), `render` (true: configure EEVEE Next and AgX
+on the glass; default every 1.5 s) or `timeline` (a file whose `ticks` or `tempo.ticks` are read, else its `beats`, the only tempo marks
+`mk timeline analyze` writes: a splat on every beat), `seed` (4242), `pendant` ([x, y], default [0, -0.48]), `render` (true: configure EEVEE Next and AgX
 "Base Contrast"), `rain` and `lightning` (true), `colors` (role to slot or `#hex`: `plaster`, `wainscot`, `window_paint`, `oak`,
 `oak_dark`, `cream`, `fog_tint`, ...). Room frame: a character sits at the origin facing -Y, +X is her left, the window wall is
 x = -0.80, the wall behind her y = 1.05; the big window spans y -1.75..0.65, z 0.82..2.85 and a small round table is expected at
@@ -728,7 +728,7 @@ against the vehicle as it stands at the first frame and then rides it.
 | `at` | arc length in metres at clip time 0 (default 0) |
 | `height` | metres above the path (default 0) |
 | `roll` | degrees of body roll per g of lateral acceleration (speed² × curvature), leaning out of the turn (default 1.2) |
-| `pitch` | degrees of body pitch per g of longitudinal acceleration (default 0.8) |
+| `pitch` | degrees of body pitch per g of longitudinal acceleration: the nose rises under acceleration and dives under braking (default 0.8) |
 | `wheelbase` | metres, for the steering angle (default 2.6) |
 | `steer_ratio` | angle of the steering wheel per angle of the road wheels; replaces the card's `steering.ratio` (default the card's, else 14) |
 
@@ -774,7 +774,7 @@ the targets `cast:<name>` and `{cast = "<name>", point}`, and a check's `cast = 
 | `at` | `[x, y, z]` metres of the model root (default the origin; in the frame of `parent` when there is one) |
 | `yaw` | degrees about Z; 0 faces -Y, positive turns toward +X (default 0) |
 | `parent` | name of an object the model rides on; `at` and `yaw` are then in its frame |
-| `physics` | `"mk"` (default) and `"none"`: import without Bullet, so the chains move only where a `[sim.<name>]` table solves them. `"bullet"`: keep the author's rigid bodies and joints (Blender's rigid-body simulation then moves them; give the member no `[sim.<name>]`) |
+| `physics` | `"mk"` (default): import without Bullet, so the chains move only where a `[sim.<name>]` table solves them. `"none"`: the same import, and the member is left out of `[sim]` even when it has a table (no secondary motion; the sim report says `skipped`). `"bullet"`: keep the author's rigid bodies and joints (Blender's rigid-body simulation then moves them; give the member no `[sim.<name>]`). Any other word is an error |
 
 ```toml
 [[cast]]
@@ -791,9 +791,12 @@ has, per member, `armature`, `meshes`, `physics`, `rig` (whether a `rig.json` wa
 `textures_missing` (image names to fix before rendering); the log notes when the `rig.json` was made from another file than the
 model.
 
-The per-member stages of this chapter do not validate keys: a key they do not read is ignored, and so is a `[pose.<name>]`,
-`[perform.<name>]` or `[sim.<name>]` whose name is no cast member (`[[motion.<name>]]` raises). Read the stage report after a
-build. A `sit` pose places its member itself and replaces `at` and `yaw` (see [Posing](#posing)).
+The per-member tables of the later stages are checked before their stage runs: `[pose.<name>]`, `[perform.<name>]` and `[sim.<name>]`
+must be named after a cast member, and a key the stage does not read is an error that lists the cast or the known keys
+(`[perform.rin]: unknown key 'blinks' (known: ...)`). The check goes into the sub-tables the stages read (`hands.L`, `head`, `hips`,
+`feet`, `gaze[]`, `blink`, `bob`, `sing`, `strum` ...), not into targets, nor into `params` and `wind` of `[sim]` (the solver refuses
+its own). A table with no keys does nothing, and the build log carries a WARNING. A `sit` pose places its member itself and replaces
+`at` and `yaw` (see [Posing](#posing)).
 
 ### Posing
 
@@ -801,8 +804,8 @@ build. A `sit` pose places its member itself and replaces `at` and `yaw` (see [P
 holds. It eases in from the rest pose over `[scene] settle_frames` (24) at the start of the pre-roll (bone keys at `start` and at
 `start + settle_frames`, Bezier; the arm IKs' influence goes from 0 to 1) and then holds: the base pose that `[[motion]]` plays
 under, `[perform]` moves and `[sim]` reacts to. The stage reads the scene at frame `start`, so props that
-[vehicles](#vehicles) moved are read where they stand there. A member without a `[pose.<cast>]` table, or with an empty one, is
-left alone; `[perform]` and `[sim]` still work on it. The stage needs the cast and the props its keys name; grips need the CLI's
+[vehicles](#vehicles) moved are read where they stand there. A member without a `[pose.<cast>]` table, or with an empty one (a WARNING
+in the log), is not posed, but a prop that `wear` puts on it is still worn; `[perform]` and `[sim]` still work on it. The stage needs the cast and the props its keys name; grips need the CLI's
 Python with scipy (the solver runs there).
 
 Rotations are composed in the armature's axes (the model faces -Y: x its left, y behind it, z up), so characters riding a
@@ -816,7 +819,7 @@ and positive `head.roll` tips the head toward its left shoulder.
 |---|---|
 | `sit` | `"prop:seat"`: a `use.sit` point of a prop (`"prop"` alone when it has one), or a table `{hip, facing, floor_z, pelvis_deg, back_deg}` in world coordinates. The root goes to the seat's floor point (`floor_z`; in the prop's frame for a card) facing `facing` (default `[0, -1, 0]`, flattened to the horizontal) and is parented to the prop, so the character rides it and `[[cast]] at` and `yaw` are replaced; the midpoint of the hip joints goes to `hip`. `pelvis_deg` (default 6) tips the pelvis back, which brings the thighs forward; `back_deg` (default 0) is the backrest's recline, the upper body leans back by it and `lean` adds to it. A card's `seat_z` and `back_tilt_deg` are not read |
 | `sit_offset` | `[x, y, z]` metres: slides the hip point on the seat, in the seat prop's frame (the world's for a `sit` table): sit further forward |
-| `feet` | ankle targets for the leg IK (a model without `leg_ik` bones ignores them). `"seat"` (default when seated): the seat prop's `use.feet` point of the seat's own name, else its only one (`L` and `R` as `[x, y, z]` in the prop's frame); a seat without one, and `"floor"`, put the feet in front of the knees (0.55 of the leg's length ahead of the hip, 0.1 m either side); both need `sit`. `"prop:feet"`: another prop's `use.feet` point. A table `{L, R}` gives both feet as world `[x, y]` or any [target](#targets): `{cast = "rin", point = [x, y, 0]}` writes a standing pose in the character's own frame, so it moves with the character. Only x and y count: the ankle keeps the model's own height above the floor |
+| `feet` | ankle targets for the leg IK (a model without `leg_ik` bones ignores them). `"seat"` (default when seated): the seat prop's `use.feet` point of the seat's own name, else its only one (`L` and `R` as `[x, y, z]` in the prop's frame); a seat without one, and `"floor"`, put the feet in front of the knees (0.55 of the leg's length ahead of the hip, 0.1 m either side). Standing (no `sit`), `"floor"` keeps the feet where the model stands, on the floor under the hips (what no `feet` does too), and `"seat"` is an error that says so. `"prop:feet"`: another prop's `use.feet` point. A table `{L, R}` gives both feet as world `[x, y]` or any [target](#targets): `{cast = "rin", point = [x, y, 0]}` writes a standing pose in the character's own frame, so it moves with the character. Only x and y count: the ankle keeps the model's own height above the floor |
 | `hips` | `{shift = [x, y, z], roll, yaw}`: moves and turns the pelvis of a standing or seated body, eased in over the settle and on top of what a seat asks for. `shift` is in metres in the character's own frame (x its left, y behind, z up): a drop bends the knees and the leg IK keeps the feet on `feet`. `roll` degrees drops the left hip (+). `yaw` degrees turns the pelvis toward the left about the vertical. Keyed on `center` (shift) and `lower_body` (roll, yaw) |
 | `toes` | `{L = deg, R = deg}`: foot yaw about the vertical through each ankle (the leg IK bone), + toward the left: toes in are negative on the left foot and positive on the right. Any other key raises |
 | `lean`, `turn` | degrees: upper-body forward lean and turn toward the left, on top of the seat's back angle (default 0) |
@@ -938,10 +941,10 @@ These keys sit on a `[[prop]]` ([Props](#props)) and are applied by the pose sta
 | `attach` | `"<cast>:<bone>"` (semantic or Blender bone name): the prop's root is bone-parented, replacing its `at` and `yaw` |
 | `offset`, `attach_rot` | with `attach`: `[x, y, z]` metres and `[x, y, z]` degrees (XYZ Euler) in the bone's head frame (default 0) |
 | `anchor_to` | `"<cast>"`: the card's `use.anchor` points that name a semantic `bone` and an `object` are bone-parented to that member, keeping their world placement at the settled pose (earbuds in the ears, a cord on the chest) |
-| `wear` | `"<cast>"` or a table `{cast, use, at, pivot, scale, neck_deg, yaw_deg, roll_deg}`: a worn prop on the bone the card names (a guitar on the chest) with its strap and cord, see [Playing a worn guitar](#playing-a-worn-guitar) |
+| `wear` | `"<cast>"` or a table `{cast, use, at, pivot, scale, neck_deg, yaw_deg, roll_deg, strap, cable}`: a worn prop on the bone the card names (a guitar on the chest) with its strap and cord, see [Playing a worn guitar](#playing-a-worn-guitar) |
 
 Worn props are placed before the arms are solved, so hands can grip them; `attach` and `anchor_to` run after the arms, so a grip
-on a prop attached to a bone reads it where the props stage left it. `wear` needs a non-empty `[pose.<cast>]` for the wearer.
+on a prop attached to a bone reads it where the props stage left it. A worn prop does not need a `[pose.<cast>]` table for its wearer: the pose stage puts it on even when the member has none.
 
 #### What the stage reports
 
@@ -980,7 +983,7 @@ to some bones (`[motion.<cast>]` with a single table works too). Each entry make
 | `from`, `to` | source frame range, in the motion's own 30 fps frames (default the whole motion) |
 | `scale` | time scale of the strip: 2 plays at half speed (default 1) |
 | `retime` | `"beats"`: the motion's own beat (`core.vmd.tempo_phase`, a comb filter over 70-180 bpm of the bone motion) is scaled to the song's beat period and the first motion beat at or after `from` lands on the song beat nearest to where it would fall with `from` at `start`. Needs `timeline`; replaces `scale` |
-| `timeline` | with `retime`: the timeline JSON whose `beats` are used (`audio/timeline.json`) |
+| `timeline` | with `retime`: the timeline JSON whose `beats` are used (default `audio/timeline.json`; a missing file stops the build naming `motion.<cast>[i]`) |
 | `bones` | which bones the motion drives: `"all"` (default), `"upper"` (spine, neck, head, eyes, shoulders, arms with their twist bones, wrists, fingers), `"lower"` (center, groove, waist, lower body, legs, knees, ankles, toes and the leg and toe IK bones) or a list of semantic or Blender names. Hair, skirt and the root bone belong to neither group |
 | `morphs` | also play the VMD's facial keys (default true) |
 | `blend_in`, `blend_out` | seconds the strip's influence ramps in and out (default 0) |
@@ -1043,7 +1046,7 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `breath` | `{per_min = 16.5, deg = 0.6}`: chest pitch on `upper_body2` |
 | `sway` | `{deg = 0.37, period = 2.5}`: a slow turn of the upper body about the vertical |
 | `nod` | `{deg = 0.48, period = 2.3}`: a slow nod of the head, fading while a gaze event holds the head away |
-| `bob` | `{deg = 1.5, beats = [t, ...], timeline = "audio/timeline.json", downbeat_accent = 1.6}`: the head dips after each beat (60 ms attack, 220 ms decay). Needs `beats` (clip seconds) or a `timeline` (its beats; its downbeats dip `downbeat_accent` times deeper); `beats` wins |
+| `bob` | `{deg = 1.5, beats = [t, ...], timeline = "audio/timeline.json", downbeat_accent = 1.6}`: the head dips after each beat (60 ms attack, 220 ms decay). Needs `beats` (clip seconds) or a timeline file (`timeline`, default `audio/timeline.json`: its beats; its downbeats dip `downbeat_accent` times deeper; a missing file stops the build naming `perform.<cast>.bob`); `beats` wins |
 | `startle` | `[t, ...]`: at each time the upper body jolts backward (4.5 degrees, settling with a 0.35 s time constant) |
 | `lean`, `turn`, `tilt` | `[[t, deg], ...]`: extra upper-body forward lean, turn toward the left and sideways tilt toward the left over time, smoothstep-eased between the keys, held before the first and after the last, on top of the pose's base: a reach that leans in and settles back, a head on a shoulder. Hand targets still hold, except hands whose pose `ride` is a chest bone, which go with it. The first key's value holds from the start of the pre-roll: begin with a `[0, 0]` key to start from the base |
 | `head_tilt` | `[[t, deg], ...]`: the head rolls toward the left on top of the gaze, keyed the same way |
@@ -1063,7 +1066,7 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 `text`, `start` and `voiced_end` in clip seconds; the text is read and never printed) become IPA phonemes with `espeak-ng` and
 then the five vowel morphs `a i u e o`: vowels share the word's sung span (the last one takes the held note), consonants take a
 short slice, the mouth closes for m, b, p and rests between words further than 0.14 s apart, and its size follows the vocal
-loudness when the timeline has `vocal_db`. `timeline` is required. `lines` is `[a, b]`, lines a to b (1-based, inclusive), or
+loudness when the timeline has `vocal_db`. `timeline` defaults to `audio/timeline.json` (a missing file stops the build naming `perform.<cast>.sing`). `lines` is `[a, b]`, lines a to b (1-based, inclusive), or
 any other list of line numbers (default all lines). `mouth` is the peak weight at full voice, `lead` shifts every key (a small
 negative lead reads better on screen), `voice` is the `espeak-ng` voice, the language of the words. `espeak-ng` must be
 installed: `mk doctor` reports whether it is found, and without it the stage raises.
@@ -1253,7 +1256,7 @@ it out for a quick look at poses and performance.
 | `colliders` | the scene's collision shapes: the name of a `[colliders]` set or a list of specs ([Colliders](#colliders)) (default none) |
 | `props` | add every prop card's colliders: seats, doors, dash, wheel ... (default true) |
 | `fingers` | add finger and palm capsules of every cast member (default true) |
-| `floor` | the ground height in metres, or `false` for no floor (default 0) |
+| `floor` | the ground: `true` (default) is the ground at z 0, a number that height in metres, `false` no floor |
 | `wind` | the air, below |
 | `use_masks` | honour the PMX collision masks everywhere, not only within `anchor_free` of a chain's root (default false) |
 | `anchor_free` | metres near a chain's root where it does not collide with the body it hangs from and the PMX masks apply (default 0.25) |
@@ -1343,7 +1346,7 @@ drag = 9
 lateral = 0.6
 ```
 
-The report has, per member, `families`, `colliders` (resolved shapes), `bones`, `penetration_mm_max` (the deepest chain point in
+The report has, per member, `families`, `colliders` (resolved shapes), `floor_z` (the ground's height, null without one), `bones`, `penetration_mm_max` (the deepest chain point in
 any shape from `frame0` on) and `passes`: per level `chains`, `bones`, `engine`, `seconds` and `report`, which gives per family
 `jerk_mm`, `speed_mm`, `ratio` (the `jitter` check's jerk over speed: calm hair is about 0.4, Bullet hair on a seated model about
 1.4) and `jerk_p95_mm`, and `penetration_mm` (`max`, `at_frame`, `bone`, `into`, `median`, `frames_over_2mm_by_shape`). A
@@ -1622,6 +1625,7 @@ bone-parented where the point says. The table's keys:
 | `cast` | who wears it (required in a table) |
 | `use` | the name of the card's `use.wear` point (default its only one) |
 | `at`, `pivot`, `scale`, `neck_deg`, `yaw_deg`, `roll_deg` | the point's numbers of the same names, overridden. Any other key raises (`wear: unknown key`) |
+| `strap`, `cable` | tables laid over the card point's own table of that name, key by key (the keys are the card point's, below); the card's point must have the table, and a key it does not have raises (`wear cable: unknown key`) |
 
 The card's `use.wear` point (the library guitar's is called `stand`) has these keys:
 
@@ -1725,7 +1729,7 @@ shot starts on the frame `round(frame0 + from * fps)`.
 | `from`, `to` | clip seconds, required unless `plate = true`. The markers use `from` only: set `to` to the next shot's `from` (it bounds the frames the camera is keyed over, ±2, and is what `[[transition]]`, `[[insert]]` and `lyrics.zones` read) |
 | `plate` | `true`: the shot is not in the cut (no marker; `from` / `to` optional). It exists for a `[[transition]]` or `[[insert]]` to take frames from, drawn through its own camera and look at the frames wanted; a plate that no effect uses is skipped with a WARNING. A shot in the cut that an effect takes frames from before its `from` is keyed over those frames as well |
 | `mount` | prop, set or object the camera rides: `at` is in its frame and its motion carries the camera. An unknown name is an error (default: the world) |
-| `at` | camera position: `[x, y, z]` in the mount's frame (the world without a mount) or a dict target, `{path = "road:road", s = 640, offset = 7, z = 1.2}` (beside a set's path), `{prop = "car", point = [x, y, z]}`, `{cast = "rin", point = [x, y, z]}`, resolved in the world on every frame (the mount does not apply to it); `keys[].at` takes the list form only (default `[0, 0, 0]`) |
+| `at` | camera position: `[x, y, z]` in the mount's frame (the world without a mount) or a dict target, `{path = "road:road", s = 640, offset = 7, z = 1.2}` (beside a set's path), `{prop = "car", point = [x, y, z]}`, `{cast = "rin", point = [x, y, z]}`, resolved in the world on every frame (the mount does not apply to it); `keys[].at` takes either form too, and a camera between two keys moves between the world points they give on every frame (default `[0, 0, 0]`) |
 | `look` | what the camera aims at: any [target](#targets), `[x, y, z]` (world), `"cast:rin.head"`, `"cast:rin"` (the eyes), `"car:road"` (a card's use point), `{path = ...}`; read on every frame, so a moving target is followed (default: straight ahead, along the mount's -Y) |
 | `lens` | focal length in mm on a 36 mm sensor that spans the larger image side; every camera clips from 0.02 m to 5000 m (default 35) |
 | `roll` | degrees about the viewing axis; positive turns the picture clockwise (default 0) |
@@ -1735,7 +1739,7 @@ shot starts on the frame `round(frame0 + from * fps)`.
 | `frame` | `{subject, fill, solve}`: solves the lens, or the distance, for each output so the subject fills a share of the frame height. `subject` is a target or a list of targets (one world point is written `[[x, y, z]]`); its height is the vertical extent of those points (at least 0.25 m) plus 0.15 m of headroom, taken at the median of about twelve frames of the shot. `fill` is the share of the frame height (default 0.45). `solve = "lens"` (default) sets one lens for the whole shot (a keyed `lens` is replaced), `"distance"` keeps the lens and moves the camera along the aim line by one factor |
 | `shift` | `[x, y]`, Blender's lens shift: fractions of the larger image side, the picture moving the other way (a positive `y` moves it down; probed in Blender 4.2.3); constant, or keyed in `keys[].shift` (default `[0, 0]`). See the crop below |
 | `dof` | `{focus, fstop}`: depth of field; `focus` is any target (required), keyed as the distance from the camera on every frame; `fstop` (default 2.8). Without `dof` nothing blurs |
-| `aspect.<output>` | `{...}`, `[shot.aspect.<output>]`: that output's own version of the shot. It may hold any key above except `name`, `from`, `to` and `plate`; a key is replaced whole (tables do not merge: override `frame` and give its `subject` again); a table for an output the project does not have has no effect |
+| `aspect.<output>` | `{...}`, `[shot.aspect.<output>]`: that output's own version of the shot. It may hold any key above except `name`, `from`, `to`, `plate` and `aspect`. The tables `frame`, `dof`, `colors`, `knockout` and `reflection` merge key by key with the shot's own (`frame = { fill = 0.6 }` keeps the `subject`); every other key, targets and lists included, is replaced whole; `reflection = false` switches an inherited reflection off for that output. A table for an output the project does not have is an error |
 | `style`, `colors`, `hide`, `keep`, `accent`, `tint`, `knockout`, `grow`, `samples` | the silhouette look, below |
 | `reflection` | the window reflection, below |
 
@@ -1781,11 +1785,12 @@ dof = { focus = "cast:rin.head", fstop = 3.56 }    # 2.0 x 1920 / 1080
 shift = [0.0, 0.1111]                  # (420 - 300) / 1080
 ```
 
-`mk build` refuses a `mount` that names nothing; a shot without `from` and `to` that is not a plate; a `shift` that is not `[x, y]`;
-a window of an effect that needs frames from a shot before `[scene] start` (`lower [scene] start`); and bad look tables (the message
-names the shot and the output: `shot 'storm' (16x9): ...`). It logs a WARNING for a plate no effect uses and for an object pattern
-that matches nothing. The keys of `[[shot]]`, `frame`, `dof` and `keys[]` are not checked against a list: a misspelled one is
-ignored, so look at the cut with `mk look` before rendering.
+`mk build` refuses a `mount` that names nothing; a shot without `from` and `to` that is not a plate, and a plate with only one of them;
+a `shift` that is not `[x, y]`; a key that `[[shot]]`, `frame`, `dof`, `keys[]` or an `aspect` table does not have (the message lists
+the known ones: `shot 'storm': unknown key 'lenss' (known: ...)`); an `aspect` table for an output the project does not have; a `frame`
+without `subject`; a window of an effect that needs frames from a shot before `[scene] start` (`lower [scene] start`); and bad look
+tables (the message names the shot and the output: `shot 'storm' (16x9): ...`). It logs a WARNING for a plate no effect uses and for
+an object pattern that matches nothing.
 
 ### Looks: silhouette and reflection
 
@@ -1794,7 +1799,7 @@ Two looks need more than the lit scene. They belong to the shot and are switched
 leave `mk post` to grade the finished frames as usual. `mk render --no-styles` and `mk look --no-styles` draw every shot as lit. A
 shot has one look per output: `style` and `reflection` together are an error. A silhouette shot can show a reflection in one output
 if that output's `aspect.<output>` table says `style = "none"` and gives the `reflection`; a `reflection` set on the shot itself
-cannot be switched off per output.
+can be switched off for one output with `reflection = false` in that output's `aspect` table.
 
 Object patterns (`hide`, `keep`, `accent`, `only`, `knockout.objects`; a single string is a list of one): `name*` (fnmatch on the
 object name, case-sensitive), `@collection` (the object is in that collection or below it; fnmatch on the collection name) and

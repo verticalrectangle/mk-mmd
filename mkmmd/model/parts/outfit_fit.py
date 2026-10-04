@@ -201,7 +201,7 @@ class Skin:
             r = r2
         return c, r
 
-    # ---- distances and weights (ModelKit's skin.py does the nearest-surface search and the weight transfer)
+    # ---- distances and weights (mkmmd.model.skin does the nearest-surface search and the weight transfer)
     def closest(self, pts):
         """(signed distance (q,), closest point (q, 3), tri index (q,), barycentric (q, 3)) of points to the surface;
         negative = behind the surface (the winding decides)."""
@@ -254,7 +254,7 @@ class Land:
         return self[f"{name}.{s}"]
 
 
-# Reisen-class standing A-pose landmarks in metres (rounded high-level measurements; Rin is scaled from these when the
+# Standing A-pose landmarks of a reference body in metres (rounded high-level measurements; Rin is scaled from these when the
 # body part does not publish its own)
 BASE_LANDMARKS = {
     "root": (0.0, 0.0, 0.0), "center": (0.0, -0.018, 0.886), "groove": (0.0, -0.018, 0.901),

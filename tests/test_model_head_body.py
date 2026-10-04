@@ -258,10 +258,10 @@ def _mesh(part, name):
     return next(m for m in part.meshes if m.name == name)
 
 
-def test_body_mode_needs_the_published_take(synth):
+def test_body_mode_needs_the_published_take(synth, tmp_path):
     from mkmmd.model.parts import head as H
     sp = spec.from_dict({"model": {"name": "t", "parts": ["head"]}, "head": {"source": "body", "take": synth.tc}})
-    ctx = build.BuildCtx(sp, "/tmp/never", seed=1)
+    ctx = build.BuildCtx(sp, tmp_path, seed=1)
     ctx.part = "body"
     ctx.parts["body"] = P.Part("body", info={})
     ctx.part = "head"

@@ -258,17 +258,18 @@ def normalize_reflection(spec, palette):
 
 def normalize(spec, palette):
     """{'silhouette': {...}} and / or {'reflection': {...}} for one shot spec (an aspect's overrides merged in); {} when
-    the shot has neither. `style = "none"` switches an inherited style off for one aspect."""
+    the shot has neither. `style = "none"` and `reflection = false` switch an inherited look off for one aspect."""
     style = spec.get("style")
+    reflection = spec.get("reflection")
     out = {}
     if style not in (None, "none"):
         if style not in STYLES:
             raise StyleError(f"shot {spec.get('name')!r}: style = {style!r} (known: {', '.join(STYLES)})")
         out["silhouette"] = normalize_silhouette(spec, palette)
-    if spec.get("reflection") is not None:
+    if reflection is not None and reflection is not False:
         if out:
             raise StyleError(f"shot {spec.get('name')!r}: a {style} shot cannot have a reflection")
-        out["reflection"] = normalize_reflection(spec["reflection"], palette)
+        out["reflection"] = normalize_reflection(reflection, palette)
     return out
 
 
@@ -337,7 +338,7 @@ def compose_silhouette(p, spec, tint_values, hard=False, subject=True):
       soft_alpha  (h, w) alpha of the soft accent objects (a bolt), hidden behind the subject; soft_aov (h, w) their weight
       type        (h, w, 4) straight RGBA of the type; knock (h, w, 4) coverage of the knock-out type in alpha
     `spec` is the normalised silhouette spec, `tint_values` one custom property value per background layer, `hard` says
-    whether flat holds accent-coloured objects (cords) to grow. The order is the original's post: background, subject,
+    whether flat holds accent-coloured objects (cords) to grow. The layers go in this order: background, subject,
     the bolt's weight in the accent colour and what its alpha has beyond that as a glow in the subject colour
     (`sil = alpha - bolt`), the cords, then type, then knock-out type (ink on the background, background colour where
     it overlaps the silhouette). `subject = False` leaves the subject out: the frame as it would be without the figure

@@ -24,7 +24,7 @@ DEFAULTS = {
     "enabled": True,
     "width": None,              # m, base width where the ear leaves the hair (None: width_ratio x head width)
     "height": None,             # m, visible height above the hair (None: height_ratio x head width)
-    "width_ratio": 0.50,        # x head width (0.095 m on the 0.19 m head of the proportions study)
+    "width_ratio": 0.50,        # x head width (0.095 m on the 0.19 m head of the reference proportions)
     "height_ratio": 0.46,       # x head width (0.087 m)
     "tilt_out_deg": 17.0,       # axis tilt from vertical, outward
     "tilt_fwd_deg": 8.0,        # axis tilt from vertical, forward

@@ -1,5 +1,5 @@
 """Wall decor of the cafe: `cafe_fairy_lights` (two runs of string lights) and `cafe_poster` (a paper print taped to the
-back wall). Both are built to the layout of the original scene: the wall planes and the anchors below are in the
+back wall). Both are built to the set's reference layout: the wall planes and the anchors below are in the
 world-aligned cafe frame, the frame the room set uses as well."""
 import math
 import os
@@ -14,7 +14,7 @@ from .cafe_kit import Kit, L, N, bm_append, bm_lathe, bm_tube, bm_uv_sphere, cat
 
 # ================================================================= layout
 # The string lights hang on the room's own geometry, so `cafe_fairy_lights` is built in the world-aligned cafe frame of
-# the original layout: root at the origin with yaw 0, floor at z = 0, +Z up, the camera side of the room at -Y.
+# the reference layout: root at the origin with yaw 0, floor at z = 0, +Z up, the camera side of the room at -Y.
 WINDOW_X = -0.80                    # window wall plane; the room is at x > WINDOW_X
 BACK_WALL_Y = 1.05                  # back wall plane; the room is at y < BACK_WALL_Y
 
@@ -38,7 +38,7 @@ POSTER_W, POSTER_H = 0.30, 0.40     # sheet size (m)
 STANDOFF = 0.005                    # distance of the sheet's mean plane from the wall (m)
 
 # ================================================================= colours
-# Recipes (kwargs of Kit.blend) fitted on Rose Pine Dawn to the colours of the original scene (OKLab error x100 in the
+# Recipes (kwargs of Kit.blend) fitted on Rose Pine Dawn to the reference colours of the scene (OKLab error x100 in the
 # comments; below 2 is a close match).
 WIRE = dict(foam=0.5, base=0.3, gold=0.2, k=1.3)            # pale grey-green cable (1.4)
 BULB_WARM = dict(gold=0.85, surface=0.15, k=1.25)           # glass tint of a bulb, warm end (0.1) ...
@@ -350,7 +350,7 @@ def cafe_fairy_lights(name, coll, root, slots=None):
     """The two runs of string lights of the cafe, as objects `<name>_StringLightsWindow` and `<name>_StringLightsBack`
     (wire, brass and warm emissive bulbs: three material slots in that order).
 
-    Frame: the world-aligned cafe frame of the original layout (floor z = 0, +Z up), so the root belongs at the origin
+    Frame: the world-aligned cafe frame of the reference layout (floor z = 0, +Z up), so the root belongs at the origin
     with yaw 0; the runs hang on the room's geometry (WINDOW_X, BACK_WALL_Y and the anchors at the top of the module).
       window run  x = WINDOW_X + 6 cm, y -1.75 .. +0.65, z ~ 2.9 on the room side of the window frame: five catenary
                   swags on brass peg hooks, a loose tail with a last bulb at the front end, a cable drop to a plug at
@@ -607,7 +607,7 @@ def cafe_poster(name, coll, root, slots=None):
 
     Frame: origin = the sheet's centre on the wall plane. The wall is the plane y = 0, the sheet faces local -Y (the
     room) and its mean plane stands 5 mm in front of the wall (y = -0.005), +Z up, +X to the right as seen from the
-    room. On the original back wall: at = [-0.25, 1.05, 1.42], yaw 0.
+    room. On the cafe set's back wall: at = [-0.25, 1.05, 1.42], yaw 0.
 
     slots: palette-slot colour overrides as for every prop, and `image`: the absolute path of the printed image (an
     entry that is not a colour; a PNG with alpha is composited over the paper, its UV runs over the whole sheet, 3:4).

@@ -19,7 +19,7 @@ WALL_T = 0.28
 STREET_Z = -0.15                            # outside ground level
 SKY_RADIUS = 88.0                           # inside the default 100 m camera far clip
 SUN_DIR = Vector((-0.86, -0.22, 0.46)).normalized()      # towards the low sun (it breaks through at the window)
-SPLAT_DRAWS = 4 * 16                        # random draws the glass splats used in the original; the street continues after them
+SPLAT_DRAWS = 4 * 16                        # random draws of the glass splats; the street's stream continues after them
 
 RAIN_SPEED = 7.0            # m/s
 RAIN_LAYERS = (
@@ -41,7 +41,7 @@ def palette_colors(C):
     """Colours of the outside as blends of palette slots. `light(...)` tints are max-normalised light colours."""
     b = C.blend
     L = C.light
-    # row-house pastels: the original picked each from this list per building
+    # row-house pastels: each building picks one from this list
     pastels = [b(hl_high=.6, rose=.4, k=1.25), b(surface=.5, foam=.5, hue=-30, chroma=2, k=1.1),
                b(overlay=.6, rose=.4, hue=60, chroma=1.5, k=1.2), b(love=.6, surface=.4, hue=-70, k=1.2),
                b(hl_low=.55, gold=.45), b(overlay=.6, iris=.4, hue=-90, chroma=2, k=1.1), b(base=.75, rose=.25),

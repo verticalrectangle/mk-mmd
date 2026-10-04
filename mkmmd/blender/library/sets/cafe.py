@@ -17,7 +17,7 @@ spec keys (all optional)
     frame0     Blender frame of clip time 0 (default: the project's frame0); clip_t counts seconds from it
     duration   clip length in seconds (default: the project's; only used to place the default splats)
     ticks      clip seconds at which a rain splat lands on the glass; timeline = "audio/timeline.json" reads its
-               `ticks` (or `tempo.ticks`) instead; default: every 1.5 s
+               `ticks` (or `tempo.ticks`), else its beats (what `mk timeline analyze` writes) instead; default: every 1.5 s
     seed       random seed of the street and the splat parameters (default 4242)
     pendant    [x, y] of the pendant lamp (default [0, -0.48])
     render     configure EEVEE Next (ray tracing, soft shadows) and AgX "Base Contrast" like the lighting expects
@@ -44,7 +44,7 @@ keyed.
     clip_t       s      seconds since clip start, driven by the scene frame (read-only; remove the driver to retime)
 
 Colours. Every colour is a blend of palette slots (props/cafe_kit.py Colors.blend): with `[look] palette =
-"rose-pine-dawn"` they reproduce the original hand-built scene. The set is designed for a light palette: a dark palette
+"rose-pine-dawn"` they reproduce the reference scene they were fitted on. The set is designed for a light palette: a dark palette
 darkens the walls, wood and street the same way (lights and world do not follow). Light colours (lamps, sun, flash) are
 `light(...)` tints: hue and saturation come from the palette, the strength does not.
 
@@ -53,9 +53,7 @@ Needs the Rose Pine slots base surface overlay muted subtle text love gold rose 
 
 Card: paths {}, use.look [window, street, pendant, sky], use.surface [the 16 panes, back_wall], colliders [the floor],
 lights [the light objects], params {name: default}."""
-import json
 import math
-import os
 import random
 
 import bmesh
@@ -459,20 +457,6 @@ def setup_render(sc):
 
 
 # ================================================================= the builder
-def _ticks(spec, proj, duration):
-    ticks = spec.get("ticks")
-    if ticks is None and spec.get("timeline"):
-        path = os.path.expanduser(str(spec["timeline"]))
-        if not os.path.isabs(path):
-            path = os.path.join(proj.get("root") or os.getcwd(), path)
-        with open(path, encoding="utf-8") as fh:
-            tl = json.load(fh)
-        ticks = tl.get("ticks") or (tl.get("tempo") or {}).get("ticks")
-    if ticks is None:
-        ticks = GL.default_ticks(duration)
-    return [float(t) for t in ticks]
-
-
 @register("cafe_room")
 def cafe_room(name, coll, root, spec, palette):
     sc = bpy.context.scene
@@ -524,7 +508,7 @@ def cafe_room(name, coll, root, spec, palette):
     build_pendant(R, L, mats)
 
     # ---- the glass, and everything behind it
-    ticks = _ticks(spec, proj, duration)
+    ticks = GL.splat_ticks(spec, proj.get("root") or ".", duration)
     splats = GL.splat_drops(ticks)
     fog_img = GL.fog_image("mk_cafe_fog_noise")            # one packed copy, shared by every cafe_room in the file
     build_glass(R, GL.mat_glass(R.oname("WindowGlass"), params, splats, rng_glass, L["fog_tint"], fog_img))

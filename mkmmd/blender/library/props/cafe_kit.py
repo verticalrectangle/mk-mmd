@@ -5,7 +5,7 @@ Colours. Every colour is a blend of palette slots, mixed in linear light: `K.ble
 normalised; `k` scales the brightness, `hue` (deg) and `chroma` tilt it in OKLab, `a` is the alpha). `K.slot("pine")` is
 one slot, `K.light(...)` a light tint (a blend normalised to its brightest channel). The slots come from the project's palette; `[[prop]] slots = {pine = "#123456"}` overrides single slots for one
 prop. Without a palette (the build stage passes only the overrides) the Rose Pine Dawn palette is used, which is what the
-blends were fitted on, so `[look] palette = "rose-pine-dawn"` reproduces the original look and other palettes recolour
+blends were fitted on, so `[look] palette = "rose-pine-dawn"` reproduces the reference look and other palettes recolour
 the props consistently.
 
 Parameters. A prop that has something to animate (steam, bulb gain) exposes it as a custom property on its root empty;

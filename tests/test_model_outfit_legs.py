@@ -1,8 +1,8 @@
 """The legs of Rin's outfit (mkmmd/model/parts/outfit_legs.py): the black ribbon wound round the left calf with its bow and two
 dynamic tails, and the Mary-Jane shoes on both feet.
 
-What is checked, for a stand-in mannequin (`outfit_fit.provisional_skin`) and, when the project's spec is at hand and the body
-part builds, for the real body part:
+What is checked, for a stand-in mannequin (`outfit_fit.provisional_skin`) and, when MK_TEST_RIN_MODEL names a character project
+whose body part builds, for the real body part:
   - leg ribbon: every vertex of the spiral lies 2..6 mm above the skin (`Skin.closest`), the band winds `turns` times round the
     shin between the ankle and the knee on the left leg only, texture u counts tiles of 4 cm;
   - tail chains: bone names classify as "ribbon", parent 左ひざ, unique names, dynamic bodies (root in group 8, the rest in 7) that
@@ -15,13 +15,14 @@ part builds, for the real body part:
   - meshes: `part.check`, weights sum to 1 with at most 4 bones on leg/foot bones only, < 0.5 % degenerate faces, metric UVs
     (satin: u = metres / 0.04 along the ribbon, v 0..1 across; leather: about metres / 0.10), deterministic output, cfg overrides.
 
-bpy-free and scipy-free. Run: ~/.local/share/uv/tools/mk-mmd/bin/python -m pytest -q tests/test_model_outfit_legs.py"""
+bpy-free and scipy-free. Run: pytest -q tests/test_model_outfit_legs.py"""
 import ast
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from local_project import SPEC, WHY
 from mkmmd.core.families import classify
 from mkmmd.model import build as BD
 from mkmmd.model import part as PT
@@ -30,7 +31,6 @@ from mkmmd.model.parts import outfit_geo as G
 from mkmmd.model.parts import outfit_legs as OL
 from mkmmd.model.parts import outfit_rig as RG
 
-SPEC = Path.home() / "Projects/mk-tests/rin_model/model.toml"
 SATIN = ["黒リボン", "脚リボン"]
 SHOE = ["靴", "靴底"]
 LEG_BONES = {"左ひざ", "左足首", "左足つま先", "右ひざ", "右足首", "右足つま先"}
@@ -50,12 +50,12 @@ def mannequin_fit():
 
 
 def real_fit(tmp_path_factory):
-    if not SPEC.exists():
-        pytest.skip("the project spec of the Rin model is not at hand")
+    if SPEC is None:
+        pytest.skip(WHY)
     from mkmmd.model import spec as SP
     try:
         body = BD.run(SP.load(str(SPEC)), only="body", tex_dir=str(tmp_path_factory.mktemp("legs_body")))[0]
-    except Exception as e:                                           # the real body is built elsewhere
+    except Exception as e:                                           # the project's body may not build here
         pytest.skip(f"real body part does not build: {e}")
     skin = F.Skin.from_meshes([m for m in body.meshes if len(m.verts)], "body")
     return F.Fit(F.Land(dict(body.info["landmarks"])), skin), body
@@ -167,7 +167,7 @@ def test_tail_bodies_clear_the_body_colliders(built):
     rig, rib, body = built["rig"], built["rib"], built["body"]
     statics = [rb for rb in body.bodies if rb.mode == "static"]
     shin_stack = [rb for rb in statics if rb.bone == "左ひざ"]
-    assert len(shin_stack) >= 2                                              # RinBody's tapered lower-leg stack
+    assert len(shin_stack) >= 2                                              # the body part's tapered lower-leg stack
     r = {b.name: b.size[0] for b in rig.bodies}
     for ch in "AB":
         names = rib["tail_bones"][ch]

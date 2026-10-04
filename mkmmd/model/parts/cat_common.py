@@ -1,6 +1,6 @@
 """Shared helpers of the cat ears and tails (bpy-free, numpy only; numpy 1.24 and 2.x).
 
-  palette(ctx)            the ears / tail colours of the spec ([colors.ears], defaults = RinStudy's colors.toml)
+  palette(ctx)            the ears / tail colours of the spec ([colors.ears], defaults = Rin's ear and tail colours)
   toon(ctx, name, shadow) a warm toon ramp PNG written through `ctx.save_png` -> file name for `Material.toon`
   rmf(P, n0)              rotation-minimising frames along a polyline (a tube that never twists)
   pchip(x, y)             monotone cubic interpolation (planform edges as functions of height)

@@ -1,6 +1,6 @@
 """The body part: skin surface of an anime girl (torso, neck seam, arms, hands with five fingers, legs, feet), the MMD
 standard skeleton from its landmarks, analytic skin weights, static colliders and the skin material with its generated
-texture and toon ramp. Everything is driven by the spec: `[proportions]` (RinStudy's measured landmarks, torso cuts,
+texture and toon ramp. Everything is driven by the spec: `[proportions]` (measured landmarks, torso cuts,
 limb diameters, foot) and the optional `[body]` table (see below); other characters only need their own proportions.
 
 `[body]` keys (all optional):

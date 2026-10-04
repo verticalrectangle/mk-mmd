@@ -7,7 +7,8 @@
   speed = 24.0 | [[t, v], ...]  m/s, constant or keyed on clip seconds (linear between keys)
   at = 0.0                      arc length (m) where the vehicle is at clip time 0
   height = 0.0                  extra height above the path (m)
-  roll = 1.2, pitch = 0.8       body roll / pitch (deg per g of lateral / longitudinal acceleration)
+  roll = 1.2, pitch = 0.8       body roll / pitch (deg per g of lateral / longitudinal acceleration: the nose rises under
+                                acceleration and dives under braking, the body leans out of a turn)
   wheelbase = 2.6, steer_ratio = 14.0
 Card keys used: "wheels": [{object, radius, axis = [1, 0, 0] (local spin axis pointing to the car's left: the wheel
 rolls forward)}], "steering": {object, axis =
@@ -69,8 +70,9 @@ def run(ctx):
         root = prop.root
         root.rotation_mode = "XYZ"
         K.key_vec(root, "location", frames, pos, interp="LINEAR")
-        # body: yaw about Z, then lean out of the turn (roll about the car's forward axis) and nose dive (pitch)
-        eul = np.stack([pitch, -roll, yaw], 1)
+        # body: yaw about Z, then lean out of the turn (roll about the car's forward axis) and pitch about its left axis:
+        # a positive Euler X tips the nose DOWN, so the nose goes up under acceleration (a_lon > 0) and dives under braking
+        eul = np.stack([-pitch, -roll, yaw], 1)
         K.key_vec(root, "rotation_euler", frames, eul, interp="LINEAR")
         info = {"path": spec["path"], "lane_offset": off, "from_m": round(float(s[0]), 1),
                 "to_m": round(float(s[-1]), 1), "max_lat_g": round(float(np.abs(a_lat).max() / G), 3)}
@@ -88,7 +90,9 @@ def run(ctx):
         # steering wheel follows the road's curvature
         sw = prop.card.get("steering")
         if sw:
-            ob = bpy.data.objects.get(sw["object"])
+            ob = bpy.data.objects.get(sw.get("object", ""))
+            if ob is None:
+                raise BuildError(f"vehicle {name!r}: steering object {sw.get('object')!r} missing")
             ob.rotation_mode = "QUATERNION"
             q0 = ob.rotation_quaternion.copy()
             ax = Vector(sw.get("axis", (0, 0, 1))).normalized()

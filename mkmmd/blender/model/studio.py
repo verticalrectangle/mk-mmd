@@ -1,5 +1,5 @@
-"""A neutral review studio for a single model: flat grey world, soft round floor, key + fill + rim suns (the same rig the
-Rin study scenes use, so renders compare side by side with other models), Standard view transform."""
+"""A neutral review studio for a single model: flat grey world, soft round floor, key + fill + rim suns (a fixed rig, so
+renders of different models compare side by side), Standard view transform."""
 import math
 
 import bpy

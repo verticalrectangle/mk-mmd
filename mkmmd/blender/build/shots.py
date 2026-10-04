@@ -38,6 +38,7 @@ import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 
 from ...core import perform as PF
+from ...core import shotspec as SP
 from ...core import shotstyle as SS
 from ...core import transition as TR
 from .. import keys as K
@@ -60,12 +61,6 @@ def _mount(ctx, name):
     return ob
 
 
-def _merge(base, over):
-    out = dict(base)
-    out.update(over or {})
-    return out
-
-
 def _vfov_scale(size):
     """Half-height of the image plane in sensor units at lens 1 (AUTO sensor fit: 36 mm on the long side)."""
     w, h = size
@@ -80,7 +75,7 @@ def _styles(ctx, spec, outs, name):
     for out in outs:
         asp = out["name"]
         try:
-            norm = SS.normalize(_merge(spec, (spec.get("aspect") or {}).get(asp)), ctx.palette)
+            norm = SS.normalize(SP.merged(spec, (spec.get("aspect") or {}).get(asp)), ctx.palette)
         except SS.StyleError as e:
             raise BuildError(f"shot {name!r} ({asp}): {e}") from None
         if "reflection" in norm:
@@ -114,6 +109,11 @@ def run(ctx):
     sc = bpy.context.scene
     coll = collection("Cameras")
     outs = ctx.project.get("outputs") or [{"name": "main", "size": [sc.render.resolution_x, sc.render.resolution_y]}]
+    for spec in shots:
+        try:
+            SP.check(spec, [o["name"] for o in outs])
+        except SP.ShotError as e:
+            raise BuildError(str(e)) from None
     table, report = [], {}
     for m in list(sc.timeline_markers):
         sc.timeline_markers.remove(m)
@@ -136,7 +136,7 @@ def run(ctx):
         cams = {}
         for out in outs:
             asp = out["name"]
-            sp = _merge(spec, (spec.get("aspect") or {}).get(asp))
+            sp = SP.merged(spec, (spec.get("aspect") or {}).get(asp))
             mount = _mount(ctx, sp.get("mount"))
             cd = bpy.data.cameras.new(f"{name}@{asp}")
             cd.sensor_fit, cd.sensor_width = "AUTO", SENSOR
@@ -158,17 +158,21 @@ def run(ctx):
                 t = ctx.time(f)
                 at, look, ln = sp.get("at", (0, 0, 0)), sp.get("look"), float(sp.get("lens", 35.0))
                 sh = base_shift
+                M = mount.matrix_world.copy() if mount is not None else Matrix()
+
+                def place(a, M=M):                       # a list is in the mount's frame, a dict target is in the world
+                    return targets.point(ctx, a) if isinstance(a, dict) else M @ Vector(a)
                 if keys:
                     k1 = next((k for k in keys if k["t"] >= t), keys[-1])
                     k0 = next((k for k in reversed(keys) if k["t"] <= t), keys[0])
                     u = 0.0 if k1 is k0 else float(PF.smooth((t - k0["t"]) / max(k1["t"] - k0["t"], 1e-6)))
-                    at = tuple(Vector(k0.get("at", at)).lerp(Vector(k1.get("at", at)), u))
+                    p = place(k0.get("at", at)).lerp(place(k1.get("at", at)), u)
                     ln = k0.get("lens", ln) * (1 - u) + k1.get("lens", ln) * u
                     look = k0.get("look", look) if u < 0.5 else k1.get("look", look)
                     sh = tuple(np.asarray(k0.get("shift", base_shift), float) * (1 - u)
                                + np.asarray(k1.get("shift", base_shift), float) * u)
-                M = mount.matrix_world.copy() if mount is not None else Matrix()
-                p = targets.point(ctx, at) if isinstance(at, dict) else M @ Vector(at)
+                else:
+                    p = place(at)
                 if look is None:
                     a = p + (M.to_3x3() @ Vector((0, -1, 0))) * 10.0
                 else:
@@ -186,6 +190,8 @@ def run(ctx):
                 aim = np.array([tuple(Mi @ Vector(a)) for Mi, a in zip(mounts, local)])
             fr = sp.get("frame")
             if fr:
+                if "subject" not in fr:
+                    raise BuildError(f"shot {name!r} ({asp}): `frame` needs a `subject` (a target or a list of targets)")
                 subj = fr["subject"] if isinstance(fr["subject"], list) else [fr["subject"]]
                 hs = []
                 for f in own[:: max(1, len(own) // 12)]:

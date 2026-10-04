@@ -13,7 +13,7 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
   neck_share = 0.35                  share of the head's turn carried by the neck
   eye_max = 24 (deg)
   breath = {per_min = 16.5, deg = 0.6}, sway = {deg = 0.37, period = 2.5}, nod = {deg = 0.48, period = 2.3}
-  bob = {deg = 1.5, timeline = "audio/timeline.json" | beats = [t...], downbeat_accent = 1.6}
+  bob = {deg = 1.5, beats = [t...] | timeline = "audio/timeline.json" (the default), downbeat_accent = 1.6}
   startle = [t...]
   lean = [[t, deg], ...], turn = [[t, deg], ...], tilt = [[t, deg], ...]   extra upper-body lean forward / turn
                                      toward the model's left / sideways tilt toward its left over time, eased between
@@ -25,7 +25,7 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      roll of the head (like `head_tilt`) toward the model's left: deg * sin(2 pi t / period +
                                      phase) of clip time, ADDED to the keyed tilts; unlike them it goes on at any clip time
   blink = {per_min = 15, seed = 0, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1)
-  sing = {timeline = "audio/timeline.json", lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
+  sing = {timeline = "audio/timeline.json" (the default), lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
   twitch = [{bones = ["ear_root.L", ...] | family = "ears", t = 3.2, deg = 14, axis = [1, 0, 0], dur = 0.22}]
   strum = {hand = "R", prop = "guitar", rhythm = "onsets:other" | "beats:8" | [t, ...], from = 0.96, to = 3.86, accent = "downbeats",
@@ -33,6 +33,8 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      pick hand (its grip is `grip = "guitar:strum"`) strokes across the strings on the rhythm,
                                      down strokes down, up strokes up, the pick meeting the first string at each strike time;
                                      it rests between windows (mkmmd.core.strum; docs/design.md: Perform)
+A table that is empty does nothing (the log says so); a table named after no cast member or holding a key this stage does
+not read is refused (mkmmd.core.tables).
 Everything is composed in the armature's frame (correct for characters riding vehicles), keyed per frame (LINEAR)."""
 import json
 import math
@@ -51,11 +53,6 @@ from .. import scene as S
 from . import BuildError, targets
 
 SPINE = ("upper_body", "upper_body2", "neck", "head")
-
-
-def _timeline(ctx, path):
-    with open(ctx.path(path), encoding="utf-8") as fh:
-        return json.load(fh)
 
 
 def _morph(m, name):
@@ -124,7 +121,7 @@ def _strum(ctx, name, m, specs):
             sigma = abs(float(hi - lo)) / 2.0
         else:
             sigma = 0.0225
-        tl = _timeline(ctx, first.get("timeline", "audio/timeline.json"))
+        tl = ctx.timeline(first, where)
         strokes = sorted((s for e in entries for s in SM.plan(e, tl, ctx.duration)), key=lambda s: s.t)
         keep = {k: first[k] for k in SM.DEFAULTS if k in first}
         win = SM.window(strokes, **keep)
@@ -166,12 +163,15 @@ def _strum(ctx, name, m, specs):
 
 
 def run(ctx):
+    ctx.check_tables("perform")
     out = {}
     frames = ctx.frames
     ts = np.array([ctx.time(f) for f in frames])
     for name, m in ctx.cast.items():
         spec = ctx.section("perform", name)
         if not spec:
+            if name in ctx.section("perform"):
+                ctx.log("WARNING", f"perform.{name}: the table is empty, so nothing is performed (give it keys, or remove it)")
             continue
         arm = m.arm
         smap = S.semantic_map(arm)
@@ -230,7 +230,7 @@ def run(ctx):
             if "beats" in b:
                 beats, accent = b["beats"], None
             else:
-                tl = _timeline(ctx, b["timeline"])
+                tl = ctx.timeline(b, f"perform.{name}.bob")
                 beats, downbeats = TL.beats(tl)
                 downs = set(round(x, 3) for x in downbeats)
                 accent = [b.get("downbeat_accent", 1.6) if round(x, 3) in downs else 1.0 for x in beats]
@@ -311,7 +311,7 @@ def run(ctx):
         # ---- lip sync
         if spec.get("sing"):
             sg = spec["sing"]
-            tl = _timeline(ctx, sg["timeline"])
+            tl = ctx.timeline(sg, f"perform.{name}.sing")
             kf = LS.keyframes(tl, lines=sg.get("lines"), mouth=sg.get("mouth", 0.8), fps=ctx.fps,
                               voice=sg.get("voice", "en-gb"), offset=sg.get("lead", -0.03))
             done = []

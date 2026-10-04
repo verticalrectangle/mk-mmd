@@ -4,7 +4,7 @@ optional numba kernels. Never imports bpy.
 Bullet running a model's authored rig is tuned for dance: in a calm close-up its frame-to-frame noise is larger than the
 hair's real motion, locks jut out when the head tilts, and nothing in it knows about the hands, a pen, the furniture or
 the wind. This solver reads the same authored data (rig.json chains and bodies) and simulates it deterministically, so a
-resting lock stays still and the result is plain keys. It is the solver of a finished music video, ported to arrays.
+resting lock stays still and the result is plain keys. It is a port to arrays of an earlier solver (see "port notes").
 
 Model (position-based strands)
   chains     geom.Chains: one particle per chain bone at the end of its segment (= the head of its simulated child; a
@@ -45,11 +45,11 @@ Model (position-based strands)
              substeps). numba (pip install 'mk-mmd[fast]', used when present): one chain at a time in compiled loops,
              chains on threads (seconds). Same dynamics and the same results to rounding (~1e-14 m) until a contact
              amplifies it; chains never interact, so a result does not depend on which other chains are simulated.
-  port notes the constants and the order of operations are those of the solver this was ported from, with deliberate
-             differences: collision pushes are always applied (it skipped them in the iterations where no particle
+  port notes the constants and the order of operations are those of the earlier solver this was ported from, with
+             deliberate differences: collision pushes are always applied (it skipped them in the iterations where no particle
              anywhere touched anything: pushes <= 1e-7 m); the numba kernels skip shapes that weigh < e^-25 in the soft
              union (REACH); and, since VERSION 2, strands are inextensible (SWEEPS and the exact projection; the
-             original left 0.7 % mean and up to 9 % stretch in a calm seated shot, up to 20 % in wind). Short calm
+             earlier solver left 0.7 % mean and up to 9 % stretch in a calm seated shot, up to 20 % in wind). Short calm
              hair (ears, bangs) agrees with it to ~0.01 deg; long hair draped on furniture differs by degrees because
              it no longer stretches.
   per-family parameters (`FAMILY_DEFAULTS`, override with `params={family: {...}}`)
@@ -134,7 +134,7 @@ FAMILY_DEFAULTS = {
     "bangs":      dict(sag=(3.0, 8.0), drag=5.0, zeta=1.0, radius=0.5, radius_max=0.012, friction=10.0),
     "side_hair":  dict(sag=(12.0, 60.0), drag=5.0, zeta=0.7, radius=0.35, radius_max=0.010, friction=20.0),
     "back_hair":  dict(sag=(22.0, 90.0), drag=8.0, zeta=0.8, radius=0.5, radius_max=0.022, friction=25.0),
-    # not tuned on a finished shot: physically plausible starting points
+    # not tuned on a shot: physically plausible starting points
     "twintail":   dict(sag=(18.0, 85.0), drag=7.0, zeta=0.75, radius=0.5, radius_max=0.022, friction=22.0),
     "braid":      dict(sag=(15.0, 60.0), drag=8.0, zeta=0.9, radius=0.5, radius_max=0.022, friction=25.0),
     "hair":       dict(sag=(15.0, 70.0), drag=6.0, zeta=0.8, radius=0.5, radius_max=0.020, friction=20.0),

@@ -193,6 +193,17 @@ def test_a_shot_without_a_look_normalises_to_nothing_and_style_none_switches_one
     assert SS.normalize(dict(SIL, style="none"), DAWN) == {}
 
 
+def test_reflection_false_switches_an_inherited_reflection_off_for_one_aspect():
+    shot = {"name": "r", "reflection": {"object": "glass"}, "aspect": {"1x1": {"reflection": False}}}
+    assert "reflection" in SS.normalize(shot, DAWN)
+    assert SS.normalize(dict(shot, **shot["aspect"]["1x1"]), DAWN) == {}                   # the aspect's keys laid over the shot
+    only_here = SS.normalize(dict(SIL, style="none", reflection={"object": "glass"}), DAWN)
+    assert set(only_here) == {"reflection"}                                                # a silhouette shot can show one
+    assert SS.normalize(dict(SIL, reflection=False), DAWN).keys() == {"silhouette"}        # false next to a look is no conflict
+    with pytest.raises(SS.StyleError):                                                     # true is not a reflection
+        SS.normalize({"name": "r", "reflection": True}, DAWN)
+
+
 # ---------------------------------------------------------------- the cut
 TABLE = [{"name": "a", "from": 100, "to": 130}, {"name": "b", "from": 130, "to": 160}, {"name": "c", "from": 160, "to": 200}]
 

@@ -36,7 +36,7 @@ API (details in each docstring)
     cv.circle((0.5, 0.5), 0.2, fill="#dd5555", stroke="#552222", width=0.01)
     cv.curve([(0.2, 0.8), (0.5, 0.9), (0.8, 0.8)], 0.012, "#222", widths=[0.002, 0.012, 0.002])
     grain = tex.colorize(tex.value_noise(512, 512, 24, seed=3) * 0.15, "#000")      # noise as a faint overlay
-    tex.save_png("/tmp/x/skin.png", tex.composite(cv.image(), grain))
+    tex.save_png("skin.png", tex.composite(cv.image(), grain))
 """
 import math
 from pathlib import Path

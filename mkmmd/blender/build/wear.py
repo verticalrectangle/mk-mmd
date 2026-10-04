@@ -1,8 +1,8 @@
 """wear: a prop worn by a standing character: it rides a bone at the place its card says, with a strap fitted to her body and
 its cable hung from the jack to the floor (docs/design.md: Prop card `use.wear`, Building: props).
 
-[[prop]] wear = "reisen"                       the prop's `use.wear` entry (the only one), worn by the cast member `reisen`
-[[prop]] wear = {cast = "reisen", use = "stand", neck_deg = 20, yaw_deg = 5, roll_deg = 0, at = [x, y, z], pivot = [x, y, z],
+[[prop]] wear = "rin"                          the prop's `use.wear` entry (the only one), worn by the cast member `rin`
+[[prop]] wear = {cast = "rin", use = "stand", neck_deg = 20, yaw_deg = 5, roll_deg = 0, at = [x, y, z], pivot = [x, y, z],
                  scale = ["shoulder_width", "top", "top"],
                  cable = {trail = [dx, dy] (horizontal direction the cord lies away along on the floor), reach, tail_len, sway}}
 
@@ -78,9 +78,9 @@ def _rings(path, normals, width, thick, r=0.0016):
     return P[:, None, :] + sec[None, :, 0:1] * B[:, None, :] + (sec[None, :, 1:2] + thick / 2.0) * N[:, None, :]
 
 
-def build_strap(ctx, m, prop, e, T):
-    """The strap object of a worn prop (see the module doc); `T` is the prop root's matrix in armature space."""
-    sp = e["strap"]
+def build_strap(ctx, m, prop, sp, T):
+    """The strap object of a worn prop (see the module doc): `sp` is the entry's `strap` table with the project's overrides;
+    `T` is the prop root's matrix in armature space."""
     arm = m.arm
     smap = S.semantic_map(arm)
     anchors = {a["name"]: a for a in prop.card.get("use", {}).get("anchor", [])}
@@ -137,14 +137,15 @@ def apply(ctx, name, m):
                 raise WR.WearError(f"the model has no measurements: wear needs the rig.json of cast {name!r} (`measure`)")
             pb = m.arm.data.bones[bone]
             T = WR.matrix(e, measure, np.array(pb.head_local), override)
+            strap, cable = WR.table(e, override, "strap"), WR.table(e, override, "cable")
         except (WR.WearError, KeyError) as ex:
             raise BuildError(f"prop {spec['name']!r}: wear: {ex}")
         POSE.attach_to_bone(prop.root, m.arm, bone, K.mat(np.linalg.inv(np.array(pb.matrix_local)) @ T))
         bpy.context.view_layer.update()
         rep = {"bone": bone, "entry": e["name"], "at_mm": [round(float(v) * 1e3) for v in T[:3, 3]]}
-        if e.get("strap"):
-            rep["strap"] = build_strap(ctx, m, prop, e, T)
-        prop.worn = {"cast": name, "entry": e, "T": T, "override": override}
+        if strap:
+            rep["strap"] = build_strap(ctx, m, prop, strap, T)
+        prop.worn = {"cast": name, "entry": e, "T": T, "override": override, "cable": cable}
         out[spec["name"]] = rep
         ctx.log("wear", spec["name"], name, bone)
     return out
@@ -157,9 +158,9 @@ def fit_cables(ctx):
     keep = sc.frame_current
     for pname, prop in ctx.props.items():
         worn = getattr(prop, "worn", None)
-        if not worn or not worn["entry"].get("cable"):
+        if not worn or not worn["cable"]:
             continue
-        cs = {**worn["entry"]["cable"], **(worn["override"].get("cable") or {})}
+        cs = worn["cable"]
         m = ctx.cast[worn["cast"]]
         anchors = {a["name"]: a for a in prop.card.get("use", {}).get("anchor", [])}
         a = anchors.get(cs.get("anchor", "jack"))

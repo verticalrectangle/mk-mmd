@@ -3,7 +3,7 @@
 [[cast]] keys: name, asset (registry slug) or pmx (path), rig (path; default the registry's), armature (name to give
 the armature; default "<Name>_arm"), at [x, y, z], yaw (deg; 0 = facing -Y), parent (object the model rides on),
 physics: "mk" (default: no Bullet; chains come from rig.json and the sim stage solves them), "bullet" (keep the
-author's rigid bodies), "none" (no secondary motion)."""
+author's rigid bodies), "none" (no secondary motion: no Bullet, and the sim stage leaves the member out)."""
 import json
 import math
 import os
@@ -101,8 +101,11 @@ def run(ctx):
     out = {}
     for spec in ctx.data.get("cast", []):
         name = spec["name"]
+        try:
+            physics = CN.physics(spec)
+        except ValueError as e:
+            raise BuildError(f"cast {name!r}: {e}") from None
         pmx, rig = resolve(ctx, spec)
-        physics = spec.get("physics", "mk")
         root, arm, meshes, new = import_model(pmx, physics)
         title = CN.root_name(spec)
         root.name = title

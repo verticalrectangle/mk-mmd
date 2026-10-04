@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import tapefx as TF
+from . import timeline as TL
 from . import typefx as FX
 from .screentype import deep_merge
 from .typezones import plan_blocks, split_words
@@ -53,7 +54,7 @@ MIN_RUN = 0.40                                      # s: a drip needs at least t
 DRIP_LEAD = 0.03                                    # s: a tick this close before the last word's end still counts
 DRIP_SPREAD = 0.10                                  # s: the letters of a word leave within this window
 DRIP_TAU = 0.17                                     # s: time constant of the stretch
-DRIP_FALL = 150.0                                   # the gravity constants are in px/s^2 at a 150 px em (the original)
+DRIP_FALL = 150.0                                   # the gravity constants are in px/s^2 at a 150 px em (the size they were measured at)
 
 
 class LyricsError(ValueError):
@@ -122,9 +123,8 @@ def landing_frame(onset, fps, first=None):
 
 # ------------------------------------------------------------------------------------------------------ timeline
 def ticks_of(tl):
-    """Tempo ticks (s) of a timeline: `ticks`, `tempo.ticks`, else the beats."""
-    t = tl.get("ticks") or (tl.get("tempo") or {}).get("ticks") or tl.get("beats") or (tl.get("tempo") or {}).get("beats")
-    return sorted(float(x) for x in (t or []))
+    """Tempo ticks (s) of a timeline: `ticks`, `tempo.ticks`, else the beats (mkmmd.core.timeline.ticks)."""
+    return TL.ticks(tl)
 
 
 def smooth_vocal(vdb):
@@ -298,7 +298,7 @@ def exit_tick(ticks, t_end, t_cut, fps, min_run=MIN_RUN):
 
 def drip_letter(u, i, em_rel, g, stretch, life):
     """One letter `u` s into its exit (u <= 0: nothing yet): fall (in em), stretch about its top, sideways wobble (in
-    em), opacity. The node tree builds exactly these expressions. `em_rel` scales the wobble (the original's 0.03 em)."""
+    em), opacity. The node tree builds exactly these expressions. `em_rel` scales the wobble (0.03 em in the reference render)."""
     u = max(u, 0.0)
     s = 1.0 - math.exp(-u / DRIP_TAU)
     sy = 1.0 + stretch * s
@@ -347,9 +347,9 @@ def arrival(style, tau, p):
 
 STYLE_DEFAULTS = {
     "pop": {"a": 0.20, "td": 0.06, "tp": 0.18, "rise": 0.0, "rise_s": 0.2, "jitter": 0.0, "alpha0": 1.0,
-            "alpha_frames": 2.0, "wobble": 0.0, "drop": 1.0},
+            "alpha_frames": 2.0},
     "slap": {"a": 0.17, "td": 0.045, "tp": 0.13, "rise": 0.0, "rise_s": 0.2, "jitter": 0.0, "alpha0": 1.0,
-             "alpha_frames": 2.0, "wobble": 2.8, "drop": 1.0},
+             "alpha_frames": 2.0, "wobble": 2.8},
     "drop": {"alpha0": 1.0, "alpha_frames": 2.0, "drop": 1.0},
     "rise": {"a": 0.22, "td": 0.06, "tp": 0.20, "alpha0": 1.0, "alpha_frames": 2.0, "sway": 0.13, "sway_rot": 7.0,
              "base": None},

@@ -129,7 +129,7 @@ def textures(ctx):
 
 
 def guided(ctx, cfg):
-    """RinStudy's outfit heights ([proportions.outfit_guides]) fill the keys the spec leaves open."""
+    """The measured outfit heights ([proportions.outfit_guides]) fill the keys the spec leaves open."""
     g = ctx.get("proportions.outfit_guides", {}) or {}
     out = merge(cfg, {})
     for sect, key, src in (("bodice", "waist_z", "sash_z"), ("bodice", "collar_top_z", "collar_top_z")):

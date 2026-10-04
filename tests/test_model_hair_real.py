@@ -1,27 +1,24 @@
-"""The hair part against the REAL body, head and outfit of the Rin project (the parts as they are right now, built from
-~/Projects/mk-tests/rin_model/model.toml). Skipped when the project is not there or does not build here.
+"""The hair part against the REAL body, head and outfit of a character project (the parts as they are right now, built
+from the model.toml that MK_TEST_RIN_MODEL names). Skipped when the variable is unset or the project does not build here.
 
 What the stand-in fixtures of the other hair tests cannot know: the real blouse stands 8-18 mm off the skin around the chest, the
 tail roots sit on the real lower back, the real colliders are boxes and capsules that were fitted to the real body."""
-import pathlib
-
 import numpy as np
 import pytest
 
+from local_project import SPEC, WHY
 from mkmmd.model import build as BD
 from mkmmd.model import spec as SP
 from mkmmd.model.parts.hair_braids_geo import euler_matrix
 
-SPEC = pathlib.Path.home() / "Projects/mk-tests/rin_model/model.toml"
-
 
 @pytest.fixture(scope="module")
 def real(tmp_path_factory):
-    if not SPEC.exists():
-        pytest.skip("the Rin project spec is not available")
+    if SPEC is None:
+        pytest.skip(WHY)
     sp = SP.load(SPEC)
     if "outfit" not in SP.model_cfg(sp)["parts"]:
-        pytest.skip("the Rin project has no outfit part")
+        pytest.skip("the character project has no outfit part")
     ctx = BD.BuildCtx(sp, tmp_path_factory.mktemp("hair_real_all") / "tex", seed=1)
     try:
         BD.run(sp, only=["hair", "outfit"], ctx=ctx)

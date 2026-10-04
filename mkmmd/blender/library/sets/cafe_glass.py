@@ -7,8 +7,8 @@ sliding down in columns, beaded droplets in five sizes and a slow film of water,
 module: it registers no builder."""
 import bpy
 
-from .cafe_maths import (BAR_W, BARS_Y, BARS_Z, FOG_SOFT, FRAME_W, OPEN_H, OPEN_W, OPEN_Y, OPEN_Z, default_ticks,  # noqa: F401
-                         ensure_fog_png, pane_rects, splat_drops, uv_from_world)  # noqa: F401
+from .cafe_maths import (BAR_W, BARS_Y, BARS_Z, FOG_SOFT, FRAME_W, OPEN_H, OPEN_W, OPEN_Y, OPEN_Z, ensure_fog_png,  # noqa: F401
+                         pane_rects, splat_drops, splat_ticks, uv_from_world)  # noqa: F401
 from .cafe_nodes import NG, finish, principled
 
 

@@ -10,7 +10,7 @@ pair of white wired earbuds whose cord runs from the table's near edge into the 
     cafe_earbuds   the earbuds, built in the WORLD-ALIGNED cafe frame: place the root at the origin with yaw 0.
 
 Colours are blends of the palette slots (Kit.blend), fitted on Rose Pine Dawn; meshes, UV layers, vertex colours and the
-procedural materials reproduce the original hand-built props."""
+procedural materials reproduce the reference props."""
 import math
 import random
 from types import SimpleNamespace
@@ -65,7 +65,7 @@ _ZF = _ZT - 0.0004               # screen recess floor
 _PX = 0.126875                   # mm per UI pixel (40.6 mm active width / 320 px)
 _SCREEN = (320 * _PX * 1e-3, 240 * _PX * 1e-3)           # the active picture (m)
 
-# where the iPod lay in the original layout (the earbuds' default route ends at its socket)
+# where the iPod lies in the reference layout (the earbuds' default route ends at its socket)
 IPOD_LAYOUT_AT = (0.1950231, -0.6100154, TABLE_Z)
 IPOD_LAYOUT_YAW = 0.3265814      # rad: the top edge aims at the seated figure's chest
 
@@ -972,7 +972,7 @@ _BUD_ROT = (0.07437, 0.37036, -0.7188)                       # orientation of th
 
 
 def _table_route():
-    """Waypoints of the cord from the table's near edge to the iPod socket in its original layout (cafe frame)."""
+    """Waypoints of the cord from the table's near edge to the iPod socket in the reference layout (cafe frame)."""
     s, c = math.sin(IPOD_LAYOUT_YAW), math.cos(IPOD_LAYOUT_YAW)
     ax, ay, az = IPOD_LAYOUT_AT
     px, py, pz = IPOD_PLUG
@@ -1010,8 +1010,8 @@ def cafe_earbuds(name, coll, root, slots=None):
     over the table's near edge and along the table top into the iPod's headphone socket.
 
     Frame: the WORLD-ALIGNED cafe frame (place the root at the origin, yaw 0); the default positions are world positions
-    of the original layout: a seated figure facing -Y, table top z 0.74, an iPod at [0.19502, -0.61002, 0.74] with yaw
-    18.7117 deg (a `cafe_ipod` placed there). That default cord is the original's seated layout.
+    of the reference layout: a seated figure facing -Y, table top z 0.74, an iPod at [0.19502, -0.61002, 0.74] with yaw
+    18.7117 deg (a `cafe_ipod` placed there). That default cord belongs to the reference seated layout.
 
     Anchors: plain empties `earL earR jawL jawR split chest belly` (body) and `edge lie1 lie2 plugin plug` (table),
     named `<name>_<anchor>`. The cord (`cord`, NURBS) has HOOK modifiers to them, so moving an empty bends the cord.

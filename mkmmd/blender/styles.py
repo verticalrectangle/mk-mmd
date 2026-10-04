@@ -12,13 +12,13 @@ scene["mk_shots"] (mkmmd.blender.build.shots; the normalised specs are mkmmd.cor
     looks.close()                               # puts back everything the looks changed
 
 silhouette. Blender 4.2's EEVEE Next (and Workbench) ignore a view layer's `material_override`, so the flat look is built
-from the passes that do work, all inside the one render call of a frame and composed with numpy like the original's post:
+from the passes that do work, all inside the one render call of a frame and composed with numpy (`compose_silhouette`):
   flat   Workbench, flat light, `Object.color`: the subject and the hard accents (thin cords) in their colours. Exact
          to one level of 255 (Workbench's colour transform), antialiased by Workbench.
   soft   EEVEE with an AOV carrying the opaque share of the accent objects' Mix Shader (a lightning bolt: Transparent
-         mixed with Emission) and the compositor writing R = alpha, B = that AOV (Raw values): the original's `sil` pass.
+         mixed with Emission) and the compositor writing R = alpha, B = that AOV (Raw values): `soft_alpha` and `soft_aov`.
          The AOV is painted in the accent colour; what the bolt's alpha has beyond it (its soft shells) stays a glow in
-         the subject colour, as in the original (`sil = alpha - bolt`).
+         the subject colour (`sil = alpha - bolt` in `compose_silhouette`).
   type   EEVEE with the lights off and a black world: the type objects (the text stage's `mk_text_*` objects) as their
          emission shows them, keyed opacity (the alpha attribute of kinetic words) included.
   knock  the same, alpha only, for the `knockout` objects: ink colour on the background, background colour where it

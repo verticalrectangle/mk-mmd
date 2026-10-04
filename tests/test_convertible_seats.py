@@ -1,37 +1,19 @@
 """The seats module of the 1980s convertible (pure numpy): the upholstered cages (closed, creased, where they stand against
 the layout), the seat surface and the back plane the sitters are posed on, the headrest and its collider box, the door panels
 against the body's wall, the console, the floor, the card's anchors and the module's budget. (The Blender side is checked by
-building and looking; set CAR_SEATS_DEV to a scratch file to run these tests against it before it is copied over.)"""
-import importlib
-import importlib.util
+building and looking.)"""
 import math
-import os
-import sys
 import time
 
 import numpy as np
 import pytest
 
 from mkmmd.blender.library.props import convertible_layout as L
+from mkmmd.blender.library.props import convertible_seats as SE
 from mkmmd.core import form as FM
 from mkmmd.core import shell as S
 
 M = L.M
-
-
-def _seats_module():
-    path = os.environ.get("CAR_SEATS_DEV")
-    name = "mkmmd.blender.library.props.convertible_seats"
-    if not path:
-        return importlib.import_module(name)
-    spec = importlib.util.spec_from_file_location(name, os.path.expanduser(path))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-SE = _seats_module()
 GROUPS = {SE.GROUP, "decals"}
 
 

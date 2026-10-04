@@ -262,7 +262,7 @@ def _mg_speck(nt, vec, scale, gate, rmin, rmax):
 
 # ---------------------------------------------------------------- colours
 def _mg_colors(K):
-    """The set's colours as linear RGBA: palette blends fitted to the original hand-picked values (Rose Pine Dawn)."""
+    """The set's colours as linear RGBA: palette blends fitted to the reference hand-picked values (Rose Pine Dawn)."""
     b = K.blend
     return {
         "rose": K.slot("rose"),                                           # mug glaze outside

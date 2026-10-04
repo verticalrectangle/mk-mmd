@@ -238,7 +238,7 @@ def test_wear_entry_is_the_contract(card):
     assert e["name"] == "stand" and e["bone"] == "upper_body2" and e["pivot"] == [0.0, 0.045, 0.0]
     assert e["ref"] == {"top": 1.70, "shoulder_width": 0.18}
     assert e["at"] == [-0.14, -0.10, 0.0] and e["scale"] == ["shoulder_width", "top", "top"]
-    assert (e["neck_deg"], e["yaw_deg"], e["roll_deg"]) == (35.0, 0.0, 0.0)               # validated on Reisen by the wear stage
+    assert (e["neck_deg"], e["yaw_deg"], e["roll_deg"]) == (35.0, 0.0, 0.0)               # validated on the reference body
     assert e["strap"] == {"top": "strap_top", "bottom": "strap_bottom", "over": "shoulder.L", "width": 0.05, "thickness": 0.004,
                           "material": f"{NAME}_strap"}
     assert e["cable"] == {"object": f"{NAME}_cable", "anchor": "jack", "radius": 0.0032}

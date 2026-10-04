@@ -9,5 +9,12 @@ def beats(tl):
     return list(b), list(d)
 
 
+def ticks(tl):
+    """Tempo ticks of a timeline in clip seconds, sorted: its `ticks` (or `tempo.ticks`) when it has them, else its beats
+    (the only tempo marks `mk timeline analyze` writes)."""
+    t = tl.get("ticks") or (tl.get("tempo") or {}).get("ticks") or beats(tl)[0]
+    return sorted(float(x) for x in t)
+
+
 def bpm(tl):
     return tl.get("bpm") or (tl.get("tempo") or {}).get("bpm")

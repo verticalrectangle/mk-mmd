@@ -363,8 +363,8 @@ def test_per_aspect_geometry_changes_the_bubble(tmp_path):
 
 
 # ---------------------------------------------------------------- the trail of the thought bubble
-def test_the_trail_runs_from_the_edge_of_the_head_to_the_cloud_with_growing_circles():
-    fx = CF.CutFx(TR.plan(project(), FPS, F0, MOON), "/nonexistent", (960, 540), "t")
+def test_the_trail_runs_from_the_edge_of_the_head_to_the_cloud_with_growing_circles(tmp_path):
+    fx = CF.CutFx(TR.plan(project(), FPS, F0, MOON), tmp_path, (960, 540), "t")
     a, b = 120.0, 80.0
     start, centre = (100.0, 300.0), (100.0, 100.0)                         # the cloud straight above where the trail begins
     dots = fx._dots(start, centre, a, b)
@@ -379,8 +379,8 @@ def test_the_trail_runs_from_the_edge_of_the_head_to_the_cloud_with_growing_circ
     assert (ys[2] - rs[2]) - (centre[1] + b) > 0                           # the last does not touch the cloud
 
 
-def test_the_trail_has_no_circles_when_the_head_reaches_the_cloud():
-    fx = CF.CutFx(TR.plan(project(), FPS, F0, MOON), "/nonexistent", (960, 540), "t")
+def test_the_trail_has_no_circles_when_the_head_reaches_the_cloud(tmp_path):
+    fx = CF.CutFx(TR.plan(project(), FPS, F0, MOON), tmp_path, (960, 540), "t")
     assert fx._dots((100.0, 170.0), (100.0, 100.0), 120.0, 80.0) == []     # 10 px between the head's edge and the rim: too few
 
 

@@ -2,7 +2,7 @@
 cafe (mug, saucer, iPod, vase, earbuds, plants, fairy lights, poster) lives in cafe_mug.py, cafe_ipod.py,
 cafe_plants.py and cafe_deco.py; helpers in cafe_kit.py. All register themselves with @register when imported.
 
-Layout of the original scene (room frame of sets/cafe.py: window plane x = -0.80, back wall y = 1.05; the seated
+Reference layout (room frame of sets/cafe.py: window plane x = -0.80, back wall y = 1.05; the seated
 character faces -Y; the table top is at z = 0.74):
 
     [[prop]]  name = "chair"   card = "library:cafe_chair"   at = [0, 0, 0]

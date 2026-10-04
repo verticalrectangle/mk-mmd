@@ -25,8 +25,10 @@ import time
 import bpy
 import numpy as np
 
+from ...core import tables as TB
 from ..runtime import CTX, op
 
+TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
           "sim", "save"]
 
@@ -94,6 +96,27 @@ class Ctx:
     def section(self, name, cast_name=None):
         s = self.data.get(name, {})
         return s.get(cast_name, {}) if cast_name is not None else s
+
+    def check_tables(self, section):
+        """Refuse the project's `[<section>.<name>]` tables that name no cast member (the project's [[cast]], so a build that
+        leaves out the cast stage checks the same) or hold a key the stage does not read (mkmmd.core.tables)."""
+        try:
+            TB.check_section(section, self.data.get(section), [c["name"] for c in self.data.get("cast", [])])
+        except TB.TableError as e:
+            raise BuildError(str(e)) from None
+
+    def timeline(self, table, where):
+        """The timeline JSON a table names with `timeline = "path"` (project-relative); without the key the project's own
+        `audio/timeline.json`, where `mk timeline analyze` writes it. `where` names the table in the error."""
+        ref = table.get("timeline", TIMELINE)
+        try:
+            with open(self.path(ref), encoding="utf-8") as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            hint = "" if "timeline" in table else " (no `timeline` key: the default; run `mk timeline analyze` or set `timeline = \"path\"`)"
+            raise BuildError(f"{where}: no timeline file {ref!r}{hint}") from None
+        except (OSError, ValueError) as e:
+            raise BuildError(f"{where}: cannot read the timeline {ref!r}: {e}") from None
 
     # solvers
     def solve(self, module, arrays, spec, tag):

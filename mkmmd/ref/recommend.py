@@ -36,15 +36,6 @@ def _set(rec, path, value):
     cur[parts[-1]] = sig(value, 3)
 
 
-def blink_curve_fwhm_ratio():
-    """FWHM / duration of the performance stage's blink curve (so a measured width can be turned into its duration)."""
-    from ..core import perform as PF
-    ts = np.linspace(-0.05, 1.05, 4401)
-    c = PF.blink_curve(ts, [(0.0, 1.0)])
-    above = ts[c >= 0.5]
-    return float(above.max() - above.min())
-
-
 def turn_time(rise_s, fps, tau_frames):
     """10 -> 90 % time (s) of a smoothstep envelope of length rise_s after the performance stage's follower."""
     from ..core import perform as PF
@@ -100,13 +91,6 @@ def recommend(P, results, fps=30.0):
                   f"pooled blinks outside gaze shifts: {sp['n']} in {sp['observed_seconds']:.0f} s over {sp['n_clips']} clip(s) "
                   "(blinks within 0.4 s of a gaze shift are left out because the performance stage adds a blink to each gaze event)",
                   sp["n"], "events", _rng(B["spontaneous_rate_by_clip"]))
-            f = B["duration_fwhm"]
-            if f.get("n", 0) >= 3:
-                ratio = blink_curve_fwhm_ratio()
-                R.add("blink.duration_s", f["median"] / ratio,
-                      f"median blink width at half height {f['median']:.3f} s, divided by {ratio:.3f} (the blink curve's FWHM per second of duration); "
-                      "the performance stage does not read this key yet (BLINK_S)", f["n"], "events",
-                      [f["p10"] / ratio, f["p90"] / ratio] if f["n"] >= 8 else [f["min"] / ratio, f["max"] / ratio])
         L = P["lids"]["rest_level"]
         if L.get("n", 0):
             R.add("lids", float(np.clip(L["median"], 0.0, 0.6)),

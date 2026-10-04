@@ -1,7 +1,7 @@
 """Stand-in head and body parts for the hair builders' tests and previews (numpy only).
 
 They publish the same `info` keys as the real head and body parts (see mkmmd/model/parts/hair_fit.py), with simple
-shapes built from the numbers of the proportions study (an egg-shaped head 0.19 m wide and 0.2355 m tall on a 1.4267 m
+shapes built from the measured proportions of a reference body (an egg-shaped head 0.19 m wide and 0.2355 m tall on a 1.4267 m
 body, eyes low in the face, big hair volume left to the hair part). Use `make_ctx(tmp_path, spec)` to get a real
 `BuildCtx` with `parts` filled in, then call the hair builder."""
 import numpy as np
@@ -14,7 +14,7 @@ C = np.array([0.0, -0.0148, 1.27])                      # head centre used by th
 CRANIUM_C = np.array([0.0, -0.0148, 1.30])
 CRANIUM_R = np.array([0.0948, 0.0987, 0.0988])          # width 0.1895, depth 0.1974, top 1.3988
 
-# outline of the face shell (RinStudy): z, full width, y of the front
+# outline of the face shell of the reference head: z, full width, y of the front
 OZ = np.array([1.1672, 1.1770, 1.1869, 1.1967, 1.2066, 1.2164, 1.2263, 1.2361, 1.2460, 1.2558, 1.2657, 1.2755, 1.2854,
                1.2952, 1.3051, 1.3149, 1.3248, 1.3346, 1.3445, 1.3543, 1.3642, 1.3740, 1.3839, 1.3937])
 OW = np.array([0.0462, 0.0458, 0.0588, 0.0954, 0.1198, 0.1335, 0.1421, 0.1493, 0.1562, 0.1626, 0.1683, 0.1739, 0.1790,
@@ -115,7 +115,7 @@ def head_info():
                    "front": np.array([sg * 0.085, -0.013, 1.248]), "back": np.array([sg * 0.082, 0.010, 1.253]),
                    "centre": np.array([sg * 0.081, -0.002, 1.250]), "out": unit(np.array([sg, 0.1, 0.0]))}
         o = np.array([sg * 0.0709, -0.0294, 1.3638])
-        o = _project_to_skin(o, verts, faces)                      # RinStudy's guide point, snapped to the skin
+        o = _project_to_skin(o, verts, faces)                      # the reference guide point, snapped to the skin
         n = _skin_normal(o)
         up = unit(np.array([0, 0, 1.0]) - n * n[2])
         out = unit(np.array([sg, 0.0, 0.0]) - n * (sg * n[0]))

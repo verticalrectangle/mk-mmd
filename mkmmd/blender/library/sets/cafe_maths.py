@@ -3,11 +3,14 @@ panes, the condensation noise image and the deterministic rain-splat list.
 
 Glass UV: one map for the whole window. u = (y + 1.75) / 2.4 and v = (z - 0.82) / 2.03 over the opening in the wall plane
 x = WINDOW_X (the room frame of cafe_room), so u = 0 is the edge nearest the front cameras and v = 0 the bottom."""
+import json
 import os
 import struct
 import zlib
 
 import numpy as np
+
+from ....core import timeline
 
 # ---------------------------------------------------------------- opening / UV mapping (metres, room frame)
 OPEN_Y = (-1.75, 0.65)       # opening span along y (u direction)
@@ -109,6 +112,22 @@ def pane_rects():
 def default_ticks(duration):
     """Splat times (clip seconds) when the project gives none: every 1.5 s."""
     return [round(1.5 * k, 6) for k in range(1, int(duration / 1.5 + 1e-9) + 1) if 1.5 * k < duration]
+
+
+def splat_ticks(spec, root, duration):
+    """Splat times (clip seconds) of a cafe_room spec: its `ticks`; else the tempo ticks of its `timeline` (a path, relative
+    to the project folder `root`): the file's `ticks` or `tempo.ticks`, else its beats (the tempo marks `mk timeline
+    analyze` writes); else every 1.5 s."""
+    ticks = spec.get("ticks")
+    if ticks is None and spec.get("timeline"):
+        path = os.path.expanduser(str(spec["timeline"]))
+        if not os.path.isabs(path):
+            path = os.path.join(root, path)
+        with open(path, encoding="utf-8") as fh:
+            ticks = timeline.ticks(json.load(fh)) or None
+    if ticks is None:
+        ticks = default_ticks(duration)
+    return [float(t) for t in ticks]
 
 
 def splat_drops(ticks):

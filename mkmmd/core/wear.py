@@ -21,6 +21,8 @@ import math
 import numpy as np
 
 NUMBERS = ("at", "neck_deg", "yaw_deg", "roll_deg", "pivot", "scale")
+TABLES = {"strap": ("top", "bottom", "over", "width", "thickness", "material", "shoulder_radius"),
+          "cable": ("object", "anchor", "radius", "trail", "out", "sway", "reach", "tail_len", "follow")}
 
 
 class WearError(ValueError):
@@ -52,16 +54,37 @@ def entry(card_use, name=None):
 
 
 def params(e, override=None):
-    """The entry's numbers with the project's overrides on top (`at`, `pivot`, `scale`, `neck_deg`, `yaw_deg`, `roll_deg`)."""
+    """The entry's numbers with the project's overrides on top (`at`, `pivot`, `scale`, `neck_deg`, `yaw_deg`, `roll_deg`); the
+    `strap` and `cable` tables of an override are `table`'s."""
     out = {k: e[k] for k in NUMBERS if k in e}
     for k, v in (override or {}).items():
+        if k in TABLES:
+            continue
         if k not in NUMBERS:
-            raise WearError(f"wear: unknown key {k!r} (have {NUMBERS}, and use / cast)")
+            raise WearError(f"wear: unknown key {k!r} (have {', '.join(NUMBERS + tuple(TABLES))}, and use / cast)")
         out[k] = v
     out.setdefault("roll_deg", 0.0)
     out.setdefault("yaw_deg", 0.0)
     out.setdefault("neck_deg", 0.0)
     return out
+
+
+def table(e, override, key):
+    """The entry's `strap` or `cable` table with the project's `key = {...}` laid over it, key by key (None when neither the card
+    nor the project has one). The project's keys must be ones the table has (TABLES), and the card's entry must have the table:
+    a project changes where a strap or a cord goes, it does not invent one."""
+    base, over = e.get(key), (override or {}).get(key)
+    if over is None:
+        return base
+    if not isinstance(over, dict):
+        raise WearError(f"wear: `{key}` is a table of {', '.join(TABLES[key])}")
+    unknown = sorted(set(over) - set(TABLES[key]))
+    if unknown:
+        raise WearError(f"wear {key}: unknown key{'s' if len(unknown) > 1 else ''} {', '.join(repr(k) for k in unknown)} "
+                        f"(known: {', '.join(TABLES[key])})")
+    if not base:
+        raise WearError(f"wear: the card's entry {e.get('name')!r} has no `{key}` to change")
+    return {**base, **over}
 
 
 def orientation(neck_deg, yaw_deg=0.0, roll_deg=0.0):

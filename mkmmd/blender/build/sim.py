@@ -7,10 +7,12 @@
   colliders = "set" | [...]   scene collider specs or a [colliders] set (docs/design.md: Colliders)
   props = true                add every prop card's colliders (seats, doors, dash, wheel...)
   fingers = true              finger and palm capsules of every cast member
-  floor = 0.0                 ground height (false: no floor)
+  floor = true                ground height in metres: true = the ground at z 0 (default), a number = that height, false = no floor
   wind = {direction, speed, exposure, gust, gust_period, turbulence, scale, seed, carrier = "car"}: with a carrier,
          the vehicle's velocity enters the air (exposure: the share of its motion the air does not follow)
   use_masks = false, anchor_free = 0.25, substeps = 10, settle_s = 1.5, engine = "auto"
+A member whose [[cast]] says physics = "none" is left out; a table with no keys simulates nothing (the log says so); a table
+named after no cast member or holding a key this stage does not read is refused (mkmmd.core.tables).
 The whole frame range is simulated (the pre-roll lets the hair settle while the character eases into its pose).
 
 Branching chains (a strand that splits) are decomposed: the trunk follows the deepest subtree, every other subtree
@@ -22,7 +24,9 @@ import json
 import bpy
 import numpy as np
 
+from ...core import cast as CN
 from ...core import families as FAM
+from ...core import tables as TB
 from ...solvers import geom
 from .. import keys as K
 from ..ops_sample import resolve_collider
@@ -69,7 +73,7 @@ def sample_sources(sources, frames):
     return pos, rot
 
 
-def collider_items(ctx, spec, arm):
+def collider_items(ctx, spec, arm, floor):
     specs = []
     cs = spec.get("colliders")
     if isinstance(cs, str):
@@ -84,9 +88,8 @@ def collider_items(ctx, spec, arm):
             specs += p.colliders
     if spec.get("fingers", True):
         specs += [{"type": "fingers", "armature": c.arm.name, "tag": f"hand:{c.name}"} for c in ctx.cast.values()]
-    floor = spec.get("floor", 0.0)
-    if floor is not False:
-        specs.append({"type": "floor", "z": float(floor)})
+    if floor is not None:
+        specs.append({"type": "floor", "z": floor})
     return [it for s in specs for it in resolve_collider(s, arm.name)]
 
 
@@ -136,10 +139,17 @@ def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
 
 
 def run(ctx):
+    ctx.check_tables("sim")
     out = {}
     for name, m in ctx.cast.items():
         spec = ctx.section("sim", name)
         if not spec:
+            if name in ctx.section("sim"):
+                ctx.log("WARNING", f"sim.{name}: the table is empty, so nothing is simulated (give it keys, or remove it)")
+            continue
+        if CN.physics(m.spec) == "none":
+            out[name] = {"skipped": "physics = \"none\""}
+            ctx.log(f"sim {name}: skipped, [[cast]] physics = \"none\" gives the member no secondary motion")
             continue
         if m.rig is None:
             raise BuildError(f"sim.{name}: the cast member has no rig.json (register it with mk assets add)")
@@ -154,8 +164,12 @@ def run(ctx):
             levels.setdefault(lv, []).append(piece)
         simulated = {b for pieces in levels.values() for p in pieces for b in p["bones"]}
         bodies = [b for b in rig["bodies"] if b.get("bone") not in simulated]
-        items = collider_items(ctx, spec, m.arm)
-        info = {"families": fams, "colliders": len(items), "passes": [], "bones": 0}
+        try:
+            floor = TB.floor_z(spec.get("floor", True), f"[sim.{name}] floor")
+        except TB.TableError as e:
+            raise BuildError(str(e)) from None
+        items = collider_items(ctx, spec, m.arm, floor)
+        info = {"families": fams, "colliders": len(items), "floor_z": floor, "passes": [], "bones": 0}
         pen_max = 0.0
         k0 = ctx.frame0 - int(ctx.frames[0])
         for lv in sorted(levels):

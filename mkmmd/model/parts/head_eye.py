@@ -1,6 +1,6 @@
 """Eyes: the lid opening (almond), the eyeball placement, and lid motion.
 
-Head-local metres (see head_shape), Reisen-sized head. Eye shape coordinates (u, v) are relative to the iris centre:
+Head-local metres (see head_shape), Rin-sized head. Eye shape coordinates (u, v) are relative to the iris centre:
 u = outward (towards the temple, away from the nose), v = up. The left eye (character's left, +x) is built; the right
 eye is its x-mirror.
 

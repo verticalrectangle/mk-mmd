@@ -52,7 +52,7 @@ def make_parts(order):
 
 
 def spec_for(parts, **extra):
-    d = {"model": {"name": "t", "parts": parts, "out": "/tmp/mk_model_test_unused"}}
+    d = {"model": {"name": "t", "parts": parts, "out": "unused"}}
     d.update(extra)
     return SP.from_dict(d)
 

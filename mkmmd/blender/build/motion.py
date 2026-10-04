@@ -4,7 +4,7 @@
   vmd = path or registry slug (kind motion)
   start = 0.0          clip seconds where source frame `from` plays
   from, to             source frame range (default: the whole motion)
-  scale = 1.0          time scale; or retime = "beats" with timeline = "audio/timeline.json": the motion's own beat
+  scale = 1.0          time scale; or retime = "beats" with timeline = "audio/timeline.json" (the default): the motion's own beat
                        (core.vmd.tempo_phase) is scaled to the song's beat period and its phase snapped to the nearest
                        song beat after `start`
   bones = "all" | "upper" | "lower" | [semantic or Blender names]   which bones the motion drives
@@ -158,8 +158,7 @@ def run(ctx):
             src_to = float(it.get("to", act.frame_range[1]))
             info = {"vmd": os.path.basename(path), "source": [src_from, src_to]}
             if it.get("retime") == "beats":
-                with open(ctx.path(it["timeline"]), encoding="utf-8") as fh:
-                    tl = json.load(fh)
+                tl = ctx.timeline(it, f"motion.{name}[{i}] retime = \"beats\"")
                 scale, start_rel, fit = beat_fit(path, tl, ctx.fps, float(it.get("start", 0.0)), src_from)
                 start = ctx.frame0 + start_rel
                 info.update(fit)

@@ -25,8 +25,6 @@ class Project:
     frame0: int
     duration: float
     blend: Path = None
-    build: Path = None
-    audio: Path = None
     outputs: list = field(default_factory=list)
     checks: list = field(default_factory=list)
     data: dict = field(default_factory=dict)
@@ -120,9 +118,8 @@ class Project:
         outs = [Output(o["name"], tuple(o["size"])) for o in data.get("output", [])]
         proj = cls(root=root, name=p.get("name", root.name), fps=float(p["fps"]), frame0=int(p["frame0"]),
                    duration=float(p["duration"]), outputs=outs, checks=list(data.get("check", [])), data=data)
-        for key in ("blend", "build", "audio"):
-            if p.get(key):
-                setattr(proj, key, proj.path(p[key]))
+        if p.get("blend"):
+            proj.blend = proj.path(p["blend"])
         return proj
 
     @classmethod
