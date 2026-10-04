@@ -93,11 +93,13 @@ class Ctx:
         return s.get(cast_name, {}) if cast_name is not None else s
 
     # solvers
-    def solve(self, module, arrays, meta, tag):
-        """Run a solver subprocess on arrays + meta (JSON-able); cached by their hash. Returns (arrays, meta)."""
+    def solve(self, module, arrays, spec, tag):
+        """Run `python -m module IN.npz OUT.npz` on the CLI's Python. IN holds `arrays` plus `spec` (JSON text);
+        cached by a hash of all of it in <cache>/<solver>/<tag>-<key>.npz. Returns (output arrays, report dict) where
+        report is the solver's `report` JSON text when it writes one."""
+        arrays = dict(arrays, spec=np.array(json.dumps(spec, sort_keys=True, default=str)))
         h = hashlib.sha256()
         h.update(module.encode())
-        h.update(json.dumps(meta, sort_keys=True, default=str).encode())
         for k in sorted(arrays):
             a = np.ascontiguousarray(arrays[k])
             h.update(k.encode())
@@ -113,7 +115,7 @@ class Ctx:
             if not self.python:
                 raise BuildError("no solver Python configured (the CLI passes its own interpreter)")
             inp = os.path.join(d, f"{tag}-{key}.in.npz")
-            np.savez(inp, **arrays, __meta__=np.array(json.dumps(meta, default=str)))
+            np.savez(inp, **arrays)
             t0 = time.time()
             env = dict(os.environ)
             env.pop("PYTHONHOME", None)
@@ -125,8 +127,8 @@ class Ctx:
             self.log(f"{module}: solved in {time.time() - t0:.1f}s")
         with np.load(out, allow_pickle=False) as z:
             res = {k: z[k] for k in z.files}
-        meta_out = json.loads(str(res.pop("__meta__"))) if "__meta__" in res else {}
-        return res, meta_out
+        report = json.loads(str(res.pop("report"))) if "report" in res else {}
+        return res, report
 
 
 def clear_scene():
