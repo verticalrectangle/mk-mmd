@@ -5,7 +5,9 @@ expression), relative to a model's facing.
 args: frames; views [{name, kind: shot|camera|orbit, camera, target (expr), facing (armature or null), yaw, elev,
 dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out (folder); hide [object names];
 only [object names: hide every other mesh]; styles (default true: shots with a render-time look, `style = "silhouette"` or
-`reflection`, are rendered in it, see mkmmd.blender.styles)."""
+`reflection`, are rendered in it, see mkmmd.blender.styles); layers {dir, demands} (the layers transitions and inserts need
+for the cut's frames, drawn per size into <dir>/<size name>/ before the views: mkmmd.blender.transition; the CLI composites
+them over the cut's images)."""
 import math
 import os
 
@@ -14,6 +16,7 @@ from mathutils import Vector
 
 from . import scene as S
 from . import styles as ST
+from . import transition as TRN
 from .ops_core import _namespace
 from .runtime import op
 
@@ -72,6 +75,16 @@ def look(args):
         cd.clip_start = 0.005
         tmp = bpy.data.objects.new("mk_look", cd)
         sc.collection.objects.link(tmp)
+    if args.get("layers") and looks is not None:
+        for size in args["sizes"]:
+            r.resolution_x, r.resolution_y = int(size["w"]), int(size["h"])
+            S.bind_aspect(size["name"], sc)
+            layers = TRN.Layers(sc, looks, size["name"], os.path.join(args["layers"]["dir"], size["name"]),
+                                args["layers"]["demands"])
+            for f in sorted(layers.demands):
+                sc.frame_set(f)
+                layers.run(f)
+        looks.leave()
     out = []
     for v in views:
         if v["kind"] == "shot":                          # restore the cut
@@ -99,6 +112,8 @@ def look(args):
                 r.resolution_x, r.resolution_y = int(size["w"]), int(size["h"])
                 if v["kind"] == "shot" and S.bind_aspect(size["name"], sc):
                     sc.frame_set(int(f))                 # the markers switch the camera on frame change
+                elif v["kind"] != "shot":
+                    S.show_aspect(size["name"], sc)      # per-output type: only this output's
                 path = os.path.join(args["out"], f"{v['name']}_{size['name']}_{int(f):05d}.jpg")
                 r.filepath = path
                 kind = looks.prepare(int(f), size["name"]) if looks is not None and v["kind"] == "shot" else None

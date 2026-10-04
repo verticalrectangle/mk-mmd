@@ -275,7 +275,9 @@ def normalize(spec, palette):
 # ================================================================================================= the cut
 def shot_at(table, frame):
     """The shot-table entry in force at `frame`: the last one that starts at or before it (a cut belongs to the incoming
-    shot, like the timeline markers), the first one before the first cut. None for an empty table."""
+    shot, like the timeline markers), the first one before the first cut. None for an empty table. Plate shots (entries
+    with `plate`: rendered only where a transition or insert needs them) are not in the cut."""
+    table = [e for e in table or [] if not e.get("plate")]
     if not table:
         return None
     best = None
@@ -329,7 +331,7 @@ ALPHA_FULL = 254.0 / 255.0               # Workbench's film alpha over a fully c
 SHARE_FLOOR = 0.04                       # below this share of the accent colour a flat pixel counts as plain subject
 
 
-def compose_silhouette(p, spec, tint_values, hard=False):
+def compose_silhouette(p, spec, tint_values, hard=False, subject=True):
     """The finished silhouette frame, float32 RGB (h, w, 3) in display space, from the passes `p` (numpy arrays):
       flat        (h, w, 4) straight RGBA of the subject (and hard accents) in flat colours, coverage in alpha
       soft_alpha  (h, w) alpha of the soft accent objects (a bolt), hidden behind the subject; soft_aov (h, w) their weight
@@ -338,18 +340,20 @@ def compose_silhouette(p, spec, tint_values, hard=False):
     whether flat holds accent-coloured objects (cords) to grow. The order is the original's post: background, subject,
     the bolt's weight in the accent colour and what its alpha has beyond that as a glow in the subject colour
     (`sil = alpha - bolt`), the cords, then type, then knock-out type (ink on the background, background colour where
-    it overlaps the silhouette)."""
+    it overlaps the silhouette). `subject = False` leaves the subject out: the frame as it would be without the figure
+    (what a transition shows round a figure that has turned into a window, docs/design.md: Transitions and inserts)."""
     import numpy as np
     cols = spec["colors"]
     subj, acc = np.asarray(cols["subject"], np.float32), np.asarray(cols["accent"], np.float32)
     F = p["flat"]
     h, w = F.shape[:2]
     s = np.clip(F[..., 3] / ALPHA_FULL, 0.0, 1.0)
+    sv = s if subject else np.zeros_like(s)                      # the coverage painted as the subject
     bg = background_image((w, h), cols["background"], spec["tint"], tint_values)
-    img = bg * (1.0 - s[..., None]) + F[..., :3] * s[..., None]
+    img = bg * (1.0 - sv[..., None]) + F[..., :3] * sv[..., None]
     g = np.zeros((h, w), np.float32)
     if "soft_alpha" in p:
-        g = np.minimum(np.clip(p["soft_alpha"] - p["soft_aov"], 0.0, 1.0), 1.0 - s)
+        g = np.minimum(np.clip(p["soft_alpha"] - p["soft_aov"], 0.0, 1.0), 1.0 - sv)
         img = img + (subj - bg) * g[..., None]
         img = img + (acc - img) * p["soft_aov"][..., None]
     if hard:
@@ -367,7 +371,7 @@ def compose_silhouette(p, spec, tint_values, hard=False):
     if "knock" in p:
         k = np.clip(p["knock"][..., 3:4], 0.0, 1.0)
         ink = np.asarray(spec["knockout"]["color"], np.float32)
-        sil = np.clip(s + g, 0.0, 1.0)[..., None]
+        sil = np.clip(sv + g, 0.0, 1.0)[..., None]
         flat_bg = np.asarray(cols["background"], np.float32)
         img = img * (1.0 - k) + (flat_bg * sil + ink * (1.0 - sil)) * k
     return img.astype(np.float32)

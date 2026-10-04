@@ -6,7 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .. import bridge
-from .common import add_project_arg, emit, get_project, parse_frames, UsageError
+from ..core import transition as TR
+from .common import add_project_arg, cut_plan, emit, get_project, parse_frames, UsageError
 
 PRESETS = {
     "draft": {"percent": 50, "samples": 16, "motion_blur": False},
@@ -26,6 +27,11 @@ Shots with a render-time look (`style = "silhouette"`, `reflection = {...}` in [
 rendered in it, inside the same Blender job: the frame on disk is the finished flat frame, not a pass. --no-styles renders
 every shot as it is lit.
 
+[[transition]] and [[insert]] entries (docs/design.md: Shots: Transitions and inserts) need more than the cut's frames: the
+other shot's frames (plates), a silhouette's figure (mattes) and projected anchors. They are rendered next to the frames
+in <output>/{plate,matte,back,point}/ on the same terms (claimed, resumable, counted in the disk check); mk post
+composites them. --no-transitions leaves them out (and --no-styles does too: a figure needs its silhouette look).
+
 Examples:
   mk render --preset draft                     # every output, the whole clip
   mk render --output 9x16 --frames t=0:5 --jobs 2
@@ -42,6 +48,7 @@ def add(sub):
     p.add_argument("--samples", type=int)
     p.add_argument("--percent", type=int)
     p.add_argument("--no-styles", action="store_true", help="ignore the shots' silhouette / reflection looks")
+    p.add_argument("--no-transitions", action="store_true", help="do not render the layers of [[transition]] / [[insert]]")
     add_project_arg(p)
     p.set_defaults(func=run)
 
@@ -64,13 +71,18 @@ def run(args):
         cfg["samples"] = args.samples
     if args.percent:
         cfg["percent"] = args.percent
+    plan = None if args.no_styles or args.no_transitions else cut_plan(proj)
+    demands = TR.demands(plan, frames) if plan and (plan["transitions"] or plan["inserts"]) else {}
     need_mb = 0.0
     for o in outs:
         d = frames_dir(proj, args.preset, o.name)
         have = {p.stem for p in d.glob("*.png") if p.stat().st_size > 0} if d.exists() else set()
         todo = [f for f in frames if f"{f:05d}" not in have]
         scale = (max(o.size) / 1920.0) ** 2
-        need_mb += len(todo) * EST_MB[100 if cfg["percent"] > 50 else 50] * scale
+        mb = EST_MB[100 if cfg["percent"] > 50 else 50]
+        need_mb += len(todo) * mb * scale
+        for _, item in TR.pending_items(d, demands):             # a plate is a frame; a matte and its back are mostly flat colour
+            need_mb += (mb if item["kind"] == "plate" else 0.3 if item["kind"] == "matte" else 0.0) * scale
     free_mb = shutil.disk_usage(proj.root).free / 1e6
     if need_mb > free_mb - 1500:
         raise UsageError(f"not enough disk: about {need_mb:.0f} MB of frames, {free_mb:.0f} MB free (keeping 1.5 GB "
@@ -83,7 +95,9 @@ def run(args):
         for p in d.glob("*.png"):                        # stale claims from a stopped render
             if p.stat().st_size == 0:
                 p.unlink()
-        job = {"frames": frames, "out": str(d), "size": list(o.size), "aspect": o.name, "styles": not args.no_styles, **cfg}
+        TR.clear_claims(d)
+        job = {"frames": frames, "out": str(d), "size": list(o.size), "aspect": o.name, "styles": not args.no_styles,
+               "demands": {str(f): items for f, items in demands.items()}, **cfg}
         n = max(1, args.jobs)
         with ThreadPoolExecutor(max_workers=n) as ex:
             futs = []
@@ -101,5 +115,8 @@ def run(args):
                           "frames_on_disk": len([p for p in d.glob("*.png") if p.stat().st_size > 0])}
         if looks:
             report[o.name]["looks"] = looks               # frames rendered in a silhouette / reflection look
+        if demands:
+            report[o.name]["layers"] = {"drawn": sum(r.get("layers", 0) for r in res),
+                                        "pending": len(TR.pending_items(d, demands))}
     emit({"preset": args.preset, "seconds": round(time.time() - t0, 1), "outputs": report})
     return 0

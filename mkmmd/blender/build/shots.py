@@ -23,8 +23,12 @@
                                  color}, grow, samples (docs/design.md: Shots)
   reflection = {object = "<glass>", strength, dim, roughness, hide, only, bend, world, tint}   her image in a window
                                  pane: a plane light probe and a mirror layer on the glass object, made at render time
+  plate = true                   not in the cut (no `from` / `to` needed): a shot that only a [[transition]] or [[insert]]
+                                 takes frames from (docs/design.md: Transitions and inserts); a shot in the cut that
+                                 such an effect takes frames from before its `from` is keyed over those frames too
 The scene keeps the shot table in scene["mk_shots"] (JSON; per output aspect the normalised style and reflection, colours
-resolved) so `mk look` and `mk render` bind the markers to each aspect's cameras and switch the look per frame."""
+resolved; `keyed`: the frames the cameras are keyed over; `plate`) so `mk look` and `mk render` bind the markers to each
+aspect's cameras and switch the look per frame."""
 import json
 import math
 import zlib
@@ -35,6 +39,7 @@ from mathutils import Matrix, Quaternion, Vector
 
 from ...core import perform as PF
 from ...core import shotstyle as SS
+from ...core import transition as TR
 from .. import keys as K
 from .. import styles as ST
 from . import BuildError, collection, targets
@@ -101,6 +106,11 @@ def run(ctx):
     shots = ctx.data.get("shot", [])
     if not shots:
         return {}
+    try:
+        plan = TR.plan(ctx.data, ctx.fps, ctx.frame0, ctx.palette)
+    except TR.TransitionError as e:
+        raise BuildError(str(e)) from None
+    needs = TR.needs(plan)                       # {shot: [first, last]}: frames a transition or insert takes from a shot
     sc = bpy.context.scene
     coll = collection("Cameras")
     outs = ctx.project.get("outputs") or [{"name": "main", "size": [sc.render.resolution_x, sc.render.resolution_y]}]
@@ -109,8 +119,20 @@ def run(ctx):
         sc.timeline_markers.remove(m)
     for spec in shots:
         name = spec["name"]
-        f_from, f_to = int(round(ctx.frame(float(spec["from"])))), int(round(ctx.frame(float(spec["to"]))))
-        frames = np.arange(max(ctx.start, f_from - 2), min(ctx.end, f_to + 2) + 1)
+        need, plate = needs.get(name), bool(spec.get("plate"))
+        if plate and need is None:
+            ctx.log(f"WARNING shot {name!r}: plate = true but no [[transition]] or [[insert]] takes frames from it; skipped")
+            continue
+        if "from" in spec:
+            f_from, f_to = int(round(ctx.frame(float(spec["from"])))), int(round(ctx.frame(float(spec["to"]))))
+        else:
+            f_from, f_to = need                                      # a plate shot lives where it is wanted
+        lo, hi = (min(f_from, need[0]), max(f_to, need[1])) if need else (f_from, f_to)
+        if lo < ctx.start:
+            raise BuildError(f"shot {name!r}: a transition or insert takes frames from it as early as {lo}, before the "
+                             f"scene's first frame {ctx.start} (lower [scene] start)")
+        frames = np.arange(max(ctx.start, lo - 2), min(ctx.end, hi + 2) + 1)    # its own frames and those it lends
+        own = frames[(frames >= f_from - 2) & (frames <= f_to + 2)]
         cams = {}
         for out in outs:
             asp = out["name"]
@@ -166,7 +188,7 @@ def run(ctx):
             if fr:
                 subj = fr["subject"] if isinstance(fr["subject"], list) else [fr["subject"]]
                 hs = []
-                for f in frames[:: max(1, len(frames) // 12)]:
+                for f in own[:: max(1, len(own) // 12)]:
                     sc.frame_set(int(f))
                     P = np.array([tuple(targets.point(ctx, s)) for s in subj])
                     k = int(np.argmin(np.abs(frames - f)))
@@ -214,17 +236,24 @@ def run(ctx):
                 K.set_fcurve(cd, "dof.focus_distance", 0, frames, dist, interp="LINEAR")
             cams[asp] = cam.name
         styles = _styles(ctx, spec, outs, name)
-        mk = sc.timeline_markers.new(name, frame=f_from)
-        mk.camera = bpy.data.objects[cams[outs[0]["name"]]]
-        entry = {"name": name, "from": f_from, "to": f_to, "cameras": cams}
+        entry = {"name": name, "from": f_from, "to": f_to, "cameras": cams, "keyed": [int(frames[0]), int(frames[-1])]}
+        if plate:
+            entry["plate"] = True                                    # not in the cut: no marker, rendered where wanted
+        else:
+            mk = sc.timeline_markers.new(name, frame=f_from)
+            mk.camera = bpy.data.objects[cams[outs[0]["name"]]]
         if styles:
             entry["styles"] = styles
         table.append(entry)
-        report[name] = {"frames": [f_from, f_to], "cameras": cams}
+        report[name] = {"frames": [f_from, f_to], "keyed": entry["keyed"], "cameras": cams}
+        if plate:
+            report[name]["plate"] = True
         if styles:
             report[name]["styles"] = {asp: sorted(s) for asp, s in styles.items()}
-        ctx.log("shot", name, f_from, f_to)
+        ctx.log("shot", name, f_from, f_to, "(plate)" if plate else "")
     sc["mk_shots"] = json.dumps(table)
-    first = min(table, key=lambda s: s["from"])
+    first = min((e for e in table if not e.get("plate")) or table, key=lambda s: s["from"])
     sc.camera = bpy.data.objects[first["cameras"][outs[0]["name"]]]
+    if plan["transitions"] or plan["inserts"]:
+        report["_cut_effects"] = TR.summary(plan)
     return report

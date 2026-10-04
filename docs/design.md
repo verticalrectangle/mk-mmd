@@ -329,7 +329,7 @@ in order and each reads its own sections:
 | pose | `[pose.<cast>]` | sit on a prop's seat (`sit_offset` slides the hips on it), feet on targets (leg IK), lean / turn / head (`lean_share`, `turn_share`, `head.neck` split them over the spine and neck), arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets or curl tables, grips (the hand holds a prop's `use.grip` entry or lies on a `use.rest` surface, a pen's nib can follow a track on every frame, see Grips), `[[pose.<cast>.drape]]` (a bone chain such as a skirt pointed along chosen directions, optionally bunched); `[[prop]] attach = "cast:bone"` puts props on bones. The stage reports each arm IK's miss in mm (`ik_error_mm`, the worst over a moving track) and logs a WARNING past 5 mm: a goal beyond the arm's reach leaves the hand short of the prop |
 | motion | `[[motion.<cast>]]` | VMDs on NLA strips: source range, scale or `retime = "beats"`, body masks, blends |
 | perform | `[perform.<cast>]` | gaze events over an idle target, eye-only glances (`glance`: the eyes lead, the head lifts a little, the lids open), breathing, sway, nod, beat bob, startles, keyed upper-body `lean` / `turn` / `tilt` and `head_tilt` (a reach that leans in and settles back, a head on a shoulder), blinks, lids, expressions, lip sync, twitches |
-| shots | `[[shot]]` | the cut, see Shots |
+| shots | `[[shot]]`, `[[transition]]`, `[[insert]]` | the cut, see Shots; a shot with `plate = true` is not in the cut and exists for an insert or transition; the cameras of shots that effects take frames from are keyed over those frames |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure |
 | text | `[[text]]` (`name`, `on` or `mount` / `at` / `facing` / `box`, `text` or `value`, `font`, `size` or `fit`, `align`, `offset`, `color`, `glow`, `depth`, `reveal`, `blink`, `flicker`, `lyrics`, `kinetic`, `backing`, `outline`, `ink`; see Text) | type on set and prop surfaces: fitted, palette-coloured, a typewriter reveal, a keyed number; geometry nodes with keyed inputs, so EEVEE needs no Python at render time; `lyrics` is one text per sung word, read from the timeline and landing on its onset (arrival, letter spread, weight, drip, tape behind it, all keyed); `ink` is handwriting that appears behind a pen's nib (a ribbon mesh with write times, a keyed clock) |
 | keys | `[[key]]` (`target`, `prop`, `index`, `keys = [[t, v], ...]`, `interp`, `relative`) | keys on set, prop and object properties: a set's storm and fog, a car's lamps, any RNA path (`location`, `data.energy`); `relative = true` adds the values as offsets to what the property already does (a value another stage solved, such as a hand's grip target) and keeps its animation outside the keys' span |
@@ -575,6 +575,83 @@ show through at 1 − `strength`. The original composed a mirrored-camera pass a
 at 57 %); one mirror weighs both the same, which is why the room is left out. Against that composite (type and grade left out) the
 error of the frame drops from 32 to 17 of 255 with `strength` 0.3–0.4; the sitter's own region (24 → 21) is limited by her pose.
 
+### Transitions and inserts
+
+Effects that need two shots at once are composited by `mk post` from layers `mk render` draws next to the cut's frames; the
+plan is `mkmmd.core.transition.plan` (numpy-free maths, tested without Blender), made from mk.toml alone by the build, render,
+post and look. A **window** is the run of frames an effect changes: the `dur` seconds that END at the cut `at` for a transition
+(so the incoming shot lands on the beat), the whole `from`..`to` of an insert. **Plates** are the other shot's frames through its
+own camera and look (`plate/<shot>/<frame>.png`; a shot that is in the cut at that frame is its own plate: the cut's frame);
+an expand / collapse also needs the silhouette shot's figure alone as coverage, drawn at twice the frame's size
+(`matte/<shot>/`) and its frame without the figure (`back/<shot>/`); `point/<key>/<frame>.json` holds a projected anchor or
+centre. Layers are claimed with an empty file like frames (the finishing file is written last), so a stopped render resumes,
+`--jobs N` shares them, and the disk check counts them; `mk build` keys the camera of a shot that lends frames (`keyed` in the
+shot table) and refuses a window that starts before `[scene] start`. Windows may not overlap and lie inside one shot of the cut.
+
+```toml
+[[transition]]               # the figure of the OUTGOING silhouette shot grows and turns; inside it plays the next shot
+at = 3.86                    # clip seconds of the cut: a shot starts there; the window is the 0.4 s before it
+kind = "expand"              # "collapse": the INCOMING silhouette shot's figure starts huge (the outgoing shot inside it)
+dur = 0.4                    #   and shrinks onto its place, landing on the cut; "slash": below
+scale = [1, "fill"]          # the figure's size, ratio-interpolated from the figure itself; "fill": exactly what fills the
+turn = [0, 90]               #   frame at the last frame (first of a collapse); a number may ask for more, never less than fills
+ease = "in"                  # degrees, clockwise on screen, linear; ease in | out | inout (u^2, 1-(1-u)^2, smoothstep)
+center = "subject"           # the figure's centroid (moved inside the figure if it falls outside); [x, y] frame fractions;
+                             #   [x, y, z] a world point; or an expression of the `mk q` language ('bone("spine", "A_arm").head')
+edge = { color = "text", width = 5 }   # a rim round the moving figure; width in px at 1080 on the short side
+
+[[transition]]               # a diagonal band sweeps across; behind it the next shot, ahead of it this one, the switch under it
+at = 20.76
+kind = "slash"
+dur = 0.18
+angle = -20                  # degrees off vertical, clockwise positive
+width = 0.3                  # of the frame diagonal
+color = "love"
+second = { color = "text", width = 0.04, offset = -0.03 }   # an optional thin band: gap to the main one (negative: behind it)
+dir = "right"                # or "left"; ease defaults to inout
+
+[[insert]]                   # a thought bubble over the host shot, holding another shot (picture in picture)
+from = 12.40
+to = 13.50
+shot = "g2_love"             # any [[shot]]: one in the cut, or `plate = true`
+shape = "thought"
+anchor = 'bone("head", "Reisen_arm").head'   # a `mk q` expression, projected through the host shot's camera on every frame
+size = 0.34                  # the bubble's height, a fraction of the frame height; ratio = 1.35 is its width / height
+offset = [0.12, -0.30]       # from the anchor to the bubble's centre, fractions of the frame height (kept inside the frame)
+outline = { color = "text", width = 5 }
+pop = { dur = 0.3, overshoot = 0.12 }    # three trailing circles pop one after another, then the bubble, springy
+out = "expand"               # "pop": the reverse, ending on `to`; "expand": the bubble grows until its picture is the frame,
+                             #   ending on `to`, where the cut goes to `shot` (so `shot` must start at `to`):
+expand = { dur = 0.4, turn = 0, ease = "in" }
+aspect.9x16 = { size = 0.2, offset = [0, -0.22], ratio = 1.0 }   # per-output size, offset and ratio
+```
+
+A transition's first window frame is the figure turned into a window at its own size (the dark shape fills with the next shot at
+once; the rim, if any, marks it), the last is the incoming shot at full frame (an expand) or the figure landing on its place
+with the outgoing shot still inside it, which turns dark on the cut (a collapse). A slash window is `round(dur * fps)` frames
+with the band on screen in each. Frames of the outgoing shot at the cut stay the cut's own, so the grade, grain and vignette
+cover the whole composite. `scale`'s top is raised to what fills the frame when the number is too small, and `matte_scale` in
+the `mk post` report gives `needed` per transition: a number far above it spends the window with the new shot already full.
+An insert's picture is its shot's whole frame scaled to cover the cloud (`warp_scaled`), growing with the bubble; the cloud
+is a union of discs on an ellipse (`CloudField`), the circles lie between the anchor and the bubble, never on either.
+
+**Matte maths** (`mkmmd/matte.py`, numpy and OpenCV): a figure is kept as a signed distance field (negative inside), so
+turning and scaling it moves the contour exactly and the edge stays one pixel wide and true to the shape at any zoom: a
+coverage image scaled 18-fold would be 18 pixels soft. `signed_distance` takes each partly covered pixel's offset from the
+exact inverse of a straight edge's area (from the coverage and the gradient's direction), pixels within two of them the best
+neighbouring edge line, the rest the nearest edge pixel plus its offset; the field is sampled bilinearly, Catmull-Rom within 3
+matte pixels of the contour (OpenCV's cubic ripples on a ramp). Measured on antialiased half-planes: partial pixels within
+0.03 px, within 2.5 px of the edge 0.06 px on average; a zoomed 16-fold edge deviates at most 0.5 px from its line with a ramp
+of at most 3 px; an L-shape turned and scaled overlaps its analytic image by 98.5 %. `cover_scale` bisects the scale that
+fills the frame, corners included.
+
+Blender draws the layers in `render_frames` and `look` (`mkmmd/blender/transition.py`): the cameras are looked through with the
+timeline markers set aside, `Looks.prepare(frame, aspect, shot=...)` enters that shot's look, the matte is a Workbench pass of
+the subject objects alone (`Looks.matte`) and `back` the silhouette composed without the subject (`compose_silhouette(...,
+subject=False)`). `mk look` previews a frame inside a window composited (`--no-transitions` shows the plain cut).
+Smoke (`~/Projects/mk-tests/transition`, Reisen standing in a void as silhouettes, Maki lit; an expand, a collapse, a slash and an
+expanding bubble, both aspects, draft): `mk render --jobs 2` 58 s for 2 x 162 frames and 178 layers, `mk post` 11 s per output.
+
 ## Text
 
 `[[text]]` puts type on a surface: a sign panel of a set (the `highway` gantries and billboards), a prop's screen, label
@@ -796,10 +873,13 @@ hl_high. Sets, props, lights and the grade colour by slot, never by hard-coded v
 <frame>.png`. Frames are claimed with an empty file first, so a stopped render resumes and `--jobs N` Blender
 processes share the frames; a disk check refuses to start when the frames would not fit. Shots with a render-time look (Shots:
 silhouette, reflection) are finished flat frames on disk, composed inside the render job; `--no-styles` renders them as lit.
+`[[transition]]` and `[[insert]]` (Shots: Transitions and inserts) add the layers they need next to the frames
+(`plate/`, `matte/`, `back/`, `point/`; `--no-transitions` leaves them out).
 
-`mk post` grades the frames (`[post]`: contrast around a pivot, saturation, split toning, a palette floor with a
-soft toe so nothing is black, halation from blurred highlights, vignette, grain) and encodes
-`<project>/out/<name>_<output>[_<preset>].mp4` with `[audio]` (`file`, `start` = song seconds at clip time 0).
+`mk post` composites those effects over the cut's frames, then grades the frames (`[post]`: contrast around a pivot, saturation,
+split toning, a palette floor with a soft toe so nothing is black, halation from blurred highlights, vignette, grain) and encodes
+`<project>/out/<name>_<output>[_<preset>].mp4` with `[audio]` (`file`, `start` = song seconds at clip time 0); a missing layer is
+an error unless `--allow-gaps`.
 
 ## Timeline
 

@@ -4,6 +4,8 @@ from pathlib import Path
 
 from ..core import frames as FR
 from ..core import jsonx
+from ..core import palette as PAL
+from ..core import transition as TR
 from ..project import Project, ProjectError
 
 OK, CHECK_FAILED, USAGE, RUNTIME = 0, 1, 2, 3
@@ -30,6 +32,16 @@ def get_project(args, required=False):
     if required and proj is None:
         raise UsageError("no mk.toml found here or above (pass --project DIR)")
     return proj
+
+
+def cut_plan(proj):
+    """The project's [[transition]] and [[insert]] entries checked against its shots (mkmmd.core.transition.plan); a
+    UsageError says what is wrong with one that does not fit."""
+    look = proj.data.get("look", {})
+    try:
+        return TR.plan(proj.data, proj.fps, proj.frame0, PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots")))
+    except TR.TransitionError as e:
+        raise UsageError(str(e))
 
 
 def scene_path(arg, proj):

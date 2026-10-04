@@ -235,9 +235,15 @@ class Looks:
         self.tint_values = []
 
     # ---------------------------------------------------------------- state machine
-    def spec_at(self, frame, aspect=None):
-        """(shot name, kind, spec) of the look at `frame` for an output aspect, or (name, None, None)."""
-        entry = SS.shot_at(self.table, frame)
+    def spec_at(self, frame, aspect=None, shot=None):
+        """(shot name, kind, spec) of the look at `frame` for an output aspect, or (name, None, None). `shot` names the
+        shot to look through instead of the one in the cut at `frame` (the plates of a transition or insert)."""
+        if shot is None:
+            entry = SS.shot_at(self.table, frame)
+        else:
+            entry = next((e for e in self.table if e["name"] == shot), None)
+            if entry is None:
+                raise RuntimeError(f"no shot named {shot!r} in the scene's shot table (run mk build)")
         if entry is None:
             return None, None, None
         styles = entry.get("styles") or {}
@@ -247,9 +253,10 @@ class Looks:
         kind = next(iter(look))
         return entry["name"], kind, look[kind]
 
-    def prepare(self, frame, aspect=None):
-        """Bring the scene into the look of `frame` (call after `frame_set`). Returns the active kind or None."""
-        name, kind, spec = self.spec_at(frame, aspect)
+    def prepare(self, frame, aspect=None, shot=None):
+        """Bring the scene into the look of `frame` (call after `frame_set`), or of `shot` when one is named. Returns the
+        active kind or None."""
+        name, kind, spec = self.spec_at(frame, aspect, shot)
         key = (name, aspect, kind)
         if key != self.key:
             self.leave()
@@ -340,6 +347,21 @@ class Looks:
         finally:
             rs.run()
 
+    def matte(self, scale=2):
+        """Coverage (h, w) in 0..1 of the subject alone, without cords or type: the figure a transition turns into a
+        window. Antialiased by Workbench like the flat pass it is cut from, and drawn `scale` times the frame's size: the
+        figure is zoomed far past the frame's resolution, so its edge wants every pixel of detail it can have."""
+        rs = Restore()
+        try:
+            self._film(rs, WORKBENCH, "Standard")
+            r = self.sc.render
+            rs.attr(r, "resolution_x", r.resolution_x * int(scale))
+            rs.attr(r, "resolution_y", r.resolution_y * int(scale))
+            self._visibility(rs, show=self.cl["subject"])
+            return np.clip(self._shoot("matte")[..., 3] / SS.ALPHA_FULL, 0.0, 1.0).astype(np.float32)
+        finally:
+            rs.run()
+
     def _soft(self, occlude=True):
         """The accent objects with a transparent material, hidden behind the subject (unless `occlude` is off) ->
         (alpha, aov weight), both 0..1."""
@@ -418,8 +440,12 @@ class Looks:
         rs = self.rs
         objs = [o for o in self._objects() if not o.hide_render]
         recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
-        hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
-        knock = set(SS.select(recs, spec["knockout"]["objects"])) if spec["knockout"] else set()
+        tagged = {o.name for o in objs if "mk_knockout" in o.keys()}       # type that asks to be knocked out (text `knockout`)
+        knock = (set(SS.select(recs, spec["knockout"]["objects"])) if spec["knockout"] else set()) | tagged
+        if tagged and not spec["knockout"]:         # without a table of the shot's: the figure's own ink
+            spec = dict(spec, knockout={"objects": [], "color": spec["colors"]["subject"]})
+            self.spec = spec
+        hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"])) - knock
         accent = set(SS.select(recs, spec["accent"]))
         cols = spec["colors"]
         cl = {k: [] for k in ("hide", "subject", "hard", "soft", "type", "knock")}
@@ -464,9 +490,10 @@ class Looks:
             out["knock"] = self._type(live, tag="knock")
         return out
 
-    def compose(self, p):
-        """The finished silhouette frame (float RGB, display space) from the passes `passes()` made."""
-        return SS.compose_silhouette(p, self.spec, self.tint_values, hard=bool(self.cl["hard"]))
+    def compose(self, p, subject=True):
+        """The finished silhouette frame (float RGB, display space) from the passes `passes()` made; `subject = False`
+        leaves the figure out (the frame round a transition's window)."""
+        return SS.compose_silhouette(p, self.spec, self.tint_values, hard=bool(self.cl["hard"]), subject=subject)
 
     def _render_silhouette(self, path):
         _save(path, self.compose(self.passes()))

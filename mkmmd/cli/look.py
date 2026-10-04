@@ -3,12 +3,16 @@ import argparse
 import time
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .. import bridge
 from .. import config as CFG
+from .. import cutfx as CF
+from .. import post as P
+from ..core import transition as TR
 from ..ref.photos import ascii_text
-from .common import add_project_arg, emit, get_project, parse_frames, scene_path, UsageError
+from .common import add_project_arg, cut_plan, emit, get_project, parse_frames, scene_path, UsageError
 
 PRESETS = {"front": (0, 8), "3q": (35, 12), "left": (90, 8), "back": (180, 10), "right": (-90, 8),
            "3q_right": (-35, 12), "3q_back": (145, 15), "top": (0, 80), "low": (0, -20)}
@@ -59,6 +63,8 @@ def add(sub):
     p.add_argument("--hide", action="append", default=[], metavar="OBJECT", help="hide an object (repeatable)")
     p.add_argument("--no-styles", action="store_true", help="draw every shot as it is lit, ignoring its silhouette / "
                    "reflection look (the cut shows them by default, as `mk render` draws them)")
+    p.add_argument("--no-transitions", action="store_true", help="show the cut's frames without the [[transition]] / "
+                   "[[insert]] effects (by default a frame inside one is previewed composited, as `mk post` makes it)")
     p.add_argument("--sheet", action="store_true", help="also write a contact sheet")
     p.add_argument("--strip", action="store_true", help="also write one strip per view")
     p.add_argument("--ab", metavar="OTHER.blend", help="render the same views on another scene and pair them")
@@ -204,20 +210,45 @@ def run(args):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = Path(args.out).expanduser() if args.out else (
         (proj.mk_dir / "look" / stamp) if proj else CFG.cache_dir() / "look" / stamp)
+    layers = None                                   # what the cut's transitions and inserts need for these frames
+    plan = cut_plan(proj) if proj and not args.no_styles and not args.no_transitions and any(
+        v["kind"] == "shot" for v in views) else None
+    if plan and (plan["transitions"] or plan["inserts"]):
+        want = {int(f) for f in frames}
+        for tr in plan["transitions"]:               # an expand / collapse also needs the frame where it fills the frame
+            if tr["kind"] != "slash" and any(f in want for f in range(tr["first"], tr["last"] + 1)):
+                want.add(TR.covering_frame(tr))
+        dem = TR.demands(plan, want)
+        if dem:
+            layers = {"dir": str(out / "layers"), "demands": {str(f): items for f, items in dem.items()}}
     job = {"frames": frames, "views": views, "sizes": sizes, "engine": args.engine, "samples": args.samples,
            "hide": args.hide, "armature": cast_arm, "styles": not args.no_styles}
     t0 = time.time()
     scenes = [("a", blend)] + ([("b", Path(args.ab).expanduser().resolve())] if args.ab else [])
     shots = {}
     for tag, sc in scenes:
-        shots[tag] = bridge.run("look", {**job, "out": str(out / tag if args.ab else out)}, blend=sc, project=proj,
+        extra = {"layers": layers} if layers and tag == "a" else {}
+        shots[tag] = bridge.run("look", {**job, **extra, "out": str(out / tag if args.ab else out)}, blend=sc, project=proj,
                                 timeout=3600)
-    if args.guides:
-        for lst in shots.values():
-            for s in lst:
-                guides(s["path"])
+    effects, fxs = [], {}
+    for s in shots["a"] if layers else []:           # composite the effects over the cut's frames, as mk post does
+        if s["view"] != "cut":
+            continue
+        im = Image.open(s["path"]).convert("RGB")
+        fx = fxs.setdefault(s["size"], CF.CutFx(plan, Path(layers["dir"]) / s["size"], im.size, s["size"]))
+        if not fx.active(int(s["frame"])):
+            continue
+        try:
+            fx.check([int(s["frame"])])
+            composed = fx.frame(int(s["frame"]), np.asarray(im, np.float32) / 255.0)
+        except (TR.TransitionError, FileNotFoundError) as e:
+            raise UsageError(str(e)) from None
+        Image.fromarray(P.to_u8(composed)).save(s["path"], quality=90)
+        effects.append({"frame": s["frame"], "size": s["size"]})
     res = {"scene": str(blend), "out": str(out), "seconds": round(time.time() - t0, 1),
            "images": [s["path"] for s in shots["a"]]}
+    if effects:
+        res["effects"] = effects                      # frames shown with their transition / insert composited
     if args.ab:
         res["images_b"] = [s["path"] for s in shots["b"]]
         pairs = []
