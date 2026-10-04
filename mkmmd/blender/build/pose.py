@@ -283,9 +283,12 @@ def run(ctx):
                 prop_name, _, use = h["rest"].partition(":")
                 p = ctx.props[prop_name]
                 u = p.use("rest", use)
-                a, b = p.world(u["a"]), p.world(u["b"])
-                at = a.lerp(b, float(h.get("along", 0.5))) + p.world_dir(u.get("normal", (0, 0, 1))) * \
-                    float(h.get("lift", 0.03))
+                n_w = p.world_dir(u.get("normal", (0, 0, 1)))
+                if u.get("type") == "plane" or "a" not in u:     # a plane: centre + offset in the prop's frame
+                    at = p.world(Vector(u["center"]) + Vector(h.get("offset", (0.0, 0.0, 0.0))))
+                else:                                             # an edge: a point along it
+                    at = p.world(u["a"]).lerp(p.world(u["b"]), float(h.get("along", 0.5)))
+                at = at + n_w * float(h.get("lift", 0.03))
                 d = Vector(h.get("dir", tuple(-back + out_dir * 0.3)))
                 mats.append((f1, _hand_matrix(arm, smap, side, at, d, h.get("palm", (0, 0, -1)))))
             if h.get("at") is not None:
@@ -334,19 +337,39 @@ def attach_to_bone(obj, arm, bone, rel):
 
 
 def attach_props(ctx):
-    """[[prop]] attach = "cast:bone" (semantic or Blender name), offset = [x, y, z] (m), rot = [x, y, z] (deg, XYZ
-    Euler) in the bone's head frame: the prop rides on the bone."""
+    """[[prop]] attach = "cast:bone" (semantic or Blender name), offset = [x, y, z] (m), attach_rot = [x, y, z] (deg,
+    XYZ Euler) in the bone's head frame: the prop rides on the bone.
+    [[prop]] anchor_to = "cast": the card's use.anchor entries that name a `bone` (semantic) and an `object` are
+    bone-parented to that cast member keeping their world placement at the settled base pose (earbuds in the ears,
+    a cord on the chest)."""
     done = {}
+    sc = bpy.context.scene
     for spec in ctx.data.get("prop", []):
-        if not spec.get("attach"):
-            continue
-        cast_name, _, bone = spec["attach"].partition(":")
-        m = ctx.cast.get(cast_name)
-        if m is None:
-            raise BuildError(f"prop {spec['name']!r}: attach to unknown cast member {cast_name!r}")
-        b = S.resolve_bone(m.arm, bone)
-        rel = Matrix.Translation(Vector(spec.get("offset", (0, 0, 0)))) @ \
-            Euler([math.radians(a) for a in spec.get("rot", (0, 0, 0))]).to_matrix().to_4x4()
-        attach_to_bone(ctx.props[spec["name"]].root, m.arm, b, rel)
-        done[spec["name"]] = f"{cast_name}:{b}"
+        if spec.get("attach"):
+            cast_name, _, bone = spec["attach"].partition(":")
+            m = ctx.cast.get(cast_name)
+            if m is None:
+                raise BuildError(f"prop {spec['name']!r}: attach to unknown cast member {cast_name!r}")
+            b = S.resolve_bone(m.arm, bone)
+            rel = Matrix.Translation(Vector(spec.get("offset", (0, 0, 0)))) @ \
+                Euler([math.radians(a) for a in spec.get("attach_rot", (0, 0, 0))]).to_matrix().to_4x4()
+            attach_to_bone(ctx.props[spec["name"]].root, m.arm, b, rel)
+            done[spec["name"]] = f"{cast_name}:{b}"
+        if spec.get("anchor_to"):
+            m = ctx.cast.get(spec["anchor_to"])
+            if m is None:
+                raise BuildError(f"prop {spec['name']!r}: anchor_to unknown cast member {spec['anchor_to']!r}")
+            sc.frame_set(ctx.start + ctx.settle)
+            n = 0
+            for u in ctx.props[spec["name"]].card.get("use", {}).get("anchor", []):
+                if not (u.get("bone") and u.get("object")):
+                    continue
+                ob = bpy.data.objects[u["object"]]
+                mw = ob.matrix_world.copy()
+                ob.parent = m.arm
+                ob.parent_type = "BONE"
+                ob.parent_bone = S.resolve_bone(m.arm, u["bone"])
+                ob.matrix_world = mw
+                n += 1
+            done[f"{spec['name']}.anchors"] = n
     return done

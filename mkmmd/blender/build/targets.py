@@ -41,9 +41,11 @@ def point(ctx, ref, frame=None):
         prop, _, use = ref.partition(":")
         if prop in ctx.props:
             p = ctx.props[prop]
-            for kind in ("look", "rest", "grip", "sit"):
+            for kind in ("look", "rest", "grip", "sit", "anchor", "surface", "pose"):
                 for u in p.card.get("use", {}).get(kind, []):
                     if u["name"] == use:
+                        if u.get("object") and u["object"] in bpy.data.objects:     # use points that ride an
+                            return bpy.data.objects[u["object"]].matrix_world.translation.copy()   # object
                         if "point" in u:
                             return p.world(u["point"])
                         if "center" in u:

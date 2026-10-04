@@ -5,7 +5,8 @@ import time
 from .. import bridge
 from .common import add_project_arg, emit, get_project, UsageError
 
-STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "sim", "save"]
+STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "keys", "sim",
+          "save"]
 
 HELP = """Build the project's scene from mk.toml in one Blender session and save it to [project] blend.
 

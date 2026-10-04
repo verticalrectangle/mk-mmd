@@ -62,24 +62,29 @@ def run(ctx):
         root.empty_display_size = 0.2
         coll.objects.link(root)
         ref = spec["card"]
+        slots = {**ctx.palette, **(spec.get("slots") or {})}      # builders colour by palette slot
         if ref.startswith("library:"):
             key = ref.split(":", 1)[1]
             if key not in LIB.BUILDERS:
                 raise BuildError(f"prop {name!r}: no library prop {key!r} (have {sorted(LIB.BUILDERS)})")
-            card = LIB.BUILDERS[key](name, coll, root, spec.get("slots"))
+            card = LIB.BUILDERS[key](name, coll, root, slots)
         else:
             with open(ctx.path(ref), encoding="utf-8") as fh:
                 card = json.load(fh)
             if card.get("builder", "").startswith("library:"):
-                card = dict(card, **LIB.BUILDERS[card["builder"].split(":", 1)[1]](name, coll, root, spec.get("slots")))
+                card = dict(card, **LIB.BUILDERS[card["builder"].split(":", 1)[1]](name, coll, root, slots))
             elif card.get("source"):
                 _append_blend(ctx.path(card["source"]), coll, root)
             else:
                 raise BuildError(f"prop {name!r}: card {ref} has neither a library builder nor a source")
         if spec.get("parent"):
-            root.parent = bpy.data.objects[spec["parent"]]
+            par = bpy.data.objects.get(spec["parent"])
+            if par is None:
+                raise BuildError(f"prop {name!r}: parent {spec['parent']!r} not found (props are built in order)")
+            root.parent = par
         root.location = Vector(spec.get("at", (0.0, 0.0, 0.0)))
-        root.rotation_euler = Euler((0.0, 0.0, math.radians(float(spec.get("yaw", 0.0)))))
+        rx, ry, rz = spec.get("rot", (0.0, 0.0, spec.get("yaw", 0.0)))
+        root.rotation_euler = Euler((math.radians(float(rx)), math.radians(float(ry)), math.radians(float(rz))))
         ctx.props[name] = Prop(name, root, card)
         out[name] = {"card": ref, "uses": {k: [u["name"] for u in v] for k, v in card.get("use", {}).items()},
                      "colliders": len(card.get("colliders", []))}

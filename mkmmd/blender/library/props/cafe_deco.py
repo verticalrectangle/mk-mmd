@@ -19,7 +19,7 @@ WINDOW_X = -0.80                    # window wall plane; the room is at x > WIND
 BACK_WALL_Y = 1.05                  # back wall plane; the room is at y < BACK_WALL_Y
 
 WIN_RUN_X = WINDOW_X + 0.06         # window run: the wire hangs 6 cm into the room from the window plane
-WIN_RUN_Z = 2.90                    # height of its brass hooks, just above the top of the window frame
+WIN_RUN_Z = 2.90                    # height of its brass hooks: on the top casing of the window opening (z 2.85-2.925)
 WIN_RUN_Y0 = -1.75                  # y of its first (front) hook
 WIN_RUN_SPANS = (0.50, 0.46, 0.49, 0.45, 0.50)      # hook spacings along +Y (m): five swags, the last hook at y = +0.65
 
@@ -40,12 +40,12 @@ STANDOFF = 0.005                    # distance of the sheet's mean plane from th
 # ================================================================= colours
 # Recipes (kwargs of Kit.blend) fitted on Rose Pine Dawn to the colours of the original scene (OKLab error x100 in the
 # comments; below 2 is a close match).
-WIRE = dict(surface=0.5, foam=0.3, gold=0.2)                # pale grey-green cable (1.8)
+WIRE = dict(foam=0.5, base=0.3, gold=0.2, k=1.3)            # pale grey-green cable (1.4)
 BULB_WARM = dict(gold=0.85, surface=0.15, k=1.25)           # glass tint of a bulb, warm end (0.1) ...
 BULB_PALE = dict(base=0.5, gold=0.5, k=1.3)                 # ... and pale end (0.2)
 BULB_RIM = dict(gold=0.75, love=0.25, k=1.3)                # amber at the rim of the glass (1.3)
 BULB_BASE = dict(gold=0.7, surface=0.3, k=1.3)              # base colour of the glass (0.7)
-CREAM = dict(base=0.95, gold=0.05)                          # warm off-white of the paper (0.4) and the tape pattern (0.3)
+CREAM = dict(base=0.95, gold=0.05)                          # warm off-white: paper (0.4) and tape pattern (0.3)
 ROSE_TAPE = dict(rose=0.95, overlay=0.05, k=1.05)           # rose ground of the stripe and check tapes (0.1)
 GOLD_TAPE = dict(gold=0.9, hl_med=0.1, hue=10, k=1.2)       # amber of the dot and check tapes (0.5)
 # Neutral shading factors, not palette colours: a faint warm cast of the whole sheet (multiplied over the print) and
@@ -53,6 +53,11 @@ GOLD_TAPE = dict(gold=0.9, hl_med=0.1, hue=10, k=1.2)       # amber of the dot a
 PAPER_TINT = (1.0, 0.975, 0.935, 1.0)
 GRAIN_DARK, GRAIN_LIGHT = (0.955, 0.95, 0.94, 1.0), (1.0, 1.0, 1.0, 1.0)
 TAPE_GRAIN_DARK = (0.94, 0.94, 0.94, 1.0)
+
+
+def _pt(p):
+    """A point for the card: [x, y, z] rounded to 0.1 mm."""
+    return [round(float(v), 4) for v in p]
 
 
 # ================================================================= fairy lights: wire paths
@@ -104,7 +109,8 @@ def _resample(pts, step):
 
 
 def _tail(anchor, rel, step=WIRE_STEP):
-    """Loose cable hanging from `anchor` through the relative offsets `rel` (first one (0,0,0)); smooth, even spacing."""
+    """Loose cable hanging from `anchor` through the relative offsets `rel` (first one (0,0,0)); smooth, even
+    spacing."""
     return _resample(catmull([Vector(anchor) + Vector(r) for r in rel], 6), step)
 
 
@@ -224,9 +230,9 @@ def _plug(bm, top, yaw):
 
 # ================================================================= fairy lights: the two runs
 def _run_window(rng, pr, bm, lay):
-    """Along the top of the window frame (room side): five catenary swags resting on ball-tipped brass peg hooks (rosette
-    on the wall plane, 6.6 cm rod), a loose tail at the front end, a cable drop to a pebble plug at the back end.
-    Returns the wire polyline and the hook positions."""
+    """Along the top of the window frame (room side): five catenary swags resting on ball-tipped brass peg hooks
+    (rosette on the wall plane, 6.6 cm rod), a loose tail at the front end, a cable drop to a pebble plug at the back
+    end. Returns the wire polyline and the indices of the hooks on it."""
     ys = [WIN_RUN_Y0]
     for d in WIN_RUN_SPANS:
         ys.append(ys[-1] + d)
@@ -257,12 +263,13 @@ def _run_window(rng, pr, bm, lay):
         _unit(bm, lay, pr, rng, a, lean, rng.uniform(0.010, 0.020))
     _unit(bm, lay, pr, rng, pts[0], None, 0.0, final=True, tangent=pts[0] - pts[1])
     _plug(bm, pts[-1], math.radians(24.0))
-    return pts, [pts[i] for i in clip_i]
+    return pts, clip_i
 
 
 def _run_back(rng, pr, bm, lay):
-    """Double scallop on the back wall: brass pins, the wire ~ 1 cm off the wall at the belly, a cable drop to a plug in
-    the corner at the start, a loose tail with a last bulb at the far end. Returns the wire polyline and the pins."""
+    """Double scallop on the back wall: brass pins, the wire ~ 1 cm off the wall at the belly, a cable drop to a plug
+    in the corner at the start, a loose tail with a last bulb at the far end. Returns the wire polyline and the
+    indices of the pins on it."""
     wy = BACK_WALL_Y - 0.0012
     pins = [Vector((x, wy, z)) for x, z in zip(BACK_PINS_X, BACK_PINS_Z)]
     sags = (0.230, 0.190)
@@ -285,7 +292,7 @@ def _run_back(rng, pr, bm, lay):
         _unit(bm, lay, pr, rng, a, lean, rng.uniform(0.010, 0.020))
     _unit(bm, lay, pr, rng, pts[-1], None, 0.0, final=True, tangent=pts[-1] - pts[-2])
     _plug(bm, pts[0], math.radians(-31.0))
-    return pts, [pts[i] for i in pin_i]
+    return pts, pin_i
 
 
 # ================================================================= fairy lights: materials
@@ -305,7 +312,8 @@ def _bulb_mat(K):
     vc = N(nt, "ShaderNodeVertexColor", (-1300, 0), layer_name="bulb_var")
     sp = N(nt, "ShaderNodeSeparateColor", (-1080, 0))
     L(nt, vc.outputs["Color"], sp.inputs["Color"])
-    tint = N(nt, "ShaderNodeMixRGB", (-860, 260), inputs={"Color1": K.blend(**BULB_WARM), "Color2": K.blend(**BULB_PALE)})
+    tint = N(nt, "ShaderNodeMixRGB", (-860, 260),
+             inputs={"Color1": K.blend(**BULB_WARM), "Color2": K.blend(**BULB_PALE)})
     L(nt, sp.outputs["Red"], tint.inputs["Fac"])
     geo = N(nt, "ShaderNodeNewGeometry", (-1300, -420))
     dt = N(nt, "ShaderNodeVectorMath", (-1080, -420), operation="DOT_PRODUCT")
@@ -370,20 +378,20 @@ def cafe_fairy_lights(name, coll, root, slots=None):
         for p in pr.values():
             p.free()
         K.to_obj(base, bm, mats)
-    hooks = runs["StringLightsWindow"][1]
-    pts, pins = runs["StringLightsBack"]
-    scallops = [p for p in pts if pins[0].x - 1e-6 <= p.x <= pins[-1].x + 1e-6]
-    lo = Vector(map(min, *scallops))
-    hi = Vector(map(max, *scallops))
-    look = [{"name": "window_start", "point": list(hooks[0])}, {"name": "window_end", "point": list(hooks[-1])},
-            {"name": "swag", "point": list((lo + hi) / 2)}]
+    win_pts, hooks = runs["StringLightsWindow"]
+    back_pts, pins = runs["StringLightsBack"]
+    scallops = back_pts[pins[0]:pins[-1] + 1]
+    swag = (Vector(map(min, *scallops)) + Vector(map(max, *scallops))) / 2
+    look = [{"name": "window_start", "point": _pt(win_pts[hooks[0]])},
+            {"name": "window_end", "point": _pt(win_pts[hooks[-1]])}, {"name": "swag", "point": _pt(swag)}]
     return K.card(use={"look": look}, origin="cafe_frame", front="-Y")
 
 
 # ================================================================= poster: paper, bow, print
 def _poster_w(un, vn):
-    """Paper bow along the sheet normal (+ = toward the viewer, metres) at normalised sheet coordinates un, vn in [-1, 1].
-    Every term carries a factor that vanishes at un = +-1 and vn = +-1 together, so the four corners stay put."""
+    """Paper bow along the sheet normal (+ = toward the viewer, metres) at normalised sheet coordinates un, vn in
+    [-1, 1]. Every term carries a factor that vanishes at un = +-1 and vn = +-1 together, so the four corners stay
+    put."""
     un = max(-1.0, min(1.0, un))
     vn = max(-1.0, min(1.0, vn))
     return (0.0026 * (un * un - vn * vn)                         # saddle: long sides toward the viewer, ends away
@@ -457,7 +465,8 @@ def _paper_mat(K, image):
     L(nt, gr.outputs["Color"], fib.inputs["Color2"])
     bp = N(nt, "ShaderNodeBump", (-700, -420), inputs={"Strength": 0.15, "Distance": 0.0004})
     L(nt, nz.outputs["Fac"], bp.inputs["Height"])
-    b = principled(nt, out, **{"Roughness": 0.75, "Specular IOR Level": 0.3, "Sheen Weight": 0.1, "Sheen Roughness": 0.6})
+    b = principled(nt, out, **{"Roughness": 0.75, "Specular IOR Level": 0.3, "Sheen Weight": 0.1,
+                               "Sheen Roughness": 0.6})
     L(nt, fib.outputs["Color"], b.inputs["Base Color"])
     L(nt, bp.outputs["Normal"], b.inputs["Normal"])
     return m
@@ -482,8 +491,8 @@ def _tape_mat(K, base, ground, pattern, kind, a_base, a_alt):
         L(nt, sm.outputs[0], sc.inputs[0])
         fr = N(nt, "ShaderNodeMath", (-960, 100), operation="FRACT")
         L(nt, sc.outputs[0], fr.inputs[0])
-        rp = ramp(nt, (-780, 100), [(0.0, (0, 0, 0, 1)), (0.60, (0, 0, 0, 1)), (0.66, (1, 1, 1, 1)), (0.97, (1, 1, 1, 1)),
-                                    (1.0, (0, 0, 0, 1))])
+        rp = ramp(nt, (-780, 100), [(0.0, (0, 0, 0, 1)), (0.60, (0, 0, 0, 1)), (0.66, (1, 1, 1, 1)),
+                                    (0.97, (1, 1, 1, 1)), (1.0, (0, 0, 0, 1))])
         L(nt, fr.outputs[0], rp.inputs["Fac"])
         mask = rp.outputs["Color"]
     elif kind == "dots":
@@ -597,12 +606,12 @@ def cafe_poster(name, coll, root, slots=None):
     (`<name>_TL / TR / BR / BL`).
 
     Frame: origin = the sheet's centre on the wall plane. The wall is the plane y = 0, the sheet faces local -Y (the
-    room) and its mean plane stands 5 mm in front of the wall (y = -0.005), +Z up, +X to the right as seen from the room.
-    On the original back wall: at = [-0.25, 1.05, 1.42], yaw 0.
+    room) and its mean plane stands 5 mm in front of the wall (y = -0.005), +Z up, +X to the right as seen from the
+    room. On the original back wall: at = [-0.25, 1.05, 1.42], yaw 0.
 
-    slots: palette-slot colour overrides as for every prop, and `image`: the absolute path of the printed image (an entry
-    that is not a colour; a PNG with alpha is composited over the paper, its UV runs over the whole sheet, 3:4). Without
-    it, or when the file does not exist, the sheet is plain paper.
+    slots: palette-slot colour overrides as for every prop, and `image`: the absolute path of the printed image (an
+    entry that is not a colour; a PNG with alpha is composited over the paper, its UV runs over the whole sheet, 3:4).
+    Without it, or when the file does not exist, the sheet is plain paper.
 
     Card: anchors TL TR BR BL (the sheet's corners), surface `print` (centre, normal -Y, up +Z, size 0.30 x 0.40), look
     `print` (the sheet's centre); no colliders."""
@@ -628,9 +637,9 @@ def cafe_poster(name, coll, root, slots=None):
         ax = {"L": -hw, "R": hw, "C": 0.0}[anchor] + off
         bm, org = _tape_mesh(edge, ax, ang, zig, rng)
         K.to_obj(tname, bm, [mats[design]], loc=tuple(org)).visible_shadow = False
-    centre = [0.0, -STANDOFF, 0.0]
+    centre = (0.0, -STANDOFF, 0.0)
     use = {"anchor": [{"name": tag, "point": list(p)} for tag, p in corners.items()],
-           "surface": [{"name": "print", "center": centre, "normal": [0.0, -1.0, 0.0], "up": [0.0, 0.0, 1.0],
+           "surface": [{"name": "print", "center": list(centre), "normal": [0.0, -1.0, 0.0], "up": [0.0, 0.0, 1.0],
                         "size": [POSTER_W, POSTER_H]}],
-           "look": [{"name": "print", "point": centre}]}
+           "look": [{"name": "print", "point": list(centre)}]}
     return K.card(use=use, origin="wall_center", front="-Y")

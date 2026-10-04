@@ -1,12 +1,12 @@
-"""Table-top props of the rainy cafe: an iPod classic, a ceramic bud vase with a silver-dollar eucalyptus sprig, and a pair
-of white wired earbuds whose cord runs from the table's near edge into the iPod's headphone socket.
+"""Table-top props of the rainy cafe: an iPod classic, a ceramic bud vase with a silver-dollar eucalyptus sprig, and a
+pair of white wired earbuds whose cord runs from the table's near edge into the iPod's headphone socket.
 
     cafe_ipod      the iPod lying screen up. Origin = centre of the bottom face (the contact point on the table top),
                    +X right, +Y the top edge (headphone socket side), +Z out of the screen. ONE mesh with 5 materials
                    (acrylic, chrome, screen, click wheel, recessed slots) and the vertex colour layer `ipcol` that the
                    screen and wheel materials read (the now-playing screen and the wheel marks are painted decals).
     cafe_vase      the ceramic bud vase. Origin = centre of the foot on the table top, +Z up. Its child `sprig` is the
-                   eucalyptus (one mesh, 2 materials, vertex colour layer `ipleaf`), origin = the centre of the vase mouth.
+                   eucalyptus (one mesh, 2 materials, vertex colour layer `ipleaf`), origin = centre of the vase mouth.
     cafe_earbuds   the earbuds, built in the WORLD-ALIGNED cafe frame: place the root at the origin with yaw 0.
 
 Colours are blends of the palette slots (Kit.blend), fitted on Rose Pine Dawn; meshes, UV layers, vertex colours and the
@@ -46,8 +46,8 @@ def _circle(cx, cy, r, n):
 
 # =============================================================================================================== iPod
 IPOD_L, IPOD_W, IPOD_T = 0.1035, 0.0618, 0.0105          # length (local Y), width (local X), thickness (local Z)
-IPOD_JACK_X, IPOD_HOLD_X = -0.0165, 0.0125               # local x of the headphone socket / hold switch on the top edge
-_ZC = -0.00015                                           # z (about the body centre) of the straight chrome wall's middle
+IPOD_JACK_X, IPOD_HOLD_X = -0.0165, 0.0125               # local x of the headphone socket / hold switch (top edge)
+_ZC = -0.00015                                           # z (about the body centre) of the chrome wall's middle
 IPOD_PLUG = (IPOD_JACK_X, IPOD_L / 2, IPOD_T / 2 + _ZC)  # centre of the headphone socket opening, prop frame
 IPOD_PLUG_DIR = (0.0, 1.0, 0.0)                          # pointing out of the socket
 
@@ -73,17 +73,18 @@ IPOD_LAYOUT_YAW = 0.3265814      # rad: the top edge aims at the seated figure's
 def _ipod_colors(K):
     b, s = K.blend, K.slot
     return SimpleNamespace(
-        acrylic=s("base"), chrome=b(surface=0.85, iris=0.15), slot=s("muted"),
-        bezel=b(subtle=0.55, hl_high=0.45),
+        acrylic=s("base"), chrome=b(hl_high=1.0, k=1.4), slot=s("muted"),
+        bezel=b(muted=1.0, k=1.25),
         paper0=s("surface"), paper1=s("overlay"),
         head0=s("base"), head1=b(surface=0.7, iris=0.3), rule=b(surface=0.5, iris=0.5),
         play=s("rose"), title=s("subtle"), batt=s("subtle"), batt_in=b(base=0.85, iris=0.15), batt_fill=s("foam"),
-        art_frame=s("hl_med"), sky0=s("iris"), sky1=b(rose=0.6, surface=0.4),
+        art_frame=s("hl_med"), sky0=s("iris"), sky1=b(rose=0.7, hl_med=0.3, chroma=0.8, k=1.3),
         sun=b(gold=0.8, surface=0.2, hue=10, chroma=1.1, k=1.1), hill=s("foam"), hill2=s("pine"),
-        artist=s("muted"), album=b(hl_high=0.55, iris=0.45),
+        artist=s("muted"), album=b(subtle=0.6, hl_high=0.4, k=1.25),
         track=s("hl_med"), fill0=s("rose"), fill1=b(love=0.65, rose=0.35), knob=s("love"), knob_in=s("surface"),
-        time=s("muted"), icon=b(surface=0.5, iris=0.5), icon2=b(hl_high=0.55, iris=0.45),
-        ring=s("hl_high"), ink=b(text=0.8, surface=0.2), groove=b(hl_high=0.6, iris=0.4), button=s("hl_med"))
+        time=s("muted"), icon=b(surface=0.5, iris=0.5), icon2=b(subtle=0.6, hl_high=0.4, k=1.25),
+        ring=s("hl_high"), ink=b(text=0.8, surface=0.2), groove=b(subtle=0.6, hl_high=0.4, k=1.3),
+        button=s("hl_med"))
 
 
 # ----------------------------------------------------------------------------------------------- iPod: mesh helpers
@@ -121,9 +122,10 @@ def _col_at(spec, x, y):
 
 
 def _decal(bm, shapes, org, z, mat, layer="ipcol"):
-    """Flat painter's-algorithm decal.  shapes = [(polygon_mm [(x, y)], colour_spec, drop)] in paint order (later = on top);
-    the shapes are resolved with a constrained Delaunay arrangement so that the result is coplanar and non-overlapping
-    (no z-fighting).  Triangles whose topmost shape has drop=True are discarded.  org = (x, y) in metres of mm-origin."""
+    """Flat painter's-algorithm decal.  shapes = [(polygon_mm [(x, y)], colour_spec, drop)] in paint order (later = on
+    top); the shapes are resolved with a constrained Delaunay arrangement so that the result is coplanar and
+    non-overlapping (no z-fighting).  Triangles whose topmost shape has drop=True are discarded.  org = (x, y) in
+    metres of mm-origin."""
     verts, faces = [], []
     for poly, _c, _d in shapes:
         pts = list(poly)
@@ -261,7 +263,7 @@ def _ui_shapes(c):
         (cap(24, 164, 122, 173), grad(24, 0, 122, 0, c.fill0, c.fill1), False),                     # progress fill
         (circ(122, 168.5, 7.0), c.knob, False),                                                     # knob
         (circ(122, 168.5, 2.8), c.knob_in, False),
-        (cap(24, 183, 60, 189), c.time, False),                                                     # elapsed / remaining
+        (cap(24, 183, 60, 189), c.time, False),                                                     # elapsed, remaining
         (cap(260, 183, 296, 189), c.time, False),
         (rr(132, 203, 146, 217, 3, 3), c.icon, False),                                              # footer icons
         (rr(153, 203, 167, 217, 3, 3), c.icon2, False),
@@ -484,10 +486,10 @@ def _ipod_materials(K, c):
 
 @register("cafe_ipod")
 def cafe_ipod(name, coll, root, slots=None):
-    """iPod classic lying screen up on a table. Origin = centre of the bottom face (the contact point on the table top),
-    +X right, +Y the top edge (headphone socket side), +Z out of the screen; the reading side is -Y.
-    Objects: `body` (one mesh, 5 materials, colour layer `ipcol`), `plug` (arrow empty at the headphone socket: its local
-    +Z is the socket's outward direction (+Y of the body); a plug goes in along -Z), `col` (hidden collider).
+    """iPod classic lying screen up on a table. Origin = centre of the bottom face (the contact point on the table
+    top), +X right, +Y the top edge (headphone socket side), +Z out of the screen; the reading side is -Y.
+    Objects: `body` (one mesh, 5 materials, colour layer `ipcol`), `plug` (arrow empty at the headphone socket: its
+    local +Z is the socket's outward direction (+Y of the body); a plug goes in along -Z), `col` (hidden collider).
     No custom properties. Card: `use.anchor` / `use.look` `plug` {point, dir out of the socket}, `use.look` `screen`,
     `use.surface` `screen` (the active picture, up = +Y), `use.rest` `top` (plane on the body top), a box collider."""
     K = Kit(name, coll, root, slots)
@@ -497,7 +499,7 @@ def cafe_ipod(name, coll, root, slots=None):
     bm = bmesh.new()
     bm_box(bm, (IPOD_W, IPOD_L, IPOD_T), loc=(0.0, 0.0, IPOD_T / 2))
     col = K.collider(K.to_obj("col", bm))
-    screen_c = [0.0, _WIN_CY, IPOD_T - 0.0004]
+    screen_c = [0.0, _WIN_CY, round(IPOD_T - 0.0004, 5)]
     use = {
         "anchor": [{"name": "plug", "point": list(IPOD_PLUG), "dir": list(IPOD_PLUG_DIR), "object": plug.name}],
         "look": [{"name": "plug", "point": list(IPOD_PLUG), "dir": list(IPOD_PLUG_DIR)},
@@ -513,7 +515,6 @@ def cafe_ipod(name, coll, root, slots=None):
 
 # =============================================================================================================== vase
 VASE_H = 0.085                                   # height of the vase (foot to lip)
-VASE_R = 0.032                                   # radius of the belly
 VASE_MOUTH = (0.0012, 0.0006, VASE_H)            # centre of the mouth in vase coordinates (handmade lean)
 SPRIG_SEED = 11
 
@@ -524,14 +525,17 @@ def _vase_colors(K):
         # glaze: mid / light body tones, pooled bead, dark and pale speckles, thin glaze over the rim; raw clay foot
         g_mid=b(iris=0.9, hl_high=0.1, k=1.25), g_light=b(iris=0.8, hl_high=0.2, k=1.4),
         g_pool=b(iris=1.0, chroma=0.9, k=1.25), g_dark=b(iris=0.6, subtle=0.4, k=0.85),
-        g_pale=b(base=0.5, iris=0.5, k=1.3), g_rim=b(surface=0.6, iris=0.4),
+        g_pale=b(base=0.5, iris=0.5, hue=-20, chroma=1.25, k=1.3), g_rim=b(surface=0.6, iris=0.4),
         clay0=b(hl_med=0.7, gold=0.3), clay1=b(overlay=0.75, gold=0.25),
         # eucalyptus stem (dusty rose-brown) and leaves (sage, silvery bloom, paler rim and veins, greener underside)
         stem0=b(rose=1.0, hue=10, chroma=0.6, k=0.9), stem1=b(rose=1.0, hue=10, chroma=0.5),
         stem2=b(rose=1.0, hue=10, chroma=0.7, k=0.7),
-        sage0=b(foam=0.7, overlay=0.3, hue=-30, chroma=1.5, k=0.9), sage1=b(foam=0.6, overlay=0.4, hue=-30, chroma=1.5, k=1.05),
-        bloom=b(foam=0.6, overlay=0.4, hue=-30, chroma=0.9, k=1.35), rim=b(foam=0.6, overlay=0.4, hue=-30, chroma=1.25, k=1.25),
-        vein=b(foam=0.6, surface=0.4, hue=-30, chroma=0.8, k=1.35), under=b(foam=0.9, gold=0.1, hue=-30, chroma=1.1, k=1.35),
+        sage0=b(foam=0.7, overlay=0.3, hue=-30, chroma=1.5, k=0.9),
+        sage1=b(foam=0.6, overlay=0.4, hue=-30, chroma=1.5, k=1.05),
+        bloom=b(foam=0.6, overlay=0.4, hue=-30, chroma=0.9, k=1.35),
+        rim=b(foam=0.6, overlay=0.4, hue=-30, chroma=1.25, k=1.25),
+        vein=b(foam=0.6, surface=0.4, hue=-30, chroma=0.8, k=1.35),
+        under=b(foam=0.9, gold=0.1, hue=-30, chroma=1.1, k=1.35),
         sheen=b(surface=0.8, foam=0.2))
 
 
@@ -700,7 +704,8 @@ def _frames(pts):
 
 
 def _leaf(bm, P, a, w, nrm, r, rnd, tint, mat=1, segs=32):
-    """One round, cupped, slightly wavy coin leaf.  Base edge touches P; long axis a, width axis w, upper-face normal nrm."""
+    """One round, cupped, slightly wavy coin leaf.  Base edge touches P; long axis a, width axis w, upper-face
+    normal nrm."""
     rings = (0.0, 0.26, 0.52, 0.76, 0.92, 1.0)
     p1, p2, p3 = rnd.uniform(0, 6.283), rnd.uniform(0, 6.283), rnd.uniform(0, 6.283)
     bowl, fold, curl = 0.20 + rnd.uniform(-0.05, 0.06), 0.05 + rnd.uniform(-0.02, 0.03), 0.14 + rnd.uniform(-0.05, 0.09)
@@ -909,9 +914,9 @@ def _euc_materials(K, c):
     return m1, m2
 
 
-# the vase body as stacked vertical cylinders (name, radius, z from, z to): belly, shoulder, neck
-_VASE_COLLIDERS = (("col_belly", 0.0330, 0.0, 0.0340), ("col_shoulder", 0.0290, 0.0340, 0.0470),
-                   ("col_neck", 0.0165, 0.0470, VASE_H + 0.0002))
+# the vase body as stacked vertical cylinders (name, radius, z from, z to): belly, shoulder, upper shoulder, neck
+_VASE_COLLIDERS = (("col_belly", 0.0330, 0.0, 0.0340), ("col_shoulder", 0.0305, 0.0340, 0.0410),
+                   ("col_upper", 0.0255, 0.0410, 0.0470), ("col_neck", 0.0170, 0.0470, VASE_H + 0.0002))
 
 
 @register("cafe_vase")
@@ -921,7 +926,7 @@ def cafe_vase(name, coll, root, slots=None):
     2 materials, stems pass down into the neck; origin = centre of the vase mouth, 0.0012 / 0.0006 / 0.085 m in the
     vase frame; object property `leaf_count`; colour layer `ipleaf`, UV map), `col_*` (hidden collider cylinders).
     No custom properties. Card: `use.look` `sprig` (top of the sprig) and `mouth`, `use.rest` `lip` (an edge across
-    the rolled lip), three stacked cylinder colliders (belly, shoulder, neck)."""
+    the rolled lip), four stacked cylinder colliders that cover the belly, shoulders and neck."""
     K = Kit(name, coll, root, slots)
     c = _vase_colors(K)
     pot = K.to_obj("pot", _vase_mesh(), [_glaze_mat(K, c)])
@@ -960,7 +965,10 @@ _BODY_ANCHORS = {
 }
 _CORDS = (("earL", "jawL", "split"), ("earR", "jawR", "split"),
           ("split", "chest", "belly", "edge", "lie1", "lie2", "plugin", "plug"))
-_SAG = ("jawL", "jawR", "chest", "belly")                    # control points hang 1 cm lower than their anchor
+# control points of the jaw, chest and belly anchors hang about 1 cm below their anchor, tilted as those body parts were
+_SAG = {"jawL": (-0.002227, 0.002936, -0.009296), "jawR": (-0.002227, 0.002936, -0.009296),
+        "chest": (0.000095, 0.002813, -0.009596), "belly": (0.000011, 0.001736, -0.009848)}
+_BUD_ROT = (0.07437, 0.37036, -0.7188)                       # orientation of the seated head (Euler XYZ, rad)
 
 
 def _table_route():
@@ -1005,23 +1013,21 @@ def cafe_earbuds(name, coll, root, slots=None):
     of the original layout: a seated figure facing -Y, table top z 0.74, an iPod at [0.19502, -0.61002, 0.74] with yaw
     18.7117 deg (a `cafe_ipod` placed there). That default cord is the original's seated layout.
 
-    Anchors: plain empties `earL earR jawL jawR split chest belly` (body) and `edge lie1 lie2 plugin plug` (table), named
-    `<name>_<anchor>`. The cord (`cord`, NURBS) has HOOK modifiers to them, so moving an empty bends the cord. To follow a
-    body, parent the body anchors to bones (the card's `use.anchor[].bone` names the semantic bone: head, neck,
-    upper_body2, upper_body); to land on another iPod, move `plug` / `plugin` / `lie2`. Other objects: `earL_mesh`,
-    `earR_mesh` (buds, children of their anchors), `jack` (plug sleeve at `plugin`).
+    Anchors: plain empties `earL earR jawL jawR split chest belly` (body) and `edge lie1 lie2 plugin plug` (table),
+    named `<name>_<anchor>`. The cord (`cord`, NURBS) has HOOK modifiers to them, so moving an empty bends the cord.
+    To follow a body, parent the body anchors to bones (the card's `use.anchor[].bone` names the semantic bone: head,
+    neck, upper_body2, upper_body); to land on another iPod, move `plug` / `plugin` / `lie2`. Other objects:
+    `earL_mesh`, `earR_mesh` (buds, children of their anchors), `jack` (plug sleeve, child of `plugin`).
 
     Every object has the object property `earbud` = 1; the material `white` writes the shader AOV `earbud` (= 1; the
     view-layer AOV is created here) so a silhouette pass can paint the cord white. No custom properties on the root."""
     K = Kit(name, coll, root, slots)
     _setup_aov(bpy.context.view_layer)
     mat = _earbud_material(K)
-    objs = []
 
     def tag(o):
         o["earbud"] = 1
         o.visible_shadow = True
-        objs.append(o)
         return o
 
     route, out = _table_route()
@@ -1044,7 +1050,7 @@ def cafe_earbuds(name, coll, root, slots=None):
         sp.order_u = 3
         sp.use_endpoint_u = True
         for k, n in enumerate(chain):
-            sag = Vector((0, 0, -0.01)) if n in _SAG else Vector()
+            sag = Vector(_SAG.get(n, (0.0, 0.0, 0.0)))
             sp.points[k].co = (*(pos[n] + sag), 1.0)
             hooks.append((idx, anchors[n]))
             idx += 1
@@ -1057,14 +1063,14 @@ def cafe_earbuds(name, coll, root, slots=None):
     for n in ("earL", "earR"):
         bm = bmesh.new()
         bm_uv_sphere(bm, 1.0, seg=14, rings=10)
-        tag(K.to_obj(f"{n}_mesh", bm, [mat], scale=(0.0085, 0.0075, 0.0085), parent=anchors[n]))
+        tag(K.to_obj(f"{n}_mesh", bm, [mat], rot=_BUD_ROT, scale=(0.0085, 0.0075, 0.0085), parent=anchors[n]))
     # the jack: a short white sleeve on the plug end
     bm = bmesh.new()
     bmesh.ops.create_cone(bm, cap_ends=True, segments=12, radius1=0.0028, radius2=0.0028, depth=0.016)
     for f in bm.faces:
         f.smooth = True
     yaw = out.to_track_quat("Z", "Y").to_euler().z
-    tag(K.to_obj("jack", bm, [mat], loc=pos["plugin"], rot=(math.pi / 2, 0.0, yaw)))
+    tag(K.to_obj("jack", bm, [mat], rot=(math.pi / 2, 0.0, yaw), parent=anchors["plugin"]))
     use = {
         "anchor": [{"name": n, "point": [round(v, 5) for v in pos[n]], "object": anchors[n].name,
                     **({"bone": _BODY_ANCHORS[n][1]} if n in _BODY_ANCHORS else {})} for n in anchors],

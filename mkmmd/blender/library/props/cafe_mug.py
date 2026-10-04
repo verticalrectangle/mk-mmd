@@ -5,13 +5,14 @@ string and a wisp of steam. Two builders, each in its own frame (+Z up, metres):
                   glaze with sparse speckles, bare foot ring. The well floor is MUG_SEAT_Z (5.8 mm) above the origin.
     cafe_mug      origin = centre of the foot ring base, where the mug stands in the saucer well: a project places it at
                   `saucer at + (0, 0, 0.0058)`; yawing the root spins it in place. Handle azimuth -25 deg (0 = +X, -90 = -Y),
-                  tag and string at 215 deg (opposite the handle). Stoneware (rose outside, cream inside, bare-clay foot,
-                  throwing rings, 95 mm tall), the tea surface 13.5 mm below the lip, the paper tag, the string over the lip
-                  and the steam are separate objects, all children of the root with identity transforms (their meshes live
-                  in the mug frame).
+                  tag and string at 215 deg (opposite the handle). The mug (speckled stoneware, 95 mm tall: rose outside,
+                  cream inside, bare-clay foot, throwing rings), the tea (surface 13.5 mm below the lip), the paper tag, the
+                  cotton string over the lip and the steam are separate objects, all children of the root with identity
+                  transforms (their meshes live in the mug frame).
 
 Custom properties (cafe_mug root):
-    steam   0..1, default 0.6   steam strength: plume alpha and wisp density. Key it on the root.
+    steam   0..1, default 0.6   steam strength: plume alpha and wisp density. Key it on the root; when a cafe_room set is
+                                in the scene its `steam` property drives this one (one control for the whole scene).
 
 The steam noise scrolls with the scene time (frame / fps) and the plume sways through two shape keys driven by sin(time),
 so both follow the scene's frame rate. The materials are procedural in object space (metres); the shaders read the vertex
@@ -266,16 +267,16 @@ def _mg_colors(K):
     return {
         "rose": K.slot("rose"),                                           # mug glaze outside
         "love": K.slot("love"),                                           # deeper pooled glaze, tag text bars
-        "oat": b(overlay=.7, gold=.2, foam=.1),                           # pale clay mixed into the thin glaze
-        "speck": b(text=.75, gold=.25),                                   # muted plum-brown speckle
-        "cream_lo": b(surface=.75, gold=.25),                             # inside glaze, saucer glaze (dark end)
-        "cream_hi": b(surface=.95, gold=.05),                             # inside glaze (light end), string highlight
-        "clay_lo": b(surface=.65, gold=.35, k=.75),                       # bare oatmeal clay (dark end)
-        "clay_hi": b(overlay=.8, gold=.2),                                # bare oatmeal clay (light end)
+        "oat": b(overlay=.75, gold=.25, hue=10, chroma=.9, k=.95),        # pale clay mixed into the thin glaze
+        "speck": b(text=.75, gold=.25, k=1.05),                           # muted plum-brown speckle
+        "cream_lo": b(surface=.75, gold=.25, hue=10, chroma=1.2),         # inside glaze, saucer glaze (dark end)
+        "cream_hi": b(surface=.95, gold=.05, chroma=1.3),                 # inside glaze (light end), string highlight
+        "clay_lo": b(overlay=.65, gold=.35, hue=10, chroma=.9, k=.85),    # bare oatmeal clay (dark end)
+        "clay_hi": b(overlay=.85, gold=.15, hue=10, chroma=1.1, k=.95),   # bare oatmeal clay (light end)
         "tea_lo": b(gold=1.0, k=.83),                                     # tea in the middle of the cup
         "tea_mid": b(gold=1.0, k=.71),
-        "tea_hi": b(gold=.9, love=.1, k=.5),                              # tea at the wall (deeper)
-        "string_lo": b(overlay=.75, gold=.25),                            # cotton ply shadow
+        "tea_hi": b(gold=1.0, hue=-5, chroma=1.1, k=.45),                 # tea at the wall (deeper)
+        "string_lo": b(base=.65, gold=.35, hue=15, chroma=.9),            # cotton ply shadow
         "paper_lo": b(gold=.6, overlay=.4, hue=20, chroma=1.5),           # pastel-gold paper
         "paper_hi": b(overlay=.6, gold=.4, hue=20, chroma=2),
         "eyelet": b(gold=.9, overlay=.1, hue=10, k=.9),                   # darker ring round the punched hole
@@ -491,7 +492,8 @@ def _mg_mat_tag(K, C):
     dh = _mg_math(nt, "POWER", _mg_math(nt, "ADD", _mg_math(nt, "MULTIPLY", x, x),
                                         _mg_math(nt, "POWER", _mg_math(nt, "SUBTRACT", y, hy), 2.0)), 0.5)
     alpha = _mg_sstep(nt, 0.00078, 0.00090, dh)
-    ringm = _mg_math(nt, "SUBTRACT", 1.0, _mg_sstep(nt, 0.0, 0.00030, _mg_math(nt, "ABSOLUTE", _mg_math(nt, "SUBTRACT", dh, 0.00115))))
+    ringm = _mg_math(nt, "SUBTRACT", 1.0, _mg_sstep(nt, 0.0, 0.00030,
+                                                    _mg_math(nt, "ABSOLUTE", _mg_math(nt, "SUBTRACT", dh, 0.00115))))
     col = _mg_mixc(nt, _mg_math(nt, "MULTIPLY", ringm, 0.55), paper_ramp.outputs[0], C["eyelet"])
     col = _mg_mixc(nt, _mg_math(nt, "MULTIPLY", bars, 0.85), col, C["love"])
     col = _mg_mixc(nt, _mg_math(nt, "MULTIPLY", leaf, 0.92), col, C["leaf"])
@@ -977,10 +979,16 @@ def _mg_cylinder_bm(radius, depth, segments=32):
     return bm
 
 
-def _mg_handle_use(handle_pts):
-    """Pinch grip on the handle's vertical run and the handle's outermost point. The strap is a flat oval: wide along the
-    tangent (et), thinner in the handle plane. The pads close across its width (squeeze axis = et), fingertips pointing
-    into the opening towards the wall (x = -er), the strap running up the grip's y axis. -> (grip entry, outermost point)"""
+def _mg_round(v):
+    """Vector / sequence -> list of floats rounded to 0.01 mm (no negative zeros)."""
+    return [round(c, 5) + 0.0 for c in v]
+
+
+def _mg_handle_use(body, handle_pts):
+    """Pinch grip on the handle's vertical run, and the handle's outermost surface point. The strap is a flat oval: wide
+    along the tangent (et), thinner in its plane. The pads close across the width (squeeze axis = et), the fingertips point
+    into the opening towards the wall (x = -er), the strap runs up the grip's y axis (= `axis`).
+    -> (grip entry, outermost point)"""
     az = math.radians(MUG_HANDLE_DEG)
     H = _mg_handle_path(az)
     er, et = H.er, H.et
@@ -994,13 +1002,18 @@ def _mg_handle_use(handle_pts):
         d = hi - lo
         if abs(d.y) >= math.cos(math.radians(25.0)) * d.length:
             straight += d.length
-    center = er * rho + Vector((0.0, 0.0, z))
-    grip = {"name": "handle", "type": "pinch", "center": [round(v, 5) for v in center],
-            "axis": [0.0, 0.0, 1.0], "normal": [round(v, 5) for v in et], "x": [round(-v, 5) for v in er],
+    grip = {"name": "handle", "type": "pinch", "center": _mg_round(er * rho + Vector((0.0, 0.0, z))),
+            "axis": [0.0, 0.0, 1.0], "normal": _mg_round(et), "x": _mg_round(-er),
             "width": round(2 * ra, 5), "length": round(straight, 5), "depth": round(2 * rb, 5),
-            "span": round(rho - rb - wall, 5)}
-    outer = max(handle_pts, key=lambda p: p.dot(er))
-    return grip, outer
+            "span": round(rho - rb - wall, 5), "object": body.name}
+    return grip, max(handle_pts, key=lambda p: p.dot(er))
+
+
+def _mg_bbox_size(o):
+    lo, hi = Vector((1e9,) * 3), Vector((-1e9,) * 3)
+    for c in o.bound_box:
+        lo, hi = Vector(map(min, lo, c)), Vector(map(max, hi, c))
+    return [round(v, 4) for v in (hi - lo)]
 
 
 @register("cafe_saucer")
@@ -1030,15 +1043,20 @@ def cafe_mug(name, coll, root, slots=None):
     and string at 215 deg. Objects (all children of the root, identity transforms): <name>_body, _tea, _tag, _string,
     _steam, and the hidden collider _col.
 
-    Custom property on the root: `steam` (0..1, default 0.6) - strength of the steam plume. The plume scrolls with the
+    Custom property on the root: `steam` (0..1, default 0.6) - strength of the steam plume; key it here, or on the
+    `cafe_room` set root when one is in the scene (this property is then driven by that one). The plume scrolls with the
     scene time and sways through two shape keys driven by sin(time); the rates follow the scene's fps.
 
     Card: grip `handle` (pinch on the strap's vertical run: `normal` = the squeeze direction along the mug's tangent,
     `x` = fingertips towards the mug, `axis` = up the strap, `width` = strap width between the pads, `depth` = strap
     thickness along x, `length` = straight run, `span` = clear opening between strap and wall) and `body` (cylinder wrap on
-    the wall); look points rim / tea / tag / handle_out; rest `thumb_rest` (the flat top of the handle); surface `tag`."""
+    the straight wall); look points rim / tea / tag / handle_out (outermost point of the handle); surface `tag`; a
+    cylinder collider (R 45 mm, rnd 10 mm) around the body. `size` is the cup with its handle (no steam)."""
     K = Kit(name, coll, root, slots)
     K.prop("steam", 0.6, 0.0, 1.0, "steam strength: plume alpha and wisp density")
+    src = K.scene_source("steam")
+    if src is not root:                      # a cafe_room set in the scene carries the scene-wide steam control
+        drive(root, '["steam"]', "s", var=("s", src, '["steam"]'))
     C = _mg_colors(K)
     body, handle_pts = _mg_mug(K, _mg_mat_glaze(K, C, "glaze"))
     _mg_tea(K, _mg_mat_tea(K, C))
@@ -1047,26 +1065,21 @@ def cafe_mug(name, coll, root, slots=None):
     _mg_steam(K, _mg_mat_steam(K, C))
     col = K.collider(K.to_obj("col", _mg_cylinder_bm(0.045, MUG_H), loc=(0.0, 0.0, MUG_H / 2)))
 
-    grip, outer = _mg_handle_use(handle_pts)
-    zm = (_MG_ZW0 + _MG_ZW1) / 2
+    handle, outer = _mg_handle_use(body, handle_pts)
+    zm = (_MG_ZW0 + _MG_ZW1) / 2                                     # the wrap covers the straight wall
     tag_c, tag_n = _mg_tag_pt(0.0, 0.0)
-    e = 1e-4
-    tag_up = (_mg_tag_pt(0.0, e)[0] - _mg_tag_pt(0.0, -e)[0]).normalized()
-    r = lambda v: [round(c, 5) for c in v]
+    tag_up = (_mg_tag_pt(0.0, 1e-4)[0] - _mg_tag_pt(0.0, -1e-4)[0]).normalized()
     use = {
-        "grip": [grip,
+        "grip": [handle,
                  {"name": "body", "type": "cylinder", "center": [0.0, 0.0, round(zm, 5)], "axis": [0.0, 0.0, 1.0],
-                  "radius": round(_mg_r_out(zm), 5), "height": round(_MG_ZW1 - _MG_ZW0, 5)}],
+                  "radius": round(_mg_r_out(zm), 5), "height": round(_MG_ZW1 - _MG_ZW0, 5), "object": body.name}],
         "look": [{"name": "rim", "point": [0.0, 0.0, MUG_H]},
                  {"name": "tea", "point": [0.0, 0.0, MUG_TEA_Z]},
-                 {"name": "tag", "point": r(tag_c)},
-                 {"name": "handle_out", "point": r(outer)}],
-        "surface": [{"name": "tag", "center": r(tag_c), "normal": r(tag_n), "up": r(tag_up),
+                 {"name": "tag", "point": _mg_round(tag_c)},
+                 {"name": "handle_out", "point": _mg_round(outer)}],
+        "surface": [{"name": "tag", "center": _mg_round(tag_c), "normal": _mg_round(tag_n), "up": _mg_round(tag_up),
                      "size": [_MG_TAG_W, _MG_TAG_H]}],
     }
-    lo, hi = Vector((1e9,) * 3), Vector((-1e9,) * 3)
-    for c in body.bound_box:
-        lo, hi = Vector(map(min, lo, c)), Vector(map(max, hi, c))
-    return K.card(use=use, origin="foot_center", front="-Y", size=[round(v, 4) for v in (hi - lo)],
+    return K.card(use=use, origin="foot_center", front="-Y", size=_mg_bbox_size(body),
                   colliders=[{"type": "cylinder", "object": col.name, "R": 0.045, "half_h": MUG_H / 2, "rnd": 0.01,
                               "tag": name}])
