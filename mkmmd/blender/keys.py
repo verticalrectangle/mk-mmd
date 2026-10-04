@@ -42,9 +42,9 @@ def set_fcurve(id_data, path, index, frames, values, interp="BEZIER", replace=Tr
     co[0::2], co[1::2] = frames, values
     fc.keyframe_points.foreach_set("co", co)
     fc.keyframe_points.foreach_set("interpolation", [INTERP[interp]] * len(frames))
-    if interp == "BEZIER":
-        fc.keyframe_points.foreach_set("handle_left_type", [3] * len(frames))    # AUTO_CLAMPED
-        fc.keyframe_points.foreach_set("handle_right_type", [3] * len(frames))
+    if interp == "BEZIER":                               # RNA enum: FREE 0, AUTO 1, VECTOR 2, ALIGNED 3, AUTO_CLAMPED 4
+        fc.keyframe_points.foreach_set("handle_left_type", [4] * len(frames))
+        fc.keyframe_points.foreach_set("handle_right_type", [4] * len(frames))
     fc.update()
     return fc
 
