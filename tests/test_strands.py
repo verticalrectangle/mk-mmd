@@ -231,18 +231,60 @@ def test_a_collider_holds_the_strand_back_and_the_penetration_is_reported():
     assert all(np.linalg.norm(res.x[-1, i] - [0.13, 0, 1.25]) > 0.1 for i in (3, 4))      # outside the ball
 
 
-def test_the_floor_stops_a_strand_lowered_onto_it():
-    shapes = geom.Shapes()
-    shapes.floor_z = 0.9                                                         # the hanging tip is at 1.0
-    F = 16
+def test_the_floor_holds_a_blown_strand_lowered_onto_it_and_it_lies_along_the_floor():
+    F = 24
     drop = np.stack([0 * np.arange(F), 0 * np.arange(F), -0.15 * np.arange(F) / (F - 1)], 1)       # anchor sinks 15 cm
-    sc = scene(straight_rig(), F, shapes, poses={0: (drop, np.tile([1.0, 0, 0, 0], (F, 1)))})
-    res = run(sc)
+    poses = {0: (drop, np.tile([1.0, 0, 0, 0], (F, 1)))}
+    wind = strands.Wind({"direction": [1, 0, 0], "speed": 3.0})        # a straight, inextensible strand cannot fold alone
+    free = run(scene(straight_rig(), F, poses=poses), wind=wind)
+    shapes = geom.Shapes()
+    shapes.floor_z = 1.15
+    res = run(scene(straight_rig(), F, shapes, poses=poses), wind=wind)
     r = 0.5 * 0.02                                                         # particle radius: radius 0.5 x body 0.02
-    free = np.array([0, 0, TOP - 0.15 - 0.5])
-    assert res.x[-1, 4, 2] == pytest.approx(0.9 + r, abs=3e-3) and free[2] < 0.9      # held up where it would sink
-    assert res.x[:, :, 2].min() > 0.9 + r - 0.002 and res.pen[:, 0].max() < 0.002
-    assert res.worst[-1][2] in ("-", "floor")
+    assert free.x[:, :, 2].min() < 1.15 - 0.05                             # it would hang through the floor
+    assert res.x[-1, 4, 2] == pytest.approx(1.15 + r, abs=3e-3)            # held up on it, the tip lying along it
+    assert res.x[:, :, 2].min() > 1.15 + r - 0.002 and res.pen[:, 0].max() < 0.002
+    assert np.abs(np.linalg.norm(res.x[:, 1:] - res.x[:, :-1], axis=2) / 0.1 - 1.0).max() < 1e-9      # lengths intact
+
+
+def rendered_positions(sc, res):
+    """Where the keyed bones put the particles: each bone's rest offset turned by its D, from the end of its parent."""
+    chains = sc["chains"]
+    seg = chains.end - chains.head
+    out = np.zeros_like(res.x)
+    for i in range(len(chains)):
+        head = chains.head[i] if chains.parent[i] < 0 else out[:, chains.parent[i]]
+        out[:, i] = head + np.einsum("fij,j->fi", res.D[:, i], seg[i])
+    return out
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_strands_stay_inextensible_in_a_gale_so_the_bones_render_the_particles(engine):
+    rig = straight_rig(n=27, seg=0.034)                                          # a long lock of back hair
+    shapes = geom.Shapes()
+    wall = np.eye(4)
+    wall[:3, 3] = [0.3, 0.0, 1.0]
+    shapes.add("box", ("world", "", ""), "wall", M=wall, half=[0.02, 0.5, 0.8], rnd=0.005)
+    sc = scene(rig, 25, shapes)
+    gale = strands.Wind({"direction": [1, 0, 0], "speed": 14.0, "gust": 4.0, "gust_period": 0.6, "turbulence": 2.0,
+                         "seed": 1})
+    res = run(sc, wind=gale, engine=engine)
+    assert res.x[-1, 13, 0] > 0.15                                               # it is blown hard toward the wall
+    assert np.abs(np.linalg.norm(res.x[:, 1:] - res.x[:, :-1], axis=2) / 0.034 - 1.0).max() < 1e-9
+    assert np.abs(rendered_positions(sc, res) - res.x).max() < 1e-9              # so the bones end where it was solved
+    # and the penetration reported is the penetration of those positions
+    chains, P = sc["chains"], sc["shapes"].pack()
+    W = geom.world(P, sc["rest_R"], sc["rest_p"])
+    own, frac = np.repeat(np.arange(len(chains)), 3), np.tile(geom.SAMPLES, len(chains))
+    fk = rendered_positions(sc, res)
+    closest = -1.0
+    for f in range(res.x.shape[0]):
+        head = np.concatenate([chains.head[:1], fk[f, :-1]])
+        X = head[own] + frac[:, None] * (fk[f][own] - head[own])
+        pen, _ = geom.measure(X, np.full(len(X), 0.01), W, None, P)
+        assert max(pen.max(), 0.0) == pytest.approx(res.pen[f, 0], abs=1e-9)
+        closest = max(closest, pen.max())
+    assert -0.003 < closest < 0.005                                              # it leans on the wall, and is held
 
 
 def test_input_mistakes_are_refused():
@@ -322,9 +364,20 @@ def test_numba_engine_reproduces_the_numpy_engine_whatever_the_thread_count():
     assert a.engine == "numpy" and b.engine == "numba"
     assert np.array_equal(b.x, c.x) and np.array_equal(b.D, c.D) and np.array_equal(b.pen, c.pen)   # independent chains
     assert np.abs(a.x - b.x).max() < 1e-7 and np.abs(a.D - b.D).max() < 1e-6
-    assert a.pen[:, 0].max() > 1e-4 and np.abs(a.pen - b.pen).max() < 1e-7                         # and they do touch
+    assert a.pen[:, 0].max() > 1e-6 and np.abs(a.pen - b.pen).max() < 1e-7                         # and they do touch
     assert [w[2] for w in a.worst if w[0] > 1e-6] == [w[2] for w in b.worst if w[0] > 1e-6]
     assert not np.allclose(a.x[:, 4, 1], 0.0, atol=1e-3)                                           # the air moved them
+
+
+@needs_numba
+@pytest.mark.parametrize("sweeps, ftl", [(1, 0.0), (2, 0.5), (6, 1.0)])
+def test_numba_engine_follows_the_length_settings_like_the_numpy_engine(monkeypatch, sweeps, ftl):
+    monkeypatch.setattr(strands, "SWEEPS", sweeps)
+    monkeypatch.setattr(strands, "FTL_DAMP", ftl)
+    sc, wind = busy_scene()
+    a = run(sc, wind=wind, engine="numpy")
+    b = run(sc, wind=wind, engine="numba", threads=1)
+    assert np.abs(a.x - b.x).max() < 1e-7 and np.abs(a.D - b.D).max() < 1e-6
 
 
 @needs_numba

@@ -97,11 +97,18 @@ class Ctx:
     # solvers
     def solve(self, module, arrays, spec, tag):
         """Run `python -m module IN.npz OUT.npz` on the CLI's Python. IN holds `arrays` plus `spec` (JSON text);
-        cached by a hash of all of it in <cache>/<solver>/<tag>-<key>.npz. Returns (output arrays, report dict) where
-        report is the solver's `report` JSON text when it writes one."""
+        cached by a hash of all of it and of the solver package's source in <cache>/<solver>/<tag>-<key>.npz (editing
+        a solver invalidates its results). Returns (output arrays, report dict) where report is the solver's `report`
+        JSON text when it writes one."""
         arrays = dict(arrays, spec=np.array(json.dumps(spec, sort_keys=True, default=str)))
         h = hashlib.sha256()
         h.update(module.encode())
+        pkg = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                           *module.split(".")[1:-1])
+        for fn in sorted(os.listdir(pkg)):
+            if fn.endswith(".py"):
+                with open(os.path.join(pkg, fn), "rb") as fh:
+                    h.update(fn.encode() + fh.read())
         for k in sorted(arrays):
             a = np.ascontiguousarray(arrays[k])
             h.update(k.encode())

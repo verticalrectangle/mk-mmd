@@ -256,8 +256,8 @@ in order and each reads its own sections:
 | Stage | Sections | Does |
 |---|---|---|
 | scene | `[scene]` (`start`, `end`, `settle_frames`) | empty scene, fps, frame range including the pre-roll before `frame0` |
-| sets | `[[set]]` (`name`, `kind`, `at`, `yaw`, builder keys) | library set builders (sky, roads, tunnels, skylines, rooms) with their paths, surfaces and lights |
-| props | `[[prop]]` (`name`, `card`, `at`, `yaw`, `parent`, `slots`) | library props (`library:car_mockup`, `library:chair`) or card files; their use points and colliders |
+| sets | `[[set]]` (`name`, `kind`, `at`, `yaw`, builder keys) | library set builders with their paths, surfaces and lights (see the list below) |
+| props | `[[prop]]` (`name`, `card`, `at`, `yaw` or `rot`, `parent`, `slots`, `attach`, `anchor_to`) | library props or card files; builders get the project palette as slots; their use points and colliders |
 | vehicles | `[[vehicle]]` (`prop`, `path`, `lane`, `speed`, `at`, `roll`, `pitch`, `wheelbase`, `steer_ratio`) | a prop drives a set path's lane: position and heading per frame, body roll and pitch, wheels spinning, the steering wheel turning with the curvature |
 | cast | `[[cast]]` (`name`, `asset` or `pmx`, `armature`, `at`, `yaw`, `parent`, `physics`) | models imported without Bullet (`physics = "mk"`), named, placed |
 | pose | `[pose.<cast>]` | sit on a prop's seat, feet on targets (leg IK), lean / turn / head, arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets; `[[prop]] attach = "cast:bone"` puts props on bones |
@@ -265,8 +265,18 @@ in order and each reads its own sections:
 | perform | `[perform.<cast>]` | gaze events over an idle target, breathing, sway, nod, beat bob, startles, blinks, lids, expressions, lip sync, twitches |
 | shots | `[[shot]]` | the cut, see Shots |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure |
-| sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys |
+| keys | `[[key]]` (`target`, `prop`, `index`, `keys = [[t, v], ...]`, `interp`) | keys on set, prop and object properties: a set's storm and fog, a car's pop-ups, any RNA path (`location`, `data.energy`) |
+| sim | `[sim.<cast>]` (`families`, `params`, `colliders`, `props`, `fingers`, `floor`, `wind`) | secondary motion solved outside Blender (`mkmmd.solvers.strands`) and baked to keys; branching chains solve as trunk then branches; `wind.carrier = "car"` makes the air relative to a vehicle |
 | save | | the `.blend` |
+
+Library sets (`kind`; every key is documented in the builder's docstring): `test_road`, `night_sky` (gradient dome,
+stars, moon with light, horizon glow, clouds, EEVEE ray tracing), `highway` (divided road with lanes as card
+paths, lamps with baked spill, gantries and billboards as `use.surface`, tunnels, trees, wet asphalt), `skyline`
+(a city arc or band with lit windows and aviation lights), `cafe_room` (the rainy café: window with rain and fog,
+street, storm; its animatable state is custom properties on the set root). Library props (`library:<key>`):
+`car_mockup`, `chair`, and the café props (`cafe_chair`, `cafe_table`, `cafe_page`, `cafe_pen`, `cafe_mug`,
+`cafe_saucer`, `cafe_ipod`, `cafe_earbuds`, `cafe_vase`, `cafe_fairy_lights`, `cafe_poster`, `cafe_pothos`,
+`cafe_haworthia`, `cafe_monstera`).
 
 The character eases from its rest pose (at `start`) into the base pose over `settle_frames`; secondary motion settles
 in the same pre-roll. Rotations are composed in the armature's axes (the model faces -Y): a bone's posed rotation

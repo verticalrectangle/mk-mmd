@@ -15,19 +15,31 @@ Model (position-based strands)
              PMX collision masks (geom.enable_matrix).
   per substep  verlet prediction with gravity and air drag toward the air velocity -> a pull toward the rest shape
              relative to the parent segment (strength: the sag angle a horizontal segment settles at under gravity) ->
-             ITERS rounds of segment lengths (Gauss-Seidel along the strand, so tips keep their inertia) and collisions
-             of three points per segment against the smooth union of all shapes (log-sum-exp soft minimum, SMOOTH: the
-             normal is continuous, so a lock in the crease between two bodies settles) -> velocities, damped relative to
-             the rest shape (zeta), capped, and by friction while touching. The first frame is settled under gravity.
+             ITERS rounds of SWEEPS segment-length sweeps (Gauss-Seidel along the strand, both ends move, so tips keep
+             their inertia) and collisions of three points per segment against the smooth union of all shapes
+             (log-sum-exp soft minimum, SMOOTH: the normal is continuous, so a lock in the crease between two bodies
+             settles) -> an exact length projection (follow the leader: root to tip, each particle to its rest distance
+             from its parent) -> velocities, damped relative to the rest shape (zeta), capped, and by friction while
+             touching. The first frame is settled under gravity.
+  inextensible  every substep ends with exact segment lengths, so the particles ARE the forward kinematics of the keyed
+             bones (which keep their rest length) and the penetration reported is the penetration that renders. Under
+             strong forcing (wind, a fast carrier) sweeps alone leave 3-20 % stretch, and rendered bones then end far
+             from the particles. Pure follow-the-leader kills the velocity that would stretch a segment and whips the
+             tips; the tension that shortened a child also pulls its parent (dynamic FTL, Mueller et al. 2012: parent
+             velocity -= FTL_DAMP * the child's move / dt), which keeps the swing: a strand in a 22 m/s carrier's wind is
+             half as jerky (median) and four times calmer at the 95th percentile than with FTL_DAMP = 0.
   output     world rotation deltas D (bone world = D @ rest), keyed bone-locally by `local_quats`.
   engines    numpy: whole chains at once, level by level (the reference; minutes for 160 bones x 900 frames x 10
              substeps). numba (pip install 'mk-mmd[fast]', used when present): one chain at a time in compiled loops,
              chains on threads (seconds). Same dynamics and the same results to rounding (~1e-14 m) until a contact
              amplifies it; chains never interact, so a result does not depend on which other chains are simulated.
-  port notes the constants and the order of operations are those of the solver this was ported from (the numpy engine
-             matches its code to 3e-11 m over a 918-frame scene with 160 bones); two deliberate differences: collision
-             pushes are always applied (it skipped them in the iterations where no particle anywhere touched anything:
-             pushes <= 1e-7 m), and the numba kernels skip shapes that weigh < e^-25 in the soft union (REACH).
+  port notes the constants and the order of operations are those of the solver this was ported from, with deliberate
+             differences: collision pushes are always applied (it skipped them in the iterations where no particle
+             anywhere touched anything: pushes <= 1e-7 m); the numba kernels skip shapes that weigh < e^-25 in the soft
+             union (REACH); and, since VERSION 2, strands are inextensible (SWEEPS and the exact projection; the
+             original left 0.7 % mean and up to 9 % stretch in a calm seated shot, up to 20 % in wind). Short calm
+             hair (ears, bangs) agrees with it to ~0.01 deg; long hair draped on furniture differs by degrees because
+             it no longer stretches.
   per-family parameters (`FAMILY_DEFAULTS`, override with `params={family: {...}}`)
     sag         (root_deg, tip_deg)  angle a horizontal segment settles at under gravity, root -> tip (small = keeps its
                                      modelled shape, large = hangs)
@@ -83,10 +95,12 @@ try:                                                 # pip install mk-mmd[fast]
 except Exception:                                    # not installed, or not built for this numpy
     HAVE_NUMBA = False
 
-VERSION = 1                                          # bump when results change (cache keys)
+VERSION = 2                                          # bump when results change (cache keys)
 GRAVITY = np.array([0.0, 0.0, -9.81])
 SMOOTH = 0.01                                        # soft-union width (m): creases between shapes fill this much
 ITERS = 4                                            # constraint + collision iterations per substep
+SWEEPS = 4                                           # length-relaxation sweeps per iteration (cheap next to collisions)
+FTL_DAMP = 1.0                                       # share of a length correction handed to the parent as velocity
 PUSH_SPEED = 0.25                                    # most velocity (m/s) a collision push may give a particle
 MAX_SPEED = 2.5                                      # most speed (m/s) a particle may have relative to its rest shape
 PUSH_CAP = 0.03                                      # largest single collision push (m)
@@ -397,6 +411,7 @@ class _Model:
         # zeta of the segment's own frequency sqrt(alpha)/dt, so stiff parts (ears, bangs) follow a jolt without ringing
         self.sdecay = np.exp(-2.0 * get("zeta") * np.sqrt(self.alpha))
         self.heavy = np.full(N, np.exp(-30.0 * dt))          # settling damping
+        self.sweeps, self.ftl = int(SWEEPS), float(FTL_DAMP)
         # ---- anchors
         self.a_root = self.a_src[self.roots]
         self.root_local = np.einsum("kji,kj->ki", self.rest_R[self.a_root],
@@ -501,6 +516,19 @@ class _NumpyEngine:
                 p[I] -= 0.5 * c
                 p[M.par[I]] += 0.5 * c
 
+    def project(self, p, H0):
+        """Exact segment lengths, follow the leader (root to tip, only the child moves): each particle goes to the
+        right distance from its parent along the line to where it was. Returns the moves (N, 3)."""
+        M = self.M
+        corr = np.empty_like(p)
+        for lv, I in enumerate(M.levels):
+            head = H0[M.rpos[I]] if lv == 0 else p[M.par[I]]
+            dv = p[I] - head
+            new = head + dv * (M.L[I] / np.maximum(np.linalg.norm(dv, axis=1), 1e-12))[:, None]
+            corr[I] = new - p[I]
+            p[I] = new
+        return corr
+
     def points(self, p, H0):
         M = self.M
         H = np.empty_like(p)
@@ -548,14 +576,19 @@ class _NumpyEngine:
         self.shape_pass(p, H0, Da, True)
         contact = np.zeros(M.N, bool)
         pushed = np.zeros_like(p)
-        for _ in range(ITERS):                          # lengths, then collisions: a substep ends outside every shape
-            self.relax(p, H0)
+        for _ in range(ITERS):                          # lengths, then collisions
+            for _ in range(M.sweeps):
+                self.relax(p, H0)
             push, c = self.collide(p, H0, W)
             contact |= c
             p += push
             pushed += push
+        corr = self.project(p, H0)                      # exact lengths: the bones keyed from these frames render this
         self.shape_pass(p, H0, Da, False)               # final frames and targets from the settled positions
         vn = (p - self.x) / dt
+        if M.ftl:                                       # dynamic FTL: a child's move pulls its parent
+            has = M.child >= 0
+            vn[has] -= M.ftl * corr[M.child[has]] / dt
         vp = pushed / dt                                # depenetration moves a lock but may not launch it: a body or
         m = np.linalg.norm(vp, axis=1)                  # prop can push hair along at up to PUSH_SPEED, a squeeze
         vn -= vp * (1.0 - np.minimum(1.0, PUSH_SPEED / np.maximum(m, 1e-12)))[:, None]   # cannot fling it
@@ -832,6 +865,21 @@ if HAVE_NUMBA:
                 p[j - 1, 2] += 0.5 * cz
 
     @_jit
+    def _nb_project(n, H0r, p, Lc, corr):
+        """Exact segment lengths, follow the leader: root to tip each particle goes to the right distance from its
+        parent along the line to where it was; corr gets the moves (the numpy engine's project for one chain)."""
+        for j in range(n):
+            if j == 0:
+                hx, hy, hz = H0r[0], H0r[1], H0r[2]
+            else:
+                hx, hy, hz = p[j - 1, 0], p[j - 1, 1], p[j - 1, 2]
+            dx, dy, dz = p[j, 0] - hx, p[j, 1] - hy, p[j, 2] - hz
+            f = Lc[j] / max(np.sqrt(dx * dx + dy * dy + dz * dz), 1e-12)
+            nx, ny, nz = hx + dx * f, hy + dy * f, hz + dz * f
+            corr[j, 0], corr[j, 1], corr[j, 2] = nx - p[j, 0], ny - p[j, 1], nz - p[j, 2]
+            p[j, 0], p[j, 1], p[j, 2] = nx, ny, nz
+
+    @_jit
     def _nb_air(x, y, z, r, wmean, wdisp, wt, kv, ae, ph, om, use_turb):
         """Air velocity at a point on substep row r (Wind.mean_at + Wind.fluctuation)."""
         ux, uy, uz = wmean[r, 0], wmean[r, 1], wmean[r, 2]
@@ -868,7 +916,7 @@ if HAVE_NUMBA:
                     H0, Da, sc, sb, sm, bsc, bsr, wmean, wdisp, wt, wcar,
                     skind, sk, floor_z, has_floor,
                     kv, ae, ph, om, use_wind, use_turb,
-                    dt, samp, xs, Ds, dep, who):
+                    dt, samp, sweeps, ftl, xs, Ds, dep, who):
         """Advance chains cids by nsteps substeps (substep i uses block row i * rstride), with velocity decay `dec`;
         every rec_every steps store a frame (first rec_f0), and rec_start >= 0 stores the current state first as that
         frame. State arrays x v tgt_prev Dst tgt are per bone in chain-major order and updated in place."""
@@ -884,6 +932,7 @@ if HAVE_NUMBA:
             n = j1 - j0
             p, pushed, push, ub = np.empty((n, 3)), np.empty((n, 3)), np.empty((n, 3)), np.zeros((n, 3))
             hit, cont = np.zeros(n, np.bool_), np.zeros(n, np.bool_)
+            corr = np.empty((n, 3))
             Lg, dg, ag, Dg, tg = Lc[j0:j1], d0[j0:j1], alpha[j0:j1], Dst[j0:j1], tgt[j0:j1]
             if rec_start >= 0:
                 _nb_record(rec_start, j0, n, H0[0, c], x, Dst, rr, enable, sc[0], sb[0], sm[0], bsc[0], bsr[0], skind,
@@ -911,7 +960,8 @@ if HAVE_NUMBA:
                     cont[jj] = False
                     pushed[jj, 0], pushed[jj, 1], pushed[jj, 2] = 0.0, 0.0, 0.0
                 for it in range(ITERS):                         # lengths, then collisions
-                    _nb_relax(n, H0r, p, Lg)
+                    for sw in range(sweeps):
+                        _nb_relax(n, H0r, p, Lg)
                     for jj in range(n):
                         j = j0 + jj
                         if jj == 0:
@@ -935,10 +985,14 @@ if HAVE_NUMBA:
                         for i in range(3):
                             p[jj, i] += push[jj, i]
                             pushed[jj, i] += push[jj, i]
+                _nb_project(n, H0r, p, Lg, corr)
                 _nb_shape_pass(n, H0r, Dar, p, Dg, tg, Lg, dg, ag, False)
                 for jj in range(n):                             # velocities
                     j = j0 + jj
                     vnx, vny, vnz = (p[jj, 0] - x[j, 0]) / dt, (p[jj, 1] - x[j, 1]) / dt, (p[jj, 2] - x[j, 2]) / dt
+                    if jj + 1 < n:                              # dynamic FTL: the child's move pulls its parent
+                        vnx, vny, vnz = (vnx - ftl * corr[jj + 1, 0] / dt, vny - ftl * corr[jj + 1, 1] / dt,
+                                         vnz - ftl * corr[jj + 1, 2] / dt)
                     vpx, vpy, vpz = pushed[jj, 0] / dt, pushed[jj, 1] / dt, pushed[jj, 2] / dt
                     fp = 1.0 - min(1.0, PUSH_SPEED / max(np.sqrt(vpx * vpx + vpy * vpy + vpz * vpz), 1e-12))
                     vnx, vny, vnz = vnx - vpx * fp, vny - vpy * fp, vnz - vpz * fp
@@ -1063,7 +1117,8 @@ class _NumbaEngine:
                         dec, self.wgain, self.stick, self.sdec, self.rr, self.enable, self.x, self.v, self.tgt_prev,
                         self.Dst, self.tgt, blk.H0, blk.Da, sc, sb, sm, bsc, bsr,
                         *[np.ascontiguousarray(a) for a in wind[:4]], self.skind, self.sk, floor[0], floor[1],
-                        *wind[4:8], wind[8], wind[9], M.dt, M.samples, self.xs, self.Ds, self.dep, self.who)
+                        *wind[4:8], wind[8], wind[9], M.dt, M.samples, M.sweeps, M.ftl, self.xs, self.Ds, self.dep,
+                        self.who)
 
         if self.pool is None:
             go(self.groups[0])
