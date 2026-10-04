@@ -11,6 +11,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   perform  gaze, blinks, breathing, sway, beat bob, startles, expressions, lip sync, twitches
   shots    the cut: baked cameras per shot and output aspect (mounts, aim, lag, shake, framing, focus), markers
   lights   [[light]] rigs in palette colours (mounted, aimed, keyed) and the [look] colour pipeline
+  text     [[text]] kinetic type on set and prop surfaces: fitted, palette-coloured, typewriter and keyed numbers
   keys     [[key]] keys on set, prop and object properties (fog, flashes, steam, visibility)
   sim      secondary motion (hair, ears, tails, skirts) solved outside Blender, baked to keys
   save     the .blend
@@ -26,8 +27,8 @@ import numpy as np
 
 from ..runtime import CTX, op
 
-STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "keys", "sim",
-          "save"]
+STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
+          "sim", "save"]
 
 
 class BuildError(RuntimeError):
