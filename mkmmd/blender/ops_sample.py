@@ -12,6 +12,8 @@ args:
 npz keys: frames; per armature index a: bone_world_a (F,n,4,4) posed world matrices, bone_rest_a (n,4,4) rest
 matrices (armature space), arm_world_a (F,4,4); obj_world (F,m,4,4); expr_i (F,...); cam_world (F,4,4), cam_lens,
 cam_sensor (F,2), cam_shift (F,2), cam_clip (F,2). The JSON reply names everything."""
+import json
+
 import bpy
 import numpy as np
 
@@ -37,6 +39,11 @@ def resolve_collider(spec, default_arm):
     rnd = float(spec.get("rnd", 0.0))
     if t == "floor":
         return [{"kind": "floor", "source": ["world", "", ""], "tag": "floor", "z": float(spec.get("z", 0.0))}]
+    if t == "prop":                                      # every collider of a prop's card (stored on its root at save)
+        root = bpy.data.objects.get(spec.get("prop", ""))
+        if root is None or "mk_colliders" not in root.keys():
+            raise ValueError(f"collider spec {spec!r}: no prop {spec.get('prop')!r} with stored colliders (rebuild)")
+        return [it for s in json.loads(root["mk_colliders"]) for it in resolve_collider(s, default_arm)]
     if "object" in spec:
         ob = bpy.data.objects[spec["object"]]
         src = ["object", "", ob.name]

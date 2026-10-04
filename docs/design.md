@@ -215,6 +215,7 @@ Scene collision shapes for the secondary-motion solver and the `penetration` che
 | `{type = "capsule", bone = B, to = B2, R, armature?}` | from B's head to B2's head, riding on B |
 | `{type = "fingers", radius = {thumb, index, middle, ring, little, palm}?, sides?, armature?}` | every finger segment and three palm capsules (wrist to index1, middle1, little1) |
 | `{type = "floor", z}` | the ground plane |
+| `{type = "prop", prop}` | every collider of a prop's card, as the sim stage uses them (stored on the prop's root when the scene is saved) |
 
 The model's own bodies (rig.json `bodies`) collide too. A chain skips a body it already overlaps in the rest pose
 (the author's intended overlaps); within `anchor_free` (0.25 m) of its root it also skips the body it hangs from and
