@@ -141,12 +141,12 @@ max = 8.0
 | `mk assets` | the local asset registry: add, terms of use, licence and credit fields, credits for a project |
 | `mk model` | builds an original MMD character from a spec in code and exports a PMX (see Characters in design.md) |
 | `mk timeline` | analyses a song span: tempo, beats, bars, loudness, sung words by `(line, word)` |
-| `mk ref` | measures blinks, gaze, nods, sway and mouth in reference clips of real people (Pexels + MediaPipe) |
+| `mk ref` | measures blinks, gaze, nods, sway and mouth in reference clips of real people (Pexels + MediaPipe); `mk ref photos` fetches licensed Wikimedia photos to model props from |
 | `mk build` | builds the scene from `mk.toml`, stage by stage (`--until`, `--skip`) |
 | `mk q`, `mk serve` | ask a scene anything, frame by frame (`mk serve` keeps a big scene loaded) |
 | `mk grip` | solves a hand grip (pen, wheel, pinch, rest) on a model's hand |
-| `mk check` | runs the project's checks: penetration, contact, joint limits, jitter, framing, occlusion, palette and more |
-| `mk look` | renders views without touching the file: the cut per aspect, orbit views of any target, sheets, A/B |
+| `mk check` | runs the project's checks: penetration, contact, joint limits, jitter, framing, occlusion, palette, prop form (boxiness) and more |
+| `mk look` | renders views without touching the file: the cut per aspect, orbit views of any target, sheets, A/B, reference photos side by side (`--ref`) |
 | `mk render` | renders the cut of every output to frames (presets draft / preview / final, parallel, resumable) |
 | `mk post` | grades the frames (contrast, split tone, halation, vignette, grain) and encodes MP4s with the song |
 

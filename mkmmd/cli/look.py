@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .. import bridge
 from .. import config as CFG
+from ..ref.photos import ascii_text
 from .common import add_project_arg, emit, get_project, parse_frames, scene_path, UsageError
 
 PRESETS = {"front": (0, 8), "3q": (35, 12), "left": (90, 8), "back": (180, 10), "right": (-90, 8),
@@ -23,13 +24,16 @@ Views:
 
 Layout: one image per frame, view and aspect; --sheet adds a contact sheet (rows = view x aspect, columns =
 frames), --strip one row per view, --ab OTHER.blend renders the same views there and pairs them side by side,
---guides draws thirds and the 5 % safe area.
+--guides draws thirds and the 5 % safe area. --ref PHOTO[,PHOTO...] writes ref.jpg: each reference photo beside a
+rendered view at the render's height, to compare a model with the real thing at the same angle (photo i goes with
+view i; one photo is repeated beside every view and one view beside every photo; a view is its first frame and size).
 
 Examples:
   mk look --frames 200,400,600 --sheet                       # the cut, every aspect
   mk look --view front,left,back --target 'bone("head").head' --dist 0.6 --frames 300 --sheet
   mk look --view 3q --target 'bone("elbow.L").head' --dist 0.35 --lens 60 --frames 189:189
   mk look --cam CloseUp --frames t=2:4:0.5 --strip --engine workbench
+  mk look --frames 1 --view 35:12,90:8 --target '(0, 0, 0.7)' --dist 7 --ref refs/car/front_left.jpg,refs/car/side.jpg
 """
 
 
@@ -53,6 +57,8 @@ def add(sub):
     p.add_argument("--sheet", action="store_true", help="also write a contact sheet")
     p.add_argument("--strip", action="store_true", help="also write one strip per view")
     p.add_argument("--ab", metavar="OTHER.blend", help="render the same views on another scene and pair them")
+    p.add_argument("--ref", action="append", metavar="PHOTO[,PHOTO...]", help="reference photos to show beside the "
+                   "rendered views in ref.jpg (same height; mk ref photos fetches licensed ones)")
     p.add_argument("--guides", action="store_true", help="draw thirds and the safe area")
     p.add_argument("--out", help="folder (default: <project>/.mk/look/<time> or ~/.cache/mk/look/<time>)")
     add_project_arg(p)
@@ -111,10 +117,64 @@ def grid(rows, out, label_px=16):
     return str(out)
 
 
+def ref_paths(specs, proj):
+    """The reference images named by --ref values (comma lists, repeatable): relative paths are tried from the working
+    directory, then from the project folder."""
+    out = []
+    for spec in specs or []:
+        for item in str(spec).split(","):
+            item = item.strip()
+            if not item:
+                continue
+            p = Path(item).expanduser()
+            if not p.is_absolute() and not p.exists() and proj:
+                p = proj.root / p
+            if not p.is_file():
+                raise UsageError(f"--ref: no such image {item!r}")
+            out.append(p)
+    if not out:
+        raise UsageError("--ref needs at least one image")
+    return out
+
+
+def pair_refs(refs, shots):
+    """[(photo, shot)] rows for the side-by-side sheet: photo i beside view i, where a view is its first frame and size;
+    the shorter list repeats (one photo beside every view, one view beside every photo)."""
+    views = {}
+    for s in shots:
+        views.setdefault(s["view"], s)
+    views = list(views.values())
+    return [(refs[i % len(refs)], views[i % len(views)]) for i in range(max(len(refs), len(views)))]
+
+
+def side_by_side(pairs, out, label_px=14, pad=8):
+    """One image, a row per (photo, shot): the photo scaled to the render's height beside it, labelled above."""
+    font, top = _font(label_px), label_px + 8
+    rows = []
+    for ref, shot in pairs:
+        render = Image.open(shot["path"]).convert("RGB")
+        photo = Image.open(ref).convert("RGB")
+        photo = photo.resize((max(1, round(photo.width * render.height / photo.height)), render.height), Image.LANCZOS)
+        rows.append((ref, shot, photo, render))
+    sheet = Image.new("RGB", (max(p.width + r.width + 3 * pad for _, _, p, r in rows),
+                              sum(r.height + top + pad for _, _, _, r in rows) + pad), (35, 33, 54))
+    d, y = ImageDraw.Draw(sheet), pad
+    for ref, shot, photo, render in rows:
+        d.text((pad, y), "reference: " + ascii_text(ref.name)[:60], fill=(246, 193, 119), font=font)
+        d.text((2 * pad + photo.width, y), ascii_text(f"{shot['view']} {shot['size']} frame {shot['frame']}"),
+               fill=(224, 222, 244), font=font)
+        sheet.paste(photo, (pad, y + top))
+        sheet.paste(render, (2 * pad + photo.width, y + top))
+        y += render.height + top + pad
+    sheet.save(out, quality=90)
+    return str(out)
+
+
 def run(args):
     proj = get_project(args)
     blend = scene_path(args.scene, proj)
     frames = parse_frames(args.frames, proj)
+    refs = ref_paths(args.ref, proj) if args.ref else []
     cast_arm = None
     if args.cast or (proj and len(proj.cast) == 1):
         cast_arm = proj.cast_member(args.cast).get("armature") if proj else None
@@ -159,6 +219,10 @@ def run(args):
         for sa, sb in zip(shots["a"], shots["b"]):
             pairs.append((f"{sa['view']} {sa['size']} {sa['frame']}", [("A", sa["path"]), ("B", sb["path"])]))
         res["ab"] = grid(pairs, out / "ab.jpg")
+    if refs:
+        pairs = pair_refs(refs, shots["a"])
+        res["ref"] = side_by_side(pairs, out / "ref.jpg")
+        res["ref_pairs"] = [{"photo": str(r), "view": s["view"], "frame": s["frame"]} for r, s in pairs]
     if args.sheet or args.strip:
         rows = {}
         for s in shots["a"]:

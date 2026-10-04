@@ -49,7 +49,8 @@ blender -b SCENE.blend -y --python-exit-code 3 --python-expr BOOT -- job.json re
   leave the scene as they found it (`ping`, `list`, `q`, `sample`, `visibility`), which matters for big files. Ops
   that change scene state (`look` hides objects, removes markers, adds a camera) always get a fresh Blender.
 - `sample` is how numbers leave Blender: one pass over a set of frames writes posed bone and object matrices, rest
-  matrices, expression values, the active camera and resolved colliders to an `.npz`; checks and solvers work on that.
+  matrices, expression values, the active camera, resolved colliders and evaluated meshes (world-space triangles of what
+  a render shows, for `form`) to an `.npz`; checks and solvers work on that.
 
 ## Conventions
 
@@ -256,9 +257,46 @@ framing guides.
 ## Building
 
 `mk build` assembles the scene from `mk.toml` in one Blender session and saves it to `[project] blend`. Stages run
+| `form` | boxiness 0..1 of a prop's evaluated geometry: area-weighted over loose parts, `1 - (1 - cuboid)(1 - flat_sharp)` | what a render shows at one frame, in the prop's frame; hero props stay under the default `max` 0.25; `detail.worst_parts` names the objects to fix (see Form below) |
 in order and each reads its own sections:
 
 | Stage | Sections | Does |
+**Form** (`form`; docs/AGENTS.md: Modelling props) measures how blocky a prop is. `prop = "car"` takes every object a render
+shows under that prop root (colliders, objects hidden from render and characters are left out), `objects = [...]` names
+objects as they are, `exclude = [...]` drops names or fnmatch patterns, `frame` picks the frame (default the project's
+`frame0`). The `sample` op evaluates modifiers as a render does (Subdivision Surface and Multires at render levels) and
+returns world-space triangles (`meshes` in its job); the maths is `mkmmd.core.form` (numpy only, tested without Blender).
+Triangles are welded per object, grouped into loose parts and grown into planar patches (neighbouring normals within 3
+degrees of the patch's mean); a patch is *large* from (0.12 x the prop's diameter)^2 up, a flat panel at the size the prop
+is looked at. Per part:
+
+- `cuboid`: how much of it is a box. Flat faces (within 3 degrees of an axis, fading out by 10) on three orthogonal axes
+  must make up 60-85 % of its surface and the second axis must carry 10-22 % (a thin plate is no box). A bevelled or
+  filleted cuboid stays a box until its fillets reach a sixth to a fifth of its smallest side; a crowned panel is not flat.
+- `flat_sharp`: its surface in large flat patches, each weighed by the share of its own rim that turns more than 65
+  degrees (a chamfer turns 45 per edge, a cube corner 90): flat panels with unbevelled edges, such as a table top without
+  a rounded rim.
+
+The value is the area-weighted mean over parts. `detail` also gives `flat` (all large flat area), `hard_edges` (sharp share
+of the edge length around large patches), `worst_parts` (`object`, `part`, `area_m2`, `share`, `boxiness`, `why`, `size_m`,
+`at` in the prop's frame), `worst_objects`, `sharp_panels` (the biggest flat patches with unbevelled rims) and `exempt`.
+Hidden or internal surfaces count (no occlusion test): `exclude` what nobody sees.
+
+Limits: `max` defaults to 0.25, the limit for hero props (anything the camera sees large); a project overrides it per check.
+Furniture and gadgets that are boxes by nature (a boombox, a nightstand) read 0.2-0.7 even when well made: judge them by
+eye and give them their own `max`. Architecture (walls, gantries, barriers) is legitimately boxy: `exempt = [names or
+patterns]` measures and lists those objects but weighs them at `exempt_weight` (default 0), as does an object tagged
+`mk_form_exempt` (a custom property; `shell.exempt(obj)` in the shell toolkit) or named in `[[prop]] card_extra = {
+form_exempt = [...] }`; `exclude` removes objects altogether. Calibration on the test scenes:
+
+| Scene (`mk check ... form`) | value |
+|---|---|
+| the rejected car, `convertible_80s` modelled from cuboids: whole prop / exterior / body | 0.51 / 0.59 / 0.71 |
+| `car_mockup` (stacked boxes) | 0.90 |
+| a car body lofted and subdivided with the shell toolkit (the docs/modelling.md example: long flat flanks, creased shoulder) | 0.08 |
+| café iPod, the highest of the passing set | 0.09 |
+| café mug, chair, table, vase, saucer, plants, page, poster, lights, pen; the MMD characters | 0.00-0.01 |
+
 |---|---|---|
 | scene | `[scene]` (`start`, `end`, `settle_frames`) | empty scene, fps, frame range including the pre-roll before `frame0` |
 | sets | `[[set]]` (`name`, `kind`, `at`, `yaw`, builder keys) | library set builders with their paths, surfaces and lights (see the list below) |

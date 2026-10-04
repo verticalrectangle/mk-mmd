@@ -22,6 +22,7 @@ Metrics (mk check --list for their arguments):
   camera_inside  camera inside a closed mesh (frames)
   flicker        temporal noise in rendered frames
   palette        near-black share / distance to a palette in rendered frames
+  form           how blocky a prop's modelled shapes are (0 smooth .. 1 boxes; hero props stay under 0.25)
 
 Examples:
   mk check                                         # the project's checks
@@ -48,9 +49,10 @@ def add(sub):
 
 
 def run(args):
-    from ..checks import camera, image, motion  # noqa: F401  (register metrics)
+    CH.load()
     if args.list:
-        emit({name: {"doc": m.doc, "args": m.args} for name, m in sorted(CH.METRICS.items())})
+        emit({name: {"doc": m.doc, "args": m.args, **({"default_max": m.default_max} if m.default_max is not None else {})}
+              for name, m in sorted(CH.METRICS.items())})
         return 0
     proj = get_project(args)
     pos = list(args.args_pos)
@@ -75,7 +77,8 @@ def run(args):
             raise UsageError("the project has no [[check]] entries")
     if pos and pos[0] not in CH.METRICS:
         raise UsageError(f"unknown metric {pos[0]!r} (have {', '.join(sorted(CH.METRICS))})")
-    needs_scene = any(CH.METRICS[c["metric"]].uses_frames for c in checks if c.get("metric") in CH.METRICS)
+    needs_scene = any(CH.METRICS[c["metric"]].uses_frames or CH.METRICS[c["metric"]].sampled
+                      for c in checks if c.get("metric") in CH.METRICS)
     blend = scene_path(blend_arg, proj) if (needs_scene or blend_arg) else None
     ctx = CH.Context(blend, proj)
     t0 = time.time()

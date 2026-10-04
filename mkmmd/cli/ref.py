@@ -1,4 +1,4 @@
-"""mk ref: measure how real people move in reference clips and turn it into performance parameters."""
+"""mk ref: measure how real people move in reference clips and turn it into performance parameters; fetch reference photos."""
 import argparse
 from pathlib import Path
 
@@ -20,6 +20,11 @@ clip, the smallest rendition >= 720p) and tracking data are copyrighted and larg
 `mk ref clean` deletes them. Inside a project, `measure` writes <project>/ref/<set>.json (numbers only, safe to keep).
 The Pexels API key is read from the system keyring (secret-tool lookup service pexels key api) and never printed.
 
+Reference photos (modelling): `mk ref photos QUERY` searches Wikimedia Commons (no login), keeps photographs wide enough
+with their licence, author and page, downloads thumbnails into <project>/refs/<set>/ (outside a project:
+~/.cache/mk/ref/photos/<set>/) with SOURCES.json and a contact sheet to look at. They are visual references only: never
+textures, never in a render. Compare a model with them side by side: `mk look ... --ref refs/<set>/photo.jpg`.
+
 Examples:
   mk ref search 'woman singing in car' --n 20
   mk ref add 8042695 6954269 --set singing --note 'front-on, studio light'
@@ -27,6 +32,7 @@ Examples:
   mk ref measure --set singing                 # recommend + why on stdout, everything in the .json
   mk ref sheet --set singing                   # landmarks drawn on frames at the measured events
   mk ref clean --set singing                   # delete downloads, tracks and the sheet
+  mk ref photos 'Dodge 600 convertible' --set dodge600 --n 12     # photos to model a car from
 """
 
 
@@ -34,6 +40,16 @@ def add(sub):
     p = sub.add_parser("ref", help="reference clips: search, track, measure, performance parameters", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
     s = p.add_subparsers(dest="action", metavar="ACTION", required=True)
+
+    ph = s.add_parser("photos", help="Wikimedia Commons photos as modelling references (licence and author kept)")
+    ph.add_argument("query")
+    ph.add_argument("--set", dest="set_name", metavar="NAME", help="folder name under refs/ (default: the query's words)")
+    ph.add_argument("--n", type=int, default=12, help="photos of this query the set should hold (default 12; the same "
+                    "query again downloads nothing, another query adds its own)")
+    ph.add_argument("--min-width", type=int, default=1000, help="smallest original width, px (default 1000)")
+    ph.add_argument("--width", type=int, default=1280, help="thumbnail width, px: Wikimedia serves 120 250 330 500 960 "
+                    "1280 1920 3840 (default 1280)")
+    add_project_arg(ph)
 
     se = s.add_parser("search", help="Pexels video search (downloads nothing)")
     se.add_argument("query")
@@ -91,8 +107,21 @@ def _set(args):
     return proj, store.RefSet(store.scope_dir(proj), args.set_name)
 
 
+def _photos(args):
+    """Wikimedia Commons photos into <project>/refs/<set>/ (else ~/.cache/mk/ref/photos/<set>/)."""
+    from ..ref import photos
+    proj = get_project(args)
+    name = store.set_name(args.set_name or photos.slug(args.query)[:40].strip("_"))
+    dest = proj.root / "refs" / name if proj else store.cache_root() / "photos" / name
+    res = photos.fetch(args.query, dest, args.n, args.min_width, args.width)
+    emit({"set": name, "project": proj.name if proj else None, **res})
+    return CHECK_FAILED if res["failed"] else 0
+
+
 def _run(args):
     act = args.action
+    if act == "photos":
+        return _photos(args)
     if act == "search":
         from ..ref import pexels
         res = pexels.search(args.query, args.n, args.min_height, args.orientation)

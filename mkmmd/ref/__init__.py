@@ -14,8 +14,9 @@ Modules
   measure    per-clip analysis, pooling over clips
   recommend  pooled statistics -> perform parameters with a `why` per field
   sheet      contact sheet
+  photos     Wikimedia Commons photographs as modelling references (`mk ref photos`): search, licences, thumbnails, sheet
 
-Only `store`, `pexels`, `models` touch the network; only `track` and `sheet` import MediaPipe / decode video. The
+Only `store`, `pexels`, `models` and `photos` touch the network; only `track` and `sheet` import MediaPipe / decode video. The
 analysis modules are pure numpy on the tracked arrays, so they run (and are tested) without MediaPipe.
 
 Downloads and tracking data are large and copyrighted: they live under the cache (`~/.cache/mk/ref/<project or

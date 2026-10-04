@@ -37,6 +37,7 @@ class Metric:
     args = {}               # arg -> help
     sampled = True          # needs the Blender sample op
     uses_frames = True      # evaluated over scene frames (image metrics read files instead)
+    default_max = None      # the limit when a check gives neither min nor max
 
     def needs(self, args, ctx, need):
         return None
@@ -49,6 +50,7 @@ class Metric:
 class Need:
     def __init__(self):
         self.bones, self.families, self.objects, self.exprs, self.colliders = {}, {}, [], [], []
+        self.meshes = []
         self.camera = False
 
     def bone(self, arm, *names):
@@ -78,12 +80,24 @@ class Need:
             idx.append(keys.index(key))
         return idx
 
+    def mesh(self, objects=(), prop=None, exclude=(), frame=None):
+        """A mesh request: the evaluated geometry (world space) of the named `objects` and of everything a render shows
+        under the prop root `prop`, minus `exclude` (names or fnmatch patterns), at one `frame` (None: as the scene
+        stands). Returns its index for Data.mesh."""
+        spec = {"objects": list(objects), "prop": prop, "exclude": list(exclude),
+                "frame": None if frame is None else int(frame)}
+        if spec not in self.meshes:
+            self.meshes.append(spec)
+        return self.meshes.index(spec)
+
     def empty(self):
-        return not (self.bones or self.families or self.objects or self.exprs or self.colliders or self.camera)
+        return not (self.bones or self.families or self.objects or self.exprs or self.colliders or self.meshes
+                    or self.camera)
 
     def job(self, frames, out):
         return {"frames": frames, "out": str(out), "bones": self.bones, "families": self.families,
-                "objects": self.objects, "exprs": self.exprs, "camera": self.camera, "colliders": self.colliders}
+                "objects": self.objects, "exprs": self.exprs, "camera": self.camera, "colliders": self.colliders,
+                "meshes": self.meshes}
 
 
 # ---------------------------------------------------------------- sampled data
@@ -159,6 +173,17 @@ class Data:
 
     def colliders(self, idx):
         return [it for i in idx for it in self.meta["colliders"][i]]
+
+    def mesh(self, i):
+        """Mesh request i: {"vertices" (n,3), "triangles" (m,3), "object" (m,) index into "names", "names", "exempt"
+        (names tagged `mk_form_exempt`), "roots" ({prop: world matrix (4,4)}), "frame"} in world space. A request whose
+        names do not exist raises its CheckError."""
+        meta = self.meta["meshes"][i]
+        if meta.get("error"):
+            raise CheckError(meta["error"])
+        return {"vertices": self.z[f"mesh_v_{i}"], "triangles": self.z[f"mesh_t_{i}"], "object": self.z[f"mesh_o_{i}"],
+                "names": meta["objects"], "exempt": meta.get("exempt", []), "frame": meta["frame"],
+                "roots": {p: np.array(M, float) for p, M in meta.get("roots", {}).items()}}
 
     def camera(self, frames):
         r = self.rows(frames)
@@ -289,9 +314,14 @@ def judge(check, value):
     return (lo is None or value >= lo) and (hi is None or value <= hi)
 
 
+def load():
+    """Import the metric modules (they register themselves in METRICS)."""
+    from . import camera, form, image, motion  # noqa: F401
+
+
 def run(checks, ctx, frames_override=None, keep_sample=False):
     """Run checks; returns a list of results (name, metric, value, min/max, ok, detail | error)."""
-    from . import camera, image, motion  # noqa: F401  (register metrics)
+    load()
     plan, need, union = [], Need(), set()
     results = [None] * len(checks)
     for i, c in enumerate(checks):
@@ -310,7 +340,7 @@ def run(checks, ctx, frames_override=None, keep_sample=False):
             union |= set(frames)
         plan.append((i, c, m, frames, state))
     data = None
-    if union and not need.empty():
+    if (union or need.meshes) and not need.empty():
         out = CFG.cache_dir() / "samples" / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.npz"
         out.parent.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
@@ -329,11 +359,14 @@ def run(checks, ctx, frames_override=None, keep_sample=False):
         except (CheckError, KeyError, ValueError, IndexError) as e:
             results[i] = {**base, "ok": False, "error": f"{type(e).__name__}: {e}"}
             continue
+        lim = {k: c.get(k) for k in ("min", "max")}
+        if lim["min"] is None and lim["max"] is None and m.default_max is not None:
+            lim["max"] = m.default_max
         res = {**base, "value": None if value is None else round(float(value), 4)}
         for k in ("min", "max"):
-            if c.get(k) is not None:
-                res[k] = c[k]
-        res["ok"] = judge(c, value)
+            if lim[k] is not None:
+                res[k] = lim[k]
+        res["ok"] = judge(lim, value)
         res["detail"] = detail
         results[i] = res
     return results

@@ -9,10 +9,18 @@ args:
   exprs       [expression]                   `mk q` expressions, numeric results only
   camera      bool                           the active camera per frame (markers respected) + its intrinsics
   colliders   [spec]                         scene collision shapes to resolve (docs/design.md: Colliders)
+  meshes      [{objects, prop, exclude, frame}]   evaluated geometry, world space, once per request at its own frame
+                                             (frame null: as the scene stands): `objects` by name plus what a render shows
+                                             under the prop root(s) `prop` (a name or a list; no colliders, no hidden
+                                             objects, no characters), minus `exclude` (names or fnmatch patterns)
 npz keys: frames; per armature index a: bone_world_a (F,n,4,4) posed world matrices, bone_rest_a (n,4,4) rest
 matrices (armature space), arm_world_a (F,4,4); obj_world (F,m,4,4); expr_i (F,...); cam_world (F,4,4), cam_lens,
-cam_sensor (F,2), cam_shift (F,2), cam_clip (F,2). The JSON reply names everything."""
+cam_sensor (F,2), cam_shift (F,2), cam_clip (F,2); per mesh request k: mesh_v_k (n,3) vertices, mesh_t_k (m,3) triangle
+corners (indices into mesh_v_k), mesh_o_k (m,) index of the owning object in the reply's meshes[k].objects. The JSON
+reply names everything."""
 import json
+from contextlib import contextmanager
+from fnmatch import fnmatchcase
 
 import bpy
 import numpy as np
@@ -109,6 +117,145 @@ def resolve_collider(spec, default_arm):
     raise ValueError(f"collider spec {spec!r}: give an object, a world center, bone+to, fingers or floor")
 
 
+# ---------------------------------------------------------------- evaluated geometry
+GEOMETRY = {"MESH", "CURVE", "SURFACE", "FONT", "META"}      # object types whose evaluated geometry converts to a mesh
+
+
+def _character_root(o):
+    """An MMD model's root empty (mmd_tools stores its `mmd_type` enum as a number, ROOT = 2): what hangs below it is a
+    character, not part of a prop."""
+    return o.type == "EMPTY" and o.get("mmd_type") == 2
+
+
+def _rendered(o):
+    """Does a render show this object: not a collider shape, not hidden from render (itself or all its collections), and
+    visible to the camera."""
+    return (not o.get("mk_collider") and not o.hide_render and o.visible_camera
+            and not (o.users_collection and all(c.hide_render for c in o.users_collection)))
+
+
+def _visible_geometry(root):
+    """The geometry objects below `root` that a render shows (`_rendered`), characters excluded (their subtrees are
+    skipped); in name order."""
+    out = []
+    for c in sorted(root.children, key=lambda o: o.name):
+        if _character_root(c):
+            continue
+        if c.type in GEOMETRY and _rendered(c):
+            out.append(c)
+        out += _visible_geometry(c)
+    return out
+
+
+def _find_object(name, what):
+    ob = bpy.data.objects.get(name)
+    if ob is None:
+        near = [o.name for o in bpy.data.objects if name.lower() in o.name.lower()][:8]
+        raise ValueError(f"mesh {what} {name!r}: no such object" + (f" (similar: {near})" if near else ""))
+    return ob
+
+
+def _mesh_objects(spec):
+    """The objects of one mesh request, in order and without repeats."""
+    obs = []
+    props = spec.get("prop") or []
+    for prop in [props] if isinstance(props, str) else props:
+        obs += _visible_geometry(_find_object(prop, "prop"))
+    for name in spec.get("objects") or []:
+        ob = _find_object(name, "object")
+        if ob.type not in GEOMETRY:
+            raise ValueError(f"mesh object {name!r} is a {ob.type}, not geometry (the root of a prop goes in `prop`)")
+        obs.append(ob)
+    skip = list(spec.get("exclude") or [])
+    out = {}
+    for ob in obs:
+        if not any(fnmatchcase(ob.name, pat) for pat in skip):
+            out.setdefault(ob.name, ob)
+    return list(out.values())
+
+
+@contextmanager
+def _render_settings(obs):
+    """Modifiers as a render evaluates them: only the ones shown in renders, Subdivision Surface and Multires at their
+    render levels. The viewport settings come back afterwards (`mk serve` keeps the scene between jobs)."""
+    saved = []
+    try:
+        for ob in obs:
+            for md in ob.modifiers:
+                saved.append((md, "show_viewport", md.show_viewport))
+                if md.type in ("SUBSURF", "MULTIRES"):
+                    saved.append((md, "levels", md.levels))
+                    md.levels = md.render_levels
+                md.show_viewport = md.show_render
+        yield
+    finally:
+        for md, attr, value in reversed(saved):
+            setattr(md, attr, value)
+
+
+def _world_mesh(ob, dg):
+    """World-space vertices (n,3) and triangle corners (m,3) of the evaluated object: modifiers, shape keys, armature
+    poses and geometry nodes applied, as a render at this frame sees it."""
+    oe = ob.evaluated_get(dg)
+    me = oe.to_mesh()
+    if me is None:
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int32)
+    try:
+        co = np.empty(len(me.vertices) * 3, np.float32)
+        me.vertices.foreach_get("co", co)
+        me.calc_loop_triangles()
+        tri = np.empty(len(me.loop_triangles) * 3, np.int32)
+        me.loop_triangles.foreach_get("vertices", tri)
+    finally:
+        oe.to_mesh_clear()
+    M = _mat(oe.matrix_world)
+    tri = tri.reshape(-1, 3)
+    if np.linalg.det(M[:3, :3]) < 0:                      # mirrored by a negative scale: keep the normals outward
+        tri = tri[:, ::-1]
+    return co.reshape(-1, 3).astype(float) @ M[:3, :3].T + M[:3, 3], tri
+
+
+def _sample_meshes(specs, out):
+    """Fill `out` with mesh_v_k / mesh_t_k / mesh_o_k for every request; returns their reply entries (objects, frame,
+    the objects tagged `mk_form_exempt`, and the world matrix of every prop root asked for; `error` instead when a name
+    does not exist: that request fails, the others do not). The scene's frame is put back afterwards."""
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    meta = []
+    try:
+        for k, spec in enumerate(specs):
+            if spec.get("frame") is not None and int(spec["frame"]) != sc.frame_current:
+                sc.frame_set(int(spec["frame"]))
+            try:
+                obs = _mesh_objects(spec)
+            except ValueError as e:
+                obs, err = [], str(e)
+            else:
+                err = None
+            verts, tris, owner, base = [], [], [], 0
+            with _render_settings(obs):
+                bpy.context.view_layer.update()
+                dg = bpy.context.evaluated_depsgraph_get()
+                for j, ob in enumerate(obs):
+                    V, T = _world_mesh(ob, dg)
+                    verts.append(V)
+                    tris.append(T + base)
+                    owner.append(np.full(len(T), j, np.int32))
+                    base += len(V)
+            out[f"mesh_v_{k}"] = np.concatenate(verts) if verts else np.zeros((0, 3))
+            out[f"mesh_t_{k}"] = np.concatenate(tris).astype(np.int32) if tris else np.zeros((0, 3), np.int32)
+            out[f"mesh_o_{k}"] = np.concatenate(owner) if owner else np.zeros(0, np.int32)
+            props = spec.get("prop") or []
+            roots = {p: _mat(bpy.data.objects[p].matrix_world).tolist()
+                     for p in ([props] if isinstance(props, str) else props) if err is None}
+            meta.append({"objects": [o.name for o in obs], "frame": sc.frame_current, "roots": roots,
+                         "exempt": [o.name for o in obs if o.get("mk_form_exempt")], **({"error": err} if err else {})})
+    finally:
+        if sc.frame_current != keep:
+            sc.frame_set(keep)
+    return meta
+
+
 @op("sample")
 def sample(args):
     frames = [int(f) for f in args["frames"]]
@@ -158,6 +305,7 @@ def sample(args):
     codes = [compile(e, "<mk sample>", "eval") for e in exprs]
     F = len(frames)
     out = {"frames": np.array(frames)}
+    meshes = _sample_meshes(args.get("meshes") or [], out)
     for k, (arm, names) in enumerate(arms):
         out[f"bone_world_{k}"] = np.zeros((F, len(names), 4, 4))
         out[f"bone_rest_{k}"] = np.array([_mat(arm.data.bones[n].matrix_local) for n in names]).reshape(-1, 4, 4)
@@ -203,7 +351,7 @@ def sample(args):
         out[f"expr_{e}"] = np.array(vals, float)
     np.savez(args["out"], **out)
     reply = {"out": args["out"], "frames": len(frames), "bones": meta_b, "objects": objects, "exprs": exprs,
-             "colliders": resolved_specs}
+             "colliders": resolved_specs, "meshes": meshes}
     if want_cam:
         cams = {n for n in cam_names if n}
         reply["camera"] = {"names": cam_names, "sensor_fit": {n: bpy.data.objects[n].data.sensor_fit for n in cams},
