@@ -1,7 +1,9 @@
 """mk doctor: check that everything mk needs is installed and reachable."""
 import importlib
+import re
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 
 from .. import bridge
@@ -13,9 +15,39 @@ MIN_FREE_GB = 10.0
 
 def add(sub):
     p = sub.add_parser("doctor", help="check the environment (Blender, mmd_tools, tools, disk, keys)",
-                       description="Checks Blender + mmd_tools, ffmpeg, espeak-ng, Python packages, free disk space "
-                                   "and API keys. Exits 1 if anything required is missing.")
+                       description="Checks Blender + mmd_tools (and the Python wheels the extension bundles), ffmpeg, "
+                                   "espeak-ng, Python packages, free disk space and API keys. Exits 1 if anything "
+                                   "required is missing. --fix reinstalls missing mmd_tools wheels (a Blender started "
+                                   "with --factory-startup deletes them, and PMX import then fails).")
+    p.add_argument("--fix", action="store_true", help="reinstall mmd_tools' bundled wheels that are missing")
     p.set_defaults(func=run)
+
+
+def extension_wheels(version):
+    """[(wheel path, top-level package names, installed?, site-packages dir)] for the wheels mmd_tools bundles,
+    checked against the extensions' site-packages of Blender `version` ("4.2")."""
+    base = Path.home() / ".config" / "blender" / version / "extensions"
+    site = base / ".local" / "lib"
+    sites = sorted(site.glob("python3.*/site-packages"))
+    out = []
+    for whl in sorted(base.glob("*/mmd_tools/wheels/*.whl")):
+        with zipfile.ZipFile(whl) as z:
+            tops = [n for n in z.namelist() if n.endswith(".dist-info/top_level.txt")]
+            names = z.read(tops[0]).decode().split() if tops else [whl.name.split("-")[0]]
+        ok = bool(sites) and all(any((s / n).exists() or (s / f"{n}.py").exists() for s in sites) for n in names)
+        out.append((whl, names, ok, sites[0] if sites else None))
+    return out
+
+
+def _fix_wheels(version):
+    fixed = []
+    for whl, names, ok, site in extension_wheels(version):
+        if ok or site is None:
+            continue
+        with zipfile.ZipFile(whl) as z:
+            z.extractall(site)
+        fixed.append(whl.name)
+    return fixed
 
 
 def _item(name, ok, detail, required=True):
@@ -27,6 +59,15 @@ def run(args):
     items = []
     bl = Path(cfg["blender"])
     if bl.exists():
+        m = re.search(r"blender-(\d+\.\d+)", str(bl))
+        version = m.group(1) if m else "4.2"
+        if getattr(args, "fix", False):
+            fixed = _fix_wheels(version)
+            if fixed:
+                items.append(_item("mmd_tools wheels reinstalled", True, ", ".join(fixed), required=False))
+        for whl, names, ok, site in extension_wheels(version):
+            items.append(_item(f"mmd_tools wheel:{'/'.join(names)}", ok,
+                               str(site) if ok else f"missing from {site} (run mk doctor --fix)"))
         try:
             info = bridge.run("ping", timeout=120)
             items.append(_item("blender", True, f"{info['blender']} (Python {info['python']}, numpy {info['numpy']})"))
