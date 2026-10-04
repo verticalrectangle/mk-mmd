@@ -16,7 +16,7 @@ import math
 
 import bpy
 import numpy as np
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from ...core.palette import linear, resolve
 from .. import keys as K
@@ -80,12 +80,10 @@ def run(ctx):
             q = (aim - world_at).to_track_quat("-Z", "Y")
         else:
             q = Vector((0, 0, -1)).to_track_quat("-Z", "Y")
-        ob.matrix_world = q.to_matrix().to_4x4()
-        ob.location = world_at
-        if mount is not None:
-            mw = ob.matrix_world.copy()
+        mw = Matrix.Translation(world_at) @ q.to_matrix().to_4x4()   # explicit: matrix_world lags .location until a
+        if mount is not None:                                         # depsgraph update, so never copy it back
             ob.parent = mount
-            ob.matrix_world = mw
+        ob.matrix_world = mw
         if spec.get("keys"):
             pts = sorted(spec["keys"])
             K.set_fcurve(ld, "energy", 0, [ctx.frame(t) for t, _ in pts], [ld.energy * m for _, m in pts])
