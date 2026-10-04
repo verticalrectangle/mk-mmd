@@ -229,7 +229,7 @@ class Materials:
                 s = g.inv(g.ss(g.ab(g.sub(z, zc)), PIN_W - 0.0005, PIN_W + 0.0005))
                 lines = s if lines is None else g.mx(lines, s)
             col = g.mixc(col, rgba(p.lin("stripe")), lines)
-        b = g.principled(col, 0.38, 0.30, Coat_Weight=1.0, Coat_Roughness=0.03, Specular_IOR_Level=0.6)
+        b = g.principled(col, 0.38, 0.30, Coat_Weight=1.0, Coat_Roughness=LAY.PAINT_COAT_ROUGHNESS, Specular_IOR_Level=0.6)
         g.put(b.inputs["Emission Color"], col)                       # the floor: shadows keep the paint's colour
         g.put(b.inputs["Emission Strength"], 0.10)
         g.finish(b.outputs[0])
@@ -275,18 +275,20 @@ class Materials:
 
     # ---- glass and lamps
     def m_glass(self):
+        """Clear glass: a transparent shader with a slight cool tint, a soft reflection only where the view is nearly along the
+        pane (Fresnel above a knee, a rough lobe): no sharp white shape from an area light, no sheet of paper at night."""
         m, g = self._new("glass", blend="BLENDED")
         m.use_transparency_overlap = False
-        tint = self.pal.mix("glass", ("text", 1.2), ("base", 0.2))
+        tint = self.pal.mix("glass", ("text", 5.0))
         clear = g.node("ShaderNodeBsdfTransparent")
         g.put(clear.inputs[0], rgba(tint))
         gloss = g.node("ShaderNodeBsdfGlossy")
-        g.put(gloss.inputs["Roughness"], 0.04)
+        g.put(gloss.inputs["Roughness"], LAY.GLASS_ROUGHNESS)
         g.put(gloss.inputs["Color"], (1.0, 1.0, 1.0, 1.0))
         fres = g.node("ShaderNodeFresnel")
         g.put(fres.inputs["IOR"], 1.45)
         mix = g.node("ShaderNodeMixShader")
-        fac = g.mad(fres.outputs[0], 0.85, 0.12)                    # always a little reflective
+        fac = g.maprange(fres.outputs[0], LAY.GLASS_FRESNEL_KNEE, 1.0, 0.0, LAY.GLASS_REFLECT_MAX)
         g.put(mix.inputs[0], fac)
         g.nt.links.new(clear.outputs[0], mix.inputs[1])
         g.nt.links.new(gloss.outputs[0], mix.inputs[2])
@@ -345,8 +347,10 @@ class Materials:
         return m
 
     def m_vinyl_dark(self):
+        """The dash pad and its hood, the door-top rolls, the bolsters: a dark charcoal with a warm cast (the tan interior
+        shows only in the seats' inserts and the door panels' inserts), as in the photographed car."""
         p = self.pal
-        return self._simple("vinyl_dark", p.mix("interior", ("base", 0.55)), 0.68, 0.0, Sheen_Weight=0.2)
+        return self._simple("vinyl_dark", p.mix(("interior", 1.0), ("base", 6.0)), 0.62, 0.0, floor=0.09, Sheen_Weight=0.25)
 
     def m_carpet(self):
         p = self.pal

@@ -95,7 +95,7 @@ def test_dash_surfaces_face_the_driver_and_sit_in_the_cabin():
         assert np.linalg.norm(n) == pytest.approx(1) and np.linalg.norm(up) == pytest.approx(1) and abs(n @ up) < 1e-6
         assert s["size"][0] > 0.02 and s["size"][1] > 0.01
         if name != "cassette_label":
-            assert n[1] > 0.5                                  # toward the driver (+Y)
+            assert n[1] > 0.3 and n[2] >= 0.0                  # toward the driver (+Y) and up
             assert -0.8 < s["center"][0] < 0.8 and -0.7 < s["center"][1] < -0.2 and 0.6 < s["center"][2] < 1.15
 
 

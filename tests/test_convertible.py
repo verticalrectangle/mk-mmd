@@ -399,6 +399,35 @@ def test_overall_size_of_the_car():
 
 
 # ======================================================================================== the builder's params
+def test_the_glass_shader_constants_make_clear_glass_that_reflects_softly_and_only_at_grazing_angles():
+    """The windshield is a Transparent BSDF mixed with a rough Glossy by a Fresnel term above a knee (convertible_mats.m_glass
+    reads these three numbers): glass reflects 3.4 % at normal incidence, so with the knee above that nothing reflects face-on;
+    the lobe is rough enough that a lamp is a soft glow, and the strongest reflection stays well under a mirror's."""
+    f0 = ((1.45 - 1.0) / (1.45 + 1.0)) ** 2                                           # Fresnel at normal incidence for IOR 1.45
+    assert L.GLASS_FRESNEL_KNEE > 2 * f0 and L.GLASS_FRESNEL_KNEE < 0.2               # a reflection starts at about 60-70 degrees
+    assert 0.2 <= L.GLASS_ROUGHNESS <= 0.5                                           # a soft lobe: an area light is not a sharp shape
+    assert 0.1 <= L.GLASS_REFLECT_MAX <= 0.5                                         # and it never goes to a mirror
+
+    def reflectance(angle_deg):
+        """The mix factor the shader gives at an incidence angle (unpolarised Fresnel, then the knee and the cap)."""
+        ti = math.radians(angle_deg)
+        tt = math.asin(math.sin(ti) / 1.45)
+        rs = ((math.cos(ti) - 1.45 * math.cos(tt)) / (math.cos(ti) + 1.45 * math.cos(tt))) ** 2
+        rp = ((1.45 * math.cos(ti) - math.cos(tt)) / (1.45 * math.cos(ti) + math.cos(tt))) ** 2
+        fr = 0.5 * (rs + rp)
+        return min(max((fr - L.GLASS_FRESNEL_KNEE) / (1.0 - L.GLASS_FRESNEL_KNEE), 0.0), 1.0) * L.GLASS_REFLECT_MAX
+
+    # a camera over the hood sees the pane at ~40 degrees from its normal, one at the side-front at 50-60: no reflection there
+    assert all(reflectance(a) == 0.0 for a in range(0, 61, 5) if a < 60) and reflectance(60) < 0.002
+    assert 0.0 < reflectance(70) < reflectance(80) < 0.25 and reflectance(89) <= L.GLASS_REFLECT_MAX   # a sheen only along the pane
+
+
+def test_the_paint_coat_is_glossy_but_too_rough_to_mirror_an_area_light_as_a_crisp_rectangle():
+    """A clear coat at roughness 0.03 reflects a rim or strip light on the hood as a crisp pale rectangle (and the faces behind
+    the camera as a mirror image); from ~0.10 the reflection is a soft streak. Above ~0.25 the paint is satin, not gloss."""
+    assert 0.10 <= L.PAINT_COAT_ROUGHNESS <= 0.25
+
+
 def test_the_builder_has_a_visors_param_that_defaults_to_flipped_up_and_documents_it():
     """The builder imports bpy, so its source is read, not imported: `visors` is a param (default 0 = flipped up, because the
     top is folded), the card docstring documents it and the object `<name>_visors`, and the part is one the builder requires and

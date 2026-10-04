@@ -95,9 +95,12 @@ STEER_RATIO = 14.0
 DASH_X = X_WALL_IN                                # fills the cabin between the door panels
 DASH_TOP_Y = (Y_COWL, -0.36)                      # the pad: from the cowl back to the lip
 DASH_TOP_Z = (Z_GLASS, Z_GLASS + 0.025)
-BINNACLE_C = (SEAT_X, -0.335, 1.015)              # centre of the cluster face
-BINNACLE_TILT_DEG = 20.0                          # the cluster face leans back (toward +Y) like the wheel
+BINNACLE_C = (SEAT_X, -0.416, 0.975)              # centre of the cluster glass: lying on the pad at the brow, its near edge 6 mm above the rolled lip
+BINNACLE_TILT_DEG = 70.0                          # the glass faces the driver and UP (its normal is 70 degrees above horizontal, the glass 20 above it),
+                                                  # so the hood over it stays a low hump (the pad's lip is at 0.95, the hood's crest at ~1.01): it reads
+                                                  # as a dash-top binnacle from the hood and front cameras and leaves the driver's chest and face clear
 CLUSTER_SIZE = (0.34, 0.11)                       # glass panel (w, h)
+DASH_GLOW_AT = (SEAT_X, -0.165, 1.045)            # the point light that stands for the cluster's glow on the driver (above the pad, in front of the wheel hub)
 
 # centre stack with the cassette deck
 STACK_X = (-0.15, 0.15)
@@ -119,6 +122,19 @@ SILL_X = X_BELT_OUT - WALL_T / 2                  # centre of the door top (0.80
 SILL_Y = (-0.55, 0.38)
 LOOK_ROAD = (0.0, -30.0, 1.2)
 MIRROR_C = (0.0, -0.26, 1.205)                    # rear-view mirror glass centre (its housing clears the glass by ~1 cm)
+
+# windshield glass shader (convertible_mats.m_glass): clear glass that reflects only at grazing angles, softly. The reflection is
+# the glossy lobe (roughness GLASS_ROUGHNESS, a lamp's reflection is a soft glow, never a sharp white shape) weighted by the Fresnel
+# term of glass (3.4 % at normal incidence) above GLASS_FRESNEL_KNEE (a reflection starts at about 60 degrees to the normal),
+# rising to GLASS_REFLECT_MAX at grazing incidence
+GLASS_ROUGHNESS = 0.30
+GLASS_FRESNEL_KNEE = 0.08
+GLASS_REFLECT_MAX = 0.40
+
+# body paint shader (convertible_mats._paint): a clear coat over a satin base. The coat's roughness decides what an area light
+# does on the hood: 0.03 mirrors it as a crisp pale rectangle (and the faces behind it as a mirror image), 0.10 turns it into a soft
+# streak, 0.14 into a broad sheen that still reads as the gloss of 80s paint, 0.24 is satin
+PAINT_COAT_ROUGHNESS = 0.14
 
 # fixed flush headlamps: a bezel with two clear lenses on the fascia either side of the grille; the spot lights sit at the lens
 HEADLAMP_X = 0.515                                # centre of each lamp (+X driver side, -X passenger side)

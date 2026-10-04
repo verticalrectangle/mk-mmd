@@ -33,6 +33,9 @@ Card keys (all in the prop's local frame)
                `digit_height` 0.052 m, `stroke` 0.0062, two decimal dots; a right-aligned numeral ends at the right
                edge of the last digit, (pitch - digit_width) / 2 = 0.0038 m inside the cell.
                The unlit cells (role vfd_ghost) are a faint hint, ~9 % of a lit cell's displayed brightness.
+               The cluster glass lies on the dash at the brow, facing the driver and UP (cluster/speed/bars normal (0, 0.34, 0.94),
+               their `up` (0, -0.94, 0.34) runs forward up the glass): a text on `car:speed` reads from the driver's seat and
+               from over his shoulder, and the hood over it is a low dark hump (crest 6.6 cm over the dash lip).
   use.anchor   slot (the cassette slot: point, dir of insertion), mirror (rear-view mirror), and the cabin's handles
                and pulls (shifter, handbrake, console_lid, armrest_L/R, door_pull_L/R, lock_pin_L/R)
   colliders    boxes on hidden objects `<name>_col_cushion_<side>`, `_col_back_<side>`, `_col_headrest_<side>`
@@ -60,6 +63,10 @@ prop = "lamps" keys = [[t, v], ...]`):
                 0 flipped up, level with the header and pointing back (the default: under a folded top a real visor is
                 stowed, and a camera over the hood sees the faces), 1 down against the glass. The object can also be
                 hidden by a project key: `[[key]] target = "car_visors" prop = "hide_render" keys = [[0, 1]]`
+
+The windshield is clear glass (a slight cool tint, a soft reflection only at grazing angles: no white patch from an area light).
+The dash pad, its hood and the door-top rolls are a dark charcoal vinyl (`vinyl_dark`); the seats' and doors' inserts are the
+tan `interior`.
 
 Colour roles (`slots` of the prop; a palette slot name, a hex, or a blend "gold:5,rose:3,overlay:2"): body (love),
 lower (muted: the two-tone below the rub strip at z 0.43, and the bumpers), stripe (gold: the pinstripes and cassette stripe), trim (text: bright
@@ -314,9 +321,7 @@ def build_lights(name, coll, root, pal, objs):
         drive_vars(ld, "energy", f"{TAIL_BASE_W:.1f} * (0.3 + 0.7 * tails) + {TAIL_BRAKE_W:.1f} * brake",
                    {"tails": "tails", "brake": "brake"}, root)
     disp = pal.lin("display")
-    cn, up, _ = LAY.CLUSTER_FRAME[0], LAY.CLUSTER_FRAME[1], LAY.CLUSTER_FRAME[2]
-    glow_at = tuple(np.asarray(LAY.BINNACLE_C) + np.asarray(cn) * 0.17 - np.asarray(up) * 0.03)   # clear of the glass
-    o, ld = add(f"{name}_dash_glow", "POINT", root, glow_at, colour=disp, watts=DASH_GLOW_W, radius=0.05)
+    o, ld = add(f"{name}_dash_glow", "POINT", root, LAY.DASH_GLOW_AT, colour=disp, watts=DASH_GLOW_W, radius=0.05)
     drive(ld, "energy", f"{DASH_GLOW_W:.2f} * p", var=("p", root, '["dash_on"]'))
     return [o.name for o in out]
 

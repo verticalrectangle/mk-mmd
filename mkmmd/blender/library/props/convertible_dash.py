@@ -10,8 +10,8 @@ Pure numpy (no bpy); every number the parts agree on comes from `convertible_lay
                                                    mirror, the points the characters look at, the bar graph's 24 cells
 
 Frames. The dash faces +Y (the occupants), so a viewer sees -X on the right of every face built here: a face is
-(right, up, normal) with right x up = normal. The cluster's frame is `CLUSTER_FRAME` of the layout (normal tipped up 20
-degrees, right = -X). The wheel part is built in its own frame (ring in XY, +Z toward the driver, spokes along X, local +Y
+(right, up, normal) with right x up = normal. The cluster's frame is `CLUSTER_FRAME` of the layout (the glass lies on the pad
+at the brow, facing the driver and up: its normal is tipped up 70 degrees, its "up" runs forward and up the glass, right = -X). The wheel part is built in its own frame (ring in XY, +Z toward the driver, spokes along X, local +Y
 down in the car); its base rotation takes local +Z onto the column axis. The cassette part has its origin at the centre of
 its label (the label plane is local z = 0, the shell lies below it). The visors part is built in the car's frame moved so that
 its origin lies on the two pivot rods' common axis (VISOR_ORIGIN; the rods are parallel to X): it turns about its local X.
@@ -22,10 +22,11 @@ brow, the pad) pulled along x with rolled ends. The pad is one plane: it starts 
 the body's cowl lip, and the heights of the face (brow, band, shelf, lower panel) are a table under the pad's top (Z_BROW,
 Z_BAND, Z_SHELF, Z_LOW), so a new DASH_TOP_Z moves the whole face. Its flat regions are exactly flat after subdivision, and
 every panel (wood, glove lid, vents, speaker, defrost) stands on one of them with its back sunk 2-4 mm. The cluster hood
-(the binnacle) is a second cage set into the pad: a pod with a visor lip over the glass, its belly hung from the brow's
-underside; the stack's surround is a third, a loft along y. The cluster panel stack, from the glass outward along the cluster
-normal: the pod's face (-4 mm), the bezel's back (-6 mm), the glass (0), the display elements (+0.6 mm), the card's text
-surface (+1.2 mm), the bezel's top (+3.5 mm), the visor lip (+30 mm). The deck is built the same way on the plane
+(the binnacle) is a second cage set into the pad: a low hump on the pad at the brow (its crest 6.6 cm over the lip: seen from a
+camera over the hood it is a dark wedge, not a box), the glass lying in its face, a lip over the glass's far edge against the
+windshield's glare, and a ramp down to the pad; the stack's surround is a third, a loft along y. The cluster panel stack, from
+the glass outward along the cluster normal: the pod's face (-4 mm), the bezel's back (-6 mm), the glass (0), the display
+elements (+0.6 mm), the card's text surface (+1.2 mm), the bezel's top (+3.5 mm), the hood's lip (+19 mm). The deck is built the same way on the plane
 y = DECK_FACE_Y (glass +0.6 mm, ghost digits +1.2 mm, the text surface +1.8 mm). The cassette slot is centred on the
 inserted cassette body (6.6 mm under DECK_Z), so the cassette passes the rim with 2 mm to spare.
 
@@ -267,26 +268,33 @@ def dash_polygon():
     return a[:, :2], a[:, 2]
 
 
+HOOD_IDX = {"foot": 0, "chin": 1, "face": (2, 3, 4), "lip_in": 5, "lip": 6, "crest": 7, "lip_back": 8, "ramp_mid": 9,
+            "ramp_end": 10, "buried": 11, "bottom": 12}            # the points of hood_polygon
+HOOD_FACE = HOOD_IDX["face"]                                        # the three points that lie flat on the face plane
+HOOD_LIP = 0.0150                                                   # the hood's lip stands this far over the face plane (the bezel's top: 7.5 mm)
+HOOD_END_Y = YC + 0.065                                             # where the hood's back ramp meets the pad (clear of the defrost vents)
+
+
 def hood_polygon():
-    """The binnacle's section (a pod with a visor lip over the glass, set into the pad): ((m, 2) control polygon (y, z)
-    counter-clockwise, (m,) crease weights). Its lower back is buried in the dash."""
+    """The binnacle's section: a low hump on the pad, ((m, 2) control polygon (y, z) counter-clockwise, (m,) crease weights).
+    The glass lies on the pad at the brow (it faces the driver and up, see BINNACLE_TILT_DEG); the hump is the face plane a few
+    millimetres behind it (the three HOOD_FACE points are flat on it), a chin that rests on the brow's crest, a low lip
+    over the glass's far edge (a hood against the windshield's glare) and a ramp that runs down to the pad. Its bottom is
+    buried in the dash."""
     cu, cn = CU[1:], CN[1:]
-    B0 = CC[1:] - HOOD_BACK * cn                                     # on the pod's face plane, at the glass centre
-    face = lambda v: B0 + v * cu                                     # noqa: E731
-    q0 = np.array([YB - 0.020, Z_BROW - 0.010])
-    q1, q2 = np.array([YB + 0.030, Z_BROW - 0.004]), np.array([-0.337, Z_BROW + 0.003])         # the belly: the brow's underside, carried on
-    d = q2 - q1
-    s, v = np.linalg.solve(np.array([d, -cu]).T, B0 - q1)           # the belly line meets the face line at the chin
-    chin = q1 + s * d
-    ft = face(0.088)
-    vis_v = ft + 0.028 * cn + 0.022 * cu
-    crest = vis_v + np.array([-0.040, 0.004])
-    by = _glass_y(1.10) + 0.024                                       # the pod's back wall: 2.4 cm inside the glass
-    pts = [q0, q1, q2, chin, chin + 0.014 * cu, face(-0.040), face(0.020), face(0.065), ft, ft + 0.020 * cn,
-           ft + 0.038 * cn + 0.006 * cu, vis_v, crest, crest + np.array([-0.026, -0.002]), np.array([by + 0.002, 1.098]),
-           np.array([by - 0.006, 1.050]), np.array([by - 0.012, _zp(by - 0.012) + 0.004]), np.array([by - 0.032, _zp(by - 0.032) - 0.025])]
+    B0 = CC[1:] - HOOD_BACK * cn                                     # on the face plane, under the glass centre
+    at = lambda v, w=0.0: B0 + v * cu + w * cn                       # noqa: E731
+    ramp0 = at(0.098, 0.012)                                         # the lip's back: the ramp starts here
+    pad_end = np.array([HOOD_END_Y, _zp(HOOD_END_Y) - 0.004])
+    mid = 0.5 * (ramp0 + pad_end) + np.array([-0.004, -0.006])       # the ramp bows a little, then eases onto the pad
+    pts = [at(-0.064, -0.020), at(-0.064, 0.0),                      # the chin's foot (in the brow), the chin
+           at(-0.040), at(0.020), at(0.066),                         # the face
+           at(0.068, 0.0095), at(0.073, HOOD_LIP), at(0.088, HOOD_LIP + 0.0008), ramp0,    # the lip
+           mid, pad_end,                                             # the ramp
+           np.array([HOOD_END_Y + 0.010, _zp(HOOD_END_Y) - 0.026]),  # buried
+           np.array([YB + 0.025, Z_BROW + 0.014])]                   # the bottom, inside the brow
     cw = np.zeros(len(pts))
-    cw[8], cw[10] = 0.8, 0.3                                         # the visor's underside corner, the lip's nose
+    cw[5], cw[6] = 0.7, 0.3                                          # the lip's inside corner stays crisp, its nose is soft
     return np.array(pts), cw
 
 

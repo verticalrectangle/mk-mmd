@@ -126,13 +126,34 @@ def test_the_binnacle_face_is_the_glass_plane_four_millimetres_behind_it(shells)
     P, cw = D.hood_polygon()
     assert not segments_cross(P) and S.polygon_area(P) > 0
     nrm = D.CN[1:]
-    for k in range(5, 8):                                                           # the three flat face points
+    for k in D.HOOD_FACE:                                                           # the three flat face points
         d = (P[k] - D.CC[1:]) @ nrm
         assert d == pytest.approx(-D.HOOD_BACK, abs=1e-9)
     # the pod covers the whole bezel, and its back is buried in the dash (below the pad plane)
     lo, hi = shells["binnacle"].mesh.bbox()
     assert lo[0] < D.CC[0] - D.CW / 2 - 0.02 and hi[0] > D.CC[0] + D.CW / 2 + 0.02
     assert P[-1][1] < D._zp(P[-1][0]) - 0.02
+
+
+def test_the_binnacle_is_a_low_dark_hump_on_the_pad_not_a_box_over_the_drivers_chest(shells):
+    """From a camera over the hood the pod is what stands between it and the driver: its crest is at most ~6.6 cm above the
+    dash lip, it is the dash's dark vinyl, its ramp runs down to the pad clear of the defrost vents and its lip over the
+    glass is a few millimetres above the bezel."""
+    P, cw = D.hood_polygon()
+    m = shells["binnacle"].mesh
+    assert P[:, 1].max() - L.DASH_TOP_Z[1] < 0.067 and P[:, 1].max() > L.DASH_TOP_Z[1] + 0.05          # low, but a real hump
+    assert np.unique(m.Qm).tolist() == [M["vinyl_dark"]] and np.unique(m.Tm).tolist() in ([M["vinyl_dark"]], [])
+    assert m.is_closed() and m.volume() > 0
+    ramp_end = P[D.HOOD_IDX["ramp_end"]]                                               # the pad point the ramp lands on
+    assert ramp_end[0] == pytest.approx(D.HOOD_END_Y) and ramp_end[1] == pytest.approx(D._zp(D.HOOD_END_Y) - 0.004)
+    assert D.HOOD_END_Y > L.Y_COWL + 0.04 + 0.020                                      # in front of the defrost vents (0.04 deep)
+    lip_rise = (P[D.HOOD_IDX["lip"]] - D.CC[1:]) @ D.CN[1:]
+    assert 0.008 < lip_rise < 0.016                                                    # a few mm over the bezel's top (3.5 mm)
+    assert P[D.HOOD_IDX["crest"], 1] == P[:, 1].max()
+    # a hood-height camera (z 1.27, y -1.5) sees the driver's chest (z 1.0 at y 0.1) over the crest
+    cam, crest = np.array([-1.5, 1.27]), P[np.argmax(P[:, 1])]
+    slope = (cam[1] - crest[1]) / (crest[0] - cam[0])
+    assert crest[1] - slope * (0.1 - crest[0]) < 0.92                                 # the line over the crest passes the chest at z < 0.92
 
 
 def test_the_stack_pod_grows_from_the_faceplate_into_the_dash(shells):
@@ -233,7 +254,7 @@ def test_the_surfaces_follow_the_card_conventions():
         assert s["size"][0] > 0.02 and s["size"][1] > 0.01
         assert all(isinstance(x, float) for x in s["center"] + s["normal"] + s["up"] + s["size"]), name
         if name != "cassette_label":
-            assert n[1] > 0.5                                                          # toward the driver (+Y)
+            assert n[1] > 0.3 and n[2] >= 0.0                                          # toward the driver (+Y) and up (the cluster lies on the pad)
             assert -0.8 < s["center"][0] < 0.8 and -0.7 < s["center"][1] < -0.2 and 0.6 < s["center"][2] < 1.15
     for k in ("cluster", "speed", "bars"):
         s = D.SURFACES[k]
@@ -278,7 +299,7 @@ def test_the_wheel_clears_the_cluster_sight_line_over_the_hub_by_a_finger():
     eye = np.array([L.SEAT_X, 0.30, 1.22])
     p = D.WHEEL_C
     ax = D.WHEEL_AXIS
-    for uv in ((0.0, -0.040), (-0.145, 0.0)):                                         # the bar graph's middle, the fuel gauge
+    for uv in ((0.0, -0.040), (-0.145, 0.0), D.SPEED_UV, (D.SPEED_UV[0] + 0.0417, D.SPEED_UV[1])):    # the bar graph's middle, the fuel gauge, two digits
         tgt = D.CC + uv[0] * D.CR + uv[1] * D.CU
         d = tgt - eye
         t = ((p - eye) @ ax) / (d @ ax)
