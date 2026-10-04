@@ -60,7 +60,15 @@ def resolve_collider(spec, default_arm):
         if t == "sphere":
             return [{"kind": "sphere", "source": src, "tag": tag, "c": spec.get("c", ctr.tolist()),
                      "R": float(spec.get("R", half.max()))}]
-        raise ValueError(f"collider type {t!r} on an object: box cylinder capsule sphere")
+        if t == "ring":                                  # a torus about the object's local Z: capsules round it
+            n = int(spec.get("segments", 16))
+            k = float(sc[0])
+            R, tube = float(spec["radius"]) * k, float(spec["tube"]) * k
+            a = 2 * np.pi * np.arange(n) / n
+            pts = np.stack([R * np.cos(a), R * np.sin(a), np.zeros(n)], 1).tolist()
+            return [{"kind": "capsule", "source": src, "tag": tag, "a": pts[i], "b": pts[(i + 1) % n], "R": tube}
+                    for i in range(n)]
+        raise ValueError(f"collider type {t!r} on an object: box cylinder capsule sphere ring")
     if t == "cylinder" and "center" in spec:
         M = np.eye(4)
         M[:3, 3] = spec["center"]

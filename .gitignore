@@ -4,8 +4,8 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
-dist/
-build/
+/dist/
+/build/
 
 # mk working data
 .mk/

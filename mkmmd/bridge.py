@@ -5,6 +5,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -74,7 +75,7 @@ def run(op, args=None, blend=None, project=None, timeout=None, use_serve=True):
         if not blend.exists():
             raise BlenderError(f"{blend} does not exist")
     job = {"op": op, "args": args or {}, "project": project.to_job() if project else None,
-           "config": {"mmd_addon": cfg["mmd_addon"], "assets": cfg["assets"]}}
+           "config": {"mmd_addon": cfg["mmd_addon"], "assets": cfg["assets"], "python": sys.executable}}
     if use_serve and blend is not None and op in READONLY_OPS:
         sock = serve_socket(blend)
         if sock.exists():

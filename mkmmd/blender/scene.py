@@ -175,3 +175,24 @@ def morph_value(arm, name):
         if sk and name in sk.key_blocks:
             return sk.key_blocks[name].value
     raise KeyError(f"morph {name!r} not found on {arm.name}")
+
+
+def shot_table(sc=None):
+    """The shot table `mk build` stores on the scene: [{name, from, to, cameras: {aspect: camera}}]."""
+    import json
+    sc = sc or bpy.context.scene
+    return json.loads(sc.get("mk_shots", "[]"))
+
+
+def bind_aspect(aspect, sc=None):
+    """Point every shot marker at the given output aspect's camera. Returns False when the scene has no shot table
+    or no cameras for that aspect (its markers are left alone)."""
+    sc = sc or bpy.context.scene
+    by = {s["name"]: s["cameras"].get(aspect) for s in shot_table(sc)}
+    if not any(by.values()):
+        return False
+    for m in sc.timeline_markers:
+        cam = by.get(m.name)
+        if cam and cam in bpy.data.objects:
+            m.camera = bpy.data.objects[cam]
+    return True

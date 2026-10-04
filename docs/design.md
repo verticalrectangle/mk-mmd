@@ -245,6 +245,34 @@ aspect, named cameras, or orbit presets around any target expression relative to
 one JPEG per view, aspect and frame, plus optional contact sheets, strips, A/B pairs against another scene and
 framing guides.
 
+## Building
+
+`mk build` assembles the scene from `mk.toml` in one Blender session and saves it to `[project] blend`. Stages run
+in order and each reads its own sections:
+
+| Stage | Sections | Does |
+|---|---|---|
+| scene | `[scene]` (`start`, `end`, `settle_frames`) | empty scene, fps, frame range including the pre-roll before `frame0` |
+| props | `[[prop]]` (`name`, `card`, `at`, `yaw`, `parent`, `slots`) | library props (`library:car_mockup`, `library:chair`) or card files; their use points and colliders |
+| cast | `[[cast]]` (`name`, `asset` or `pmx`, `armature`, `at`, `yaw`, `parent`, `physics`) | models imported without Bullet (`physics = "mk"`), named, placed |
+| pose | `[pose.<cast>]` | sit on a prop's seat, feet on targets (leg IK), lean / turn / head, arm IK to points, edges and moving keys, finger presets; `[[prop]] attach = "cast:bone"` puts props on bones |
+| motion | `[[motion.<cast>]]` | VMDs on NLA strips: source range, scale or `retime = "beats"`, body masks, blends |
+| perform | `[perform.<cast>]` | gaze events over an idle target, breathing, sway, nod, beat bob, startles, blinks, lids, expressions, lip sync, twitches |
+| sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys |
+| save | | the `.blend` |
+
+The character eases from its rest pose (at `start`) into the base pose over `settle_frames`; secondary motion settles
+in the same pre-roll. Rotations are composed in the armature's axes (the model faces -Y): a bone's posed rotation
+relative to rest is `D_bone = D_parent . q`, and the bone-local key is `R^-1 q R` with `R` its armature-space rest
+rotation, so characters riding a moving vehicle keep correct keys. Gaze blends unit directions from the eyes, so
+targets at any distance (a mirror 0.5 m away, a road 30 m ahead) mix evenly.
+
+Targets anywhere in the build spec are `[x, y, z]` (world), `{prop = "car", point = [..]}` (a prop's local frame),
+`"car:road"` (a prop use point), `"cast:rin"` (eyes) or `"cast:rin.head"` (a bone), or `"camera"`.
+
+Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python and are cached in `<project>/.mk/cache/`
+by a hash of their inputs.
+
 ## Cache
 
 `<project>/.mk/cache/<op>/<key>.{json,npz}` where `key` is a SHA-256 of the op's inputs (arguments, input-file

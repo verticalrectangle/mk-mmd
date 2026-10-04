@@ -94,6 +94,8 @@ def look(args):
                 sc.frame_set(int(f))
             for size in args["sizes"]:
                 r.resolution_x, r.resolution_y = int(size["w"]), int(size["h"])
+                if v["kind"] == "shot" and S.bind_aspect(size["name"], sc):
+                    sc.frame_set(int(f))                 # the markers switch the camera on frame change
                 path = os.path.join(args["out"], f"{v['name']}_{size['name']}_{int(f):05d}.jpg")
                 r.filepath = path
                 bpy.ops.render.render(write_still=True)
