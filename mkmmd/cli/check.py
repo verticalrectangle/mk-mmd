@@ -23,6 +23,8 @@ Metrics (mk check --list for their arguments):
   flicker        temporal noise in rendered frames
   palette        near-black share / distance to a palette in rendered frames
   form           how blocky a prop's modelled shapes are (0 smooth .. 1 boxes; hero props stay under 0.25)
+  strum          the pick against the strings at every stroke of a strum spec: distance at the strike (mm), timing in detail
+  prop_body      a prop's geometry inside the character's collision bodies (mm; a guitar resting on the body)
 
 Examples:
   mk check                                         # the project's checks

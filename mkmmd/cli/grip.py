@@ -1,4 +1,4 @@
-"""mk grip: solve how a character's hand holds a prop (pen, wheel, pinch, rest) and write the result as JSON."""
+"""mk grip: solve how a character's hand holds a prop (pen, wheel, pinch, rest, neck) and write the result as JSON."""
 import argparse
 import json
 import time
@@ -11,10 +11,10 @@ from ..core import jsonx
 from ..project import ProjectError
 from .common import CHECK_FAILED, add_project_arg, emit, get_project, scene_path, UsageError
 
-STYLES = ("pen", "wheel", "pinch", "rest")
+STYLES = ("pen", "wheel", "pinch", "rest", "neck")
 PROP_FLAGS = {"pen": ("length", "radius", "tip", "nib_offset"), "wheel": ("radius", "tube"), "pinch": ("width",),
-              "rest": ("surface",)}                             # prop keys with a flag of their own, per style
-SOLVER_FLAGS = {"pen": ("posture",), "wheel": ("approach", "wrap"), "pinch": ("edge",), "rest": ("face",)}
+              "rest": ("surface",), "neck": ()}                 # prop keys with a flag of their own, per style
+SOLVER_FLAGS = {"pen": ("posture",), "wheel": ("approach", "wrap"), "pinch": ("edge",), "rest": ("face",), "neck": ()}
 EXPORT_VERSION = 1          # bump with the `hand_model` op's output
 
 HELP = """Solve a grip: finger rotations and the hand/prop frame for a character's hand on a prop.
@@ -39,6 +39,10 @@ Styles and the grip frame (prop keys: a prop card's use.grip entry; unknown keys
          pad to the thumb pad, x away from the wrist. --edge M (pads' distance inside the object's edge).
   rest   prop surface = plane. Relaxed hand lying on a plane: frame on the plane below the palm, z = the plane's
          normal, x = the hand's heading. --face palm|back.
+  neck   a fretting hand on a guitar neck: --card (a prop card, or its use.grip entry of type neck, as JSON or @file) with
+         --chord (power, E, A, D, G, C ... or a table) and --fret (the position fret under the index finger) make the prop;
+         or --prop with the solver's own neck problem. Frame: on the board under the position fret's wire, x toward the nut,
+         z out of the board, y = z cross x. The thumb behind the neck, pressing fingers arched on their strings.
 
 A project's mk.toml names the armature (--cast); results are cached by a hash of the hand and the inputs. Exit codes:
 0 ok, 1 the grip misses a gate (a contact gap, penetration or finger clash over its limit; the file is still written),
@@ -53,7 +57,7 @@ Examples:
 
 
 def add(sub):
-    p = sub.add_parser("grip", help="solve a hand grip on a prop (pen, wheel, pinch, rest)", description=HELP,
+    p = sub.add_parser("grip", help="solve a hand grip on a prop (pen, wheel, pinch, rest, neck)", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("style", choices=STYLES)
     p.add_argument("scene", nargs="?", metavar="SCENE.blend", help="default: the project's scene")
@@ -73,6 +77,9 @@ def add(sub):
     prop.add_argument("--tube", type=float, metavar="M", help="wheel: tube radius")
     prop.add_argument("--width", type=float, metavar="M", help="pinch: thickness between the pads")
     prop.add_argument("--surface", help="rest: the surface kind (plane)")
+    prop.add_argument("--card", metavar="JSON|@FILE", help="neck: a prop card (or its neck grip entry)")
+    prop.add_argument("--chord", help="neck: a chord name (power, E, A, D, G, C, Em, Am ...) or a table as JSON")
+    prop.add_argument("--fret", type=int, help="neck: the position fret (under the index finger)")
     how = p.add_argument_group("how to solve")
     how.add_argument("--params", metavar="JSON|@FILE", help="solver keyword arguments as JSON, or @file.json")
     how.add_argument("--posture", metavar="JSON|@FILE", help="pen: writing posture (nib, shoulder, pole, table, ...)")
@@ -115,7 +122,29 @@ def _own(args, style, what):
     return [f for f in what[style] if getattr(args, f) is not None]
 
 
+def _neck_prop(args):
+    """The solver's neck problem from --card, --chord and --fret."""
+    from ..core import fretting as FR
+    card = _json_arg(args.card, "--card")
+    entry = card
+    if "use" in card:                                            # a whole prop card: its neck grip entry
+        entry = next((g for g in card["use"].get("grip", []) if g.get("type") == "neck"), None)
+        if entry is None:
+            raise UsageError("--card has no use.grip entry of type neck")
+    if not (args.chord and args.fret):
+        raise UsageError("neck needs --chord and --fret (or --prop with the solver's own neck problem)")
+    try:
+        chord = json.loads(args.chord) if args.chord.lstrip().startswith("{") else args.chord
+        return FR.solver_prop(entry, chord, args.fret)[0]
+    except (FR.FrettingError, KeyError, ValueError) as e:
+        raise UsageError(f"neck: {e}")
+
+
 def _prop(args):
+    if args.style != "neck" and any(getattr(args, k, None) is not None for k in ("card", "chord", "fret")):
+        raise UsageError("--card, --chord and --fret are options of the neck style")
+    if args.style == "neck" and getattr(args, "card", None):
+        return _neck_prop(args)
     prop = _json_arg(args.prop, "--prop")
     for flag in _own(args, args.style, PROP_FLAGS):
         value = getattr(args, flag)

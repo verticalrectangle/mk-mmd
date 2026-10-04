@@ -1,6 +1,11 @@
 """Target references used across the build spec:
   [x, y, z]                       a world point
   {prop = "car", point = [..]}    a point in a prop's local frame (follows the prop)
+  {cast = "rin", point = [..]}    a point in a cast member's frame: its model root, at `[[cast]] at`, turned by `yaw` (x its
+                                  left, y behind it, z up: the model faces -Y), so a pose, a gaze or a camera written with
+                                  it keeps working when the member is moved to another place in the world. Read where the
+                                  root stands when the stage asks (a `sit` pose moves its member's root before it reads
+                                  its own targets)
   {path = "road:road", s = 640, offset = -6.0 | "fwd1", z = 1.2}   a point beside a set's path: arc length s (m),
                                   offset (m left of the centreline, or a lane name), height above the road
   "car:road"                      a prop use point by name (look / rest / grip / sit / feet / anchor / surface / pose)
@@ -48,6 +53,11 @@ def point(ctx, ref, frame=None):
         return Vector(ref)
     if isinstance(ref, dict) and "prop" in ref:
         return ctx.props[ref["prop"]].world(ref.get("point", (0, 0, 0)))
+    if isinstance(ref, dict) and "cast" in ref:
+        m = ctx.cast.get(ref["cast"])
+        if m is None:
+            raise BuildError(f"target {ref!r}: no cast member {ref['cast']!r}")
+        return m.root.matrix_world @ Vector(ref.get("point", (0, 0, 0)))
     if isinstance(ref, dict) and "path" in ref:
         return path_point(ctx, ref)
     if isinstance(ref, str):

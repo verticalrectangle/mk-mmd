@@ -49,6 +49,7 @@ Blender name (`手首.R`) or their PMX name (`右手首`).
 | Feet do not skate | `foot_slide`, `max = 1.5` (mm per frame) |
 | No broken elbows, knees, necks | `joint_limits`, `max = 0` |
 | A hand really holds or touches something | `contact` between two points or a point and a track (see Grips below) |
+| A worn prop (a guitar) is played in time and stays out of the body | `strum` (the pick meets the strings at every down stroke, `max = 10` mm; `detail.timing` is the strike error in ms), `prop_body` (`max = 8` mm), and `contact` of `bone("wrist.R").tail` against `obj("<cast>_hand.R").loc` (the arm reached every goal, `max = 5`); see design.md: Playing a worn guitar |
 | The subject is in frame in every aspect | `framing` per shot (frames of that shot), `min = 0` |
 | Nothing blocks the subject | `occlusion`, `max = 0.3` |
 | No near-black, stays in palette | `palette` on rendered frames |
@@ -133,6 +134,11 @@ a vehicle, furniture, a set element) follow this loop, and do not call a prop do
   `mmd_vertex_order`); rig.json marks the former and quirks list the latter.
 - Many PMX hair joints are fully locked (zero angular range): Bullet swings such chains as rigid sticks.
 - Never print lyric text anywhere: refer to words as `(line, word)`.
+- A scripted driver is an animation that needs no Python only while its expression is a Blender *simple expression*, and
+  Blender stores at most 255 characters of it (a longer one is silently cut there and then fails). `%`, `**`, `sign` and
+  `copysign` are not simple (`fmod`, `pow`, `floor`, `clamp`, `smoothstep`, `lerp`, `min`, `max`, `abs`, `sin`, `cos`,
+  `radians`, `sqrt`, `if ... else`, `and`, `or` are); check `driver.is_simple_expression` and `is_valid`, and split a long
+  formula over driven custom properties of the object (the hearts prop's `age`, `u` and `pin`).
 
 ## Example `mk.toml`
 

@@ -176,6 +176,39 @@ their meshes with those probes (`static_parts(probes)`), so a lamp is placed on 
 side silhouette laid over the photograph (orthographic render at the photo's scale), and the car beside the photographs at the
 same angle (`review/refcmp.sh` in the test project).
 
+## Worked example: the guitar
+
+`mkmmd/blender/library/props/electric_guitar*.py` (card `library:electric_guitar`): an 80s Strat-type electric with no logo or
+lettering. `electric_guitar_layout.py` holds every number and the card (the contract with the grip, strum and wear code), `_geo`, `_body`,
+`_neck`, `_hw` and `_parts` the meshes (numpy only, so `tests/test_electric_guitar.py` checks the card against them), `_mats` and
+`electric_guitar.py` the Blender side. It builds in 0.7 s and scores 0.014 on `form` (cuboid 0.008; worst parts: the hidden faces of
+`guitar_fretboard` 0.04 and `guitar_neck` 0.02; before the board's underside corners were rolled it was 0.054, that flat sharp underside on top).
+
+**What was measured.** A photograph is flat and has perspective, so the first step was a metric frame: the 20 visible fret wires of a
+full-length front photo, fitted with 12-TET on the known 648 mm scale and a scale that shrinks along the neck, give the nut row, the pixels
+per metre at every height (residual 0.4 mm; a plain scale left 2 mm and put the saddle line 25 px off) and, with the neck's tilt, an image
+rectified to a grid in metres (`tools/rectify.py` in the test project: x across, z along the strings from the saddle line). Read off it
+as landmarks, never traced: body 0.315 across the lower bout and 0.225 at the waist (z 0.125), tail edge z -0.1155, long horn tip z 0.314
+(the 12.6th fret) and short horn 0.2565 (16th) with its bay down to 0.196, the pocket's end at 0.2545, pickups at z 0.159 / 0.100 / 0.045 (the
+bridge one slanted 9 degrees, poles 10.5 mm apart), a 75 x 42 mm bridge plate, knobs on an arc, the jack's 71 x 33 mm boat plate at -36
+degrees; the headstock (a flat photo at 6.19 px/mm) 0.1826 long, 0.088 wide, its six posts on a line 17 degrees off the neck. From the data
+sheet: 22 frets, a 9.5 inch board radius, nut 42 mm and 56 mm at the last wire, neck depth 20.5 mm at the nut and 25 mm at the heel,
+back exponent p = 2.6, a 10-46 set.
+
+| part | how |
+|---|---|
+| body, guard | `electric_guitar_geo.slab`: the outline is a spline through 113 control points, the rim a stack of offset rings (4.5 mm radius, 4 segments, front and back), each face a Delaunay triangulation of the inset outline plus a lattice (horns and bays are not star-shaped: `rounded_panel`'s cap would fold), so a face is any height function: `face` = the forearm bevel (a smoothstep scoop on the bass edge), `back` = the belly cut. The guard is a second slab on `face` whose chamfer shows three plies |
+| neck, headstock | ONE `skin` of 64 rings along z, each the lower half of |2x/w|^p + (v/d)^p = 1 cut under the board: along the neck the mesh IS the card's `section` (the test slices it to 1e-9). Past the nut the ring's centre and width follow the headstock outline (pchip tables) while p grows to 6, so the C runs out into the flat back and the face is the plane the board sits on |
+| board, wires | a skin of radiused rings (rolled edges, walls that continue the neck's curve); 22 wires `sweep`t across along the radius with tapered ends, 1.2 mm proud; the dots are lathes |
+| strings | tubes through the card's nut and saddle points with a graded action (2.4 to 1.6 mm over fret 12, so the saddles stand 4-7 mm over the board plane), coiled 2.5 turns on the posts |
+| hardware | lathes (posts, knobs, strap buttons, plug, screws, poles), `rounded_panel`s (covers, plates, paddles), `sweep`s (saddles, lever), put on the guard or the face with `S.place` |
+| materials | one Principled per colour role, a clear coat on the body, a faint grain on the woods, and for metal a facing-angle glow (a matcap) so it keeps its form in a dark world where it reflects nothing |
+
+Checks used: the rectified photograph beside the orthographic render and the render's outline over it (the body is within 2 mm
+all round, IoU 0.96 with the pick and cord in; the headstock within 2 mm), 3/4 views against a case photograph, and a `silhouette`
+shot (`keep = ["guitar*"]`, `accent = ["guitar_cable"]`) upright and turned 65 degrees about +Y, where the long neck, headstock,
+horns, strap buttons and the hanging cord read at once (`review/sheets/` in `~/Projects/mk-tests/guitar_model`).
+
 ## Reviewing
 
 * Render the prop alone from named views and set it beside the reference photo at the same angle and lens: front 3/4

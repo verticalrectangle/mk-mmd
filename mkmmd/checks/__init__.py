@@ -51,6 +51,7 @@ class Need:
     def __init__(self):
         self.bones, self.families, self.objects, self.exprs, self.colliders = {}, {}, [], [], []
         self.meshes = []
+        self.props = []
         self.camera = False
 
     def bone(self, arm, *names):
@@ -90,14 +91,18 @@ class Need:
             self.meshes.append(spec)
         return self.meshes.index(spec)
 
+    def prop_use(self, *names):
+        """The use points (the card's `use`, stored on the prop's root when the scene was built) of these props."""
+        self.props += [n for n in names if n not in self.props]
+
     def empty(self):
         return not (self.bones or self.families or self.objects or self.exprs or self.colliders or self.meshes
-                    or self.camera)
+                    or self.props or self.camera)
 
     def job(self, frames, out):
         return {"frames": frames, "out": str(out), "bones": self.bones, "families": self.families,
                 "objects": self.objects, "exprs": self.exprs, "camera": self.camera, "colliders": self.colliders,
-                "meshes": self.meshes}
+                "meshes": self.meshes, "props": self.props}
 
 
 # ---------------------------------------------------------------- sampled data
@@ -173,6 +178,13 @@ class Data:
 
     def colliders(self, idx):
         return [it for i in idx for it in self.meta["colliders"][i]]
+
+    def use(self, prop):
+        """A prop's use points (its card's `use`, as built; ask for them with Need.prop_use)."""
+        try:
+            return self.meta["props"][prop]
+        except KeyError:
+            raise CheckError(f"prop {prop!r}: no use points in the sample (rebuild the scene: they are stored when it is saved)") from None
 
     def mesh(self, i):
         """Mesh request i: {"vertices" (n,3), "triangles" (m,3), "object" (m,) index into "names", "names", "exempt"
@@ -316,7 +328,7 @@ def judge(check, value):
 
 def load():
     """Import the metric modules (they register themselves in METRICS)."""
-    from . import camera, form, image, motion  # noqa: F401
+    from . import camera, form, image, motion, props  # noqa: F401
 
 
 def run(checks, ctx, frames_override=None, keep_sample=False):

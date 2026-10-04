@@ -1,4 +1,5 @@
 """Signal helpers and the beat tracker (numpy only)."""
+import functools
 import math
 import subprocess
 
@@ -191,3 +192,143 @@ def vocal_onsets(voc, rel_db_fn, sr=SR, hop_s=0.005):
         if nov[i] == nov[i - 8:i + 9].max() and nov[i] > med + 2.0 * mad and e[min(len(e) - 1, i + 6)] > -35:
             out.append((i * hop_s, float((nov[i] - med) / mad)))
     return out
+
+
+# ---------------------------------------------------------------------------------------------------- note onsets
+ONSET_LO, ONSET_HI = 800.0, 6000.0           # Hz: pick noise and the upper harmonics of plucked / strummed strings
+
+
+def _band_energies(x, sr, lo, hi, n, hop, bands):
+    """((frames, bands) power of the Hann-windowed STFT of x summed over `bands` log-spaced slices of lo..hi, scale):
+    the total over the bands divided by `scale` (3/8 n per bin) is the variance of white noise of the same level in the
+    band. Frame i is centred on sample i * hop; the signal is mirrored at both ends, so a loud start is no pluck."""
+    x = np.asarray(x, np.float64)
+    if len(x) <= n // 2:
+        return np.zeros((0, 1)), 1.0
+    k0 = max(1, int(math.ceil(lo * n / sr)))
+    k1 = max(k0, min(n // 2, int(math.floor(hi * n / sr))))
+    edges = np.unique(np.round(np.geomspace(k0, k1 + 1, bands + 1)).astype(int))
+    fr = np.lib.stride_tricks.sliding_window_view(np.pad(x, (n // 2, n // 2), mode="reflect"), n)[::hop]
+    w = np.hanning(n)
+    out = np.empty((len(fr), len(edges) - 1))
+    for a in range(0, len(fr), 2048):                         # chunks: 70 s at a 2.5 ms hop would be ~0.5 GB at once
+        F = np.fft.rfft(fr[a:a + 2048] * w, axis=1)[:, edges[0]:edges[-1]]
+        out[a:a + 2048] = np.add.reduceat(F.real ** 2 + F.imag ** 2, edges[:-1] - edges[0], axis=1)
+    return out, float((w ** 2).sum() * (edges[-1] - edges[0]))
+
+
+def _flux(B, lag, floor_db, gate=0.0):
+    """Per frame, in dB: the mean over the bands of the half-wave rectified rise of the log energy since `lag` frames
+    ago. Energies are relative to the 99.5th percentile of the total and floored at `floor_db` (the same signal at any
+    level gives the same flux; noise far below the music rises by nothing); frames whose total is below `gate` (power)
+    are silence and have no flux."""
+    tot = B.sum(1)
+    ref = max(float(np.percentile(tot, 99.5)), 1e-30)
+    L = 10.0 * np.log10(B / ref + 10.0 ** (floor_db / 10.0))
+    fl = np.zeros(len(B))
+    if len(B) > lag:
+        fl[lag:] = np.maximum(L[lag:] - L[:-lag], 0.0).mean(1)
+    fl[tot < gate] = 0.0
+    return fl
+
+
+def _local_threshold(fl, hw, step, k):
+    """Rolling median + k * 1.4826 * MAD of the flux over +-hw frames, every `step` frames, interpolated."""
+    pad = np.pad(fl, hw, mode="reflect" if len(fl) > hw else "edge")
+    win = np.lib.stride_tricks.sliding_window_view(pad, 2 * hw + 1)[::step]
+    med = np.median(win, axis=1)
+    mad = np.median(np.abs(win - med[:, None]), axis=1)
+    return np.interp(np.arange(len(fl)), np.arange(len(win)) * step, med + k * 1.4826 * mad)
+
+
+def _subframe(fl, i):
+    """Offset (-0.5..0.5 frames) of the vertex of the parabola through the flux at i - 1, i, i + 1."""
+    den = fl[i - 1] - 2.0 * fl[i] + fl[i + 1]
+    return float(np.clip(0.5 * (fl[i - 1] - fl[i + 1]) / den, -0.5, 0.5)) if den < 0 else 0.0
+
+
+def _steps(sr, hop_s, lag_s):
+    """(hop in samples, hop in s, lag in hops): the frame grid actually used for the requested hop and lag."""
+    hop = max(1, int(round(hop_s * sr)))
+    return hop, hop / sr, max(1, int(round(lag_s * sr / hop)))
+
+
+def band_onsets(x, sr=SR, lo=ONSET_LO, hi=ONSET_HI, n=1024, hop_s=0.0025, lag_s=0.010, bands=8, floor_db=-60.0,
+                gate_db=-70.0, k=2.5, win_s=1.0, min_rise=2.0, min_sep=0.10, start_frac=0.3, start_gap=0.04,
+                latency=None):
+    """When notes are plucked or strummed in a mono signal (a Demucs `other` stem): (times in s from the first sample,
+    strengths in dB), sorted by time.
+
+    The detector is the spectral flux of the band lo..hi: a Hann-windowed STFT (n samples, a frame every hop_s), the
+    power summed into `bands` log-spaced slices, and per frame the mean over the slices of the rise in dB since lag_s
+    ago (half-wave rectified: a pluck lifts every slice by tens of dB, a decaying string by nothing). Levels are
+    relative to the signal's loud parts and floored `floor_db` below them, and frames quieter than `gate_db` (dB
+    re full-scale white noise of the same level in the band) are silence: quiet noise is no onset. A flux peak counts
+    when it exceeds the local median + k MAD of the flux (over win_s, so dense and sparse passages each get their own
+    noise floor) and `min_rise` dB; the strongest peak within min_sep s wins (0.1 s: a strum spreads over up to ~90 ms
+    and is one onset, while 16th notes up to 150 bpm stay apart) and its flux is the strength.
+
+    The time is where the pluck or strum STARTS. A strum is not one step: its notes arrive over 20-90 ms, the energy
+    climbs in steps and the biggest is often the last. From the winning peak the detector walks back through the flux
+    peaks of its cluster (not more than min_sep before it, nor past the midpoint to the previous onset) while each is
+    at least `start_frac` of the winner and within `start_gap` s of the one after it, and reports the earliest. Then
+    the time is refined to a fraction of a frame, and is shifted by the detector's latency: frames are centred, so the
+    flux peaks a few ms BEFORE the first sample of a pluck. `latency` (s, peak time minus pluck start; negative =
+    early) is subtracted from every time: None measures it for these settings on synthetic plucks (onset_latency), 0
+    returns the raw flux peaks."""
+    hop, hs, lag = _steps(sr, hop_s, lag_s)
+    B, scale = _band_energies(x, sr, lo, hi, n, hop, bands)
+    if len(B) < 3:
+        return np.zeros(0), np.zeros(0)
+    fl = _flux(B, lag, floor_db, 10.0 ** (gate_db / 10.0) * scale)
+    thr = np.maximum(min_rise, _local_threshold(fl, int(round(win_s / 2 / hs)), max(1, int(round(0.05 / hs))), k))
+    cand = np.flatnonzero((fl[1:-1] > fl[:-2]) & (fl[1:-1] >= fl[2:]) & (fl[1:-1] > thr[1:-1])) + 1
+    sep, gap = max(1, int(round(min_sep / hs))), max(1, int(round(start_gap / hs)))
+    taken = np.zeros(len(fl), bool)
+    main = []
+    for i in cand[np.argsort(-fl[cand], kind="stable")]:     # strongest first: it claims +-min_sep around itself
+        if not taken[i]:
+            main.append(int(i))
+            taken[max(0, i - sep + 1):i + sep] = True
+    main.sort()
+    start = []
+    for j, p in enumerate(main):
+        first = max(p - sep + 1, (main[j - 1] + p) // 2 + 1 if j else 0)
+        s = p
+        for c in cand[np.searchsorted(cand, first):np.searchsorted(cand, p)][::-1]:
+            if s - c > gap:
+                break
+            if fl[c] >= start_frac * fl[p]:
+                s = int(c)
+        start.append(s)
+    if latency is None:
+        latency = onset_latency(sr, lo, hi, n, hop_s, lag_s, bands, floor_db)
+    t = np.array([(s + _subframe(fl, s) - lag / 2.0) * hs for s in start]) - latency
+    return np.maximum(t, 0.0), fl[np.array(main, int)]
+
+
+@functools.lru_cache(maxsize=16)
+def onset_latency(sr=SR, lo=ONSET_LO, hi=ONSET_HI, n=1024, hop_s=0.0025, lag_s=0.010, bands=8, floor_db=-60.0):
+    """Seconds from the first sample of a plucked note to the flux peak of band_onsets (negative: early). Measured, not
+    modelled: the detector's own flux is run on synthetic plucks (decaying white noise, 60 ms time constant, attacks of
+    0.5, 2 and 5 ms, five start phases within one hop) and the mean of peak time minus start is returned. Frames are
+    centred, so the window's leading edge meets a pluck about n / 2 before it, and the 10 ms difference and the log's
+    steep rise give back part of that: -6.3 ms for the defaults at 44.1 kHz. The spread over other plucks is small
+    (noise bursts -7.0 ms for a 0.5 ms attack .. -4.1 ms for 40 ms; decaying harmonic plucks from 196 Hz to 1.5 kHz
+    -5.4 .. -6.4 ms), so the compensated time is within about 2 ms of the start whatever the attack."""
+    hop, hs, lag = _steps(sr, hop_s, lag_s)
+    rng = np.random.default_rng(0)
+    t = np.arange(int(0.4 * sr)) / sr
+    noise = rng.standard_normal(len(t))
+    start = int(0.3 * sr)
+    lat = []
+    for attack in (0.0005, 0.002, 0.005):
+        burst = noise * np.exp(-t / 0.06) * np.minimum(1.0, t / attack)
+        for phase in range(5):
+            i0 = start + phase * hop // 5
+            x = np.zeros(start + len(burst) + 4 * n)
+            x[i0:i0 + len(burst)] = burst
+            fl = _flux(_band_energies(x, sr, lo, hi, n, hop, bands)[0], lag, floor_db)
+            i = int(np.argmax(fl))
+            lat.append((i + _subframe(fl, i) - lag / 2.0) * hs - i0 / sr)
+    return float(np.mean(lat))

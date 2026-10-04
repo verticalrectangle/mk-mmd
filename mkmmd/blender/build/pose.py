@@ -5,15 +5,30 @@
         the prop); without sit the model stands where the cast stage put it
   sit_offset = [x, y, z]      slides the hip point on the seat (metres, in the seat prop's frame): sit further forward
   feet = "prop:feet" | "floor" | {L = [x, y, z|nan], R = [...]}               ankle targets (leg IK); z omitted / nan =
-        the model's own ankle height above the floor
+        the model's own ankle height above the floor; a foot may also be a target reference (`{cast = "name", point =
+        [x, y, 0]}`: only x and y count), so a standing pose written in the character's own frame moves with it
   lean, turn (deg)            upper body forward lean / turn toward the model's left, on top of the seat's back angle
   lean_share, turn_share = 0.6   the share of each that `upper_body` takes (`upper_body2` takes the rest)
+  hips = {shift = [x, y, z], roll = deg, yaw = deg}   the pelvis of a standing or seated body, eased in over the settle: `shift`
+        slides it (metres, in the character's own frame like `{cast = "name", point}`: x its left, y behind it, z up: a drop
+        bends the knees, the leg IK keeps the feet on `feet`), `roll` drops her left hip (+), `yaw` turns the pelvis toward her
+        left about the vertical through it (keys on `center` and `lower_body`, on top of what a seat asks for)
+  toes = {L = deg, R = deg}   foot yaw about the vertical through each ankle (the leg IK bone), + toward her left: toes in
+        are negative on the left foot and positive on the right
   head = {pitch, yaw, roll, neck = 0.4}   base head rotation (deg, absolute); the neck carries the share `neck` of the
         turn from the chest to the head; perform's gaze adds on top
   [pose.<cast>.hands.<L|R>]   arm IK on the wrist through the twist bones:
      at = target ref, dir = [x, y, z] (hand direction), palm = [x, y, z] (palm normal), pole = target ref
      rest = "prop:edge" (+ along = 0..1, lift = m): the hand lies on an edge use point
      keys = [{t, at, dir, palm}]  moving targets (clip seconds, eased)
+     ride = "<object>" | "cast:NAME.BONE"   the goal FOLLOWS something: an object (a steering wheel), or a bone of this
+        character (NAME is its own name: the chest, `cast:reisen.upper_body2`). The goal and the elbow pole are then
+        bone-parented to the bone (Blender parents to its TAIL) and their keys are computed from the world goal as the bone
+        stands in the settled base pose (frame start + settle: this stage's own spine keys; perform's breathing, sway and
+        lean / turn / tilt keys ride on top), so the hand is where the world target said at the end of the settle and then
+        goes with the chest through every later lean, turn, tilt and sway; two hands riding the same bone never part. A
+        bone of an arm is refused (its IK would depend on itself). `keys` ride too: they are read as world points of the
+        settled pose
      fingers = "relaxed" | "curled" | "fist" | "flat" | "point" | {index = [a, b, c], middle, ring, little, thumb}
         a table gives the degrees of each finger's first three joints toward the palm; fingers and joints left out
         stay straight (mkmmd.core.fingers)
@@ -54,6 +69,7 @@
         scale = [1, 0.75, ...] optional length scale per bone (bunched cloth). Eased in over the settle like the rest of
         the base pose; the bones stay keyed (not simulated), so hair collides with their bodies
 World-axis rotations are keyed with mkmmd.blender.keys (q_child = D_parent^-1 D_want)."""
+import json
 import math
 import os
 import time
@@ -63,11 +79,13 @@ import numpy as np
 from mathutils import Euler, Matrix, Quaternion, Vector
 
 from ...core import fingers as FG
+from ...core import fretting as FR
 from ...core import gripframe as GF
 from ...core import pentrack as PT
 from .. import keys as K
 from .. import scene as S
 from . import BuildError, collection, targets
+from . import wear as WEAR
 
 
 def _q(axis, deg):
@@ -123,6 +141,44 @@ def _reparent(obj, parent):
     obj.matrix_parent_inverse.identity()
     bpy.context.view_layer.update()
     obj.matrix_world = mw
+
+
+def _ride_bone(m, smap, name, side, ref, f1):
+    """`ride = "cast:NAME.BONE"` of a hand: (Blender bone, inverse of the bone's head frame in the world) for the bone as it
+    stands in the settled base pose, frame `f1`, when the pose stage's spine keys exist; the character's own placement is
+    the one of the current frame, like the world targets'. NAME is the posed character and BONE any name of one of its bones
+    that is no part of an arm (the arm IK would depend on itself)."""
+    where = f"pose.{name}.hands.{side}"
+    who, _, bone = ref[5:].partition(".")
+    if who != name or not bone:
+        raise BuildError(f"{where}: ride {ref!r} must be cast:{name}.BONE, a bone of the posed character "
+                         f"(its chest: cast:{name}.upper_body2)")
+    arm = m.arm
+    try:
+        b = S.resolve_bone(arm, bone)
+    except KeyError as e:
+        raise BuildError(f"{where}: ride {ref!r}: {e}")
+    tops = {smap[f"arm.{s}"] for s in ("L", "R") if f"arm.{s}" in smap}
+    p = arm.data.bones[b]
+    while p is not None:
+        if p.name in tops:
+            raise BuildError(f"{where}: ride {ref!r} is part of an arm, whose IK would depend on itself "
+                             f"(ride the chest: cast:{name}.upper_body2)")
+        p = p.parent
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    sc.frame_set(f1)
+    head = arm.evaluated_get(bpy.context.evaluated_depsgraph_get()).pose.bones[b].matrix.copy()
+    sc.frame_set(keep)
+    return b, (arm.matrix_world @ head).inverted()
+
+
+def _foot_point(ctx, ref):
+    """An ankle target of `feet = {L, R}`: [x, y, (z)] in the world, or any target reference (a point in a character's own
+    frame: `{cast = "name", point = [x, y, 0]}`). Only x and y count: the ankle's height is the model's own."""
+    if isinstance(ref, (list, tuple)):
+        return Vector(list(ref[:2]) + [0.0])
+    return targets.point(ctx, ref)
 
 
 def _axes(m):
@@ -358,7 +414,7 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
     wrist = smap[f"wrist.{side}"]
     toward = (_world_head(arm, smap["arm.L"]) + _world_head(arm, smap["arm.R"])) / 2      # the character's side
     ref = h["grip"]
-    track = None
+    track = pick = None
     try:
         if ref == "rest":
             if h.get("track"):
@@ -388,7 +444,19 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
             style, prop, params = GF.card_style(u, hh)
             if track is not None and style != "pen":
                 raise BuildError(f"{where}: a track needs a pen grip, {ref!r} is a {style} grip")
-            if style == "wheel":
+            if u.get("type") == "neck":                          # the neck frame N: on the board under the position fret's wire
+                origin, Rn = FR.neck_frame(u, int(hh["fret"]))
+                N = np.eye(4)
+                N[:3, :3], N[:3, 3] = Rn, origin
+                G = np.array(p.root.matrix_world) @ N
+                info = {"fret": int(hh["fret"]), "chord": hh["chord"]}
+            elif u.get("type") == "strum":                       # the pick's pinch frame: its tip on the strings at the strum centre
+                tip = float(hh.get("tip", u["pick"].get("tip", 0.008)))
+                G = GF.strum_frame(p.world(u["center"]), p.world_dir(u.get("normal", (0, -1, 0))),
+                                   p.world_dir(u.get("along", (0, 0, 1))), tip, hh.get("thumb", "neck"))
+                info = {"thumb": hh.get("thumb", "neck"), "tip_mm": round(tip * 1000, 1)}
+                pick = u["pick"].get("object")
+            elif style == "wheel":
                 G, info = GF.ring_frame(p.world(u["center"]), p.world_dir(u["axis"]), u["radius"],
                                         p.world_dir((0, 0, 1)), GF.clock_of(h, side), toward)
                 info = {"clock": GF.clock_of(h, side), "axis_flipped": info["flipped"]}
@@ -420,6 +488,10 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
     _W, goal = GF.wrist_goal(G, res["target_in_wrist"], arm.data.bones[wrist].length)
     bones = {str(b): tuple(float(x) for x in q) for b, q in zip(res["bones"], res["quats"])}
     out = {"goal": K.mat(goal), "bones": bones, "digest": digest}
+    if pick:                                                     # the object the hand carries (a pick): modelled in the grip frame
+        if pick not in bpy.data.objects:
+            raise BuildError(f"{where}: grip {ref!r}: the card's pick object {pick!r} is not in the scene")
+        out["pick"] = {"object": bpy.data.objects[pick], "T": np.asarray(res["target_in_wrist"], float)}
     if track is not None:
         if "frame_world_quat" not in rep:
             raise BuildError(f"{where}: the pen solve returned no writing orientation (frame_world_quat)")
@@ -428,6 +500,50 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
                            "nib_mm": [round(float(v) * 1000, 1) for v in np.ptp(track[1], axis=0)]}
         out["pen"] = {"prop": p, "T": np.asarray(res["target_in_wrist"], float),
                       "R": PT.quat_matrix(rep["frame_world_quat"]), "track": track}
+    return out
+
+
+def _grip_card(ctx, h):
+    """(prop, use.grip entry) of a hand's `grip = "prop:use"`, or (None, None) for `rest` and unknown names (`_grip` reports those)."""
+    ref = h.get("grip")
+    if not isinstance(ref, str) or ref == "rest":
+        return None, None
+    prop_name, _, use = ref.partition(":")
+    p = ctx.props.get(prop_name)
+    if p is None:
+        return None, None
+    try:
+        return p, p.use("grip", use or None)
+    except BuildError:
+        return p, None
+
+
+def _neck_grips(ctx, m, smap, name, side, h, back, out_dir, pole):
+    """The grips of a fretting hand over time (grip = "guitar:neck"): its `fret` (the position, under the index finger) and
+    `chord` at the start, then `keys = [{t, fret, chord, move}]`: the shape that is in place at clip time t, reached over `move`
+    seconds (default 0.12) before it. A key without `fret` or `chord` keeps the previous one; without `fret` and `chord` in the
+    hand table the first key is the start. Every distinct (fret, chord) is solved once (cached). Returns the first grip with
+    `changes` = [(landing frame, move frames, goal, bones)] and every state's digest in `digest["states"]`."""
+    where = f"pose.{name}.hands.{side}"
+    keys = sorted(h.get("keys") or [], key=lambda k: float(k["t"]))
+    if h.get("fret") is not None and h.get("chord") is not None:
+        states, later = [(None, h["fret"], h["chord"], 0.0)], keys
+    elif keys and keys[0].get("fret") is not None and keys[0].get("chord") is not None:
+        states, later = [(None, keys[0]["fret"], keys[0]["chord"], 0.0)], keys[1:]
+    else:
+        raise BuildError(f"{where}: a neck grip needs `fret` and `chord` (or keys that start with both)")
+    for k in later:
+        _t, fret, chord, _mv = states[-1]
+        states.append((float(k["t"]), k.get("fret", fret), k.get("chord", chord), float(k.get("move", h.get("move", 0.12)))))
+    solved, seq = {}, []
+    for t, fret, chord, move in states:
+        key = json.dumps([fret, chord], sort_keys=True)
+        if key not in solved:
+            solved[key] = _grip(ctx, m, smap, name, side, dict(h, fret=fret, chord=chord), back, out_dir, pole)
+        seq.append((t, move, solved[key]))
+    out = dict(seq[0][2])
+    out["changes"] = [(ctx.frame(t), max(1.0, move * ctx.fps), g["goal"], g["bones"]) for t, move, g in seq[1:]]
+    out["digest"] = dict(seq[0][2]["digest"], states=[g["digest"] for g in solved.values()])
     return out
 
 
@@ -464,14 +580,23 @@ def run(ctx):
             _place_root(m, seat)
             m.seat = seat
         lat, back, up = _axes(m)
-        # hips onto the seat
+        # hips onto the seat; `hips` slides and turns the pelvis of a standing body too
+        hp = spec.get("hips") or {}
+        hip_move = m.root.matrix_world.to_3x3().normalized() @ Vector(hp.get("shift", (0.0, 0.0, 0.0)))   # her frame -> world
+        hip_turn = _q((0, 0, 1), float(hp.get("yaw", 0.0))) @ _q((0, 1, 0), float(hp.get("roll", 0.0)))   # the armature's axes
         if seat:
             hips = (_world_head(arm, smap["leg.L"]) + _world_head(arm, smap["leg.R"])) / 2
-            off = seat["hip"] - hips
+            off = seat["hip"] - hips + hip_move
             K.key_bone_locs(arm, smap["center"], [f0, f1], [(0, 0, 0), tuple(off)])
-            K.key_bone_arm(arm, smap["lower_body"], [f0, f1], [Quaternion(), _q((1, 0, 0), -seat["pelvis"])],
+            K.key_bone_arm(arm, smap["lower_body"], [f0, f1], [Quaternion(), hip_turn @ _q((1, 0, 0), -seat["pelvis"])],
                            interp="BEZIER")
             info["hip_offset"] = [round(v, 4) for v in off]
+        elif hp:
+            if hip_move.length > 0.0:
+                K.key_bone_locs(arm, smap["center"], [f0, f1], [(0, 0, 0), tuple(hip_move)])
+            if hp.get("roll") or hp.get("yaw"):
+                K.key_bone_arm(arm, smap["lower_body"], [f0, f1], [Quaternion(), hip_turn], interp="BEZIER")
+            info["hips"] = {k: hp[k] for k in hp}
         # spine and head
         lean = float(spec.get("lean", 0.0)) + (-seat["back"] if seat else 0.0)
         base, chain = _spine(m, smap, lean, float(spec.get("turn", 0.0)), spec.get("head", {}),
@@ -498,7 +623,7 @@ def run(ctx):
                 fd = p.use("feet", use or None)
                 pts = {s: p.world(fd[s][:2] + [0.0]) for s in ("L", "R")}
             else:
-                pts = {s: Vector(feet[s][:2] + [0.0]) for s in ("L", "R")}
+                pts = {s: _foot_point(ctx, feet[s]) for s in ("L", "R")}
             for s in ("L", "R"):
                 ik = smap.get(f"leg_ik.{s}")
                 if not ik:
@@ -513,9 +638,19 @@ def run(ctx):
                 z_rest = rest.z
                 goal = Vector((tgt.x, tgt.y, z_rest))
                 K.key_bone_locs(arm, ik, [f0, f1], [(0, 0, 0), tuple(goal - rest)])
+        for s, deg in (spec.get("toes") or {}).items():          # foot yaw about the vertical through the ankle
+            if s not in ("L", "R"):
+                raise BuildError(f"pose.{name}.toes: the keys are L and R, not {s!r}")
+            if smap.get(f"leg_ik.{s}") and float(deg):
+                K.key_bone_arm(arm, smap[f"leg_ik.{s}"], [f0, f1], [Quaternion(), _q((0, 0, 1), float(deg))], interp="BEZIER")
+            info.setdefault("toes", {})[s] = float(deg)
         # cloth draped over the seat: chains whose bones point along chosen directions
         if spec.get("drape"):
             info["drape_bones"] = _drape(ctx, m, name, spec["drape"], f0, f1)
+        # props the character wears (a guitar on its strap): on their bone before the hands go to them
+        worn = WEAR.apply(ctx, name, m)
+        if worn:
+            info["wear"] = worn
         # arms
         hands = spec.get("hands", {})
         for side in ("L", "R"):
@@ -527,35 +662,57 @@ def run(ctx):
             wrist = smap[f"wrist.{side}"]
             sh = _world_head(arm, smap[f"arm.{side}"])
             out_dir = lat if side == "L" else -lat
+            gp, gu = _grip_card(ctx, h)
             if h.get("pole") is not None:
                 pole.location = targets.point(ctx, h["pole"])
+            elif gu is not None and gu.get("type") in ("neck", "strum"):
+                pole.location = sh - up * 0.40 + back * 0.08       # a guitarist's elbow hangs under the shoulder
             else:
                 pole.location = sh + out_dir * 0.45 + back * 0.25 - up * 0.30
             pole_w = pole.location.copy()
             if seat and seat["prop"] is not None:          # IK goals ride with the prop
                 for o in (tgt, pole):
                     _reparent(o, seat["prop"].root)
-            if h.get("ride"):                              # ... or with one of its parts (a steering wheel)
-                ob = bpy.data.objects.get(h["ride"])
-                if ob is None:
-                    raise BuildError(f"pose.{name}.hands.{side}: ride object {h['ride']!r} not found")
-                _reparent(tgt, ob)
+            ride_inv = None                                # the frame a bone ride's keys are relative to
+            ride = h.get("ride")
+            if ride is None and gu is not None and gu.get("type") in ("neck", "strum"):
+                ride = gp.root.name                        # a hand on the neck or strings goes with the prop (it is worn: it moves)
+            if ride:                                       # ... or with one of its parts (a steering wheel), or a bone
+                if str(ride).startswith("cast:"):          # of the character itself (its chest): see _ride_bone
+                    ride_bone, head_inv = _ride_bone(m, smap, name, side, ride, f1)
+                    attach_to_bone(tgt, arm, ride_bone, Matrix())
+                    attach_to_bone(pole, arm, ride_bone, head_inv @ Matrix.Translation(pole_w))
+                    ride_inv = Matrix.Translation((0.0, -arm.data.bones[ride_bone].length, 0.0)) @ head_inv
+                    info.setdefault("ride", {})[side] = ride_bone
+                else:
+                    ob = bpy.data.objects.get(ride)
+                    if ob is None:
+                        raise BuildError(f"pose.{name}.hands.{side}: ride object {ride!r} not found")
+                    _reparent(tgt, ob)
             frames, grip, interp = [], None, "BEZIER"
             if h.get("grip"):
-                if h.get("keys"):
-                    raise BuildError(f"pose.{name}.hands.{side}: grip and keys cannot be combined")
-                grip = _grip(ctx, m, smap, name, side, h, back, out_dir, pole_w)
+                neck = gu is not None and gu.get("type") == "neck"
+                if h.get("keys") and not neck:
+                    raise BuildError(f"pose.{name}.hands.{side}: grip and keys cannot be combined (only a neck grip takes "
+                                     f"keys: {{t, fret, chord}})")
+                grip = (_neck_grips if neck else _grip)(ctx, m, smap, name, side, h, back, out_dir, pole_w)
                 if grip.get("pen"):                        # the nib follows a track: a goal on every frame
                     mats, interp = _pen_goals(ctx, m, wrist, h, grip), "LINEAR"
                     probe = np.union1d(probe, ctx.frames[ctx.frames >= f1][::6])
                 else:
-                    mats = [(f1, grip["goal"])]
+                    mats, prev = [(f1, grip["goal"])], grip["goal"]
+                    for fr, mv, goal, _bones in grip.get("changes", []):     # a fretting hand moves to its next shape
+                        mats += [(max(fr - mv, f1 + 0.5), prev), (fr, goal)]
+                        prev = goal
+                    probe = np.union1d(probe, [math.ceil(fr) for fr, *_ in grip.get("changes", [])])   # reach at every landing
+                if grip.get("pick"):                       # the pick rides the wrist in the solved pinch
+                    attach_to_bone(grip["pick"]["object"], arm, wrist, K.mat(grip["pick"]["T"]))
                 info.setdefault("grip", {})[side] = grip["digest"]
                 ctx.log("grip", name, side, grip["digest"])
             else:
                 mats = _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1)
             mats.sort(key=lambda fm: fm[0])
-            par_inv = tgt.parent.matrix_world.inverted() if tgt.parent else Matrix()
+            par_inv = ride_inv if ride_inv is not None else (tgt.parent.matrix_world.inverted() if tgt.parent else Matrix())
             locs, rots = [], []
             for fr, M in mats:
                 Ml = par_inv @ M
@@ -569,8 +726,13 @@ def run(ctx):
             c.influence = 1.0
             fp = h.get("fingers")
             if grip:
-                for b, q in grip["bones"].items():
-                    K.key_bone_quats(arm, b, [f0, f1], [(1, 0, 0, 0), q], interp="BEZIER")
+                seq, prev = [(f1, grip["bones"])], grip["bones"]
+                for fr, mv, _goal, bones in grip.get("changes", []):
+                    seq += [(max(fr - mv, f1 + 0.5), prev), (fr, bones)]
+                    prev = bones
+                for b in grip["bones"]:
+                    K.key_bone_quats(arm, b, [f0] + [f for f, _ in seq], [(1, 0, 0, 0)] + [bn[b] for _, bn in seq],
+                                     interp="BEZIER")
             elif fp:
                 for b, q in _finger_quats(arm, smap, side, fp).items():
                     K.key_bone_quats(arm, b, [f0, f1], [(1, 0, 0, 0), tuple(q)], interp="BEZIER")
@@ -580,6 +742,9 @@ def run(ctx):
         out[name] = info
         ctx.log("pose", name)
     out["attached"] = attach_props(ctx)
+    cables = WEAR.fit_cables(ctx)                              # worn props' leads hang from their jacks to the floor
+    if cables:
+        out["cables"] = cables
     bpy.context.view_layer.update()
     errs = ik_errors(ctx, probe)
     if errs:

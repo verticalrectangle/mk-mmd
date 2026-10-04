@@ -11,6 +11,8 @@ Styles, each `solve_<style>(hand, prop, **params) -> dict`:
   wheel  power grip on a ring (torus): fingers wrap the tube, the thumb opposes
   pinch  thumb-index pad pinch of an object `width` thick
   rest   relaxed hand resting on a plane
+  neck   fretting hand on a guitar-like neck (mkmmd.solvers.grip_neck): the thumb behind the neck, the pressing fingers
+         arched onto their strings, the others hovering
 
 Result: {"style", "side", "bones": {blender_bone: [w, x, y, z]}, "target_in_wrist": 4x4, "report": {...}, ...}.
 `bones` are pose-bone `rotation_quaternion` values, bone-local and relative to rest (what Blender stores; a bone that
@@ -1529,15 +1531,18 @@ def solve_rest(hand, prop, face="palm", seeds=6, workers=None, **tuning):
                    solver={"version": VERSION, "cost": cost, "seeds": int(seeds), "x": x})
 
 
-STYLES = ("pen", "wheel", "pinch", "rest")
+STYLES = ("pen", "wheel", "pinch", "rest", "neck")
 
 
 def solve(style, hand, prop, **params):
-    """Dispatch to solve_<style> ("ring" is the wheel style)."""
+    """Dispatch to solve_<style> ("ring" is the wheel style; `neck` lives in mkmmd.solvers.grip_neck)."""
     name = "wheel" if style == "ring" else style
+    if name == "neck":
+        from . import grip_neck
+        return grip_neck.solve_neck(hand, prop, **params)
     fn = globals().get(f"solve_{name}") if name in STYLES else None
     if fn is None:
-        raise ValueError(f"unknown grip style {style!r} (have pen, wheel, pinch, rest)")
+        raise ValueError(f"unknown grip style {style!r} (have pen, wheel, pinch, rest, neck)")
     return fn(hand, prop, **params)
 
 
@@ -1546,7 +1551,7 @@ def main(argv=None):
     """python -m mkmmd.solvers.grip IN.npz OUT.npz. Returns the exit code: 0 ok, 2 bad input.
 
     IN: the arrays of the Blender op `hand_model` (side, names, parents, heads, tails, rest_rot, V, W, ...) and `spec`,
-    JSON text {"style": pen | wheel | pinch | rest, "prop": {...}, "params": {...}} (solve_<style>'s prop and keyword
+    JSON text {"style": pen | wheel | pinch | rest | neck, "prop": {...}, "params": {...}} (solve_<style>'s prop and keyword
     arguments; `workers` defaults to all cores).
     OUT: `bones` (n,) Blender bone names, `quats` (n, 4) w x y z pose-bone rotation_quaternion values, `target_in_wrist`
     (4, 4), `report` JSON text {"style", "side", "report", "solver", ...} (a pen with a writing posture adds

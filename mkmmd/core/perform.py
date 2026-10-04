@@ -124,6 +124,12 @@ def sway(ts, period=2.5, deg=0.37, phase=0.8):
     return math.radians(deg) * np.sin(2 * math.pi * np.asarray(ts, float) / period + phase)
 
 
+def rock(ts, period=4.0, deg=3.0, phase=0.0):
+    """Slow sideways rock (rad, + toward the model's left): `deg` * sin(2 pi t / `period` + `phase`) of clip time, so it is
+    the same sway at whatever time a clip is cut (keyed tilts only cover their own span)."""
+    return math.radians(deg) * np.sin(2 * math.pi * np.asarray(ts, float) / period + phase)
+
+
 def beat_bob(ts, beats, deg=1.5, attack=0.06, decay=0.22, accent=None):
     """Head nod (rad) on the beats: a quick dip after each beat, easing back; accent (per beat weight) scales it."""
     ts = np.asarray(ts, float)

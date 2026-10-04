@@ -181,8 +181,9 @@ def build(args):
         if st == "save":
             out = ctx.path(args["out"])
             os.makedirs(os.path.dirname(out), exist_ok=True)
-            for p in ctx.props.values():               # checks resolve {type = "prop", prop = name} from these
+            for p in ctx.props.values():               # checks resolve {type = "prop", prop = name} and read use points from these
                 p.root["mk_colliders"] = json.dumps(p.colliders)
+                p.root["mk_use"] = json.dumps(p.card.get("use", {}))
             bpy.context.scene.frame_set(ctx.frame0)
             bpy.ops.wm.save_as_mainfile(filepath=out, compress=True)
             report["save"] = {"out": out}

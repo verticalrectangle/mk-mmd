@@ -350,8 +350,14 @@ def sample(args):
     for e, vals in enumerate(expr_vals):
         out[f"expr_{e}"] = np.array(vals, float)
     np.savez(args["out"], **out)
+    uses = {}
+    for n in args.get("props") or []:
+        root = bpy.data.objects.get(n)
+        if root is None or "mk_use" not in root.keys():
+            raise ValueError(f"prop {n!r}: no prop root with stored use points (rebuild the scene)")
+        uses[n] = json.loads(root["mk_use"])
     reply = {"out": args["out"], "frames": len(frames), "bones": meta_b, "objects": objects, "exprs": exprs,
-             "colliders": resolved_specs, "meshes": meshes}
+             "colliders": resolved_specs, "meshes": meshes, "props": uses}
     if want_cam:
         cams = {n for n in cam_names if n}
         reply["camera"] = {"names": cam_names, "sensor_fit": {n: bpy.data.objects[n].data.sensor_fit for n in cams},

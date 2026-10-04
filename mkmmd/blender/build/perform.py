@@ -18,12 +18,21 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
   lean = [[t, deg], ...], turn = [[t, deg], ...], tilt = [[t, deg], ...]   extra upper-body lean forward / turn
                                      toward the model's left / sideways tilt toward its left over time, eased between
                                      keys and held before the first and after the last, on top of the pose's base (a
-                                     reach that leans in and settles back, a head on a shoulder; hand targets still hold)
+                                     reach that leans in and settles back, a head on a shoulder; hand targets still hold,
+                                     except hands whose pose `ride` is a chest bone: they go with it)
   head_tilt = [[t, deg], ...]        the head rolls toward the model's left (on top of the gaze), keyed the same way
+  rock = {deg, period = 4.0, phase = 0.0}, head_rock = {...}   a periodic sideways lean of the upper body (like `tilt`) and
+                                     roll of the head (like `head_tilt`) toward the model's left: deg * sin(2 pi t / period +
+                                     phase) of clip time, ADDED to the keyed tilts; unlike them it goes on at any clip time
   blink = {per_min = 15, seed = 0, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1)
   sing = {timeline = "audio/timeline.json", lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
   twitch = [{bones = ["ear_root.L", ...] | family = "ears", t = 3.2, deg = 14, axis = [1, 0, 0], dur = 0.22}]
+  strum = {hand = "R", prop = "guitar", rhythm = "onsets:other" | "beats:8" | [t, ...], from = 0.96, to = 3.86, accent = "downbeats",
+           depth = 0.003, span = 0.09, attack = 0.075, timeline = "audio/timeline.json", ...}   or a list of such tables: the
+                                     pick hand (its grip is `grip = "guitar:strum"`) strokes across the strings on the rhythm,
+                                     down strokes down, up strokes up, the pick meeting the first string at each strike time;
+                                     it rests between windows (mkmmd.core.strum; docs/design.md: Perform)
 Everything is composed in the armature's frame (correct for characters riding vehicles), keyed per frame (LINEAR)."""
 import json
 import math
@@ -31,7 +40,7 @@ import zlib
 
 import bpy
 import numpy as np
-from mathutils import Quaternion, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 from ...core import families as FAM
 from ...core import lipsync as LS
@@ -76,6 +85,84 @@ def _sample_pass(ctx, m, look_refs, frames):
         for i, ref in enumerate(look_refs):
             T[i].append(inv @ targets.point(ctx, ref))
     return A, E, T
+
+
+def _strum(ctx, name, m, specs):
+    """[perform.<cast>] strum: key the pick hand's IK goal (relative to the grip the pose stage solved) so that the pick tip
+    strokes across the strings of the guitar-like prop the hand grips: strokes from the timeline's onsets or the beat grid
+    (mkmmd.core.strum.plan), the pick tip's path over them (`path`), turned into goals that move the hand as a rigid body: the
+    tip goes where the path says, part of the sideways travel (`share`) made by turning the hand about the wrist, about an axis
+    along the strings. Returns {side: numbers}."""
+    from ...core import fretting as FR
+    from ...core import strum as SM
+    specs = [specs] if isinstance(specs, dict) else list(specs)
+    sides = {}
+    for sp in specs:
+        sides.setdefault(sp.get("hand", "R"), []).append(sp)
+    out = {}
+    f1 = ctx.start + ctx.settle
+    for side, entries in sides.items():
+        where = f"perform.{name}.strum ({side})"
+        first = entries[0]
+        if side not in m.ik:
+            raise BuildError(f"{where}: the pick hand needs `[pose.{name}.hands.{side}] grip = \"<prop>:strum\"` (no arm IK on that side)")
+        tgt = m.ik[side][0]
+        prop = ctx.props.get(first.get("prop"))
+        if prop is None:
+            raise BuildError(f"{where}: give `prop` = the name of the guitar the hand grips (props: {sorted(ctx.props)})")
+        if tgt.parent is not prop.root:
+            raise BuildError(f"{where}: the hand's goal must ride the prop {prop.name!r} (a grip on its strum zone does by default)")
+        entry = prop.use("grip", first.get("grip", "strum"))
+        a, c, n = (np.asarray(entry.get(k), float) for k in ("along", "across", "normal"))
+        a, c, n = a / np.linalg.norm(a), c / np.linalg.norm(c), n / np.linalg.norm(n)
+        centre = np.asarray(entry["center"], float)
+        neck = next((g for g in prop.card.get("use", {}).get("grip", []) if g.get("type") == "neck"), None)
+        if "sigma" in first:
+            sigma = float(first["sigma"])
+        elif neck is not None:                                 # half the width of the six strings at the strum centre
+            lo, hi = (FR.string_point(neck, s, float(centre @ a)) @ c for s in (6, 1))
+            sigma = abs(float(hi - lo)) / 2.0
+        else:
+            sigma = 0.0225
+        tl = _timeline(ctx, first.get("timeline", "audio/timeline.json"))
+        strokes = sorted((s for e in entries for s in SM.plan(e, tl, ctx.duration)), key=lambda s: s.t)
+        keep = {k: first[k] for k in SM.DEFAULTS if k in first}
+        win = SM.window(strokes, **keep)
+        if win is None:
+            ctx.log("WARNING", f"{where}: no strokes (rhythm and window select no strike time)")
+            out[side] = {"strokes": 0}
+            continue
+        fr = np.arange(max(f1 + 1, math.floor(ctx.frame(win[0]))), min(ctx.end, math.ceil(ctx.frame(win[1]))) + 1)
+        P = SM.path(strokes, [ctx.time(f) for f in fr], sigma, **keep)
+        act = tgt.animation_data.action
+        loc0 = np.array([act.fcurves.find("location", index=i).evaluate(f1) for i in range(3)])
+        q0 = Quaternion([act.fcurves.find("rotation_quaternion", index=i).evaluate(f1) for i in range(4)])
+        R0 = np.array(q0.to_matrix())
+        wrist = S.semantic_map(m.arm)[f"wrist.{side}"]
+        pivot = loc0 - R0 @ np.array([0.0, m.arm.data.bones[wrist].length, 0.0])      # the wrist head: the goal acts on the tail
+        r = centre - pivot
+        r = r - (r @ a) * a
+        kappa = float(np.cross(a, r) @ c)                      # sideways travel of the tip per radian about the wrist
+        share = float(first.get("share", SM.DEFAULTS["share"])) if abs(kappa) > 0.03 else 0.0
+        locs, rots = [], []
+        for u, h in zip(P["u"], P["h"]):
+            th = float(np.clip(share * u / kappa, -0.6, 0.6)) if share else 0.0
+            Rt = np.array(Quaternion(Vector(a), th).to_matrix())
+            tip = centre + u * c + h * n                       # where the path wants the pick tip
+            move = tip - (pivot + Rt @ (centre - pivot))
+            locs.append(tuple(pivot + Rt @ (loc0 - pivot) + move))
+            rots.append(tuple(Matrix((Rt @ R0).tolist()).to_quaternion()))
+        rots = K.continuous(rots)
+        if float(np.dot(rots[0], np.array(q0))) < 0:
+            rots = -rots
+        K.key_vec(tgt, "location", fr, locs, interp="LINEAR", replace=False)
+        K.key_vec(tgt, "rotation_quaternion", fr, rots, interp="LINEAR", replace=False)
+        down = sum(1 for s in strokes if s.dir > 0)
+        out[side] = {"strokes": len(strokes), "down": down, "up": len(strokes) - down, "frames": [int(fr[0]), int(fr[-1])],
+                     "sigma_mm": round(sigma * 1e3, 1), "turn_share": share, "first": [round(s.t, 3) for s in strokes[:6]],
+                     "max_u_mm": round(float(np.abs(P["u"]).max()) * 1e3, 1)}
+        ctx.log("strum", name, side, json.dumps(out[side]))
+    return out
 
 
 def run(ctx):
@@ -151,8 +238,11 @@ def run(ctx):
         startle = PF.startles(ts, spec.get("startle", []))
         lean_x = np.radians(PF.eased_keys(ts, spec.get("lean", [])))
         turn_x = np.radians(PF.eased_keys(ts, spec.get("turn", [])))
-        tilt_x = np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
-        head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
+        rk, hrk = spec.get("rock") or {}, spec.get("head_rock") or {}
+        tilt_x = (np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
+                  + PF.rock(ts, rk.get("period", 4.0), rk.get("deg", 0.0), rk.get("phase", 0.0)))
+        head_tilt_x = (np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
+                       + PF.rock(ts, hrk.get("period", 4.0), hrk.get("deg", 0.0), hrk.get("phase", 0.0)))
         k_head = float(spec.get("head_share", 0.7))
         k_neck = float(spec.get("neck_share", 0.35))
         head_limits = spec.get("head_limits")
@@ -247,6 +337,8 @@ def run(ctx):
                 ax_l = (R.inverted() @ axis).normalized()
                 K.key_bone_quats(arm, b, fr, [tuple(Quaternion(ax_l, math.radians(deg) * a)) for a in amp],
                                  interp="BEZIER", replace=False)
+        if spec.get("strum"):
+            info["strum"] = _strum(ctx, name, m, spec["strum"])
         out[name] = info
         ctx.log("perform", name, json.dumps(info, ensure_ascii=False))
     return out

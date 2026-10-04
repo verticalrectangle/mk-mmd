@@ -87,6 +87,22 @@ def wrist_goal(G, target_in_wrist, bone_length):
     return W, W @ T
 
 
+def strum_frame(center, normal, along, tip, thumb="neck"):
+    """The pinch frame of a pick whose tip rests at `center` on a guitar's strings: x = the pick's direction toward its tip
+    = into the face (minus the face `normal`), z = the squeeze axis from the index pad to the thumb pad (the string
+    direction `along`, toward the nut when the thumb is on the `neck` side, away from it for `bridge`), y = z cross x; the
+    origin (midway between the pads) is `tip` above `center`, since the pick's tip protrudes `tip` beyond the pads."""
+    n, a = unit(normal), unit(along)
+    a = a - (a @ n) * n
+    if np.linalg.norm(a) < 1e-6:
+        raise ValueError("a strum zone's string direction lies along its normal")
+    if thumb not in ("neck", "bridge"):
+        raise ValueError(f"thumb must be \"neck\" or \"bridge\", got {thumb!r}")
+    z = unit(a) * (1.0 if thumb == "neck" else -1.0)
+    x = -n
+    return frame_matrix(x, np.cross(z, x), z, np.asarray(center, float) + n * float(tip))
+
+
 def clock_of(hand, side):
     return float(hand.get("clock", CLOCK[side]))
 
@@ -98,6 +114,10 @@ def card_style(entry, hand):
     pen            style pen, prop {length, radius, tip, nib_offset}; needs hand['posture'] (pen grips are tuned for
                    one hand shape and do not generalise yet)
     pinch          style pinch, prop {width, depth = span, length}; hand key edge
+    neck           style neck, prop = the neck problem (mkmmd.core.fretting.solver_prop) for the hand's `fret` (the position:
+                   the index finger's fret) and `chord` (a name or a table); hand key press (the pad's place behind the wire)
+    strum          style pinch of the card's `pick` {thickness, length, width, tip}: width = thickness, depth = length, length =
+                   width, edge = length - tip (hand key `tip` overrides the card's: how far the pick sticks out of the pads)
     Raises ValueError naming what is missing."""
     kind, name = entry.get("type"), entry.get("name", "?")
 
@@ -131,4 +151,20 @@ def card_style(entry, hand):
         if hand.get("edge") is not None:
             params["edge"] = float(hand["edge"])
         return "pinch", prop, params
-    raise ValueError(f"grip {name!r}: type {kind!r} has no grip style (ring, pen, pinch)")
+    if kind == "neck":
+        from . import fretting as FR
+        if hand.get("fret") is None or hand.get("chord") is None:
+            raise ValueError(f"grip {name!r} (neck): give `fret` (the position, under the index finger) and `chord` "
+                             f"({sorted(FR.CHORDS)} or a table)")
+        return "neck", FR.solver_prop(entry, hand["chord"], int(hand["fret"]), float(hand.get("press", FR.PRESS)))[0], params
+    if kind == "strum":
+        pick = entry.get("pick")
+        if not pick or any(pick.get(k) is None for k in ("thickness", "length", "width")):
+            raise ValueError(f"grip {name!r} (strum): the card needs `pick` {{thickness, length, width, tip}}")
+        length = float(pick["length"])
+        tip = float(hand.get("tip", pick.get("tip", 0.008)))
+        if not 0.0 < tip < length:
+            raise ValueError(f"grip {name!r} (strum): the pick's tip ({tip * 1e3:g} mm) must be inside its length ({length * 1e3:g} mm)")
+        params["edge"] = length - tip
+        return "pinch", {"width": float(pick["thickness"]), "depth": length, "length": float(pick["width"])}, params
+    raise ValueError(f"grip {name!r}: type {kind!r} has no grip style (ring, pen, pinch, neck, strum)")

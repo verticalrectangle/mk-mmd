@@ -97,3 +97,13 @@ def test_yaw_elevation_does_not_depend_on_how_the_head_is_turned():
     q *= np.sign(np.linalg.det(q))                              # a rotation, not a reflection
     f, u, d = np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 1.0]), np.array([0.3, -0.8, 0.5])
     assert PF.yaw_elevation(q @ f, q @ u, q @ d) == pytest.approx(PF.yaw_elevation(f, u, d))
+
+
+def test_rock_is_a_periodic_sine_of_clip_time_toward_the_models_left():
+    ts = np.arange(-2.0, 31.0, 1 / 30)
+    r = PF.rock(ts, period=4.0, deg=3.0)
+    assert r.max() == pytest.approx(np.radians(3.0), abs=1e-3) and r.min() == pytest.approx(-np.radians(3.0), abs=1e-3)
+    assert PF.rock(ts + 4.0, 4.0, 3.0) == pytest.approx(r)                      # the same sway one period later: any cut works
+    assert PF.rock(np.array([1.0]), 4.0, 3.0)[0] == pytest.approx(np.radians(3.0))     # a quarter period in: the peak, + = her left
+    assert PF.rock(ts, 4.0, 3.0, phase=np.pi) == pytest.approx(-r)              # the phase turns the lean around
+    assert not PF.rock(ts, 4.0, 0.0).any()                                      # no amplitude, no motion

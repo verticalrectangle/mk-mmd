@@ -258,6 +258,8 @@ the union of their frames.
 | `flicker` | worst frame's 99th percentile of temporal luma noise | on rendered frames |
 | `palette` | near-black share (or median distance to a palette) | on rendered frames; `rose-pine-moon`, `rose-pine`, `rose-pine-dawn` built in |
 | `form` | boxiness 0..1 of a prop's evaluated geometry: area-weighted over loose parts, `1 - (1 - cuboid)(1 - flat_sharp)` | what a render shows at one frame, in the prop's frame; hero props stay under the default `max` 0.25; `detail.worst_parts` names the objects to fix (see Form below) |
+| `strum` | largest distance (mm) of the pick tip from the nearest string at the strike of a down stroke | replays the project's `[perform.<cast>] strum` on its timeline and measures the scene: the pick object rides the wrist, so the arm's reach is in the numbers; `detail.timing` has the mean, median, p95 and max of when the tip really crosses the first string against the planned strike time (ms), `detail.missed` the strokes it never reached; default `max` 10 (see Playing a worn guitar) |
+| `prop_body` | deepest vertex (mm) of a prop's geometry inside the character's collision bodies | the torso, hips, legs, neck and head bodies of rig.json (not the arms that hold it), over the frames; the bodies are capsules a little fatter than the skin, so a few millimetres is a prop resting on the body; default `max` 8 |
 
 `mk check --list` prints every metric's arguments.
 
@@ -305,6 +307,7 @@ form_exempt = [...] }`; `exclude` removes objects altogether. Calibration on the
 | a car body lofted and subdivided with the shell toolkit (the docs/modelling.md example: long flat flanks, creased shoulder) | 0.08 |
 | café iPod, the highest of the passing set | 0.09 |
 | café mug, chair, table, vase, saucer, plants, page, poster, lights, pen; the MMD characters | 0.00-0.01 |
+| `hearts` (18 inflated hearts, one shared mesh) | 0.00 |
 
 ## Looking
 
@@ -326,9 +329,9 @@ in order and each reads its own sections:
 | props | `[[prop]]` (`name`, `card`, `at`, `yaw` or `rot`, `parent`, `slots`, `card_extra`, `place`, `attach`, `anchor_to`; `scale` and `origin` for PMX props), `[[scatter]]` | library props (`library:<name>`), card files, MMD accessory models (`pmx:PATH` or a registered prop slug, see PMX props); builders get the project palette as slots; their use points and colliders; `bounds` measured on every card; placement rules and clutter (see Placement) with a per-prop report (position, yaw, clearance) |
 | vehicles | `[[vehicle]]` (`prop`, `path`, `lane`, `speed`, `at`, `roll`, `pitch`, `wheelbase`, `steer_ratio`) | a prop drives a set path's lane: position and heading per frame, body roll and pitch, wheels spinning, the steering wheel turning with the curvature |
 | cast | `[[cast]]` (`name`, `asset` or `pmx`, `armature`, `at`, `yaw`, `parent`, `physics`) | models imported without Bullet (`physics = "mk"`), named, placed |
-| pose | `[pose.<cast>]` | sit on a prop's seat (`sit_offset` slides the hips on it), feet on targets (leg IK), lean / turn / head (`lean_share`, `turn_share`, `head.neck` split them over the spine and neck), arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel), finger presets or curl tables, grips (the hand holds a prop's `use.grip` entry or lies on a `use.rest` surface, a pen's nib can follow a track on every frame, see Grips), `[[pose.<cast>.drape]]` (a bone chain such as a skirt pointed along chosen directions, optionally bunched); `[[prop]] attach = "cast:bone"` puts props on bones. The stage reports each arm IK's miss in mm (`ik_error_mm`, the worst over a moving track) and logs a WARNING past 5 mm: a goal beyond the arm's reach leaves the hand short of the prop |
+| pose | `[pose.<cast>]` | sit on a prop's seat (`sit_offset` slides the hips on it), feet on targets (leg IK; a standing pose can be written in the character's own frame, `{cast = "rin", point = [x, y, 0]}`), `hips = {shift, roll, yaw}` (the pelvis slides in the character's frame, her left hip drops, the pelvis turns: soft knees and a weight shift for a standing body, on top of a seat's) and `toes = {L, R}` (foot yaw in degrees, toes in are negative on the left foot), lean / turn / head (`lean_share`, `turn_share`, `head.neck` split them over the spine and neck), arm IK to points, edges and moving keys (targets can ride a prop part such as a steering wheel, or a bone of the character: `ride = "cast:rin.upper_body2"` bone-parents the goal and the elbow pole to the chest, their keys computed from the world goal with the chest as it stands in the settled pose, so clasped hands follow every `lean` / `turn` / `tilt` and never part), finger presets or curl tables, grips (the hand holds a prop's `use.grip` entry or lies on a `use.rest` surface, a pen's nib can follow a track on every frame, see Grips), `[[pose.<cast>.drape]]` (a bone chain such as a skirt pointed along chosen directions, optionally bunched); `[[prop]] attach = "cast:bone"` puts props on bones. The stage reports each arm IK's miss in mm (`ik_error_mm`, the worst over a moving track) and logs a WARNING past 5 mm: a goal beyond the arm's reach leaves the hand short of the prop |
 | motion | `[[motion.<cast>]]` | VMDs on NLA strips: source range, scale or `retime = "beats"`, body masks, blends |
-| perform | `[perform.<cast>]` | gaze events over an idle target, eye-only glances (`glance`: the eyes lead, the head lifts a little, the lids open), breathing, sway, nod, beat bob, startles, keyed upper-body `lean` / `turn` / `tilt` and `head_tilt` (a reach that leans in and settles back, a head on a shoulder), blinks, lids, expressions, lip sync, twitches |
+| perform | `[perform.<cast>]` | gaze events over an idle target, eye-only glances (`glance`: the eyes lead, the head lifts a little, the lids open), breathing, sway, nod, beat bob, startles, keyed upper-body `lean` / `turn` / `tilt` and `head_tilt` (a reach that leans in and settles back, a head on a shoulder; hands that `ride` the chest go with it, any other hand target holds), `rock` / `head_rock` (`{deg, period, phase}`: a periodic sideways lean of the upper body and roll of the head, added to the keyed tilts, so a dreamy sway goes on at any clip time), blinks, lids, expressions, lip sync, twitches |
 | shots | `[[shot]]`, `[[transition]]`, `[[insert]]` | the cut, see Shots; a shot with `plate = true` is not in the cut and exists for an insert or transition; the cameras of shots that effects take frames from are keyed over those frames |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure |
 | text | `[[text]]` (`name`, `on` or `mount` / `at` / `facing` / `box`, `text` or `value`, `font`, `size` or `fit`, `align`, `offset`, `color`, `glow`, `depth`, `reveal`, `blink`, `flicker`, `lyrics`, `kinetic`, `backing`, `outline`, `ink`; see Text) | type on set and prop surfaces: fitted, palette-coloured, a typewriter reveal, a keyed number; geometry nodes with keyed inputs, so EEVEE needs no Python at render time; `lyrics` is one text per sung word, read from the timeline and landing on its onset (arrival, letter spread, weight, drip, tape behind it, all keyed); `ink` is handwriting that appears behind a pen's nib (a ribbon mesh with write times, a keyed clock) |
@@ -355,6 +358,33 @@ neon tube; its floor, walls, `use.rest` and obstacles are what the placement rul
 `SPEED_GRID` / `BAR_GRAPH` surfaces and a cassette, and `lamps` (0..1: headlamp lenses and spot lights with a warm-up
 flicker); its card documents every `use` point.
 
+`electric_guitar` is an 80s Strat-type electric (`card = "library:electric_guitar"`; `[[prop]] slots` recolour by role: `body`, `pickguard`,
+`neck`, `fretboard`, `hardware`, `strings`, `knobs`, `strap`, `cable`, `pick`, `inlay`, `dark`). It stands upright on its tail: Z up along the
+strings toward the nut (z 0.648; the headstock's tip at 0.83), the face toward -Y, X across with the low E at -X, the origin on the body's
+front face at the saddle line (`origin = "bridge"`, the body fills y in [0, 0.045]). Its card has `use.grip` `neck` (frets, strings, the
+neck's superellipse `section`) and `strum` (the pick tip's rest point, the zone between the pickups, the `pick` object in the grip solver's
+pinch frame), `use.anchor` `strap_top` / `strap_bottom` / `jack` / `head`, `use.look`, `use.wear` (`stand`: the chest placement, the
+strap and the cord) and hidden colliders; the cord is the bevelled curve `<name>_cable` and the material `<name>_strap` waits for the
+strap the pose stage builds. Modelling and numbers: docs/modelling.md (Worked example: the guitar), `electric_guitar_layout.py`.
+
+`hearts` is a field of puffy hearts that rise and sway around a point (the maths and the table of its root properties are
+`mkmmd/core/hearts.py`, the options `mkmmd/blender/library/props/hearts.py`): `card = "library:hearts"`, `at` the middle of
+the column they climb, `slots = { count = 16, size = [0.06, 0.16], height = 1.9, clear = 0.3, clear_top = 0.55, spread = 0.65,
+heart = "love" }`. Every heart is an object `<name>_heart<i>` (one shared mesh: a classic two-lobed heart, rounded and
+inflated, its face along -Y, `form` 0.00) with the custom property `mk_heart`, so a silhouette shot makes them its accents:
+`keep = [..., "hearts_heart*"]`, `accent = ["hearts_heart*"]`. The position, turn and scale of every heart are drivers on the
+scene frame that read the root's custom properties (`rise` m/s, `height`, `spread`, `fan`, `clear`, `clear_top`, `depth`,
+`sway`, `spin`, `tilt`, `pop`, `fade`, `amount`, `size_min`, `size_max`; `[[key]]` keys them, `amount` swells the field in or
+out): no handler, no Python at render time (each driver is a Blender simple expression of at most 255 characters, checked at
+build). The hearts rise in two plumes, one each side of the axis, born at even intervals and climbing at one speed, so
+neighbours keep their distance and a flat silhouette never merges two of them. A heart is born at the bottom of the column
+with a 10 % overshooting pop, climbs, sways and turns within `spin` / `tilt` degrees, shrinks away over `fade` seconds at the
+top and is reborn at scale 0, so nothing jumps but the pop; no part of it enters the column |x| < `clear` (the prop's X, the
+width of a figure standing in it) below `clear_top` metres above the root, through any sway, turn or pop, so in a front view no
+heart crosses her; above `clear_top` the column closes over 0.3 m and the hearts arch over her head. In perspective a heart
+behind the column's plane looks nearer the axis than it is: keep `depth` small. Changing `rise` or `height` mid-clip moves
+the hearts (they are a clock rate), the other properties are safe to key.
+
 The character eases from its rest pose (at `start`) into the base pose over `settle_frames`; secondary motion settles
 in the same pre-roll. Rotations are composed in the armature's axes (the model faces -Y): a bone's posed rotation
 relative to rest is `D_bone = D_parent . q`, and the bone-local key is `R^-1 q R` with `R` its armature-space rest
@@ -362,7 +392,10 @@ rotation, so characters riding a moving vehicle keep correct keys. Gaze blends u
 targets at any distance (a mirror 0.5 m away, a road 30 m ahead) mix evenly.
 
 Targets anywhere in the build spec are `[x, y, z]` (world), `{prop = "car", point = [..]}` (a prop's local frame),
-`"car:road"` (a prop use point), `"cast:rin"` (eyes) or `"cast:rin.head"` (a bone), or `"camera"`.
+`{cast = "rin", point = [..]}` (a point in a character's own frame: its model root, at `[[cast]] at` and turned by `yaw`; x its
+left, y behind it, z up. A pose, a gaze or a camera written this way keeps working when the character is moved to another place
+in the world; a hand's `dir` and `palm` stay world directions), `"car:road"` (a prop use point), `"cast:rin"` (eyes) or
+`"cast:rin.head"` (a bone), or `"camera"`.
 
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python and are cached in `<project>/.mk/cache/`
 by a hash of their inputs.
@@ -462,6 +495,8 @@ solver source).
 | `wheel` | `type = "ring"`: `center`, `axis` (prop frame), `radius`, `tube` | origin on the tube's centreline where the palm sits, x radially outward, y tangent (counter-clockwise seen from +z), z the ring axis | `approach` (deg, palm side in the section plane, 0 = +x, 90 = +z), `wrap` (+1 / -1) |
 | `pinch` | `type = "pinch"`: `width` (thickness between the pads), `span` (depth, becomes `depth`), `length`, `center`, `axis` (along the strap), `normal` (outward) | midway between the pads, z from the index pad to the thumb pad, x away from the wrist, y = z cross x | `edge` (pads' distance inside the edge, 4 mm) |
 | `rest` | `use.rest` entry (`edge` with `a`, `b`, `normal`, or a `plane` with `center`) | origin on the plane below the palm centre, z the normal, x the hand's heading | `face` (`palm` or `back`) |
+| `neck` | `type = "neck"`: `frame`, `thumb`, `frets`, `strings`, `section`, `fret_height` (see Playing a worn guitar) | on the board's centre line under the position fret's wire, x toward the nut, z out of the board, y = z cross x | `fret`, `chord` (name or table), `press`; `keys = [{t, fret, chord, move}]` change the shape over time |
+| `pinch` (a pick) | `type = "strum"`: `center`, `along`, `across`, `normal`, `pick = {object, thickness, length, width, tip}` | the pinch frame with x into the face, z along the strings (`thumb = "neck"` or `"bridge"`), origin `tip` above `center` | `tip`, `thumb`; the pick object rides the wrist |
 
 `pen` was tuned on one hand shape (Reisen's): the other two models tried, Una and Maki, also solve within the gates
 (gaps 0.2-0.6 mm; Maki's thumb sits at the solver's bounds) but a third hand can still miss them (the CLI then exits 1).
@@ -513,6 +548,76 @@ result minus those) to the output `.npz`; exit code 0 ok, 2 bad input.
 Frames: `mkmmd/core/gripframe.py` builds the grip frame in the world (`ring_frame`, `surface_frame`, `pinch_frame`) and
 the wrist goal (`wrist_goal`); it is numpy only, so the maths is tested without Blender. Check a grip with `contact`
 checks between a fingertip bone's tail and the prop (see AGENTS.md).
+
+## Playing a worn guitar
+
+A standing character can wear a prop on a bone (a guitar on its strap), fret its neck and strum its strings in time with the
+song. The mechanism is generic: the prop's card says where it is worn and where the hands go (`use.wear`, `use.grip` of type
+`neck` and `strum`, `use.anchor`), the project gives the numbers (a chord and fret, the times, the rhythm). The library prop
+`electric_guitar` (frame and card: its module docstring) is the first card that does.
+
+```toml
+[[prop]]
+name = "guitar"
+card = "library:electric_guitar"
+wear = "reisen"                      # or {cast = "reisen", neck_deg = 30, yaw_deg = 5, at = [x, y, z]}: the card's numbers, overridden
+
+[pose.reisen]                        # standing: no `sit`; the elbows hang under the shoulders by default
+[pose.reisen.hands.L]
+grip = "guitar:neck"                 # fretting hand: thumb behind the neck, pressing fingers arched on their strings
+fret = 3                             # the position: the fret under the index finger (open chords: 1)
+chord = "power"                      # power power5 E A D G C Em Am, or a table {index = [6, 0], ring = [5, 2]} = finger -> [string, frets above `fret`]
+keys = [{ t = 1.92, fret = 5 }, { t = 3.86, fret = 1, chord = "E" }]   # the shape in place at t, reached over `move` s (0.12) before it
+[pose.reisen.hands.R]
+grip = "guitar:strum"                # the pick pinched between thumb and index, its tip on the strings; `thumb = "neck" | "bridge"`, `tip`
+
+[perform.reisen]
+strum = { hand = "R", prop = "guitar", rhythm = "onsets:other", from = 0.96, to = 15.0, accent = "downbeats" }
+```
+
+**Wearing** (`mkmmd/core/wear.py`, `mkmmd/blender/build/wear.py`, run by the pose stage before the arms). A card's `use.wear` entry
+names the semantic `bone` (the chest), the prop's `pivot` (a point of its own frame) and where that point sits, `at` (metres from
+the bone's head in the character's axes: x her left, y behind her, z up) for the `ref` body, each coordinate scaled by the
+wearer's rig.json `measure` named in `scale` over the reference's; `neck_deg` (the prop's +z axis, a guitar's neck, is brought to
+her left and raised that far above horizontal), `yaw_deg` (swung toward her front) and `roll_deg` (the face turned up). The prop
+root is bone-parented there. `strap = {top, bottom, over, width, thickness, material}` builds the band `<prop>_strap` from the
+card's anchors over her shoulder joint (`over`, a semantic bone) round her back to the other anchor, riding her torso at the
+radius of her chest's collision body plus a standoff (`core.wear.strap_path`); `cable = {object, anchor, radius}` re-hangs the
+curve `<prop>_cable` from the jack anchor to the floor under her (`core.cable.hang`: out of the plug, a lazy S, then lying on the
+floor along `trail`, default behind and to her right), unparented so its lower end stays and hooked at the jack with a smooth
+falloff (`follow`, 0.35 m) so its top follows the guitar. The numbers decide whether both arms reach: the build logs a WARNING for a
+wrist that ends more than 5 mm short of a goal, at the settle and at every keyed chord.
+
+**Hands.** The neck entry (`frame` along / across / normal, `thumb`, `frets`: the board-surface point under every wire with the nut
+first, `strings`: nut and bridge points on each axis, low E first, `section`: the neck solid as width, depth and the superellipse
+exponent `p` of its back, `fret_height`) feeds the `neck` solver style (`mkmmd/solvers/grip_neck.py`): frame N on the board under
+the position wire (x toward the nut, z out of the board, y = z cross x); each pressing finger's pad on its string a share (`press`,
+0.3) of the way behind its wire, within a few millimetres across it, the distal phalanx steep onto the board, the thumb pad on the
+neck's back near the fingers, no skin in the neck, the other fingers hovering over the strings, no finger in another
+(`mkmmd/core/fretting.py`: chord tables, targets). Every distinct (fret, chord) is solved once and cached (3-8 s on Reisen,
+contacts within 0.5 mm); a keyed change moves the wrist goal and every finger bone from one solved shape to the next. The strum
+entry (`center`, `along`, `across`, `normal`, `pick = {object, thickness, length, width, tip}`) is solved as a `pinch` of the
+pick: the grip frame has x into the face, z along the strings (`core.gripframe.strum_frame`), the pick object (modelled in that
+frame) is bone-parented to the wrist. Hands that grip a `neck` or `strum` entry ride the prop (`ride` defaults to its root).
+`mk grip neck --card CARD.json --chord power --fret 3` solves one without a build.
+
+**Strumming** (`[perform.<cast>] strum`, a table or a list of tables; `mkmmd/core/strum.py`). `rhythm` is `"onsets:<stem>"` (the
+timeline's `onsets`, see Timeline: `mk timeline onsets`), `"beats:N"` (N strokes per bar: 8 = eighths) or a list of times; `from`
+and `to` (clip seconds) pick the strikes played. A strike on a beat goes down, one on the offbeat up, an off-grid one alternates;
+strikes closer than `min_gap` (0.09 s) are one stroke; `accent = "downbeats"` (or `"beats"`, or times) makes those strokes
+wider (`accent_gain` 1.25) and deeper, up strokes are `up_scale` (0.85) of a down stroke. The pick tip meets the first string at
+the strike time, sweeps the strings at constant speed in `attack` (0.075 s), and runs up and follows through over `lead` and
+`follow` (0.09 s) to the far side, `span` (0.09 m) in all, pressed `depth` (0.003 m) into the strings and `lift` (0.014 m) clear
+of them at the ends; alternating strokes share their turn-round, so eighths are one continuous swing, and a stroke in the same
+direction returns over the strings lifted. After a pause longer than `approach + retreat` (0.3 s each) the hand goes back to rest
+(the tip on the string plane at the strum centre: the grip) and comes in again. The path is turned into IK goals relative to the
+grip, keyed every frame: the hand moves as a rigid body and turns about the wrist about an axis along the strings for `share`
+(0.6) of the sideways travel. `plan` and `path` are numpy only and tested without Blender; the `strum` check replays the plan on the
+timeline against the scene.
+
+Checks to keep: `joint_limits` (the default elbow pole is under the shoulder; give `pole = [x, y, z]` per hand for another),
+`contact` between `bone("wrist.R").tail` and `obj("<cast>_hand.R").loc` (the IK reached its goal at every frame, `max` 5 mm),
+`strum` (distance at the down strokes, timing), `prop_body` (the guitar against her body), `form` on the prop.
 
 ## Shots
 
@@ -906,6 +1011,22 @@ downbeats from kick accents plus harmonic change (chords change on beat 1; kicks
 on the vocal stem and snapped to sung onsets; Whisper's line breaks are then corrected on the song's line grid (line
 starts recur every one or two bars: merged lines are split at the grid, mid-line breaks merged). Lines and words are
 numbered from 1; tools refer to words as `(line, word)` and never print their text.
+
+`onsets` (`{"other": [t, ...]}`, clip seconds, sorted) are the moments notes are plucked or strummed in a Demucs stem,
+`onsets_meta` its `band`, `latency_ms` and per-onset `strength` (dB). `analyze` stores the `other` stem (guitars and keys).
+The detector (`signal.band_onsets`, numpy only) is the spectral flux of the stem in 800-6000 Hz (pick noise and string
+harmonics; bass, kick and hi-hat fall outside): a 1024-sample Hann STFT every 2.5 ms, the power in 8 log-spaced slices,
+per frame the mean rise in dB over the last 10 ms (half-wave rectified; levels relative to the stem's loud parts, floored
+60 dB below; frames under -70 dBFS are silence). A flux peak is an onset when it exceeds the local median + 2.5 MAD (1 s
+window) and 2 dB, and the strongest within 0.1 s wins (a strum is one onset). The time is where the strum STARTS: strums
+climb in steps and the biggest is often the last, so from the winner the detector walks back through the peaks that are at
+least 0.3 of it and within 40 ms of each other and takes the earliest, then refines it to a fraction of a frame and
+subtracts the latency: centred frames put the flux peak about 6 ms before a pluck's first sample, measured by running
+the same flux on synthetic plucks (`signal.onset_latency`), not set by hand. `mk timeline onsets [--stem S] [--lo HZ
+--hi HZ] [--timeline FILE] [--context 20]` recomputes a stem into an existing timeline and changes nothing else in the
+file: the song span is read again the way `analyze` read it (the `audio` block), so the stem cache hits (a `--context`
+that does not reproduce the recorded window is refused). It prints numbers only: the count, onsets per beat, and the
+offset to the 8th-note grid of the beats (median, MAD, p95 in ms; 8ths without an onset; onsets between 8ths).
 
 ## Cache
 
