@@ -57,10 +57,32 @@ def _send(sock_path, job, timeout):
     return json.loads(buf.decode("utf-8"))
 
 
+def empty_blend(cfg):
+    """A factory-default empty scene that jobs without a .blend start from. Never start job Blenders with
+    --factory-startup: without the user's preferences Blender sees mmd_tools as disabled and its extension sync
+    removes the extension's wheels (opencc), which breaks PMX import in every Blender running at the time. This file
+    is made once, by a Blender whose extension and config folders point at a scratch place."""
+    path = CFG.cache_dir() / "empty.blend"
+    if path.exists():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"empty.{os.getpid()}.blend")
+    scratch = CFG.cache_dir() / "factory"
+    env = dict(os.environ, BLENDER_USER_EXTENSIONS=str(scratch / "extensions"), BLENDER_USER_CONFIG=str(scratch / "config"),
+               BLENDER_USER_SCRIPTS=str(scratch / "scripts"))
+    expr = ("import bpy; bpy.ops.wm.read_homefile(use_factory_startup=True, use_empty=True); "
+            f"bpy.ops.wm.save_as_mainfile(filepath={str(tmp)!r}, compress=False)")
+    r = subprocess.run([cfg["blender"], "-b", "--factory-startup", "--python-expr", expr], env=env,
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0 or not tmp.exists():
+        raise BlenderError(f"could not create {path}: {(r.stdout + r.stderr)[-1500:]}")
+    os.replace(tmp, path)
+    return path
+
+
 def blender_command(job_path, result_path, blend=None, cfg=None):
     cfg = cfg or CFG.load()
-    cmd = [cfg["blender"], "-b"]
-    cmd += [str(blend)] if blend else ["--factory-startup"]
+    cmd = [cfg["blender"], "-b", str(blend or empty_blend(cfg))]
     cmd += ["-y", "--python-exit-code", "3", "--python-expr", BOOT.format(root=str(ROOT)), "--",
             str(job_path), str(result_path)]
     return cmd
