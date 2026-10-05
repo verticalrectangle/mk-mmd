@@ -247,15 +247,19 @@ def _drape(ctx, m, name, specs, f0, f1):
 
 def _finger_quats(arm, smap, side, preset):
     """Bone -> local quaternion curling each finger toward the palm about its own flexion axis (finger direction x
-    palm normal, from the rest pose). `preset`: a name of mkmmd.core.fingers.PRESETS or a table {finger: [a, b, c]}."""
+    palm normal, from the rest pose), its base joint first turned about the palm normal by its spread (away from the
+    middle finger; the thumb away from the index). `preset`: a name of mkmmd.core.fingers.PRESETS or a table
+    {finger: [a, b, c], spread}."""
     from ...core import bonemap
     try:
-        angles = FG.curls(preset)
+        angles, spread = FG.curls(preset), FG.spreads(preset)
     except ValueError as e:
         raise BuildError(str(e))
     if not all(f"{k}.{side}" in smap for k in ("wrist", "index1", "little1")):
         return {}
     palm = palm_normal(arm, smap, side)
+    base = {f: _world_head(arm, smap[f"{sems[0]}.{side}"]) for f, sems in bonemap.FINGERS.items()
+            if f"{sems[0]}.{side}" in smap}
     out = {}
     for name, sems in bonemap.FINGERS.items():
         bones = [smap[f"{s}.{side}"] for s in sems if f"{s}.{side}" in smap]
@@ -263,9 +267,19 @@ def _finger_quats(arm, smap, side, preset):
             continue
         d = (_world_head(arm, bones[1]) - _world_head(arm, bones[0])).normalized()
         axis = d.cross(palm).normalized()
-        for b, deg in zip(bones[:3], angles[name]):
+        turn = Quaternion()
+        ref = "index" if name == "thumb" else "middle"
+        if spread.get(name) and ref in base and name != ref:
+            away = base[name] - base[ref]                     # from the reference finger's base to this one's, in the palm
+            away = away - away.dot(palm) * palm
+            if away.length > 1e-6:
+                spin = d.cross(away.normalized())
+                if spin.length > 1e-6:
+                    turn = Quaternion(spin.normalized(), math.radians(spread[name]))
+        for i, (b, deg) in enumerate(zip(bones[:3], angles[name])):
             B = K.rest_rot(arm, b)
-            out[b] = (B.inverted() @ _q(axis, deg).to_matrix() @ B).to_quaternion()
+            R = (turn if i == 0 else Quaternion()).to_matrix() @ _q(axis, deg).to_matrix()
+            out[b] = (B.inverted() @ R @ B).to_quaternion()
     return out
 
 
@@ -290,14 +304,16 @@ def _pole_angle(arm, base, fore, fold):
     return -angle if x_axis.cross(projected).dot(tail - head) > 0 else angle
 
 
-TWIST_SHARE = 0.5          # share of the hand's roll the forearm twist bone takes (the wrist takes the rest)
+TWIST_SHARE = 1.0          # share of the hand's roll the forearm twist bone takes: all of it (a forearm pronates, a wrist
+                           # only bends; MMD rigs spread the twist bone's roll down the forearm), so a sleeve turns with the
+                           # hand instead of the hand turning inside the cuff
 
 
 def _arm_ik(ctx, m, smap, side):
     """The arm rig. The goal empty `<name>_hand.<side>` is the wrist bone's tail and orientation. A position-only IK on
     the forearm (chain up to the upper arm) puts the forearm's tail where the goal says the wrist's head is and bends the
     elbow toward the pole (`_pole_angle`: the pole is where the elbow points, on either side of any rig); the wrist copies
-    the goal's rotation; the forearm twist bone, when the rig has one, rolls TWIST_SHARE of the way with the hand.
+    the goal's rotation; the forearm twist bone, when the rig has one, rolls with the hand (TWIST_SHARE).
     (A single IK that also matched the hand's rotation let the solver swing the elbow away from the pole.)
     Returns (goal, pole, [(bone, constraint name), ...]): the constraints whose influence the settle ramps up."""
     arm = m.arm
@@ -335,6 +351,11 @@ def _arm_ik(ctx, m, smap, side):
     r.target = tgt
     r.owner_space = r.target_space = "WORLD"
     cons.append((wrist, r.name))
+    at = arm.pose.bones[wrist].constraints.new("COPY_LOCATION")   # the wrist stays on the forearm's end: rigs put it a
+    at.name = "mk_wrist_on_arm"                                    # fraction of a millimetre off the twist bone's axis,
+    at.target, at.subtarget, at.head_tail = arm, fore, 1.0          # so rolling that bone would slide the hand off it
+    at.owner_space = at.target_space = "WORLD"
+    cons.append((wrist, at.name))
     if f"arm_twist.{side}" in smap:
         tb = arm.pose.bones[smap[f"arm_twist.{side}"]]
         tb.lock_ik_x = tb.lock_ik_z = True
@@ -480,6 +501,126 @@ def _pen_posture(ctx, m, smap, side, h, positions, pole, where):
     return PT.posture(user, positions, (-back.x, -back.y, 0.0), shoulder)
 
 
+WHEEL_APPROACHES = (0.0, 30.0, 60.0, 90.0)       # palm on the rim's outer and driver sides: the grips a driver uses (deg)
+ELBOW_DOWN = 0.05                                 # m: a chosen elbow is at least this far below its shoulder ...
+ELBOW_STEP = 3.0                                  # deg: ... and not inward of it; the elbow circle is tried in these steps
+WRIST_BEND_WARN = 35.0                            # deg: a wheel hand bent more than this against its forearm is a WARNING
+
+
+def _elbow(S, W, P, a, b):
+    """Where the arm IK puts the elbow of an arm from shoulder S to wrist W (upper arm a, forearm b): in the plane of S, W
+    and the pole P, on P's side; the straight arm's when W is out of reach. None for a degenerate pole."""
+    sw = W - S
+    c = float(np.linalg.norm(sw))
+    if c < 1e-6:
+        return None
+    u = sw / c
+    if c >= a + b:
+        return S + a * u
+    v = (P - S) - float((P - S) @ u) * u
+    n = float(np.linalg.norm(v))
+    if n < 1e-9:
+        return None
+    ca = (a * a + c * c - b * b) / (2.0 * a * c)
+    al = math.acos(max(-1.0, min(1.0, ca)))
+    return S + a * (math.cos(al) * u + math.sin(al) * (v / n))
+
+
+def _elbows(S, W, a, b, up, out):
+    """Every elbow the arm can have for a wrist at W (ELBOW_STEP apart round the shoulder-wrist line) that is not inward
+    of the shoulder (along `out`) and at least ELBOW_DOWN below it (along `up`); the straight arm's when W is out of
+    reach (the IK then stretches the arm toward it); [] when no elbow is allowed."""
+    sw = W - S
+    c = float(np.linalg.norm(sw))
+    if c < 1e-6:
+        return []
+    u = sw / c
+    if c >= a + b:
+        E = S + a * u
+        return [E] if float((E - S) @ out) >= 0.0 and float((E - S) @ up) <= -ELBOW_DOWN else []
+    p = np.cross(u, up)
+    if np.linalg.norm(p) < 1e-6:
+        p = np.cross(u, out)
+    p /= np.linalg.norm(p)
+    q = np.cross(u, p)
+    al = math.acos(max(-1.0, min(1.0, (a * a + c * c - b * b) / (2.0 * a * c))))
+    out_l = []
+    for f in np.radians(np.arange(0.0, 360.0, ELBOW_STEP)):
+        E = S + a * (math.cos(al) * u + math.sin(al) * (math.cos(f) * p + math.sin(f) * q))
+        if float((E - S) @ out) >= 0.0 and float((E - S) @ up) <= -ELBOW_DOWN:
+            out_l.append(E)
+    return out_l
+
+
+def _bend(E, W, hand_dir):
+    """Degrees between the forearm from elbow E to wrist W and the hand's direction (the joint_limits check's `wrist`)."""
+    d = (W - E) / np.linalg.norm(W - E)
+    return math.degrees(math.acos(float(np.clip(d @ hand_dir, -1.0, 1.0))))
+
+
+def _arm_frame(ctx, m, smap, side, p, out_dir):
+    """The arm in the frame of the prop `p` it grips, as the settled pose has it (frame start + settle: the seat, the lean):
+    shoulder, pole, upper arm and forearm lengths, the hand's direction (wrist head -> middle finger base) in the wrist
+    bone's own frame, up and outward (`out_dir`, world) in the prop's frame, and the matrices between the prop's frame and
+    the world NOW (the grip frame and the pole are placed now)."""
+    arm, sc = m.arm, bpy.context.scene
+    keep = sc.frame_current
+    now = p.root.matrix_world.copy()
+    sc.frame_set(ctx.start + ctx.settle)
+    dg = bpy.context.evaluated_depsgraph_get()
+    ae = arm.evaluated_get(dg)
+    to_prop = p.root.evaluated_get(dg).matrix_world.inverted()
+    shoulder = to_prop @ (ae.matrix_world @ ae.pose.bones[smap[f"arm.{side}"]].head)
+    pole = to_prop @ m.ik[side][1].evaluated_get(dg).matrix_world.translation
+    R = to_prop.to_3x3().normalized()
+    sc.frame_set(keep)
+    hd = {k: np.array(_world_head(arm, smap[f"{k}.{side}"])) for k in ("arm", "elbow", "wrist", "middle1")}
+    B = np.array((arm.matrix_world @ arm.data.bones[smap[f"wrist.{side}"]].matrix_local).to_3x3().normalized())
+    hand = hd["middle1"] - hd["wrist"]
+    return {"S": np.array(shoulder), "P": np.array(pole), "a": float(np.linalg.norm(hd["elbow"] - hd["arm"])),
+            "b": float(np.linalg.norm(hd["wrist"] - hd["elbow"])), "hand_local": B.T @ (hand / np.linalg.norm(hand)),
+            "up": np.array(R @ Vector((0.0, 0.0, 1.0))), "out": np.array(R @ Vector(out_dir).normalized()),
+            "to_prop": np.array(now.inverted()), "to_world": np.array(now)}
+
+
+def _wheel_for_arm(ctx, where, G, prop, params, arrays, af, label, free_elbow, wraps=(-1, 1)):
+    """An arm-chosen wheel grip: the grips a driver uses (palm on the rim's outer or driver side, WHEEL_APPROACHES, the
+    `wraps`) are solved, and each is scored by how straight the wrist is on the forearm the arm makes: with the elbow in
+    its pole's plane, or, `free_elbow`, at the best elbow the arm can have that is not inward of its shoulder and is below
+    it (`_elbows`). The straightest that meets the grip's gates wins. Returns (params, res, rep, info, elbow): the elbow
+    in the prop's frame when it was chosen, else None."""
+    Gl = af["to_prop"] @ np.asarray(G, float)
+    S, P, a, b = af["S"], af["P"], af["a"], af["b"]
+    tried = []
+    for th in WHEEL_APPROACHES:
+        for wrap in wraps:
+            cand = dict(params, approach=float(th), wrap=int(wrap))
+            res, rep = ctx.solve("mkmmd.solvers.grip", arrays, {"style": "wheel", "prop": prop, "params": cand},
+                                 f"{label}-a{th:.0f}w{wrap:+d}")
+            r = rep.get("report", {})
+            Wf = Gl @ np.linalg.inv(np.asarray(res["target_in_wrist"], float))      # the wrist head frame, prop frame
+            W, h = Wf[:3, 3], Wf[:3, :3] @ af["hand_local"]
+            elbows = _elbows(S, W, a, b, af["up"], af["out"]) if free_elbow else [_elbow(S, W, P, a, b)]
+            scored = [(_bend(E, W, h), E) for E in elbows if E is not None]
+            bend, E = min(scored, key=lambda t: t[0]) if scored else (None, None)
+            gaps = [v.get("gap_mm") for v in (r.get("contacts") or {}).values() if isinstance(v, dict)]
+            ok = (all(g is not None and g <= 3.0 for g in gaps) and (r.get("penetration_mm") or 0.0) <= 1.0
+                  and (r.get("finger_clash_mm") or 0.0) <= 1.0)
+            reach = float(np.linalg.norm(W - S)) / (a + b)
+            tried.append((bend is None, not ok, 999.0 if bend is None else bend, cand, res, rep, E, reach))
+    tried.sort(key=lambda t: t[:3])
+    none, _bad, bend, cand, res, rep, E, reach = tried[0]
+    if none:                                              # no allowed elbow on any grip: the first grip, as the pole has it
+        E = None
+    info = {"approach": cand["approach"], "wrap": cand["wrap"], "wrist_bend_deg": None if none else round(bend, 1),
+            "elbow": "chosen" if free_elbow and not none else "pole", "reach": round(reach, 2),
+            "tried": [[t[3]["approach"], t[3]["wrap"], None if t[0] else round(t[2], 1)] for t in tried]}
+    if reach > 1.0:
+        ctx.log("WARNING", f"{where}: the wheel is {reach:.2f} arm lengths away: the arm stretches straight and the hand "
+                           "does not reach the rim (move the seat closer, or lean in)")
+    return cand, res, rep, info, (E if free_elbow else None)
+
+
 def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
     """Solve the grip of one hand (docs/design.md: Grips): the grip frame G in the world from the prop's card and its
     current transform, the solver's finger rotations and `target_in_wrist`, and the IK goal that puts the wrist where
@@ -491,6 +632,7 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
     toward = (_world_head(arm, smap["arm.L"]) + _world_head(arm, smap["arm.R"])) / 2      # the character's side
     ref = h["grip"]
     track = pick = None
+    auto_wheel = False
     try:
         if ref == "rest":
             if h.get("track"):
@@ -517,6 +659,9 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
             if h.get("track"):
                 track = _hand_track(ctx, where, h)
                 hh = dict(h, posture=_pen_posture(ctx, m, smap, side, h, track[1], pole, where))
+            auto_wheel = u.get("type") == "ring" and hh.get("approach", "auto") == "auto"
+            if auto_wheel:                                       # chosen for the arm below (_wheel_for_arm)
+                hh = {k: v for k, v in hh.items() if k != "approach"}
             style, prop, params = GF.card_style(u, hh)
             if track is not None and style != "pen":
                 raise BuildError(f"{where}: a track needs a pen grip, {ref!r} is a {style} grip")
@@ -549,8 +694,28 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
         raise BuildError(f"{where}: grip {ref!r}: {e}")
     arrays = hand_arrays(arm, side, float(h.get("skin_radius", 0.16)))
     t0 = time.time()
-    res, rep = ctx.solve("mkmmd.solvers.grip", arrays, {"style": style, "prop": prop, "params": params},
-                         f"grip-{name}-{side}")
+    if auto_wheel and style == "wheel" and side in m.ik:
+        af = _arm_frame(ctx, m, smap, side, p, out_dir)
+        params, res, rep, chose, elbow = _wheel_for_arm(ctx, where, G, prop, params, arrays, af, f"grip-{name}-{side}",
+                                                        free_elbow=h.get("pole") is None,
+                                                        wraps=(int(h["wrap"]),) if h.get("wrap") is not None else (-1, 1))
+        info.update(chose)
+        W = (af["to_prop"] @ np.asarray(G, float) @ np.linalg.inv(np.asarray(res["target_in_wrist"], float)))[:3, 3]
+        u = (W - af["S"]) / np.linalg.norm(W - af["S"])
+        foot = None if elbow is None else af["S"] + float((elbow - af["S"]) @ u) * u
+        if foot is not None and np.linalg.norm(elbow - foot) > 1e-3:     # the pole goes where the chosen elbow points
+            pole_l = elbow + 2.0 * (elbow - foot)                       # (a straight arm has no bend to aim)
+            m.ik[side][1].matrix_world = Matrix.Translation(Vector(tuple((af["to_world"] @ np.r_[pole_l, 1.0])[:3])))
+            info["pole"] = [round(float(v), 3) for v in pole_l]
+        bend = chose["wrist_bend_deg"]
+        if bend is None or bend > WRIST_BEND_WARN:
+            ctx.log("WARNING", f"{where}: " + (f"the wrist bends {bend} deg against the forearm on the best grip of the "
+                                               f"wheel (over {WRIST_BEND_WARN})" if bend is not None else
+                                               "no grip of the wheel leaves the elbow out and below the shoulder")
+                    + ": try another clock, move the seat, or give no `pole` so the elbow is chosen with the grip")
+    else:
+        res, rep = ctx.solve("mkmmd.solvers.grip", arrays, {"style": style, "prop": prop, "params": params},
+                             f"grip-{name}-{side}")
     seconds = round(time.time() - t0, 1)
     r = rep.get("report", {})
     contacts = {k: v.get("gap_mm") for k, v in (r.get("contacts") or {}).items() if isinstance(v, dict)}
@@ -832,9 +997,15 @@ def run(ctx):
                 for b in grip["bones"]:
                     K.key_bone_quats(arm, b, [f0] + [f for f, _ in seq], [(1, 0, 0, 0)] + [bn[b] for _, bn in seq],
                                      interp="BEZIER")
-            elif fp:
-                for b, q in _finger_quats(arm, smap, side, fp).items():
-                    K.key_bone_quats(arm, b, [f0, f1], [(1, 0, 0, 0), tuple(q)], interp="BEZIER")
+            elif fp or any(k.get("fingers") for k in h.get("keys", [])):
+                seq = {f1: _finger_quats(arm, smap, side, fp or "flat")}         # the hand's own fingers, then each key's
+                for k in sorted(h.get("keys", []), key=lambda k: float(k["t"])):  # own at its time, eased in between
+                    if k.get("fingers"):                                          # (none before the settle ends)
+                        seq[max(ctx.frame(float(k["t"])), f1)] = _finger_quats(arm, smap, side, k["fingers"])
+                seq = sorted(seq.items())
+                for b in seq[0][1]:
+                    K.key_bone_quats(arm, b, [f0] + [f for f, _ in seq],
+                                     K.continuous([(1, 0, 0, 0)] + [tuple(q[b]) for _, q in seq]), interp="BEZIER")
         for side, fp in (spec.get("fingers") or {}).items():
             for b, q in _finger_quats(arm, smap, side, fp).items():
                 K.key_bone_quats(arm, b, [f0, f1], [(1, 0, 0, 0), tuple(q)], interp="BEZIER")

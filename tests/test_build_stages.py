@@ -125,6 +125,87 @@ def test_both_elbows_point_at_their_own_poles_whatever_the_rig_rolls(make, capsy
         right = _bend(sr, er, wr, [-pole[0], pole[1], pole[2]])
         assert left < 20.0 and right < 20.0, (pole, left, right)
 
+DRIVE = """
+[[prop]]
+name = "car"
+card = "library:car_mockup"
+[pose.mq]
+sit = "car:driver"
+feet = "car:driver"
+lean = 12
+sit_offset = [0.0, -0.14, 0.0]
+[pose.mq.hands.L]
+grip = "car:wheel"
+clock = {left}
+[pose.mq.hands.R]
+grip = "car:wheel"
+clock = {right}
+"""
+
+
+def _angle(a, b):
+    import numpy as np
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    return float(np.degrees(np.arccos(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1.0, 1.0))))
+
+
+def test_a_driver_with_no_poles_holds_the_wheel_with_straight_wrists_and_the_elbows_out_and_down(make, capsys):
+    """The wheel grip was placed for the rim alone: the forearms came in from the elbow's side and the hands bent at the
+    wrist through the cuff (107 degrees on this seat). The grip and the elbow are now chosen together for the arm."""
+    for left, right in ((9, 3), (10, 2)):
+        code, out = make(DRIVE.format(left=left, right=right), until="pose")
+        assert code == 0, out.get("error")
+        names = [f"{b}.{s}" for s in ("L", "R") for b in ("arm", "elbow", "wrist", "middle1")]
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), f"[list(bone(b).head) for b in {names!r}]",
+                       "--frames", "80", "--project", str(make.root)], capsys)
+        assert code == 0, q
+        pts = q["values"][0]
+        for k, side in enumerate(("L", "R")):
+            sh, el, wr, mid = pts[4 * k: 4 * k + 4]
+            bend = _angle([w - e for w, e in zip(wr, el)], [m - w for m, w in zip(mid, wr)])
+            assert bend < 45.0, (left, side, bend)                       # the hand in line with the forearm
+            out_x = (el[0] - sh[0]) * (1 if side == "L" else -1)          # the mannequin faces -Y: its left is +X
+            assert out_x > -0.01 and el[2] < sh[2] - 0.04, (left, side, sh, el)   # not tucked in, not winged up
+
+
+SPREAD = """[pose.mq]
+feet = "floor"
+[pose.mq.hands.L]
+at = {{ cast = "mq", point = [0.3, -0.2, 1.0] }}
+fingers = {{ index = [5, 5, 5], spread = {spread} }}
+"""
+
+
+def _fanned(wrist, base, tip, m1, m2, l1):
+    """Signed degrees a finger (base -> tip) turns away from the middle finger (m1 -> m2) in the plane of the palm: + away
+    from it, toward the finger's own side."""
+    import numpy as np
+    w, b, t, a, c, l = (np.asarray(v, float) for v in (wrist, base, tip, m1, m2, l1))
+    n = np.cross(a - w, l - w)
+    n /= np.linalg.norm(n)
+    flat = lambda v: v - (v @ n) * n                                  # noqa: E731
+    mid = flat(c - a) / np.linalg.norm(flat(c - a))
+    side = flat(b - a) - (flat(b - a) @ mid) * mid
+    side /= np.linalg.norm(side)
+    f = flat(t - b)
+    return float(np.degrees(np.arctan2(f @ side, f @ mid)))
+
+
+def test_spread_fans_the_fingers_apart_from_the_middle_one_and_a_negative_spread_closes_them(make, capsys):
+    fan = {}
+    for spread in (0, 12, -6):
+        code, out = make(SPREAD.format(spread=spread), until="pose")
+        assert code == 0, out.get("error")
+        names = ["wrist.L", "index1.L", "index2.L", "middle1.L", "middle2.L", "little1.L", "little2.L"]
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), f"[list(bone(b).head) for b in {names!r}]",
+                       "--frames", "80", "--project", str(make.root)], capsys)
+        assert code == 0, q
+        w, i1, i2, m1, m2, l1, l2 = q["values"][0]
+        fan[spread] = (_fanned(w, i1, i2, m1, m2, l1), _fanned(w, l1, l2, m1, m2, l1))
+    assert fan[12][0] - fan[0][0] == pytest.approx(12.0, abs=2.0)    # the index turns `spread` away from the middle,
+    assert fan[12][1] - fan[0][1] == pytest.approx(14.4, abs=2.5)    # the little finger 1.2 times as far
+    assert fan[-6][0] - fan[0][0] == pytest.approx(-6.0, abs=2.0)    # a negative spread closes them together
+
 BODY = """[pose.mq]
 feet = "floor"
 [perform.mq]

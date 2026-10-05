@@ -849,7 +849,9 @@ and `point` 80, 95, 65 / 25, 35, 40 (`mkmmd/core/fingers.py`). The rotations tur
 `[pose.<cast>.hands.L]` and `.R` put an arm on a target. The goal empty `<cast>_hand.<L|R>` (collection `Rig`) is the wrist bone's
 tail and orientation: a position-only IK on the forearm (`mk_arm_ik`, chain up to the upper arm, its target a child of the goal
 at the wrist's head) bends the elbow toward the pole empty `<cast>_elbow.<L|R>`, the wrist copies the goal's rotation
-(`mk_hand_rot`) and the forearm twist bone, when the rig has one, rolls half way with the hand (`mk_forearm_twist`). The IK's pole
+(`mk_hand_rot`) and the forearm twist bone, when the rig has one, rolls all the way with the hand (`mk_forearm_twist`: the rig
+spreads it down the forearm, so a sleeve turns with the hand instead of the hand turning inside the cuff); the wrist's head is
+held on the forearm's end (`mk_wrist_on_arm`: rigs put it a fraction of a millimetre off the twist bone's axis). The IK's pole
 angle is solved per arm from its rest pose, with the forearm pre-folded 20 degrees toward the front (the solver starts from that
 fold), so the elbow points at the pole on either side of any rig. These empties are the names checks and `[[key]]` address. A hand needs one of
 `at`, `rest`, `grip` or `keys`. The goals of a seated character ride with its seat prop; a standing character's stay in the world
@@ -866,9 +868,9 @@ in over the settle.
 | `along` | `rest` on an edge: 0..1 along it (default 0.5) |
 | `offset` | `rest` on a plane: `[x, y, z]` metres from its centre, in the prop's frame (default 0) |
 | `lift` | `rest`: metres above the surface along its normal (default 0.03; 0 for a `grip = "rest"`) |
-| `keys` | `[{t, at, dir, palm}]`: moving targets, `t` in clip seconds, Bezier between the keys; `dir` and `palm` default to the hand's own. With `at` that pose holds until the first key; without it the first key's target is the hand's from the start. A neck grip's keys are `{t, fret, chord, move}` instead |
+| `keys` | `[{t, at, dir, palm, fingers}]`: moving targets, `t` in clip seconds, Bezier between the keys; `dir` and `palm` default to the hand's own; a key's `fingers` (as the hand's `fingers`) are reached at its time and eased between the keys that have them, from the hand's own at the end of the settle. With `at` that pose holds until the first key; without it the first key's target is the hand's from the start. A neck grip's keys are `{t, fret, chord, move}` instead |
 | `ride` | the goal follows something. `"<object>"` (a steering wheel, `"car_wheel"`): the goal is parented to it. `"cast:<name>.<bone>"` (this character's own name; the chest is `cast:rin.upper_body2`): goal and pole are bone-parented to that bone, their keys computed from the world goal with the bone as it stands in the settled pose, so clasped hands follow every `lean`, `turn`, `tilt` and sway and never part; a bone of an arm is refused. Targets and `keys` are read as world points of the first frame (object) or of the settled pose (bone). A hand on a guitar's `neck` or `strum` point rides the prop's root by default |
-| `fingers` | a finger preset or curl table for this hand (replaced by a grip's solved rotations) |
+| `fingers` | a finger preset (`flat`, `relaxed`, `curled`, `fist`, `point`) or a table `{index = [a, b, c], middle, ring, little, thumb, spread}` of curls in degrees per joint (a finger left out stays straight) and `spread`, degrees the fingers fan apart in the plane of the palm (the index by `spread`, the ring 0.6 and the little finger 1.2 times as far, the thumb 0.8 times away from the index; negative closes them; or `{finger: deg}`) for this hand (replaced by a grip's solved rotations) |
 | `grip` | the hand holds something: `"prop:use"` (a `use.grip` point of a prop; `"prop"` alone when it has one) or `"rest"` (with `rest`). A solver finds the finger rotations and the hand's frame on the prop ([Grips](#grips)); the wrist goal and the fingers are keyed from it, replacing `at`, `rest` and `fingers`. Not combinable with `keys`, except the `keys` of a `neck` grip |
 
 The keys of a grip (see [Grips](#grips) for what each style needs and does):
@@ -876,7 +878,7 @@ The keys of a grip (see [Grips](#grips) for what each style needs and does):
 | Key | Meaning |
 |---|---|
 | `clock` | ring grips: hours on a clock face as the character sees the wheel, 12 top and 3 its right (default 10 for `L`, 2 for `R`), read at the first frame |
-| `approach` | ring: degrees round the tube's section where the palm lies, 0 the outer side, 90 the side facing the character (default 90) |
+| `approach` | ring: degrees round the tube's section where the palm lies, 0 the outer side, 90 the side facing the character. Default: chosen for the arm (below) |
 | `wrap` | ring: +1 or -1, the way the fingers go round the tube (default -1: round the outside of the rim, then its front) |
 | `edge` | pinch: metres the pads sit inside the held part's edge (default 0.004) |
 | `face` | `grip = "rest"`: `"palm"` (default) or `"back"` lies on the surface |
@@ -1563,9 +1565,14 @@ over 3 mm, penetration or finger clash over 1 mm) and reports each hand's digest
 
 - **Ring** (`type = "ring"`): a power grip round the rim. The grip frame sits at `clock` on the ring, hours as the character
   sees the wheel (12 top, 3 its right; default 10 for `L`, 2 for `R`), read at the first frame; the ring's axis is flipped to
-  point at the character when the card gives it the other way. `approach` (default 90: the palm on the side of the rim facing
-  the character) and `wrap` (default -1: the fingers go round the outside of the rim, then its front) turn the grip. A hand
-  that follows a turning wheel also says `ride = "car_wheel"`, the wheel's object.
+  point at the character when the card gives it the other way. Without `approach` the grip is chosen for the arm: the palm on
+  the rim's outer or driver side (0, 30, 60, 90) with either `wrap` is solved, and the one whose wrist bends least on the forearm
+  the arm can make wins; without a `pole` the elbow is chosen with it (out from the shoulder and at least 5 cm below it, the
+  pole put where that elbow points), with one the elbow is the pole's. The digest gives `approach`, `wrap`,
+  `wrist_bend_deg`, `elbow` (`chosen` or `pole`), `reach` (arm lengths to the wrist) and every grip `tried`; a bend over 35
+  degrees, or a wheel out of reach, is a WARNING. `approach` and `wrap` given turn the grip by hand (`wrap` default -1: the
+  fingers go round the outside of the rim, then its front). A hand that follows a turning wheel also says
+  `ride = "car_wheel"`, the wheel's object.
 - **Pinch** (`type = "pinch"`): a thumb-index pad pinch of a strap or handle; the card needs `axis` and `normal`. The pads sit
   `edge` inside its edge.
 - **Rest** (`grip = "rest"` with `rest = "prop:edge"`, a `use.rest` point): the relaxed hand lies on the surface, the palm
