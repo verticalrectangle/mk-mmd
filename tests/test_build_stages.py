@@ -206,6 +206,35 @@ def test_spread_fans_the_fingers_apart_from_the_middle_one_and_a_negative_spread
     assert fan[12][1] - fan[0][1] == pytest.approx(14.4, abs=2.5)    # the little finger 1.2 times as far
     assert fan[-6][0] - fan[0][0] == pytest.approx(-6.0, abs=2.0)    # a negative spread closes them together
 
+GUITAR = """[[prop]]
+name = "guitar"
+card = "library:electric_guitar"
+wear = "mq"
+[pose.mq]
+feet = "floor"
+[perform.mq]
+bounce = { depth = 0.05, beats = [0.5, 1.0, 1.5, 2.0], decay = 0.12 }
+"""
+
+
+def test_a_worn_guitars_cord_stays_in_its_jack_and_swings_as_the_player_bounces(make, capsys):
+    """The cord was a fixed curve whose top 35 cm a hook dragged along: below that it stood still whatever the player did.
+    The sim stage now swings all of it from the jack."""
+    import numpy as np
+    code, out = make(GUITAR)
+    assert code == 0, out.get("error")
+    expr = ('[[list(bpy.data.objects["guitar_cable"].data.splines[0].points[i].co[:3]) for i in (0, 15)], '
+            'list(bpy.data.objects["guitar_jack"].matrix_world.translation)]')
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "40,46,52,58", "--project", str(make.root)],
+                  capsys)                                         # around the beat at t 0.5 (frame 46)
+    assert code == 0, q
+    top = np.array([r[0][0] for r in q["values"]])
+    mid = np.array([r[0][1] for r in q["values"]])
+    jack = np.array([r[1] for r in q["values"]])
+    assert np.abs(top - jack).max() < 1e-3                        # the plug end is in the jack on every frame
+    assert np.ptp(mid[:, 2]) > 0.01                               # 45 cm down the cord, the bounce shows
+
+
 BODY = """[pose.mq]
 feet = "floor"
 [perform.mq]

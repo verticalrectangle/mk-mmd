@@ -38,6 +38,7 @@ PERFORM = {
     "kick": ("foot", "height", "back", "hold", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"),
     "strum": ("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "kick", "windmill",
               "windmill_dur") + tuple(strum.DEFAULTS),
+    "drum": ("hand", "fingers", "deg", "lift", "roll", "timeline", "beats", "downbeat_accent", "from", "to"),
 }
 
 SIM = {k: None for k in ("families", "params", "colliders", "props", "fingers", "floor", "wind", "use_masks", "anchor_free",

@@ -1068,6 +1068,7 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `bounce` | `{depth = 0.03, beats = [t, ...], timeline, downbeat_accent = 1.6, from, to, attack = 0.05, decay = 0.16}`: the hips (the `center` bone) dip `depth` m on each beat (downbeats weighted), the feet planted, so the knees pump; `from`, `to` (clip seconds) limit it |
 | `rise` | `[[t, metres], ...]`: the whole body, feet too, lifts by that much (eased between keys): she floats |
 | `kick` | `{foot = "L", height = 0.12, back = 0.08, hold = 0, beats, timeline, downbeat_accent, from, to, attack = 0.06, decay = 0.18}`: that foot flicks up and back on the beats; `hold` (0..1) keeps it that share of the way up between them (a foot kicked up behind a lovestruck girl) |
+| `drum` | `{hand = "R", fingers = ["little", "ring", "middle", "index"], deg = 25, lift = 0.16, roll = 0.02, beats, timeline, downbeat_accent, from, to}`: the fingers of one hand tap on the beats (a driver drumming on the wheel): each lifts at its base joint by `deg` (the middle joint by a third of it) about its own flexion axis, from wherever its keys hold it (a grip's solved curl), over the first half of the `lift` seconds before the beat and falls, fastest at the end, back onto it on the beat; the little finger leads the index by `roll` s per finger. The palm stays where the grip put it, so a hand wrapped round a rim never moves through it. The report has `drum` (`hand`, `fingers`, `taps`, `deg`, `frames`) |
 
 #### Face and mouth
 
@@ -1371,6 +1372,15 @@ any shape from `frame0` on) and `passes`: per level `chains`, `bones`, `engine`,
 1.4) and `jerk_p95_mm`, and `penetration_mm` (`max`, `at_frame`, `bone`, `into`, `median`, `frames_over_2mm_by_shape`). A
 `params` or `wind` the solver does not accept stops the build with its message.
 
+The stage also swings the cord of every worn prop ([Playing a worn guitar](#playing-a-worn-guitar)), with or without a
+`[sim.<cast>]` table: `mkmmd.solvers.cable`, a rope of particles 3 cm apart from the jack to the floor, inextensible, with
+gravity, air drag (a swing dies in about a second), a little bending stiffness, static and sliding friction on the floor under
+the wearer, and collisions with the wearer's bodies from `rig.json` (not the hair's, ears' or tail's; none within 12 cm of the
+plug). The plug follows the jack on every frame and the cord leaves it along the anchor's `dir`; the far end lies where the
+pose stage hung it. The first frame is held for 2 s so the cord settles into its own shape, and the curve's control points are
+keyed on every frame (LINEAR), replacing the hook. The report has `cables`: per prop `points`, `length_m`, `segment_mm`,
+`stretch_pct_max`, `body_pen_mm_max`, `floor_pen_mm_max`, `seconds`.
+
 ## Placement
 
 `[[prop]] place = {...}` puts a prop's footprint on a surface instead of giving it `at` and `yaw`, and `[[scatter]]`
@@ -1663,7 +1673,7 @@ The card's `use.wear` point (the library guitar's is called `stand`) has these k
 | `neck_deg` | the prop's +z axis (a guitar's neck) is brought to the character's left and raised that many degrees above horizontal |
 | `yaw_deg`, `roll_deg` | the neck swung toward the character's front; the prop rolled about the neck, positive turning its -y face up (default 0) |
 | `strap` | `{top, bottom, over, width = 0.05, thickness = 0.004, material, shoulder_radius}`: builds the band `<prop>_strap` |
-| `cable` | `{object, anchor = "jack", radius = 0.0032, trail, out = 0.05, sway = 0.035, reach = 0.12, tail_len = 0.9, follow = 0.35}`: re-hangs the cord |
+| `cable` | `{object, anchor = "jack", radius = 0.0032, trail, out = 0.05, sway = 0.035, reach = 0.12, tail_len = 0.9, follow = 0.35, sim = true}`: re-hangs the cord; `sim = false` keeps it hung and hooked instead of swinging it |
 
 The prop's frame needs the guitar's convention: z along the neck, the face looking along -y, x across it. `strap` runs from the
 card's anchor `top` over the wearer's shoulder joint (`over`, a semantic bone: default `arm.L`, `shoulder.L` reads as `arm.L`;
@@ -1675,7 +1685,9 @@ anchor `bottom`, riding the torso at the radius of the chest's collision body (r
 (`core.cable.hang`): `out` metres straight out of the plug, a lazy S of `sway` metres, down to the floor under the wearer
 (the cast root's height), `reach` metres from under the jack along `trail`, then `tail_len` metres of cord lying on the floor
 along `trail`: a horizontal direction `[dx, dy]`, default behind the wearer and to the wearer's right. The curve is unparented, so its
-lower end stays, and hooked at the jack with a smooth falloff of `follow` metres, so its top follows the guitar.
+lower end stays, and hooked at the jack with a smooth falloff of `follow` metres, so its top follows the guitar. The sim stage
+then swings it from that shape ([Sim](#sim)): the whole cord answers the guitar's motion, falls against the wearer's legs and
+lies on the floor, keyed on every frame; with `sim = false` (or `mk build --skip sim`) the hooked cord stays.
 
 The `wear` report has `bone`, `entry`, `at_mm` and the strap's numbers (`object`, `points`, `length_m`, `radius_m`), `cables` the
 cord's (`points`, `top`, `floor_z`, `length_m`, `follow_m`). The numbers decide whether both arms reach: the build logs a WARNING

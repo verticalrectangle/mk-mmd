@@ -3,7 +3,8 @@
 The cord leaves its socket along `top_dir`, bends down under its own weight, falls to the floor in a lazy S (it swings out
 toward `tail` a little as it falls) and lies on the floor trailing away along `tail`. Heights are over `floor_z`; the
 cord's centre line never goes below `floor_z + radius`. The Blender side (mkmmd.blender.build.wear) makes a bevelled
-NURBS curve of these points and hooks its top to the jack so that it follows the guitar while the rest stays put."""
+NURBS curve of these points and hooks its top to the jack so that it follows the guitar; the sim stage then swings the
+whole cord from this shape (mkmmd.solvers.cable)."""
 import math
 
 import numpy as np

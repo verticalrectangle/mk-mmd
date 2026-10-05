@@ -60,6 +60,17 @@ def test_beat_bob_peaks_just_after_beats_with_accent():
     assert 0.49 <= ts[k1] <= 0.55 and bob[k2] == pytest.approx(2 * bob[k1], rel=1e-6)
 
 
+def test_a_tap_lifts_before_the_beat_falls_fastest_onto_it_and_rests_after():
+    ts = np.linspace(0.0, 2.0, 2001)
+    e = PF.tap(ts, [0.5, 1.5], lift=0.16, accent=[1.0, 1.5])
+    k = int(np.argmax(e[:1000]))
+    assert 0.34 < ts[k] < 0.5 and e[k] == pytest.approx(1.0, abs=1e-3)       # up before the beat, not after it
+    assert e[500] == pytest.approx(0.0, abs=1e-9) and e[501:1339].max() == 0.0   # down on the beat, rests to the next lift
+    speed = np.abs(np.diff(e[:501]))
+    assert int(np.argmax(speed)) >= 495                                    # the strike is the fastest moment
+    assert e[1000:].max() == pytest.approx(1.5, abs=2e-3)                   # an accented beat lifts higher
+
+
 def test_timeline_reads_both_layouts():
     assert TL.beats({"beats": [1, 2], "downbeats": [1]}) == ([1, 2], [1])
     assert TL.beats({"tempo": {"beats": [0.5], "downbeats": [0.5]}}) == ([0.5], [0.5])

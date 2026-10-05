@@ -152,6 +152,27 @@ def beat_bob(ts, beats, deg=1.5, attack=0.06, decay=0.22, accent=None):
     return math.radians(deg) * beat_pulse(ts, beats, attack, decay, accent)
 
 
+def tap(ts, beats, lift=0.16, accent=None):
+    """A finger tap landing on each beat (0..1 times the beat's `accent` weight): the finger rises over the first 55 % of
+    the `lift` seconds before the beat and falls, faster and faster, onto it (the strike is the fastest moment, on the
+    beat); it rests from the beat to the next rise. Overlapping taps take the larger."""
+    ts = np.asarray(ts, float)
+    out = np.zeros(len(ts))
+    lift = float(lift)
+    up = 0.55 * lift
+    down = lift - up
+    for i, b in enumerate(beats):
+        a = 1.0 if accent is None else float(accent[i])
+        u = ts - (float(b) - lift)
+        m = (u > 0.0) & (u < lift)
+        if not m.any():
+            continue
+        uu = u[m]
+        shape = np.where(uu < up, smooth(uu / up), 1.0 - ((uu - up) / down) ** 2)
+        out[m] = np.maximum(out[m], a * shape)
+    return out
+
+
 def startles(ts, times, deg=4.5, tau=0.35):
     """Backward jolt (rad) at given times: fast rise, exponential settle."""
     ts = np.asarray(ts, float)

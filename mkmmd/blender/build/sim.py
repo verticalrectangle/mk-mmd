@@ -184,4 +184,64 @@ def run(ctx):
         out[name] = info
         ctx.log("sim", name, json.dumps({k: v for k, v in info.items() if k != "passes"}, ensure_ascii=False),
                 [(p["level"], p["chains"], p["bones"], p["seconds"]) for p in info["passes"]])
+    cables = simulate_cables(ctx)
+    if cables:
+        out["cables"] = cables
+    return out
+
+
+CABLE_SUBSTEPS = 8
+CABLE_SETTLE_S = 2.0
+
+
+def simulate_cables(ctx):
+    """Swing the cord of every worn prop whose wear `cable` has not `sim = false` (docs/design.md: Playing a worn
+    guitar) with mkmmd.solvers.cable: from the hung shape (the pose stage's), the plug follows the jack on every frame
+    and the cord falls against the wearer's collision bodies (all but the hair's, ears' and tail's) and the floor
+    under the wearer. The curve gets a control point every few centimetres, keyed on every frame (LINEAR), in place of
+    the hook that only dragged its top."""
+    out = {}
+    skip_fams = FAM.HAIR_FAMILIES | {"ears", "tail"}
+    for pname, prop in ctx.props.items():
+        worn = getattr(prop, "worn", None)
+        cs = (worn or {}).get("cable")
+        if not cs or not cs.get("sim", True):
+            continue
+        m = ctx.cast[worn["cast"]]
+        anchors = {a["name"]: a for a in prop.card.get("use", {}).get("anchor", [])}
+        a = anchors.get(cs.get("anchor", "jack"))
+        obj = bpy.data.objects.get(cs.get("object", f"{pname}_cable"))
+        if a is None or obj is None or obj.type != "CURVE" or not obj.data.splines:
+            raise BuildError(f"prop {pname!r}: the cable to swing is missing (its anchor or its curve; the pose stage "
+                             f"hangs it)")
+        shape = np.array([tuple(p.co)[:3] for p in obj.data.splines[0].points], float)
+        hair = {b for c in (m.rig or {}).get("chains", []) if c["family"] in skip_fams for b in c["bones"]}
+        bodies = [b for b in (m.rig or {}).get("bodies", []) if b.get("bone") and b["bone"] not in hair and "geom" in b]
+        shapes = geom.Shapes()
+        plug = shapes.src("object", "", a["object"])
+        dsrc = shapes.src("object", "", prop.root.name)
+        geom.model_shapes(shapes, {"bodies": bodies}, m.arm.name)
+        pos, rot = sample_sources(list(shapes.sources), ctx.frames)
+        spec = {"sources": [list(s) for s in shapes.sources], "plug": plug, "dir_src": dsrc,
+                "dir": [float(v) for v in a.get("dir", (0.0, 0.0, -1.0))], "bodies": bodies, "armature": m.arm.name,
+                "floor_z": float(m.root.matrix_world.translation.z), "radius": float(cs.get("radius", 0.0032)),
+                "fps": ctx.fps, "substeps": CABLE_SUBSTEPS, "settle_s": CABLE_SETTLE_S}
+        res, rep = ctx.solve("mkmmd.solvers.cable", {"shape": shape, "src_pos": pos, "src_quat": _quats(rot)}, spec,
+                             tag=f"cable-{pname}")
+        x = np.asarray(res["x"], float)
+        cu = obj.data
+        cu.splines.clear()
+        sp = cu.splines.new("NURBS")
+        sp.points.add(x.shape[1] - 1)
+        sp.order_u, sp.use_endpoint_u = 4, True
+        k0 = ctx.frame0 - int(ctx.frames[0])
+        for pt, p in zip(sp.points, x[k0]):
+            pt.co = (float(p[0]), float(p[1]), float(p[2]), 1.0)
+        for md in [md for md in obj.modifiers if md.type == "HOOK"]:
+            obj.modifiers.remove(md)
+        for i in range(x.shape[1]):
+            for k in range(3):
+                K.set_fcurve(cu, f"splines[0].points[{i}].co", k, ctx.frames, x[:, i, k], interp="LINEAR")
+        out[pname] = rep
+        ctx.log("cable", pname, json.dumps(rep))
     return out

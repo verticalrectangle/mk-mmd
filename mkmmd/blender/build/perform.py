@@ -33,6 +33,8 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      pick hand (its grip is `grip = "guitar:strum"`) strokes across the strings on the rhythm,
                                      down strokes down, up strokes up, the pick meeting the first string at each strike time;
                                      it rests between windows (mkmmd.core.strum; docs/design.md: Perform)
+  drum = {hand = "R", fingers = [...], deg = 25, lift = 0.16, roll = 0.02, beats | timeline, from, to}   the fingers tap on
+                                     the beats from where their keys hold them (a grip's curl): lifted before, down on it
 A table that is empty does nothing (the log says so); a table named after no cast member or holding a key this stage does
 not read is refused (mkmmd.core.tables).
 Everything is composed in the armature's frame (correct for characters riding vehicles), keyed per frame (LINEAR)."""
@@ -304,6 +306,65 @@ def _body(ctx, name, m, spec, ts, frames, settle):
     return info
 
 
+DRUM_FINGERS = ("little", "ring", "middle", "index")     # the order a tap ripples in
+DRUM_MID = 0.35                                           # share of the lift the middle joint takes
+
+
+def _drum(ctx, name, m, d, ts, frames):
+    """drum: the fingers of one hand tap on the beats (a driver drumming on the wheel). Each finger lifts at its base
+    joint by `deg` (the middle joint by DRUM_MID of it) about its own flexion axis, from where its keys hold it (a
+    grip's solved curl), and falls back onto the beat (core.perform.tap); the little finger leads the index by `roll`
+    seconds per finger. Keyed every frame from the first lift to `to` (LINEAR), the hand's other keys kept."""
+    from ...core import bonemap
+    from .pose import _world_head, palm_normal
+    where = f"perform.{name}.drum"
+    side = d.get("hand", "R")
+    if side not in ("L", "R"):
+        raise BuildError(f"{where}: hand = \"L\" or \"R\", not {side!r}")
+    fingers = list(d.get("fingers", DRUM_FINGERS))
+    bad = sorted(set(fingers) - set(DRUM_FINGERS))
+    if bad:
+        raise BuildError(f"{where}: fingers {bad}: unknown (have {list(DRUM_FINGERS)})")
+    fingers = [f for f in DRUM_FINGERS if f in fingers]
+    beats, acc = _beat_marks(ctx, d, where)
+    lo, hi = float(d.get("from", ts[0])), float(d.get("to", ts[-1]))
+    keep = [i for i, b in enumerate(beats) if lo <= b <= hi]
+    if not keep:
+        ctx.log("WARNING", f"{where}: no beat between {lo} and {hi} s: nothing is drummed")
+        return {}
+    beats, acc = [beats[i] for i in keep], (None if acc is None else [acc[i] for i in keep])
+    lift, deg, roll = float(d.get("lift", 0.16)), float(d.get("deg", 25.0)), float(d.get("roll", 0.02))
+    lead = lift + roll * (len(fingers) - 1)
+    sel = np.where((ts >= beats[0] - lead - 0.05) & (ts <= max(hi, beats[-1]) + 0.05))[0]
+    fr, tsel = [frames[i] for i in sel], ts[sel]
+    arm = m.arm
+    smap = S.semantic_map(arm)
+    palm = palm_normal(arm, smap, side)
+    act = arm.animation_data.action if arm.animation_data else None
+    for k, f in enumerate(fingers):
+        bones = [smap[f"{s}.{side}"] for s in bonemap.FINGERS[f][:3] if f"{s}.{side}" in smap]
+        if len(bones) < 2:
+            continue
+        axis = (_world_head(arm, bones[1]) - _world_head(arm, bones[0])).normalized().cross(palm).normalized()
+        e = PF.tap(tsel, [b - roll * (len(fingers) - 1 - k) for b in beats], lift, acc)
+        for j, b in enumerate(bones[:2]):
+            B = K.rest_rot(arm, b)
+            path = f'pose.bones["{b}"].rotation_quaternion'
+            fcs = [act.fcurves.find(path, index=c) if act else None for c in range(4)]
+            rest = tuple(arm.pose.bones[b].rotation_quaternion)
+            share = 1.0 if j == 0 else DRUM_MID
+            quats = []
+            for i, fno in enumerate(fr):
+                base = Quaternion([fcs[c].evaluate(fno) if fcs[c] else rest[c] for c in range(4)]).normalized()
+                ext = (B.inverted() @ Quaternion(axis, -math.radians(deg * share * float(e[i]))).to_matrix()
+                       @ B).to_quaternion()
+                quats.append(tuple(ext @ base))
+            K.key_bone_quats(arm, b, fr, quats, interp="LINEAR", replace=False)
+    return {"hand": side, "fingers": fingers, "taps": len(beats), "deg": deg,
+            "frames": [int(fr[0]), int(fr[-1])]}
+
+
+
 def run(ctx):
     ctx.check_tables("perform")
     out = {}
@@ -495,6 +556,8 @@ def run(ctx):
                                  interp="BEZIER", replace=False)
         if spec.get("strum"):
             info["strum"] = _strum(ctx, name, m, spec["strum"])
+        if spec.get("drum"):
+            info["drum"] = _drum(ctx, name, m, spec["drum"], ts, frames)
         out[name] = info
         ctx.log("perform", name, json.dumps(info, ensure_ascii=False))
     return out

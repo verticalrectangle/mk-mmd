@@ -22,7 +22,7 @@ import numpy as np
 
 NUMBERS = ("at", "neck_deg", "yaw_deg", "roll_deg", "pivot", "scale")
 TABLES = {"strap": ("top", "bottom", "over", "width", "thickness", "material", "shoulder_radius"),
-          "cable": ("object", "anchor", "radius", "trail", "out", "sway", "reach", "tail_len", "follow")}
+          "cable": ("object", "anchor", "radius", "trail", "out", "sway", "reach", "tail_len", "follow", "sim")}
 
 
 class WearError(ValueError):
