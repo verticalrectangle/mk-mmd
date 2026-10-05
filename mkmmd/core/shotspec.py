@@ -8,7 +8,7 @@ OWN = ("name", "from", "to", "plate", "aspect")                     # a shot's o
 SHOT = OWN + ("mount", "at", "look", "lens", "roll", "lag", "shake", "keys", "frame", "shift", "dof") + LOOK
 ASPECT = tuple(k for k in SHOT if k not in OWN)
 FRAME = ("subject", "fill", "solve")
-DOF = ("focus", "fstop")
+DOF = ("focus", "fstop", "offset")
 KEYS = ("t", "at", "look", "lens", "shift")
 TABLES = ("frame", "dof", "colors", "knockout", "reflection")      # laid over the shot's own key by key; the rest is replaced
 

@@ -1774,7 +1774,7 @@ shot starts on the frame `round(frame0 + from * fps)`.
 | `keys` | `[{t, at, look, lens, shift}, ...]`, a move inside the shot; `t` is in clip seconds (not relative to the shot). Between two keys `at`, `lens` and `shift` move with a smoothstep ease and `look` switches to the next key's target halfway, so aim at something that moves rather than between two fixed points. A field a key leaves out is the shot's own; the first and last key hold outside their span |
 | `frame` | `{subject, fill, solve}`: solves the lens, or the distance, for each output so the subject fills a share of the frame height. `subject` is a target or a list of targets (one world point is written `[[x, y, z]]`); its height is the vertical extent of those points (at least 0.25 m) plus 0.15 m of headroom, taken at the median of about twelve frames of the shot. `fill` is the share of the frame height (default 0.45). `solve = "lens"` (default) sets one lens for the whole shot (a keyed `lens` is replaced), `"distance"` keeps the lens and moves the camera along the aim line by one factor |
 | `shift` | `[x, y]`, Blender's lens shift: fractions of the larger image side, the picture moving the other way (a positive `y` moves it down; probed in Blender 4.2.3); constant, or keyed in `keys[].shift` (default `[0, 0]`). See the crop below |
-| `dof` | `{focus, fstop}`: depth of field; `focus` is any target (required), keyed as the distance from the camera on every frame; `fstop` (default 2.8). Without `dof` nothing blurs |
+| `dof` | `{focus, fstop, offset}`: depth of field; `focus` is any target (required), keyed as the distance from the camera on every frame, less `offset` metres (default 0): the focus plane sits that much nearer the camera than the target. A character's eye bones (`"cast:rin"`) are inside the head, 4-8 cm behind the face's surface (more for `.head`, the base of the skull), while a close-up at f/2.8 keeps only a few centimetres sharp: give a face target `offset = 0.05`. `fstop` (default 2.8). Without `dof` nothing blurs |
 | `aspect.<output>` | `{...}`, `[shot.aspect.<output>]`: that output's own version of the shot. It may hold any key above except `name`, `from`, `to`, `plate` and `aspect`. The tables `frame`, `dof`, `colors`, `knockout` and `reflection` merge key by key with the shot's own (`frame = { fill = 0.6 }` keeps the `subject`); every other key, targets and lists included, is replaced whole; `reflection = false` switches an inherited reflection off for that output. A table for an output the project does not have is an error |
 | `style`, `colors`, `hide`, `keep`, `accent`, `tint`, `knockout`, `grow`, `samples` | the silhouette look, below |
 | `reflection` | the window reflection, below |
@@ -1790,7 +1790,7 @@ look = "cast:rin.head"                 # any target, followed on every frame
 lens = 35
 lag = 0.25                             # the aim trails its target by a quarter of a second, in the car's frame
 shake = 0.3
-dof = { focus = "cast:rin.head", fstop = 2.8 }
+dof = { focus = "cast:rin", fstop = 2.8, offset = 0.05 }    # her eyes are bones inside the head: focus on her face
 keys = [{ t = 0.0 }, { t = 4.0, at = [0.0, -1.1, 1.25], lens = 50 }]     # an eased push-in; the first key is the shot's own
 
 [shot.aspect.9x16]                     # this output frames the figure instead: the lens is solved per output
@@ -1813,11 +1813,11 @@ to = 12.0
 at = [0.0, -2.0, 1.5]
 look = "cast:rin.head"
 lens = 50
-dof = { focus = "cast:rin.head", fstop = 2.0 }
+dof = { focus = "cast:rin", fstop = 2.0, offset = 0.05 }
 
 [shot.aspect.1x1]                      # a square crop of the 9x16 master whose top row is 300 px below the master's top
 lens = 88.89                           # 50 x 1920 / 1080
-dof = { focus = "cast:rin.head", fstop = 3.56 }    # 2.0 x 1920 / 1080
+dof = { focus = "cast:rin", fstop = 3.56, offset = 0.05 }    # 2.0 x 1920 / 1080
 shift = [0.0, 0.1111]                  # (420 - 300) / 1080
 ```
 
@@ -2517,14 +2517,22 @@ leaves them out). Screen type ([Text](#screen-type)) is `screen/<frame>.png`, st
 
 ### Post
 
-`mk post` composites the cut effects over the cut's frames, lays the screen type over the result, then grades the frames and encodes
+`mk post` composites the cut effects over the cut's frames, draws the lens streaks (`streaks`, below) from the result, lays the screen
+type over it, then grades the frames and encodes
 `<project>/out/<name>_<output>[_<preset>].mp4` (the preset is left out of the name for `final`) with `[audio]` (`file`, `start` = song
 seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 320k with a 60 ms fade-out. A missing frame or layer is an error
 unless `--allow-gaps` (the previous frame repeats; the plain cut shows where a layer is missing); `--to DIR` also copies the videos;
 `mk look` composes the same way for the images it shows. The report has each video's frames, size, `screen_type_frames`, and the darkest luma
 after the grade (`min_luma`).
 
-`[post]` (all optional) is the grade, applied in this order:
+`streaks = {strength 0.35, threshold 0.88, length 0.15, core 0.02, tint "foam", mix 0.75, cap 1.0}` (or `true` for those; off
+without it) is the flare of an anamorphic lens: luminance above `threshold` (eased in over the rest of the range: lamp cores,
+headlights, neon) is smeared sideways only, a tight core of Gaussian width `core` and a long tail of width `length` (fractions of
+the frame's longer side, so every output streaks alike), each scaled to its peak so a lone lamp draws a thin line about as bright
+as itself; the sum is capped softly at `cap`, tinted `mix` of the way toward the palette slot `tint` and screened over the picture
+at `strength`. It is drawn before the screen type, so lyrics never streak. An unknown key is an error.
+
+`[post]` (all optional) is otherwise the grade, applied after the screen type in this order:
 
 | Key | Meaning |
 |---|---|

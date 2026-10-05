@@ -2,6 +2,9 @@
 display space (0..1, sRGB as rendered through the view transform).
 
 [post] keys (all optional)
+  streaks = {strength = 0.35, threshold = 0.88, length = 0.15, core = 0.02, tint = "foam", mix = 0.75, cap = 1.0}
+                                      horizontal lens streaks (an anamorphic lens's flare) from the brightest points of
+                                      the picture, laid on before the screen type (Streaks)
   contrast = 1.10, pivot = 0.60       midtone contrast around a pivot
   saturation = 1.06
   split = {shadows = "iris", highlights = "gold", amount = 0.06}   split toning toward palette slots
@@ -11,12 +14,66 @@ display space (0..1, sRGB as rendered through the view transform).
                                       fraction of the frame height), tinted like film halation
   vignette = 0.12                     corner darkening (fraction)
   grain = {amount = 0.012, size = 1.5, seed = 7}"""
+import math
+
 import cv2
 import numpy as np
 from PIL import Image
 
 from .core.palette import resolve, srgb
 
+Y_W = np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+STREAKS = {"strength": 0.35, "threshold": 0.88, "length": 0.15, "core": 0.02, "tint": "foam", "mix": 0.75, "cap": 1.0}
+STREAK_SCALE = (4, 2)               # the streaks are made at a quarter of the width and half of the height
+
+
+class Streaks:
+    """Horizontal lens streaks, the flare of an anamorphic lens: luminance above `threshold` (eased in over the rest of
+    the range) is smeared sideways, a tight core of Gaussian width `core` and a long tail of width `length` (fractions of
+    the frame's longer side, so every output streaks alike), each normalised to its peak so a lone lamp draws a thin line
+    about as bright as itself; the sum is capped softly at `cap` (a big source saturates instead of flooding the frame),
+    tinted `mix` of the way toward the palette slot `tint` and screened over the picture at `strength`."""
+
+    def __init__(self, spec, palette, size):
+        bad = sorted(set(spec) - set(STREAKS))
+        if bad:
+            raise ValueError(f"[post] streaks: unknown key{'s' if len(bad) > 1 else ''} {', '.join(bad)} "
+                             f"(have {', '.join(STREAKS)})")
+        s = {**STREAKS, **spec}
+        self.w, self.h = size
+        self.small = (max(1, self.w // STREAK_SCALE[0]), max(1, self.h // STREAK_SCALE[1]))
+        long_px = max(self.w, self.h) / STREAK_SCALE[0]
+        self.sigmas = (float(s["core"]) * long_px, float(s["length"]) * long_px)
+        self.strength, self.thr, self.mix, self.cap = (float(s[k]) for k in ("strength", "threshold", "mix", "cap"))
+        if not (0.0 <= self.thr < 1.0 and self.cap > 0.0 and min(self.sigmas) > 0.0):
+            raise ValueError("[post] streaks: threshold in [0, 1), cap > 0, length and core > 0")
+        self.tint = np.array(srgb(resolve(s["tint"], palette)), np.float32)
+
+    @staticmethod
+    def _hblur(img, sigma):
+        """A horizontal Gaussian of `sigma` px (three box passes), scaled so that a lone pixel keeps its value at the
+        centre."""
+        w = 2 * int(round(math.sqrt(4.0 * sigma * sigma + 1.0) / 2.0)) + 1
+        box = np.full(w, 1.0 / w)
+        peak = float(np.convolve(np.convolve(box, box), box).max())
+        out = img
+        for _ in range(3):
+            out = cv2.blur(out, (w, 1), borderType=cv2.BORDER_CONSTANT)
+        return out / peak
+
+    def __call__(self, img):
+        img = img.astype(np.float32)
+        y = img @ Y_W
+        k = np.clip((y - self.thr) / (1.0 - self.thr), 0.0, 1.0) ** 2
+        if not k.any():
+            return img
+        small = cv2.resize(k[..., None] * img, self.small, interpolation=cv2.INTER_AREA)
+        raw = 0.6 * self._hblur(small, self.sigmas[0]) + 0.4 * self._hblur(small, self.sigmas[1])
+        st = self.cap * (1.0 - np.exp(-np.maximum(raw, 0.0) / self.cap))
+        st = cv2.resize(st, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
+        st = self.mix * (st @ Y_W)[..., None] * self.tint + (1.0 - self.mix) * st
+        return 1.0 - (1.0 - img) * (1.0 - np.clip(self.strength * st, 0.0, 1.0))
 Y_W = np.array([0.2126, 0.7152, 0.0722], np.float32)
 
 

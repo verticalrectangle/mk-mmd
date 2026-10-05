@@ -16,7 +16,8 @@
                                  fstop x 1920 / 1080 and shift = [0, (420 - top) / 1080] for a crop `top` px from the
                                  master's top (mkmmd.core.shotstyle.crop_camera)
   [shot.aspect.<output>]         per-output overrides of at / look / lens / roll / frame / shift / style / reflection
-  dof = {focus = target, fstop = 2.8}
+  dof = {focus = target, fstop = 2.8, offset = 0}   offset: metres the focus plane sits nearer the camera than the target
+                                 (a face's surface is 4-8 cm in front of its eye bones)
   style = "silhouette"           the flat look of a shot, composed at render time (`mk render`, `mk look`) by
                                  mkmmd.blender.styles; colors = {background, subject, accent}, hide / keep / accent =
                                  [object patterns], tint = [{object, prop, color, gain, glow}], knockout = {objects,
@@ -235,10 +236,11 @@ def run(ctx):
             if sp.get("dof"):
                 cd.dof.use_dof = True
                 cd.dof.aperture_fstop = float(sp["dof"].get("fstop", 2.8))
+                off = float(sp["dof"].get("offset", 0.0))
                 dist = []
                 for i, f in enumerate(frames):
                     sc.frame_set(int(f))
-                    dist.append((targets.point(ctx, sp["dof"]["focus"]) - Vector(pos[i])).length)
+                    dist.append(max((targets.point(ctx, sp["dof"]["focus"]) - Vector(pos[i])).length - off, 0.05))
                 K.set_fcurve(cd, "dof.focus_distance", 0, frames, dist, interp="LINEAR")
             cams[asp] = cam.name
         styles = _styles(ctx, spec, outs, name)

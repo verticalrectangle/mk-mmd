@@ -24,7 +24,7 @@ def test_a_shot_with_every_key_it_takes_passes():
 @pytest.mark.parametrize("patch, frag", [
     ({"lenss": 40}, "shot 'hood': unknown key 'lenss' (known: name, from, to, plate, aspect, mount, at, look"),
     ({"frame": {"subject": [[0, 0, 1]], "fil": 0.5}}, "shot 'hood' frame: unknown key 'fil' (known: subject, fill, solve)"),
-    ({"dof": {"focus": "cast:rin", "fstopp": 2}}, "shot 'hood' dof: unknown key 'fstopp' (known: focus, fstop)"),
+    ({"dof": {"focus": "cast:rin", "fstopp": 2}}, "shot 'hood' dof: unknown key 'fstopp' (known: focus, fstop"),
     ({"keys": [{"t": 0}, {"t": 1, "lenz": 2}]}, "shot 'hood' keys[1]: unknown key 'lenz' (known: t, at, look, lens, shift)"),
     ({"aspect": {"1x1": {"lens": 40}}}, "[shot.aspect.1x1] is for an output the project does not have (outputs: 9x16, 16x9)"),
     ({"aspect": {"9x16": {"from": 1.0}}}, "shot 'hood' aspect.9x16: unknown key 'from'"),

@@ -278,7 +278,9 @@ class Materials:
         """Clear glass: a transparent shader with a slight cool tint, a soft reflection only where the view is nearly along the
         pane (Fresnel above a knee, a rough lobe): no sharp white shape from an area light, no sheet of paper at night."""
         m, g = self._new("glass", blend="BLENDED")
-        m.use_transparency_overlap = False
+        m.use_transparency_overlap = True        # without overlap EEVEE draws the glass after a depth prepass, and depth of
+        m.use_backface_culling = True            # field then blurs all it sees through the pane as if at the pane; culling
+                                                 # the back faces keeps it one layer from either side
         tint = self.pal.mix("glass", ("text", 5.0))
         clear = g.node("ShaderNodeBsdfTransparent")
         g.put(clear.inputs[0], rgba(tint))

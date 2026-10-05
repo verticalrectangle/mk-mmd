@@ -20,8 +20,9 @@ H.264 (yuv420p, even size) and AAC with a 60 ms fade-out at the end. Missing fra
 
 [[transition]] and [[insert]] entries (docs/design.md: Shots: Transitions and inserts) are composited from the layers mk
 render drew next to the frames, before the grade: the grade, grain and vignette cover the whole frame. A missing layer is
-an error unless --allow-gaps (then the plain cut shows there); --no-transitions leaves the effects out. Screen type
-([[text]] with `screen`, docs/design.md: Text) is laid over the result: <frames>/screen/<frame>.png, drawn by mk render.
+an error unless --allow-gaps (then the plain cut shows there); --no-transitions leaves the effects out. Lens streaks
+([post] streaks) are drawn from the result's brightest lights; then screen type ([[text]] with `screen`, docs/design.md:
+Text) is laid over it: <frames>/screen/<frame>.png, drawn by mk render.
 
 Examples:
   mk post --preset draft
@@ -87,6 +88,11 @@ def run(args):
             raise UsageError(f"{o.name}: no frames in {src}")
         size = (first.shape[1] // 2 * 2, first.shape[0] // 2 * 2)
         grade = P.Grade(proj.data.get("post", {}), pal, size)
+        st_spec = proj.data.get("post", {}).get("streaks")
+        try:
+            streaks = P.Streaks({} if st_spec is True else dict(st_spec), pal, size) if st_spec else None
+        except (ValueError, KeyError) as e:
+            raise UsageError(str(e).strip('"')) from None
         fx = CF.CutFx(plan, src, size, o.name) if plan and (plan["transitions"] or plan["inserts"]) else None
         if fx:
             lacking = fx.missing(frames)
@@ -111,6 +117,8 @@ def run(args):
                     img = fx.frame(f, raw)
                 except FileNotFoundError:                         # layers missing (allowed): the plain cut shows
                     bare += 1
+            if streaks is not None:                               # lens streaks: from the picture's lights, not the type
+                img = streaks(img)
             if layer is not None:                                 # screen type: over the cut and what its effects made of it
                 img = SRT.composite(img, layer)
                 typed += 1
