@@ -134,6 +134,7 @@ collections|actions|objects` lists names; `--summary` prints min, max and mean.
 | `blender` | `MK_BLENDER` | `~/blender-portable/blender-4.2.3-linux-x64/blender` |
 | `mmd_addon` | `MK_MMD_ADDON` | `bl_ext.user_default.mmd_tools` |
 | `assets` | `MK_ASSETS` | `~/mk-assets` |
+| `player` | `MK_PLAYER` | none: the system's opener (`mk play`) |
 
 Environment only: `MK_CONFIG` (the config file, default `~/.config/mk/config.toml`), `MK_CACHE` (the user scratch folder:
 job folders, serve sockets, samples, look output outside a project, reference downloads; default `~/.cache/mk`),
@@ -2551,6 +2552,25 @@ split = { shadows = "iris", highlights = "gold", amount = 0.05 }
 halation = { strength = 0.2, tint = "rose" }
 grain = { amount = 0.01 }
 ```
+
+### Play
+
+`mk play [--preset P] [--output NAME]...` opens the encoded videos (`out/<name>_<output>[_<preset>].mp4`; default preset
+`final`, else `preview`, else `draft`; every output unless `--output` says) in the player of your choice: the `player`
+setting (Configuration), a command line run once with the videos. Without it, the system's opener (`xdg-open`, `open`)
+gets each video. The command line may hold placeholders: `{files}` (the videos, one argument each; without it they go
+last), `{chapters}` (an FFMETADATA file of the shots in the cut, plates left out, as chapters, written to
+`.mk/play/shots.ffmeta`; mpv's `--chapters-file` and tern-video-block's `--chapters` read it), `{frame0}` (the project's
+number of the clip's first frame, so a player can show the frame numbers `mk look --frames` takes) and `{fps}`.
+
+```toml
+# ~/.config/mk/config.toml
+player = "tern-video-block --split right --chapters {chapters} --first-frame {frame0}"
+```
+
+[tern-video-block](https://github.com/verticalrectangle/tern-video-block) plays them in a Tern block beside the pane
+you are in, focused: every output side by side, in sync, with the song, the shots as chapters (PgUp / PgDn) and the
+project's frame numbers in its status line. `player = "mpv --chapters-file={chapters}"` plays them one after another.
 
 ## Timeline
 

@@ -1,8 +1,10 @@
 """mk doctor: check that everything mk needs is installed and reachable."""
 import importlib
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -21,8 +23,9 @@ def add(sub):
                                    "opencv, pillow. Optional (reported, never fail the exit code): espeak-ng (lip sync "
                                    "from sung words), numba (faster solvers), mediapipe (mk ref), torch, demucs and "
                                    "faster-whisper (mk timeline), the assets folder, 10 GB free disk, the Pexels key "
-                                   "(mk ref search). --fix reinstalls missing mmd_tools wheels (a Blender started "
-                                   "with --factory-startup deletes them, and PMX import then fails).")
+                                   "(mk ref search), mk play's player (the player setting, else xdg-open / open). "
+                                   "--fix reinstalls missing mmd_tools wheels (a Blender started with "
+                                   "--factory-startup deletes them, and PMX import then fails).")
     p.add_argument("--fix", action="store_true", help="reinstall mmd_tools' bundled wheels that are missing")
     p.set_defaults(func=run)
 
@@ -97,6 +100,14 @@ def run(args):
     items.append(_item("disk", free >= MIN_FREE_GB, f"{free:.1f} GB free at {probe} (want {MIN_FREE_GB:.0f}+)",
                        required=False))
     items.append(_item("pexels key", _has_secret("pexels"), "keyring: service pexels key api", required=False))
+    try:
+        words = shlex.split(cfg["player"])
+    except ValueError:                                     # unbalanced quotes: name the setting as it stands
+        words = [cfg["player"]]
+    player = words[0] if words else ("open" if sys.platform == "darwin" else "xdg-open")
+    found = shutil.which(player)
+    items.append(_item("player", found, found or f"{player} not on PATH (mk play: the player setting or MK_PLAYER)",
+                       required=False))
     ok = all(i["ok"] for i in items if i["required"])
     emit({"ok": ok, "config": cfg, "items": items})
     return 0 if ok else CHECK_FAILED

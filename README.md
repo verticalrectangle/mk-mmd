@@ -219,6 +219,7 @@ max = 8.0
 | `mk look` | renders views without touching the file: the cut per output, cameras, orbit views of any target, sheets, A/B, reference photos side by side (`--ref`) |
 | `mk render` | renders the cut of every output to frames (presets draft / preview / final, parallel, resumable) |
 | `mk post` | composites the cut effects and screen type, grades the frames (contrast, split tone, halation, vignette, grain) and encodes MP4s with the song |
+| `mk play` | opens the encoded cut in the player of your choice (the `player` setting; e.g. Tern's video block, every output side by side), the shots as chapters and the project's frame numbers |
 
 Every command prints JSON; exit codes are 0 ok, 1 a check, gate or verification failed, 2 usage error, 3 Blender or runtime error.
 `mk <command> -h` has the flags and examples.

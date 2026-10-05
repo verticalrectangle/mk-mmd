@@ -7,8 +7,9 @@ DEFAULTS = {
     "blender": "~/blender-portable/blender-4.2.3-linux-x64/blender",
     "mmd_addon": "bl_ext.user_default.mmd_tools",
     "assets": "~/mk-assets",
+    "player": "",                      # mk play's command line; empty: the system's opener
 }
-ENV = {"blender": "MK_BLENDER", "mmd_addon": "MK_MMD_ADDON", "assets": "MK_ASSETS"}
+ENV = {"blender": "MK_BLENDER", "mmd_addon": "MK_MMD_ADDON", "assets": "MK_ASSETS", "player": "MK_PLAYER"}
 
 
 def config_path() -> Path:

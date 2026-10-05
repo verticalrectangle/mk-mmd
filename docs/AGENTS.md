@@ -24,7 +24,7 @@ For agents (and people) driving `mk`. Every command prints JSON; exit codes are 
 | 6. Shots, effects, type | cameras per output, looks, transitions, inserts, lyrics and signs | `mk build --until text` |
 | 7. Checks | numbers that define done | `mk check` |
 | 8. Look sheets | the cut in every output, details from all sides | `mk look` |
-| 9. Render and post | draft, preview, final; grade and encode | `mk render`, `mk post` |
+| 9. Render and post | draft, preview, final; grade and encode; review | `mk render`, `mk post`, `mk play` |
 | 10. Credits | every asset named, nothing unreviewed | `mk assets credits` |
 
 Go back as often as needed: build, check and look are cheap (seconds); render and post are not. Repeat 5-8 until the checks pass and
@@ -153,7 +153,7 @@ The expression language is listed under [Expressions](design.md#expressions).
 ## 9. Render and post
 
 `mk render --preset draft --jobs 2` renders every output (frames are claimed, so a stopped render resumes and `--jobs` share the work); `--output 9x16 --frames t=0:5` renders a
-part. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song. Review the draft, fix, render `--preset preview` for motion blur, then `final`. A missing
+part. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song. Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
 layer or frame is an error unless `--allow-gaps`; after changing text, delete the preset's frames. `mk post --to DIR` copies the videos. The grade is `[post]`
 ([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black.
 

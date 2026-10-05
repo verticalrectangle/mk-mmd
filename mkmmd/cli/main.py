@@ -7,7 +7,7 @@ from .. import __version__
 from ..bridge import BlenderError
 from .common import RUNTIME, USAGE, UsageError, emit
 
-COMMANDS = ["assets", "build", "check", "doctor", "grip", "inspect", "look", "model", "post", "q", "ref", "render",
+COMMANDS = ["assets", "build", "check", "doctor", "grip", "inspect", "look", "model", "play", "post", "q", "ref", "render",
             "serve", "timeline"]
 
 
