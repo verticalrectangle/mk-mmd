@@ -2,7 +2,8 @@
 (`--no-cache` builds every part again).
 
 A part's inputs are the code (every .py file of the mkmmd package and every file of the model bases, by size and time),
-the model seed, the parts built before it (their inputs, chained: a part built again builds every part after it again)
+its builder (module, name and file), the model seed, the parts built before it (their inputs, chained: a part built
+again builds every part after it again)
 and what it read from the spec while it was built (`spec.Reads`): the values of the keys it read (a value naming a file
 counts with that file's size and time), the keys it looked up that were not set, the key sets of the tables it listed.
 A hair change so builds the hair and what comes after it again, never the body or the head.
@@ -11,6 +12,7 @@ An entry holds the Part, the textures it wrote and its log lines (its warnings c
 chain, in <cache>/model_parts/<chain>/<reads digest>.{json,pkl}; chains unused for STALE_DAYS are removed, and the least
 recently used builds once the cache passes MAX_BYTES."""
 import hashlib
+import inspect
 import json
 import os
 import pickle
@@ -38,6 +40,17 @@ def code_digest():
             h.update(f"{p.relative_to(root)}:{st.st_size}:{st.st_mtime_ns}\n".encode())
         _CODE["d"] = h.hexdigest()
     return _CODE["d"]
+
+
+def builder_id(fn):
+    """A builder in the cache key: its module and name, and the size and time of its file (a project's own builder,
+    `[model.builders]`, is not in code_digest; a test's stand-in never passes for the real one)."""
+    try:
+        f = Path(inspect.getsourcefile(fn) or "")
+        st = f.stat() if f.is_file() else None
+    except (TypeError, OSError):
+        st = None
+    return [getattr(fn, "__module__", ""), getattr(fn, "__qualname__", repr(fn)), [st.st_size, st.st_mtime_ns] if st else None]
 
 
 def _norm(v, base, top=True):
@@ -77,17 +90,17 @@ class PartCache:
     def __init__(self, root=None):
         self.root = Path(root) if root else CFG.cache_dir() / "model_parts"
 
-    def chain(self, name, seed, prior):
-        """The folder of part `name` built after the parts whose cache keys are `prior`, with this code and seed."""
-        return self.root / hashlib.sha1(json.dumps([name, int(seed), code_digest(), list(prior)]).encode()).hexdigest()[:24]
+    def chain(self, name, seed, prior, fn=None):
+        """The folder of part `name` built by `fn` after the parts whose cache keys are `prior`, with this code and seed."""
+        ident = json.dumps([name, int(seed), code_digest(), builder_id(fn) if fn is not None else None, list(prior)])
+        return self.root / hashlib.sha1(ident.encode()).hexdigest()[:24]
 
-    def find(self, spec, name, seed, prior):
-        """(key, entry) of a build of `name` after `prior` whose reads look the same in `spec` now, else None. entry:
-        part, textures {file name: bytes}, logs, reads (seen, missed, listed)."""
-        d = self.chain(name, seed, prior)
-        if not d.is_dir():
+    def find(self, spec, chain):
+        """(key, entry) of a build in `chain` whose reads look the same in `spec` now, else None. entry: part, textures
+        {file name: bytes}, logs, reads (seen, missed, listed)."""
+        if not chain.is_dir():
             return None
-        for meta in sorted(d.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for meta in sorted(chain.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 r = json.loads(meta.read_text(encoding="utf-8"))
                 reads = tuple({tuple(p) for p in r[k]} for k in ("seen", "missed", "listed"))
@@ -99,31 +112,27 @@ class PartCache:
                 continue
             os.utime(meta)                                   # the most recently used is tried first
             entry["reads"] = reads
-            return f"{d.name}:{meta.stem}", entry
+            return f"{chain.name}:{meta.stem}", entry
         return None
 
-    def key(self, spec, name, seed, prior, reads):
-        return f"{self.chain(name, seed, prior).name}:{reads_digest(spec, *reads)}"
-
-    def store(self, spec, name, seed, prior, reads, part, textures, logs):
-        """Keep a build of `name` (reads: `spec.Reads.since`); returns its key. A part that does not pickle is not kept
+    def store(self, spec, chain, reads, part, textures, logs):
+        """Keep a build in `chain` (reads: `spec.Reads.since`); returns its key. A part that does not pickle is not kept
         (its key still chains the parts after it)."""
-        key = self.key(spec, name, seed, prior, reads)
-        d = self.chain(name, seed, prior)
-        stem = key.split(":")[1]
+        stem = reads_digest(spec, *reads)
+        key = f"{chain.name}:{stem}"
         try:
-            d.mkdir(parents=True, exist_ok=True)
-            tmp = d / f"{stem}.pkl.tmp"
+            chain.mkdir(parents=True, exist_ok=True)
+            tmp = chain / f"{stem}.pkl.tmp"
             with open(tmp, "wb") as fh:
                 pickle.dump({"part": part, "textures": textures, "logs": list(logs)}, fh, protocol=pickle.HIGHEST_PROTOCOL)
-            tmp.replace(d / f"{stem}.pkl")
-            tmp = d / f"{stem}.json.tmp"
+            tmp.replace(chain / f"{stem}.pkl")
+            tmp = chain / f"{stem}.json.tmp"
             tmp.write_text(json.dumps({k: sorted(map(list, s)) for k, s in zip(("seen", "missed", "listed"), reads)}),
                            encoding="utf-8")
-            tmp.replace(d / f"{stem}.json")
+            tmp.replace(chain / f"{stem}.json")
         except (OSError, pickle.PicklingError, TypeError, AttributeError):
             return key
-        for old in sorted(d.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[KEEP:]:
+        for old in sorted(chain.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[KEEP:]:
             old.unlink(missing_ok=True)
             old.with_suffix(".pkl").unlink(missing_ok=True)
         self.prune()

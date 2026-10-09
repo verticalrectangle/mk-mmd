@@ -50,7 +50,7 @@ def mannequin(tmp_path_factory):
     (d / "m.toml").write_text('[model]\nname = "mq"\nparts = ["mannequin", "mannequin_hair"]\n'
                               f'out = "{d / "out"}"\n[model.needs]\nmannequin = []\n', encoding="utf-8")
     with pytest.raises(SystemExit) as e:
-        MAIN.main(["model", "build", str(d / "m.toml")])
+        MAIN.main(["model", "build", str(d / "m.toml"), "--no-cache"])
     assert e.value.code == 0
     return d / "out" / "mq.pmx", d / "out" / "mq.rig.json"
 

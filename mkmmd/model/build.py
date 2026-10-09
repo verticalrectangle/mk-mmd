@@ -344,7 +344,8 @@ def run(spec, only=None, tex_dir=None, log=None, ctx=None, cache=None):
         entry = get_builder(name, spec)
         ctx.part = name
         t0 = time.time()
-        hit = cache.find(ctx.spec, name, ctx.seed, keys) if cache is not None else None
+        chain = cache.chain(name, ctx.seed, keys, entry.fn) if cache is not None else None
+        hit = cache.find(ctx.spec, chain) if cache is not None else None
         if hit is not None:
             key, got = hit
             part = got["part"]
@@ -367,7 +368,7 @@ def run(spec, only=None, tex_dir=None, log=None, ctx=None, cache=None):
             except ValueError as e:
                 raise BuildError(str(e)) from e
             if cache is not None:
-                key = cache.store(ctx.spec, name, ctx.seed, keys, ctx.spec._reads.since(snap), part,
+                key = cache.store(ctx.spec, chain, ctx.spec._reads.since(snap), part,
                                   {f: (ctx.tex_dir / f).read_bytes() for f in ctx.textures[n_tex:]}, ctx.logs[n_logs:])
         if cache is not None:
             keys.append(key)

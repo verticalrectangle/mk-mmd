@@ -2716,10 +2716,11 @@ the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk
 `[[cast]]` with `pmx =`), `build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
 `--no-export` only runs and checks the builders, into `<out>/no_export/` (an exported model's files stay as they are).
 **Part cache** (`mkmmd.model.partcache`, in `~/.cache/mk/model_parts`): a part is reused, with its textures and its log
-lines, while all it read is unchanged: the code (the package's .py files and the bases' files, by size and time), the
-seed, the parts built before it (chained, so a part built again builds every part after it again) and what it read from
-the spec (the values of its keys, a file a value names by its size and time, the keys it looked up that were not set,
-the key sets of the tables it listed). The report marks each part `cached`; `--no-cache` builds all of them again.
+lines, while all it read is unchanged: the code (the package's .py files and the bases' files, by size and time), its
+builder (module, name and file: a project's own builder too), the seed, the parts built before it (chained, so a part
+built again builds every part after it again) and what it read from the spec (the values of its keys, a file a value
+names by its size and time, the keys it looked up that were not set, the key sets of the tables it listed). The report
+marks each part `cached`; `--no-cache` builds all of them again.
 `mk model info SPEC` shows the plan; `mk model new NAME [--from BASE] [--dir DIR] [--out DIR]` writes DIR/model.toml, a
 character that includes the base (default `girl`), and never overwrites one; `mk model studio SCENE.blend --out OUT.blend
 [--floor X,Y ...] [--lights]` copies a built scene with the neutral review studio (grey world, soft floor discs,

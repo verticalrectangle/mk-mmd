@@ -41,8 +41,8 @@ def make_parts(runs):
 
 def test_a_part_is_given_back_while_what_it_read_is_unchanged(registry, tmp_path, monkeypatch):
     """A cached part comes back with its textures and log lines (its warnings) while all it read is unchanged; a key it
-    looked up that is newly set, a file a value of it names that changed, or new code builds it again, and every part
-    after it, never one before it; earlier builds stay cached."""
+    looked up that is newly set, a file a value of it names that changed, new code, or another builder for the part builds
+    it again, and every part after it, never one before it; earlier builds stay cached."""
     runs = []
     make_parts(runs)
     cache = PC.PartCache(tmp_path / "cache")
@@ -71,3 +71,10 @@ def test_a_part_is_given_back_while_what_it_read_is_unchanged(registry, tmp_path
     assert build(7, body={"mesh": str(mesh)})[2] == ["body", "hair"]
     monkeypatch.setitem(PC._CODE, "d", "another version of the code")
     assert build(8, body={"mesh": str(mesh)})[2] == ["body", "hair"]
+    first = BD.REGISTRY["body"].fn
+
+    def stand_in(ctx):                                  # another builder of the part (a project's own, a test's)
+        runs.append("stand-in")
+        return first(ctx)
+    BD.builder("body")(stand_in)
+    assert build(9, body={"mesh": str(mesh)})[2] == ["stand-in", "body", "hair"]

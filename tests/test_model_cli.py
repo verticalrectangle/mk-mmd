@@ -21,6 +21,12 @@ def run_cli(argv, capsys):
     return e.value.code, json.loads(out)
 
 
+@pytest.fixture(autouse=True)
+def own_cache(tmp_path, monkeypatch):
+    """The builds here keep their part cache (and Blender's job folders) in the test's folder, not the user's."""
+    monkeypatch.setenv("MK_CACHE", str(tmp_path / "cache"))
+
+
 def mannequin_spec(tmp_path, extra=""):
     p = tmp_path / "m.toml"
     p.write_text('[model]\nname = "mq"\nparts = ["mannequin", "mannequin_hair", "mannequin_skirt"]\n'
