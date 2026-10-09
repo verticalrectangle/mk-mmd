@@ -1,6 +1,7 @@
 """The mouth: a slit in the skin (closed at rest: the upper and lower lip margins are separate vertices at the same
-place), the mouth interior behind it (a bag that follows the lips), upper teeth with a small fang, a tongue, the lip lines,
-and the mouth morphs as deformation fields of the lips.
+place), folded into the face as a notch (seen from the side the upper lip ends in an edge over the mouth line and the
+lower lip comes out under it), the mouth interior behind it (a bag that follows the lips), upper teeth with a small fang,
+a tongue, the lip lines, and the mouth morphs as deformation fields of the lips.
 
 Head-local metres (see head_shape). The slit is centred on x = 0 at height `z`; the upper lip is above it, the lower below."""
 import numpy as np
@@ -11,8 +12,16 @@ DEFAULTS = dict(
     smile=0.0020,                  # corners lifted over the middle of the closed line
     block_margin=0.0035,           # grid margin beyond the corners
     ring_t=(0.0, 0.42, 0.78, 1.0),  # rings 0..3 between the grid block and the slit
+    fold=0.0040,                   # the slit lies this far back at the middle (1 - (x / half_width)^2)^2 of it sideways
+    fold_share=(0.0, 0.05, 0.40, 1.0),  # the share of the fold rings 0..3 take: the lips curl into the mouth line
     line_width=0.0009,            # width of the lip line strips
 )
+
+
+def fold_depth(cfg, x):
+    """How far back the closed mouth line lies at x (the notch: deepest in the middle, gone at the corners)."""
+    s = np.asarray(x, float) / cfg["half_width"]
+    return cfg["fold"] * np.clip(1.0 - s * s, 0.0, None) ** 2
 
 
 def slit_z(cfg, x):
@@ -32,19 +41,23 @@ def add_mouth(sb, cfg=None):
     hw = c["half_width"]
     nf = int(np.sum((g.theta > 0) & (g.theta < np.radians(60.0))))
     cols = range(-nf, nf + 1)
-    # block: columns covering the slit plus a margin, two rows around the mouth height
-    xs0 = np.array([sb.V[g.A[g.nA // 2, k % g.n]][0] for k in cols])
+    # block: two rows around the mouth (the midline row nearest the mouth point on the face: the midline's height is not
+    # monotonic below the chin, where it comes back up the throat), columns covering the slit plus a margin
+    target = lift(sb.shape, np.zeros(1), np.array([c["z"]]))[0]
+    jm = int(np.argmin([np.linalg.norm(sb.V[g.A[j, 0]] - target) for j in range(g.nA)]))
+    xs0 = np.array([sb.V[g.A[jm, k % g.n]][0] for k in cols])
     c1 = int(cols[np.min(np.where(xs0 >= hw + c["block_margin"])[0])])
     c0 = -c1
-    zc = np.array([sb.V[g.A[j, 0]][2] for j in range(g.nA)])
-    jm = int(np.argmin(np.abs(zc - c["z"])))
     j0, j1 = jm - 1, jm + 1
     ring0 = sb.carve(c0, c1, j0, j1)
     w = c1 - c0
     n = len(ring0)                                   # 2 (w + 1) + 2
     P0 = np.array([sb.V[i] for i in ring0])
-    # parameters of the slit points: bottom row m -> s = (m + 1) / (w + 2) from the left corner, top row the same
-    s_low = (np.arange(w + 1) + 1.0) / (w + 2)
+    # parameters of the slit points: bottom row m -> s from the left corner, spaced like the block's columns (so the ring
+    # lines from the block to the slit never cross where the grid is finer in the middle); the top row the same
+    xb = P0[:w + 1, 0]
+    U = float(np.abs(xb).max()) + float(np.abs(np.diff(xb[[0, 1]])[0]))
+    s_low = 0.5 + 0.5 * xb / U
     s_up = s_low[::-1]
     s_ring = np.concatenate([s_low, [1.0], s_up, [0.0]])
     tx = -hw + s_ring * 2 * hw
@@ -54,7 +67,9 @@ def add_mouth(sb, cfg=None):
         t = c["ring_t"][k]
         x = P0[:, 0] + t * (tx - P0[:, 0])
         z = P0[:, 2] + t * (tz - P0[:, 2])
-        rings.append(sb.add_verts(lift(sb.shape, x, z)))
+        P = lift(sb.shape, x, z)
+        P[:, 1] += c["fold_share"][k] * fold_depth(c, x)            # the lips curl in to the folded mouth line
+        rings.append(sb.add_verts(P))
     for k in range(3):
         sb.strip(rings[k], rings[k + 1], sb.SKIN)
     return dict(rings=rings, n=n, w=w, block=(c0, c1, j0, j1), cfg=c,
@@ -70,10 +85,19 @@ INTERIOR = dict(
 )
 
 
-def cavity(m, V, cfg=None):
+def cavity(m, V, cfg=None, shape=None, behind=0.0025):
     """Interior bag: rings A (on the slit, behind the lips), B, C and a cap. `m`: the dict of add_mouth with the final skin
-    vertex ids in m["ids"] (ring 3, in ring order) and V the skin vertices. Returns (verts, faces, uv, follow, ring_of_vertex),
-    where `follow[i]` is the vertex's share of the lip motion and `m["ring3_row"][i]` the ring-3 column it follows."""
+    vertex ids in m["ids"] (ring 3, in ring order) and V the skin vertices; with `shape`, rings B, C and the cap stay at least
+    `behind` behind the skin in front of them (a chin that recedes fast under the mouth would otherwise show the bag through
+    it). Returns (verts, faces, uv, follow, ring_of_vertex), where `follow[i]` is the vertex's share of the lip motion and
+    `m["ring3_row"][i]` the ring-3 column it follows."""
+    from .head_skin import lift
+
+    def keep_behind(P):
+        if shape is not None:             # the line from the front ends inside, at the mouth's depth: under the chin it
+            yb = float(np.mean(V[m["ids3"]][:, 1])) + 0.03            # would go on through the throat into the neck
+            P[:, 1] = np.maximum(P[:, 1], lift(shape, P[:, 0], P[:, 2], y_back=yb)[:, 1] + behind)
+        return P
     c = dict(INTERIOR)
     c.update(cfg or {})
     ring3 = V[m["ids3"]]
@@ -93,12 +117,12 @@ def cavity(m, V, cfg=None):
     uv = [np.stack([th / (2 * np.pi), np.full(n, 0.0)], -1)]
     for k in (1, 2):
         a, b = c["a"][k], c["b"][k]
-        P = np.stack([a * np.cos(th), np.full(n, y0 + c["depth"][k]), z_m + b * np.sin(th)], -1)
+        P = keep_behind(np.stack([a * np.cos(th), np.full(n, y0 + c["depth"][k]), z_m + b * np.sin(th)], -1))
         verts.append(P)
         follow.append(np.full(n, c["follow"][k]))
         cols.append(np.arange(n))
         uv.append(np.stack([th / (2 * np.pi), np.full(n, c["depth"][k] / c["depth"][3])], -1))
-    cap = np.array([[0.0, y0 + c["depth"][3], z_m]])
+    cap = keep_behind(np.array([[0.0, y0 + c["depth"][3], z_m]]))
     verts.append(cap)
     follow.append(np.zeros(1))
     cols.append(np.zeros(1, int))
@@ -222,8 +246,9 @@ def lip_field(P, side, cfg, up=0.0, dn=0.0, p=0.9, wx=0.0, cl=0.0, nar=0.0, pro=
     dz = np.where(d >= 0, up * env * gu, -dn * env * gl)
     if wave:
         a = np.abs(s)
-        f = 1.0 * np.exp(-(s / 0.2) ** 2) - 1.7 * np.exp(-((a - 0.55) / 0.26) ** 2) + 1.5 * np.minimum(a, 1.2) ** 4
-        dz = dz + wave * f * np.where(d >= 0, _sm(1.0 - np.abs(d) / R), _sm(1.0 - np.abs(d) / R))
+        corner = 1.5 * np.minimum(a, 1.2) ** 4 * _sm((2.4 - a) / 1.2)       # the corners rise; fades out over the cheek
+        f = 1.0 * np.exp(-(s / 0.2) ** 2) - 1.7 * np.exp(-((a - 0.55) / 0.26) ** 2) + corner
+        dz = dz + wave * f * _sm(1.0 - np.abs(d) / R)
     r = np.hypot(x - np.sign(x) * hw, z - zm)
     h = _sm(1.0 - r / 0.013)
     dx = np.sign(x) * wx * h

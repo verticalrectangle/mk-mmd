@@ -131,18 +131,37 @@ def toon(mult, width=32, height=128, edge=0.30, soft=0.45):
     return np.dstack([img, np.full((height, width), 255.0)]).astype(np.uint8)
 
 
-# cylindrical face map: u = 0.5 + azimuth / 2 pi (0 = straight ahead, the seam is at the back), v = (z - UV_Z0) / (UV_Z1 - UV_Z0)
-UV_Z0, UV_Z1 = -0.045, 0.21
+# cylindrical face map: u = 0.5 + azimuth / 2 pi (0 = straight ahead, the seam is at the back). The face has the upper part
+# of the image (face_v, by height); the skin under the jaw and the neck the strip at the bottom (under_v, by the side of the
+# jaw's edge, head_shape.HeadShape.jaw_side): the chin and the throat behind it share azimuth and height, so one cylinder
+# would paint the throat's shadow onto the chin, and the shadow's edge follows the jaw's edge instead of the mesh's faces.
+UV_Z0, UV_Z1 = -0.045, 0.21               # the heights the face part of the map spans
+UNDER_H0, UNDER_H1 = -0.03, 0.02          # the jaw sides the strip spans (negative: the underside)
+UNDER_V, UV_GAP, UV_PAD = 0.14, 0.02, 0.01  # the strip's share of the image (v from 0), the empty gap above it, the margin
+#                                            below it (v = 0 would sample the top row too where the image repeats)
+SHADOW_EDGE, SHADOW_SOFT = 0.0015, 0.002  # the jaw's shadow ends this far onto the face from the middle of the jaw's edge
 
 
-def face_skin(base, cheek="#f09a96", nose="#d79a8c", w=512, h=256, cheek_k=0.34, nose_k=0.40, jaw=None, band="#e3aa95",
+def face_v(z):
+    t = np.clip((np.asarray(z, float) - UV_Z0) / (UV_Z1 - UV_Z0), 0.0, 1.0)
+    return UNDER_V + UV_GAP + t * (1.0 - UNDER_V - UV_GAP)
+
+
+def under_v(h):
+    return UV_PAD + np.clip((np.asarray(h, float) - UNDER_H0) / (UNDER_H1 - UNDER_H0), 0.0, 1.0) * (UNDER_V - UV_PAD)
+
+
+def face_skin(base, cheek="#f09a96", nose="#d79a8c", w=1024, h=512, cheek_k=0.34, nose_k=0.40, nose_z=0.0240, band="#e3aa95",
               band_w=(0.9, 1.0, 0.35)):
-    """The face skin texture on the cylindrical map: the base colour with a soft warm blush on each cheek and a faint
-    warm shade under the nose tip (permanent; the 照れ morph adds a stronger overlay). Row 0 is the top (v = 1)."""
+    """The face skin texture (see face_v / under_v; row 0 is the top, v = 1): the face is the base colour with a soft warm
+    blush on each cheek and a faint warm shade under the nose tip (permanent; the 照れ morph adds a stronger overlay); the
+    skin under the jaw is in shadow up to SHADOW_EDGE over the underside, with the weight the body's baked neck shadow has at
+    its seam ring (strength x (back + (front - back) (0.5 + 0.5 cos theta)^1.5)), so the two meet without a step."""
     b, ck, nk = hex_rgb(base), hex_rgb(cheek), hex_rgb(nose)
     r, c = np.mgrid[0:h, 0:w]
     th = ((c + 0.5) / w - 0.5) * 2 * np.pi
-    z = UV_Z0 + (1.0 - (r + 0.5) / h) * (UV_Z1 - UV_Z0)
+    v = 1.0 - (r + 0.5) / h
+    z = UV_Z0 + np.clip((v - UNDER_V - UV_GAP) / (1.0 - UNDER_V - UV_GAP), 0.0, 1.0) * (UV_Z1 - UV_Z0)
 
     def blob(th0, z0, sth, sz):
         return np.exp(-0.5 * (((th - th0) / sth) ** 2 + ((z - z0) / sz) ** 2))
@@ -150,16 +169,15 @@ def face_skin(base, cheek="#f09a96", nose="#d79a8c", w=512, h=256, cheek_k=0.34,
     img = np.empty((h, w, 3))
     img[:] = b
     img = img * (1 - cheek_k * a[..., None]) + ck * (cheek_k * a[..., None])
-    a2 = blob(0.0, 0.0258, 0.030, 0.0032)
+    a2 = blob(0.0, nose_z, 0.030, 0.0026)
     img = img * (1 - nose_k * a2[..., None]) + nk * (nose_k * a2[..., None])
-    if jaw is not None:
-        # the neck under the jaw is in shadow: a crisp top edge along the jaw silhouette, then the weight the body's baked neck
-        # shadow has at its seam ring (strength x (back + (front - back) (0.5 + 0.5 cos theta)^1.5)), held down to the ring
-        d = np.asarray(jaw, float)[None, :] - z
-        strength, front, back = band_w
-        wcol = strength * (back + (front - back) * (0.5 + 0.5 * np.cos(th[0:1, :])) ** 1.5)
-        a3 = np.where(d > 0, wcol * _smooth(d / 0.0010), 0.0)
-        img = img * (1 - a3[..., None]) + hex_rgb(band) * a3[..., None]
+    under = v < UNDER_V + 0.5 * UV_GAP
+    img[under] = b                                                    # the strip: no cheek or nose shades
+    hh = UNDER_H0 + np.clip((v - UV_PAD) / (UNDER_V - UV_PAD), 0.0, 1.0) * (UNDER_H1 - UNDER_H0)
+    strength, front, back = band_w
+    wcol = strength * (back + (front - back) * (0.5 + 0.5 * np.cos(th)) ** 1.5)
+    a3 = np.where(under, wcol * (1.0 - _smooth((hh - SHADOW_EDGE) / SHADOW_SOFT)), 0.0)
+    img = img * (1 - a3[..., None]) + hex_rgb(band) * a3[..., None]
     out = np.empty((h, w, 4), np.uint8)
     out[..., :3] = np.clip(img * 255 + 0.5, 0, 255).astype(np.uint8)
     out[..., 3] = 255

@@ -25,12 +25,22 @@ def spaced(f, n_steps, lo, hi, table=40001):
     return np.interp(np.linspace(0.0, 1.0, n_steps + 1), c, x)
 
 
-def column_angles(n, face_deg, back_deg, face_to=38.0, ramp=85.0):
-    """n azimuths (even, symmetric, 0 and pi included), ascending 0..pi then -pi..: spacing face_deg in front growing
-    to back_deg behind."""
+def column_angles(n, face_deg, back_deg, face_to=38.0, ramp=85.0, mid_deg=None, mid_to=8.0, mid_ramp=6.0):
+    """Azimuths (even count, symmetric, 0 and pi included), ascending 0..pi then -pi..: spacing face_deg in front growing
+    to back_deg behind, and mid_deg (when given) within mid_to of the midline, ramping to face_deg over mid_ramp (degrees).
+    `n` columns, or None: as many as the spacings ask for."""
+    def base(t):
+        return np.radians(face_deg) + (np.radians(back_deg) - np.radians(face_deg)) * \
+            smooth((np.abs(t) - np.radians(face_to)) / np.radians(ramp))
+    if mid_deg is None:
+        dens = base
+    else:
+        dens = lambda t: np.radians(mid_deg) + (base(t) - np.radians(mid_deg)) * \
+            smooth((np.abs(t) - np.radians(mid_to)) / np.radians(mid_ramp))
+    if n is None:
+        inv = 1.0 / dens(np.linspace(0.0, np.pi, 20001))
+        n = 2 * max(int(round(float((0.5 * (inv[1:] + inv[:-1])).sum() * np.pi / 20000))), 4)
     half = n // 2
-    dens = lambda t: np.radians(face_deg) + (np.radians(back_deg) - np.radians(face_deg)) * \
-        smooth((np.abs(t) - np.radians(face_to)) / np.radians(ramp))
     th = spaced(dens, half, 0.0, np.pi)
     return np.concatenate([th, -th[-2:0:-1]])
 
@@ -59,24 +69,36 @@ class Grid:
 
     `rows`: list of (vertex ids, column stride) from the neck ring up; stride 1 rows have all `n` columns (the finest
     layer, index `A`), stride 2 and 4 rows every 2nd / 4th. `phi`: elevation of every row (the ring row's is its
-    value at theta = 0)."""
+    value at theta = 0). Optional finer bands: columns `mid_deg` apart within `mid_to` degrees of the midline, and rows
+    `detail` = {z: (lo, hi), spacing, ramp} apart where the front of the face is between those heights (the nose)."""
 
     UPPER = ((2, 66.0), (2, 72.5), (4, 80.0))             # (stride, elevation in degrees) rows above the finest layer
 
     def __init__(self, shape, cfg=None):
         c = dict(n_cols=96, face_deg=1.9, back_deg=8.0, ring_z=-0.045, phi_end_a=58.0,
-                 spacing_face=0.0029, spacing_neck=0.0036, spacing_top=0.0062)
+                 spacing_face=0.0029, spacing_neck=0.0036, spacing_top=0.0062, mid_deg=None, mid_to=8.0, mid_ramp=6.0,
+                 detail=None)
         c.update(cfg or {})
         self.cfg = c
         self.shape = shape
         self.neck = shape.p["neck"]
-        self.theta = column_angles(c["n_cols"], c["face_deg"], c["back_deg"])
+        self.theta = column_angles(c["n_cols"], c["face_deg"], c["back_deg"], mid_deg=c["mid_deg"], mid_to=c["mid_to"],
+                                   mid_ramp=c["mid_ramp"])
         N = self.n = len(self.theta)
         ring_dirs, ring_pts = self.ring(self.theta)
         phi_ring0 = float(np.arcsin(ring_dirs[0, 2]))
-        spacing = lambda ph: (c["spacing_face"]
-                              + (c["spacing_neck"] - c["spacing_face"]) * smooth((np.radians(-38.0) - ph) / np.radians(12.0))
-                              + (c["spacing_top"] - c["spacing_face"]) * smooth((ph - np.radians(30.0)) / np.radians(26.0)))
+        base = lambda ph: (c["spacing_face"]
+                           + (c["spacing_neck"] - c["spacing_face"]) * smooth((np.radians(-38.0) - ph) / np.radians(12.0))
+                           + (c["spacing_top"] - c["spacing_face"]) * smooth((ph - np.radians(30.0)) / np.radians(26.0)))
+        spacing = base
+        if c["detail"]:
+            dt = c["detail"]
+            phs = np.radians(np.arange(-60.0, 30.0, 0.05))                 # the front profile: height -> elevation
+            zf = np.maximum.accumulate(shape.surface(directions(0.0 * phs, phs))[:, 2])
+            lo, hi = (float(np.interp(z, zf, phs)) for z in dt["z"])
+            rp = np.radians(float(dt.get("ramp", 3.0)))
+            spacing = lambda ph: base(ph) + (float(dt["spacing"]) - base(ph)) * smooth((ph - lo) / rp + 1.0) * \
+                smooth((hi - ph) / rp + 1.0)
         phi = list(row_elevations(shape, phi_ring0, np.radians(c["phi_end_a"]), spacing))
         self.nA = len(phi)
         V = []
@@ -137,13 +159,15 @@ class Grid:
 # ------------------------------------------------------------------------------------------------- holes and rings
 
 
-def lift(shape, x, z, y_hi=0.2, iters=40):
+def lift(shape, x, z, y_hi=0.2, iters=40, y_back=None):
     """Points of the head surface seen from the front at (x, z): y of the first crossing walking back from y = -y_hi
-    (vectorised; bisection, the shape is a graph over the front plane in the face region)."""
+    (vectorised; bisection, the shape is a graph over the front plane in the face region). The search ends at the skull
+    centre, or at `y_back` (a depth known to be inside the head) where the line could leave the head again: under the
+    chin a line goes on through the throat into the neck."""
     x = np.asarray(x, float)
     z = np.asarray(z, float)
     lo = np.full(x.shape, -y_hi)
-    hi = np.full(x.shape, float(shape.centre[1]))
+    hi = np.full(x.shape, float(shape.centre[1]) if y_back is None else float(y_back))
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
         inside = shape.phi(np.stack([x, mid, z], -1)) < 0.0

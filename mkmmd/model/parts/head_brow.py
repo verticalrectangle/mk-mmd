@@ -7,7 +7,7 @@ BROW = dict(
     z=0.0995,                         # height of the brow line over the head bone
     arch=0.0034,                      # how far the middle rises over the ends
     slope=-0.0016,                    # outer end lower than the inner end by this much
-    thick=0.0040,                     # width at the inner end
+    thick=0.0036,                     # width at the widest (a crescent, pointed at both ends, widest a third of the way out)
     n=16,
     height=0.0004,                    # over the skin
 )
@@ -28,7 +28,7 @@ def centreline(cfg=None, dz=0.0, arch_scale=1.0, d_inner=0.0, d_outer=0.0, dx=0.
     x = xm + (x0 + (x1 - x0) * s - xm) * x_scale + dx
     z = (c["z"] + c["arch"] * arch_scale * np.sin(np.pi * s) ** 0.85 + c["slope"] * (s - 0.5) + dz
          + d_inner * (1 - s) ** 1.3 + d_outer * s ** 1.3)
-    w = c["thick"] * thick_scale * (0.35 + 0.65 * (1 - s) ** 0.7) * (1 - s ** 6)
+    w = c["thick"] * thick_scale * np.sin(np.pi * s ** 0.75) ** 0.6
     return np.stack([x, z], -1), w
 
 

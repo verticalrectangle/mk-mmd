@@ -11,13 +11,14 @@ REQUIRED = ["まばたき", "笑い", "ウィンク", "ウィンク右", "ウィ
             "あ", "い", "う", "え", "お", "ω", "口角上げ", "口角下げ", "真面目", "困る", "怒り", "にこり", "上", "下", "照れ"]
 LIDS = ["まばたき", "ウィンク", "ウィンク右", "ウィンク２", "ｳｨﾝｸ２右", "笑い", "はぅ", "なごみ", "じと目", "びっくり"]
 SHEET = (HL.SHEET["rows"] + 1) * HL.SHEET["nu"]                 # vertices per lid sheet; order: upper L, lower L, upper R, lower R
+NOSE_TIP = (0.0, -0.1170, 1.2330)                               # model space: the spec's [proportions.face] nose_tip [y, z]
 
 
 @pytest.fixture(scope="module")
 def head(tmp_path_factory):
     sp = spec.from_dict({"model": {"name": "t", "parts": ["head"]},
                          "colors": {"skin": {"base": "#f1e7d6"}, "eyes": {}, "mouth": {}},
-                         "proportions": {"head": {}, "face": {}, "hair_guides": {}}})
+                         "proportions": {"head": {}, "face": {"nose_tip": list(NOSE_TIP[1:])}, "hair_guides": {}}})
     ctx = build.BuildCtx(sp, tmp_path_factory.mktemp("tex"), seed=1)
     ctx.part = "body"
     ctx.parts["body"] = P.Part("body", info=dict(neck_top=dict(z=1.159, center=(0.0, 0.0057), rx=0.0229, ry=0.0303),
@@ -84,6 +85,25 @@ def test_half_blink_puts_the_upper_lid_half_way_down(head):
     assert np.abs(mesh(head, "eyes").morphs.get("まばたき", np.zeros((1, 3)))).max() == 0
 
 
+def test_the_closed_lids_cover_the_iris(head):
+    """The iris, the pupil and the highlights sit just behind the opening (as drawn eyes do), so a closed eye must still
+    cover them: in every closed-eye drawing, each of their points lies behind the closed lid sheets or the skin."""
+    lids, eyes, face = mesh(head, "lids"), mesh(head, "eyes"), mesh(head, "face")
+    skin = [f for f, mi in zip(face.faces, face.face_mat) if face.mats[mi] == "顔"]
+    layers = np.unique([i for f, mi in zip(eyes.faces, eyes.face_mat) if eyes.mats[mi] != "白目" for i in f])
+    P = eyes.verts[layers]
+    skin_surf = DC.SkinSurface(face.verts, skin, np.zeros(len(skin), int))
+    for n in ("まばたき", "笑い", "はぅ", "なごみ"):
+        lid_surf = DC.SkinSurface(lids.verts + lids.morphs[n], lids.faces, np.zeros(len(lids.faces), int))
+        y_front = np.full(len(P), np.inf)
+        for s in (lid_surf, skin_surf):
+            tri, bary = s.bind(P[:, 0], P[:, 2], strict=False)
+            ok = tri >= 0
+            y_front[ok] = np.minimum(y_front[ok], s.point(tri[ok], bary[ok])[:, 1])
+        assert np.isfinite(y_front).all(), n                      # every point is under the closed lids or the skin
+        assert (P[:, 1] - y_front).min() > 2e-4, (n, (P[:, 1] - y_front).min())      # and behind them (forward is -y)
+
+
 def test_morphs_stay_in_their_region(head):
     face, lines, lids = mesh(head, "face"), mesh(head, "lines"), mesh(head, "lids")
     eye_z = head.info["eyes"]["L"]["center"][2]
@@ -100,6 +120,31 @@ def test_morphs_stay_in_their_region(head):
         assert moved(lines, n).any(), n
     assert not moved(face, "照れ").any()
     assert moved(mesh(head, "blush"), "照れ").all()
+
+
+def test_the_lash_strips_stay_in_front_of_the_skin_and_the_lids_in_every_lid_morph(head):
+    """A lid morph moves the lines round the eye (the lash band and its blades, the lower lash, the crease) over the lid
+    sheets and partly onto the skin round the eye (the surprised eye lifts the band clear of the lid, the moods hang it from
+    a lowered lid): none of their faces may dip behind the skin, or the skin shows through the lashes in holes, nor behind
+    the lid sheets, or a closed-eye drawing breaks up where it crosses them."""
+    face, lines, lids = mesh(head, "face"), mesh(head, "lines"), mesh(head, "lids")
+    skin = [f for f, mi in zip(face.faces, face.face_mat) if face.mats[mi] == "顔"]
+    surf = DC.SkinSurface(face.verts, skin, np.zeros(len(skin), int))
+    strips = [f for f, mi in zip(lines.faces, lines.face_mat) if lines.mats[mi] in ("睫毛", "下睫毛", "二重")]
+    t = [(a, b) for a in np.linspace(0, 1, 5) for b in np.linspace(0, 1, 5) if a + b <= 1]
+    for n in [None] + LIDS + ["困る", "悲しみ", "怒り", "にこり", "真面目"]:
+        V = lines.verts if n is None else lines.verts + lines.morphs.get(n, 0.0)
+        Q = np.array([V[f[0]] + a * (V[f[1]] - V[f[0]]) + b * (V[f[2]] - V[f[0]]) for f in strips for a, b in t])
+        tri, bary = surf.bind(Q[:, 0], Q[:, 2], strict=False)
+        ok = tri >= 0                                          # inside the opening the strips lie over the lids, not skin
+        behind = Q[ok, 1] - surf.point(tri[ok], bary[ok])[:, 1]   # > 0: behind the skin (forward is -y)
+        assert behind.max() < 2.5e-4, (n, behind.max())
+        if n is None:
+            continue                                           # at rest the sheets are tucked away behind the margins
+        sheets = DC.SkinSurface(lids.verts + lids.morphs.get(n, 0.0), lids.faces, np.zeros(len(lids.faces), int))
+        tri, bary = sheets.bind(Q[:, 0], Q[:, 2], strict=False)
+        ok = tri >= 0
+        assert (Q[ok, 1] - sheets.point(tri[ok], bary[ok])[:, 1]).max() < 0.0, n
 
 
 def test_wink_morphs_are_mirrored(head):
@@ -136,12 +181,12 @@ def _inside(poly, pts):
 
 
 def test_the_iris_stays_behind_the_skin_for_every_gaze(head):
-    """Rotate the eye layers about the eye bone: outside the lid opening nothing may come in front of the skin. Inward
-    (nasal) gaze is safe up to +-25 deg yaw; outward gaze pokes through the temple skin beyond about 10 deg (0.5 mm at 10,
-    1.2 mm at 15, 2 mm at 20, 5.9 mm at 25: measured), so the checked range is yaw <= 10 outward, 25 inward, pitch +-15."""
+    """Rotate the eye layers about the eye bone: outside the lid opening nothing may come in front of the skin. The iris is
+    a flat disc just behind the opening, pushed back as far as the skin round the opening needs for the eye's gaze range
+    (head_eye DEFAULTS gaze), so it stays behind the skin at 15 deg outward, 25 deg inward and 15 deg up or down."""
     face, eyes = mesh(head, "face"), mesh(head, "eyes")
     surf = DC.SkinSurface(face.verts, face.faces, np.zeros(len(face.faces), int))
-    worst = 0.0
+    worst = -1.0
     for side, sg, bone in (("L", 1.0, "左目"), ("R", -1.0, "右目")):
         e = head.info["eyes"][side]
         E = np.asarray(e["center"])
@@ -150,25 +195,38 @@ def test_the_iris_stays_behind_the_skin_for_every_gaze(head):
         grown = c + (poly - c) * 1.06
         rows = np.nonzero(eyes.weights[bone] > 0.5)[0]
         P0 = eyes.verts[rows]
-        for yaw, pitch in ((10 * sg, 0), (-25 * sg, 0), (0, 15), (0, -15), (10 * sg, 15), (-25 * sg, -15), (10 * sg, -15), (-25 * sg, 15)):
+        for yaw, pitch in ((15 * sg, 0), (-25 * sg, 0), (0, 15), (0, -15), (15 * sg, 15), (-25 * sg, -15), (15 * sg, -15), (-25 * sg, 15)):
             ay, ap = np.radians(yaw), np.radians(pitch)
             Rz = np.array([[np.cos(ay), -np.sin(ay), 0], [np.sin(ay), np.cos(ay), 0], [0, 0, 1]])
             Rx = np.array([[1, 0, 0], [0, np.cos(ap), -np.sin(ap)], [0, np.sin(ap), np.cos(ap)]])
             Q = (P0 - E) @ (Rz @ Rx).T + E
-            out = ~_inside(grown, Q[:, [0, 2]])
-            Q = Q[out]
-            ok = np.ones(len(Q), bool)
-            y_skin = np.full(len(Q), np.nan)
-            for k, q in enumerate(Q):
-                try:
-                    tri, bary = surf.bind(np.array([q[0]]), np.array([q[2]]))
-                    y_skin[k] = surf.point(tri, bary)[0, 1]
-                except ValueError:
-                    ok[k] = False                      # beyond the front skin: hidden by the head's side
-            behind = q_behind = (Q[:, 1] - y_skin)[ok]
-            if behind.size:
-                worst = max(worst, float(-behind.min()))
-    assert worst < 1.3e-3, worst                        # nothing pokes more than 1.3 mm through the skin
+            Q = Q[~_inside(grown, Q[:, [0, 2]])]
+            tri, bary = surf.bind(Q[:, 0], Q[:, 2], strict=False)
+            ok = tri >= 0                                      # beyond the front skin: hidden by the head's side
+            if ok.any():
+                worst = max(worst, float(-(Q[ok, 1] - surf.point(tri[ok], bary[ok])[:, 1]).min()))
+    assert worst < 0.0, worst                           # nothing comes in front of the skin
+
+
+def test_the_white_stays_inside_the_head(head):
+    """The white is a pocket that opens out behind the lids: outside the opening none of it may come in front of the skin
+    (it would show through the cheek or the temple)."""
+    face, eyes = mesh(head, "face"), mesh(head, "eyes")
+    skin = [f for f, mi in zip(face.faces, face.face_mat) if face.mats[mi] == "顔"]
+    surf = DC.SkinSurface(face.verts, skin, np.zeros(len(skin), int))
+    white = np.unique([i for f, mi in zip(eyes.faces, eyes.face_mat) if eyes.mats[mi] == "白目" for i in f])
+    P = eyes.verts[white]
+    out = np.ones(len(P), bool)
+    for side in ("L", "R"):
+        poly = np.asarray(head.info["eyes"][side]["opening"])
+        c = poly.mean(0)
+        out &= ~_inside(c + (poly - c) * 1.02, P[:, [0, 2]])
+    Q = P[out]
+    tri, bary = surf.bind(Q[:, 0], Q[:, 2], strict=False)
+    ok = tri >= 0
+    assert ok.sum() > 50                                     # the pocket opens out behind the skin around the opening
+    gap = Q[ok, 1] - surf.point(tri[ok], bary[ok])[:, 1]
+    assert gap.min() > 0.0, gap.min()
 
 
 def test_normals_point_outward(head):
@@ -196,6 +254,53 @@ def test_mouth_is_closed_at_rest_and_opens_with_the_vowels(head):
     assert widths["い"] > widths["う"] + 0.008
 
 
+def test_the_nose_point_is_where_the_spec_puts_it(head):
+    """[proportions.face] nose_tip is the front-most point of the face at its height (it was ignored: a flat face), and the
+    nose stands out: nothing on the midline below it (the upper lip, the mouth, the chin) comes out as far."""
+    V = mesh(head, "face").verts
+    near = V[(np.abs(V[:, 0]) < 0.002) & (np.abs(V[:, 2] - NOSE_TIP[2]) < 0.004)]
+    tip = near[np.argmin(near[:, 1])]
+    assert np.abs(tip - NOSE_TIP)[1:].max() < 0.0012, tip
+    below = V[(np.abs(V[:, 0]) < 0.002) & (V[:, 2] < NOSE_TIP[2] - 0.014) & (V[:, 2] > NOSE_TIP[2] - 0.060)]
+    assert below[:, 1].min() > NOSE_TIP[1] + 0.003, below[:, 1].min()
+
+
+def test_the_jaw_shadow_stays_under_the_jaw(head):
+    """The texture's shadow strip (the skin under the jaw and the neck) never reaches the chin or the cheeks seen from the
+    front: the chin and the throat behind it share azimuth and height, which one cylinder map cannot tell apart."""
+    from mkmmd.model.parts import head_tex as TX
+    face = mesh(head, "face")
+    skin = [i for i, mi in enumerate(face.face_mat) if face.mats[mi] == "顔"]
+    start = np.concatenate([[0], np.cumsum([len(f) for f in face.faces])])
+    V = face.verts
+    for i in skin:
+        f = face.faces[i]
+        P = V[list(f)]
+        n = np.cross(P[1] - P[0], P[2] - P[0])
+        n = n / np.linalg.norm(n)
+        v = face.uv[start[i]:start[i + 1], 1]
+        if n[1] < -0.6 and n[2] > -0.3 and P[:, 1].max() < -0.07:   # the face's front: in the face part of the map
+            assert v.min() > TX.UNDER_V, (P.mean(0), v)
+        if P[:, 2].max() < 1.165:                                # the neck at the seam ring: in the shadow strip
+            assert v.max() < TX.UNDER_V, (P.mean(0), v)
+
+
+def test_the_mouth_interior_stays_behind_the_skin_when_it_opens(head):
+    """The bag behind the lips follows them further than the skin under the lower lip follows: it must stay behind that
+    skin (it showed through the chin as dark patches)."""
+    face, mouth = mesh(head, "face"), mesh(head, "mouth")
+    skin = [f for f, mi in zip(face.faces, face.face_mat) if face.mats[mi] == "顔"]
+    bag = np.unique([i for f, mi in zip(mouth.faces, mouth.face_mat) if mouth.mats[mi] == "口内" for i in f])
+    for name in ("あ", "い", "う", "え", "お", "ω"):
+        surf = DC.SkinSurface(face.verts + face.morphs[name], skin, np.zeros(len(skin), int))
+        Q = mouth.verts[bag] + mouth.morphs[name][bag]
+        tri, bary = surf.bind(Q[:, 0], Q[:, 2], strict=False)
+        ok = tri >= 0
+        gap = Q[ok, 1] - surf.point(tri[ok], bary[ok])[:, 1]
+        gap = gap[gap > -0.01]                                   # the skin right in front, not the throat seen through the lips
+        assert gap.min() > 0.0005, (name, gap.min())
+
+
 def test_published_info(head):
     i = head.info
     for k in ("head_center", "head_radii", "skull_top", "skin", "hairline", "hairline_side", "nape", "face_outline", "ears",
@@ -213,8 +318,7 @@ def test_lash_bands_do_not_fold():
     grid = SK.Grid(shape, dict(n_cols=80, face_deg=2.1, spacing_face=0.0042, spacing_neck=0.0048, spacing_top=0.0070))
     sb = SK.SkinBuilder(shape, grid)
     eye = EY.add_eye(sb, "L")
-    for name, fn in (("lash", EY.upper_lash), ("lashlow", EY.lower_lash), ("crease", EY.crease)):
-        sh = fn(eye)
+    for name, sh in dict(EY.upper_lines(eye), lashlow=EY.lower_lash(eye)).items():
         lo, hi = sh["lo"], sh["hi"]
         signs = []
         for k in range(len(lo) - 1):

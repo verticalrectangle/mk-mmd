@@ -79,20 +79,3 @@ def tangent_frame(shape, p, side_sign, tilt_out_deg=12.0):
     axis = axis + side_sign * np.tan(np.radians(tilt_out_deg)) * np.array([1.0, 0.0, 0.0])
     axis /= np.linalg.norm(axis)
     return o, n, up, fwd, axis
-
-
-def jaw_line(shape, n=512, r=0.035):
-    """Height of the jaw underside per azimuth (theta = ((i + 0.5) / n - 0.5) 2 pi, 0 = straight ahead): the lowest height at
-    which the head (without the neck) reaches radius r from the neck axis. Head-local metres; the face texture paints the
-    shadow under the jaw from it."""
-    th = ((np.arange(n) + 0.5) / n - 0.5) * 2 * np.pi
-    zs = np.linspace(-0.045, 0.09, 270)
-    yc = float(shape.centre[1])
-    X = np.broadcast_to((r * np.sin(th))[:, None], (n, len(zs)))
-    Y = np.broadcast_to((yc - r * np.cos(th))[:, None], (n, len(zs)))
-    Z = np.broadcast_to(zs[None, :], (n, len(zs)))
-    inside = shape.phi(np.stack([X, Y, Z], -1), neck=False) < 0
-    z = zs[np.argmax(inside, axis=1)].copy()
-    z[~inside.any(axis=1)] = zs[-1]
-    pad = np.concatenate([z[-4:], z, z[:4]])
-    return np.convolve(pad, np.ones(9) / 9.0, "valid")

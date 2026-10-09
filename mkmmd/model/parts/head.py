@@ -2,9 +2,9 @@
 and the face morphs, all generated from the spec ([head] table + [proportions] + [colors]).
 
 Overview (see the head_* modules):
-  head_shape  implicit head (visual hull of a front and a side outline + blobs + neck), head-local coordinates
+  head_shape  implicit head (the skull loft + the face's planes, nose, bridge, lips, jaw + the neck), head-local coordinates
   head_skin   (theta, phi) grid of that shape with holes, ring zones, neck ring
-  head_eye    eye opening, eyeball placement, lid rings, eyeball layers (sclera, iris, pupil, highlights)
+  head_eye    eye opening, lid shell and rings, the eye behind the opening (white pocket, flat iris plane, highlights)
   ...
 The head is built in HEAD-LOCAL metres (origin at the head bone, Rin-sized) and placed in model space with
 `Frame(pivot, scale)`.
@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from ..build import builder
-from ..part import Material, Mesh, Morph, Part
+from ..part import Bone, Material, Mesh, Morph, Part
 from . import head_brow as HB
 from . import head_decal as DC
 from . import head_ear as HR
@@ -134,37 +134,39 @@ def vertex_normals(V, F):
     return N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
 
 
-def _proxy_phi(P):
-    """The smooth chubby proxy of the face: an ellipsoid plus the cheek apples and a soft jaw volume (pseudo-distance)."""
-    d = HS.ellipsoid(P, (0.0, -0.012, 0.085), (0.095, 0.102, 0.118))
-    for sx in (1.0, -1.0):
-        d = HS.smin(d, HS.ellipsoid(P, (sx * 0.050, -0.072, 0.016), (0.034, 0.030, 0.026)), 0.022)
-    return HS.smin(d, HS.ellipsoid(P, (0.0, -0.076, -0.010), (0.036, 0.030, 0.022)), 0.022)
+def _unit(v):
+    return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)
 
 
-def skin_normals(shape, V, blend=0.65):
-    """Smooth anime-face normals: the gradient of the implicit head mixed with the gradient of the chubby proxy, so the toon
-    terminator is a big soft curve that follows the cheek and the jaw and nose, lids and mouth add no shading noise. At the
-    seam ring the normals are horizontal radial like the body's top rings."""
-    g = shape.normal(V)
-    h = 2e-3
-    e = np.zeros_like(V)
+def skin_normals(shape, V, fade=0.035, cyl=0.5):
+    """Smooth anime-face normals: the face shades like its plain form (the loft and the face's planes), never its details
+    (nose, bridge, lips, the dips round the eyes). Above the eyes they are the loft's gradient; below the eyes they lean
+    `cyl` of the way to the loft's horizontal gradient (`fade`: the blend under the eye line), so the cheeks and the chin
+    stay lit like a cylinder towards the jaw's edge, yet close enough to the surface that shadow maps do not band on it;
+    on the jaw's underside and the neck they are the true normals; at the seam ring horizontal radial like the body's top
+    rings."""
+    h = 4e-4
+    g = np.zeros_like(V)
     for k in range(3):
         d = np.zeros(3)
         d[k] = h
-        e[:, k] = _proxy_phi(V + d) - _proxy_phi(V - d)
-    e /= np.maximum(np.linalg.norm(e, axis=1, keepdims=True), 1e-12)
-    b = (blend * SK.smooth((V[:, 2] + 0.022) / 0.016))[:, None]
-    out = (1 - b) * g + b * e
-    out /= np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
+        g[:, k] = shape.hull(V + d) - shape.hull(V - d)
+    g = _unit(g)
+    hz = g * [1.0, 1.0, 0.0]
+    hz = np.where(np.linalg.norm(hz, axis=1, keepdims=True) > 0.2, _unit(hz), g)
+    w = cyl * SK.smooth((float(shape.prof.a["eye"][0]) - V[:, 2]) / fade)[:, None]
+    out = _unit((1 - w) * g + w * hz)
+    F = shape.face
+    true = shape.normal(V)
+    down = SK.smooth((-true[:, 2] - 0.35) / 0.3)                 # the underside faces down; the cheek above it faces out
+    under = np.maximum(SK.smooth((F.floor(V) + F.round) / F.round) * down, SK.smooth(shape.phi(V, neck=False) / 0.002))
+    out = _unit((1 - under[:, None]) * out + under[:, None] * true)
     ring_z = getattr(shape, "ring_z", None)
     if ring_z is not None:
         nk = shape.p["neck"]
-        rad = np.stack([V[:, 0] - nk["c"][0], V[:, 1] - nk["c"][1], np.zeros(len(V))], -1)
-        rad /= np.maximum(np.linalg.norm(rad, axis=1, keepdims=True), 1e-12)
+        rad = _unit(np.stack([V[:, 0] - nk["c"][0], V[:, 1] - nk["c"][1], np.zeros(len(V))], -1))
         w = (1.0 - SK.smooth((V[:, 2] - ring_z) / 0.012))[:, None]
-        out = (1 - w) * out + w * rad
-        out /= np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
+        out = _unit((1 - w) * out + w * rad)
     return out
 
 
@@ -220,17 +222,38 @@ def bind_strip(surf, lo_xz, hi_xz, height, tip=False, ends_pointed=False, nudge=
     return dec, faces
 
 
-def skin_uv(V, F, yc):
+NECK_SHADE_H = -0.02                     # the neck below the head maps at most this far under the jaw's edge (in the shadow)
+
+
+def skin_uv(V, F, yc, under=None):
     """Per-corner uv of the face skin on the cylindrical map (head_tex.face_skin): u from the azimuth about the head axis
-    (unwrapped per face so a face across the back seam stays contiguous), v from the height."""
+    (unwrapped per face so a face across the back seam stays contiguous), v from the height; with `under` = (kind per face,
+    height per vertex) from under_jaw, the skin under the jaw goes to the map's strip, by its height over the jaw's underside."""
     th = np.arctan2(V[:, 0], -(V[:, 1] - yc))
-    v = np.clip((V[:, 2] - TX.UV_Z0) / (TX.UV_Z1 - TX.UV_Z0), 0.0, 1.0)
+    vf = TX.face_v(V[:, 2])
+    kind, vj, vn = None, None, None
+    if under is not None:
+        kind, h = under
+        vj, vn = TX.under_v(h), TX.under_v(np.minimum(h, NECK_SHADE_H))
     out = []
-    for f in F:
+    for fi, f in enumerate(F):
         t = th[list(f)]
         t = t + 2 * np.pi * np.round((t[0] - t) / (2 * np.pi))
+        v = vf if kind is None or kind[fi] == 0 else (vj if kind[fi] == 1 else vn)
         out.append([(0.5 + float(a) / (2 * np.pi), float(v[i])) for a, i in zip(t, f)])
     return out
+
+
+def under_jaw(shape, V, F, reach=0.008):
+    """(kind per face, side per vertex) of the skin under the jaw, which the texture keeps in shadow: kind 2 is the neck
+    below the head (well outside the head without its neck: face centroids in a concave crease lie a hair outside it too),
+    1 the skin within `reach` of the jaw's edge (HeadShape.jaw_side), 0 the rest of the face; per vertex the jaw side. The
+    strip's shadow edge (head_tex.SHADOW_EDGE) is well inside `reach`, so the seam between the map's parts falls on
+    unshaded skin."""
+    C = np.array([V[list(f)].mean(0) for f in F])
+    kind = np.where(shape.phi(C, neck=False) > 0.0015, 2, 0)
+    kind = np.where((kind == 0) & (shape.jaw_side(C) < reach), 1, kind)
+    return kind, shape.jaw_side(V)
 
 
 def mix_hex(a, b, t):
@@ -265,6 +288,20 @@ def anchors_from(prop, frame, own=None):
     return A
 
 
+def face_from(prop, frame, own=None):
+    """The generated face's features (head_shape.FACE overrides, head-local): the spec's [head.face] table, with the nose
+    tip taken from `nose_tip` ([y, z], model space) of [proportions.face] or [proportions.head] unless [head.face.nose]
+    sets `tip` itself."""
+    face = {k: (dict(v) if isinstance(v, dict) else v) for k, v in (own or {}).items()}
+    p = prop or {}
+    tip = (p.get("face") or {}).get("nose_tip") or (p.get("head") or {}).get("nose_tip")
+    nose = dict(face.get("nose") or {})
+    if tip is not None and "tip" not in nose:
+        nose["tip"] = ((float(tip[0]) - frame.pivot[1]) / frame.s, (float(tip[1]) - frame.pivot[2]) / frame.s)
+        face["nose"] = nose
+    return face
+
+
 def colors_of(ctx):
     c = ctx.get("colors", {}) or {}
     cfg = ctx.cfg or {}
@@ -292,20 +329,25 @@ def build(ctx):
     face_p = prop.get("face") or {}
     guides = prop.get("hair_guides") or {}
 
+    # ---- the eyes' layout
+    eye_cfg = dict(cfg.get("eye") or {})
+    if "eye_x" in face_p and "iris" not in eye_cfg:
+        eye_cfg["iris"] = (float(face_p.get("iris_x", 0.0422)) / scale, (float(face_p["eye_z"]) - pivot[2]) / scale)
+
     # ---- the shape, with the neck of the body
     nt = body.info["neck_top"]
     nc = frame.to_local(np.array([nt["center"][0], nt["center"][1], nt["z"]]))
     shape = HS.HeadShape(anchors_from(prop, frame, cfg.get("shape")),
+                         face=face_from(prop, frame, cfg.get("face")),
                          neck=dict(c=(0.0, float(nc[1]), 0.0), rx=nt["rx"] / scale, ry=nt["ry"] / scale, k=0.014, top=0.02))
-    grid_cfg = dict(n_cols=80, face_deg=2.1, spacing_face=0.0042, spacing_neck=0.0048, spacing_top=0.0070,
+    nose = shape.face.c["nose"]
+    grid_cfg = dict(n_cols=None, face_deg=1.7, spacing_face=0.0030, spacing_neck=0.0040, spacing_top=0.0065, mid_deg=0.8,
+                    mid_to=7.0, mid_ramp=6.0, detail=dict(z=(nose["base_z"] - 0.004, nose["root_z"]), spacing=0.0012, ramp=3.0),
                     ring_z=float(nc[2]))
     grid_cfg.update(cfg.get("grid", {}))
     shape.ring_z = grid_cfg["ring_z"]
     grid = SK.Grid(shape, grid_cfg)
     sb = SK.SkinBuilder(shape, grid)
-    eye_cfg = dict(cfg.get("eye") or {})
-    if "eye_x" in face_p and "iris" not in eye_cfg:
-        eye_cfg["iris"] = (float(face_p.get("iris_x", 0.0422)) / scale, (float(face_p["eye_z"]) - pivot[2]) / scale)
     if "eye.L" in land and "centre_y" not in eye_cfg:             # the eye bone (made by the body part) is the pivot
         eye_cfg["centre_y"] = float(frame.to_local(land["eye.L"])[1])
     eyes = {side: EY.add_eye(sb, side, eye_cfg) for side in ("L", "R")}
@@ -330,27 +372,36 @@ def build(ctx):
     face = MeshAcc("face")
     nrm = skin_normals(shape, V)
     t = SK.smooth((V[:, 2] - grid_cfg["ring_z"]) / 0.020)
-    face.add("skin", V, F, M_SKIN, {HEAD: t, NECK: 1.0 - t}, normals=nrm, corner_uv=skin_uv(V, F, float(shape.centre[1])))
+    face.add("skin", V, F, M_SKIN, {HEAD: t, NECK: 1.0 - t}, normals=nrm,
+             corner_uv=skin_uv(V, F, float(shape.centre[1]), under=under_jaw(shape, V, F)))
     mi_lash = face.mat(M_LASH)
-    col3 = {}
-    for e in eyes.values():                                   # ring-3 vertex -> (is an upper-lid column)
-        for c_i, vid in enumerate(remap[e["rings"][3]]):
-            col3[int(vid)] = bool(e["upper"][c_i])
-    for fi, f in enumerate(F):
-        if group[fi] == SK.SkinBuilder.RIM and any(col3.get(int(v), False) for v in f[:2]):
-            face.FM[fi] = mi_lash                              # the inner lid rim under the upper lash is lash-coloured
-
-
-    # ---- the eyes
-    eye_mesh = MeshAcc("eyes")
+    upper = {side: EY.upper_lines(e, cfg) for side, e in eyes.items()}          # the lines above each eye
+    under = set()                                              # ring-3 vertices the lash band lies on
     for side, e in eyes.items():
-        parts = EY.eyeball_parts(e)
+        under.update(int(v) for v in remap[e["rings"][3]][upper[side]["lash"]["rim"]])
+    for fi, f in enumerate(F):
+        if group[fi] == SK.SkinBuilder.RIM and any(int(v) in under for v in f[:2]):
+            face.FM[fi] = mi_lash                              # the inner lid rim under the lash band is lash-coloured
+
+
+    # ---- the eyes: the white pocket on the head, the iris and pupil on the eye bones, the highlights on their own bones that
+    # take `highlight_follow` of the eyes' (両目) rotation (a reflection lags behind the gaze); without 両目 they ride the eyes
+    eye_mesh = MeshAcc("eyes")
+    hl_bones = []
+    for side, e in eyes.items():
+        jp = "左" if side == "L" else "右"
+        eb = ctx.find_bone(f"{jp}目")
+        hl = f"{jp}ハイライト" if eb is not None and ctx.find_bone("両目") is not None else None
+        if hl is not None:
+            hl_bones.append(Bone(hl, head=tuple(eb.head), tail=tuple(np.asarray(eb.head) + np.array([0.0, -0.04 * scale, 0.0])),
+                                 parent=HEAD, name_en=f"highlight_{side}", layer=2,
+                                 grant={"parent": "両目", "rotate": True, "move": False,
+                                        "ratio": float(e["cfg"]["highlight_follow"])}))
         bone = EYE_L if side == "L" else EYE_R
-        for pname, (pv, pf, puv) in parts.items():
+        for pname, (pv, pf, puv, pn) in EY.eyeball_parts(e, shape).items():
             mat = {"sclera": M_SCLERA, "iris": M_IRIS, "pupil": M_PUPIL}.get(pname, M_HIGHLIGHT)
-            w = {HEAD: 1.0} if pname == "sclera" else {bone: 1.0}
-            rad = np.stack([np.zeros(len(pv)), -np.ones(len(pv)), np.zeros(len(pv))], -1)       # the eyes face forward
-            eye_mesh.add(f"{pname}.{side}", pv, pf, mat, w, uv=puv, normals=rad)
+            w = {HEAD: 1.0} if pname == "sclera" else {(hl or bone) if pname.startswith("highlight") else bone: 1.0}
+            eye_mesh.add(f"{pname}.{side}", pv, pf, mat, w, uv=puv, normals=pn)
 
     # ---- lines on the skin: lashes, creases, brows (bound to the skin)
     surf = DC.SkinSurface(V, F, group)
@@ -358,10 +409,12 @@ def build(ctx):
     decals, strips = {}, {}
     for side, e in eyes.items():
         sg, (cx, cz) = e["sign"], e["centre"]
-        for name, shape_fn, mat, h in (("lash", EY.upper_lash, M_LASH, EY.LASH_HEIGHT),
-                                       ("lashlow", EY.lower_lash, M_LASH_LOW, EY.LASH_HEIGHT * 0.9),
-                                       ("crease", EY.crease, M_CREASE, EY.LASH_HEIGHT * 0.8)):
-            sh = shape_fn(e, cfg.get(name))
+        up = upper[side]
+        for name, sh, mat, h in (("lash", up["lash"], M_LASH, EY.LASH_HEIGHT),
+                                 ("lashfork", up["lashfork"], M_LASH, EY.LASH_HEIGHT * 1.05),     # the blades lie over the band
+                                 ("lashwing", up["lashwing"], M_LASH, EY.LASH_HEIGHT * 1.1),
+                                 ("lashlow", EY.lower_lash(e, cfg.get("lashlow")), M_LASH_LOW, EY.LASH_HEIGHT * 0.9),
+                                 ("crease", up["crease"], M_CREASE, EY.LASH_HEIGHT * 0.8)):
             lo = np.stack([cx + sg * sh["lo"][:, 0], cz + sh["lo"][:, 1]], -1)
             hi = np.stack([cx + sg * sh["hi"][:, 0], cz + sh["hi"][:, 1]], -1)
             nrm_xz = None
@@ -372,17 +425,8 @@ def build(ctx):
             P = dec.positions()
             lines.add(f"{name}.{side}", P, orient(P, faces), mat, {HEAD: 1.0})
             decals[f"{name}.{side}"] = dec
-            if name == "lash":                                  # lid parameter of every cross-section
-                m = len(sh["margin"])
-                d = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(sh["lo"][:m], axis=0), axis=1))])
-                wn = int(EY.UPPER_LASH["wing_n"])
-                sp = np.concatenate([d / d[-1], 1.0 + np.arange(1, wn) / (wn - 1) * 0.30])
-            else:
-                c = dict(EY.LOWER_LASH if name == "lashlow" else EY.CREASE)
-                c.update(cfg.get(name) or {})
-                sp = np.linspace(c["s0"], c["s1"], c["n"])
-            strips[f"{name}.{side}"] = dict(lo=sh["lo"], hi=sh["hi"], tip=sh.get("tip", False),
-                                            ends_pointed=sh.get("ends_pointed", False), h=h, s=sp)
+            strips[f"{name}.{side}"] = dict(sh, tip=sh.get("tip", False), ends_pointed=sh.get("ends_pointed", False), h=h,
+                                            faces=faces)
     brow_cfg = dict(cfg.get("brow") or {})
     if "brow_z" in face_p and "z" not in brow_cfg:
         brow_cfg["z"] = (float(face_p["brow_z"]) - pivot[2]) / scale
@@ -393,19 +437,11 @@ def build(ctx):
         cl, w = HB.centreline(brow_cfg)
         lo, hi = HB.edges(cl, w)
         lo, hi = lo * [sg, 1.0], hi * [sg, 1.0]
-        dec, faces = bind_strip(surf, lo, hi, HB.BROW["height"], tip=True)
+        dec, faces = bind_strip(surf, lo, hi, HB.BROW["height"], ends_pointed=True)
         P = dec.positions()
         lines.add(f"brow.{side}", P, orient(P, faces), M_BROW, {HEAD: 1.0})
         decals[f"brow.{side}"] = dec
         brows[side] = cl * [sg, 1.0]
-
-    # ---- a hint of nose: one tiny stroke under the tip
-    xs = np.linspace(-0.0034, 0.0034, 11)
-    zs = 0.0258 + 0.0012 * (xs / 0.0034) ** 2
-    taper = np.sin(np.pi * np.linspace(0, 1, 11)) ** 0.7 * 0.0007
-    dec, faces = bind_strip(surf, np.stack([xs, zs], -1), np.stack([xs, zs + taper], -1), 0.0003, ends_pointed=True)
-    P = dec.positions()
-    lines.add("nose", P, orient(P, faces), M_CREASE, {HEAD: 1.0})
 
     # ---- anime lids: skin-coloured sheets tucked behind the lid margins (the skin itself never moves for a blink)
     lids_mesh = MeshAcc("lids")
@@ -439,7 +475,7 @@ def build(ctx):
         lines.add(f"lipcorner.{nm}", P, orient(P, faces), M_LIPC, {HEAD: 1.0})
         decals[f"lipcorner.{nm}"] = dec
     mouth_mesh = MeshAcc("mouth")
-    cv, cf, cuv, cfollow, ccols = MO.cavity(mouth, V)
+    cv, cf, cuv, cfollow, ccols = MO.cavity(mouth, V, shape=shape)
     mouth["cav_follow"], mouth["cav_cols"] = cfollow, ccols
     n_ring = mouth["n"]
     mouth_mesh.add("cavity", cv, cf, M_MOUTH, {HEAD: 1.0}, uv=cuv)
@@ -477,7 +513,7 @@ def build(ctx):
     for side, sg in (("L", 1.0), ("R", -1.0)):
         Pm = P * [sg, 1.0, 1.0]
         Fm = Fe if sg > 0 else [tuple(reversed(f)) for f in Fe]
-        ears.add(f"ear.{side}", Pm, Fm, M_SKIN, {HEAD: 1.0})
+        ears.add(f"ear.{side}", Pm, Fm, M_SKIN, {HEAD: 1.0}, corner_uv=skin_uv(Pm, Fm, float(shape.centre[1])))
         ear_info[side] = {k: (np.asarray(v) * [sg, 1.0, 1.0]) for k, v in einfo.items()}
 
     # ---- morphs
@@ -514,8 +550,10 @@ def build(ctx):
     # in real shadow. A body-style ramp (edge 0.42) puts a studio-lit face on the transition and turns it pink-grey.
     toon = bskin["toon"] if own.get("use_body_toon") and bskin.get("toon") else ctx.save_png(
         "toon", TX.toon(toon_mult, height=32, edge=float(own.get("toon_edge", 0.30)), soft=float(own.get("toon_soft", 0.14))))
+    nz = shape.face.c["nose"]
     skin_tex = ctx.save_png("skin", TX.face_skin(
-        skin_base, cheek_col, cheek_k=0.40, jaw=HI.jaw_line(shape, 512), band=nsh.get("color", "#e3aa95"),
+        skin_base, cheek_col, cheek_k=0.40, nose_z=0.5 * (float(nz["base_z"]) + float(nz["tip"][1])),
+        band=nsh.get("color", "#e3aa95"),
         band_w=(float(nsh.get("strength", 0.9)), float(nsh.get("front", 1.0)), float(nsh.get("back", 0.35)))))
     iris_tex = ctx.save_png("iris", TX.iris(col["eyes"]))
     sclera_cols = dict(col["eyes"])
@@ -547,7 +585,7 @@ def build(ctx):
         Material(M_HIGHLIGHT, name_en="highlight", diffuse=(0, 0, 0, 1), ambient=(1, 1, 1), sphere=white,
                  sphere_mode="add", toon="", edge=False, drop_shadow=False, self_shadow=False, self_shadow_map=False),
         flat_mat(M_LASH, "upper lash", ec.get("lash", "#2a0a10"), k=0.75),
-        flat_mat(M_LASH_LOW, "lower lash", mix_hex(ec.get("lash_lower", "#6b1d2a"), "#d0606a", 0.45), k=0.85),
+        flat_mat(M_LASH_LOW, "lower lash", mix_hex(ec.get("lash_lower", "#6b1d2a"), "#d0606a", 0.15), k=0.8),
         flat_mat(M_CREASE, "eyelid crease", mix_hex(ec.get("lid_crease", "#c97b6c"), "#7a3a30", 0.35), k=0.9),
         flat_mat(M_BROW, "eyebrow", ec.get("brow", "#7a1218"), k=0.8),
         flat_mat(M_LIP, "lip line", mix_hex(col["mouth"].get("lip_line", "#c7a19a"), "#a24f5a", 0.65), k=0.9),
@@ -581,7 +619,7 @@ def build(ctx):
     info["mouth"] = dict(slit_upper=mouth["ids3"][mouth["upper"]], slit_lower=mouth["ids3"][mouth["lower"]],
                          centre=frame.to_model(np.array([0.0, float(np.mean(V[mouth["ids3"]][:, 1])), mouth["cfg"]["z"]])),
                          half_width=mouth["cfg"]["half_width"], mesh="face")
-    return Part("head", meshes=meshes, materials=mats, bones=[], morphs=morph_list, info=info)
+    return Part("head", meshes=meshes, materials=mats, bones=hl_bones, morphs=morph_list, info=info)
 
 
 def neck_ring(nt, n=32):
@@ -624,13 +662,10 @@ def published(shape, frame, eyes, brows, ear_info, nc, guides, nt, grid_cfg, rin
     eye_info = dict(custom.get("eye_info") or {})
     for sd, e in ({} if eye_info else eyes).items():
         sg = e["sign"]
-        up = np.nonzero(e["upper"])[0]
-        lo = np.nonzero(~e["upper"])[0]
-        P3 = None
         poly = e["alm"].poly
         xz = np.stack([e["centre"][0] + sg * poly[:, 0], np.zeros(len(poly)), e["centre"][1] + poly[:, 1]], -1)
-        eye_info[sd] = dict(center=M(e["E"]), radius=e["radius"] * frame.s, pupil=M(e["E"] + np.array([0.0, -e["radius"], 0.0])),
-                            opening=M(xz)[:, [0, 2]])
+        pupil = e["layers"].layer(np.array([e["centre"][0]]), np.array([e["centre"][1]]))[0]
+        eye_info[sd] = dict(center=M(e["E"]), radius=e["radius"] * frame.s, pupil=M(pupil), opening=M(xz)[:, [0, 2]])
     info = dict(
         frame=dict(pivot=frame.pivot, scale=frame.s),
         landmarks=custom.get("landmarks") or {f"eye.{s}": M(e["E"]) for s, e in eyes.items()},

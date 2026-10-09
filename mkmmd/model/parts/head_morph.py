@@ -73,14 +73,14 @@ class Morpher:
     # ---- eyes
     def eye_layers(self, name, k_iris=1.0, k_pupil=1.0, k_hl=1.0, dv=0.0, back=0.0, sides=("L", "R")):
         """Scale the iris, pupil and highlight discs about the iris centre (highlights about their own centre) and shift
-        them down by dv metres on the eyeball."""
+        them down by dv metres on the iris plane."""
         H = self.H
         for sd in sides:
             e = H.eyes_info[sd]
-            bar = e["barrel"]
+            lay, gaps = e["layers"], EY.eye_gaps(e)
             cx, cz = e["centre"]
-            for piece, k, gap in (("iris", k_iris, EY.LAYER_GAP), ("pupil", k_pupil, 2 * EY.LAYER_GAP),
-                                  ("highlight1", k_hl, 3 * EY.LAYER_GAP), ("highlight2", k_hl, 3 * EY.LAYER_GAP)):
+            for piece, k, gap in (("iris", k_iris, gaps["iris"]), ("pupil", k_pupil, gaps["pupil"]),
+                                  ("highlight1", k_hl, gaps["highlight"]), ("highlight2", k_hl, gaps["highlight"])):
                 rows = piece_rows(H.eyes, f"{piece}.{sd}")
                 P = np.asarray(H.eyes.V)[rows]
                 if piece.startswith("highlight"):
@@ -89,7 +89,7 @@ class Morpher:
                     c = np.array([cx, cz])
                 x = c[0] + k * (P[:, 0] - c[0])
                 z = c[1] + k * (P[:, 2] - c[1]) - dv
-                d = bar.layer(x, z, gap) - P
+                d = lay.layer(x, z, gap) - P
                 d[:, 1] += back
                 self.book.add(name, "eyes", d, rows)
 
@@ -100,7 +100,7 @@ class Morpher:
             cl, w = HB.centreline(H.brow_cfg, **params)
             lo, hi = HB.edges(cl, w)
             lo, hi = lo * [sg, 1.0], hi * [sg, 1.0]
-            dec, _ = H.bind_strip(H.surf, lo, hi, HB.BROW["height"], tip=True)
+            dec, _ = H.bind_strip(H.surf, lo, hi, HB.BROW["height"], ends_pointed=True)
             piece = f"brow.{sd}"
             delta = dec.positions() - H.decals[piece].positions()
             self.book.add(name, "lines", delta, piece_rows(H.lines, piece))
@@ -136,8 +136,9 @@ def build_eye_and_brow_morphs(M):
         M.brows(n(key), **params)
 
 
-def build_mouth_morphs(M):
-    """Mouth shape morphs: lip field on the skin; the interior, teeth and tongue follow the lips."""
+def build_mouth_morphs(M, behind=0.0035):
+    """Mouth shape morphs: lip field on the skin; the interior, teeth and tongue follow the lips. The interior's inner rings
+    stay `behind` the moved skin in front of them: they follow the lips further than the skin below the lower lip does."""
     H = M.H
     m = H.mouth
     V = H.V
@@ -148,6 +149,8 @@ def build_mouth_morphs(M):
     n = m["n"]
     A_rows = piece_rows(H.mouth_mesh, "cavity")
     follow, cols = m["cav_follow"], m["cav_cols"]
+    cav_rest = np.asarray(H.mouth_mesh.V)[A_rows]
+    inner = np.arange(len(A_rows)) >= n                  # rings B, C and the cap (ring A rides on the slit)
     teeth_rows = piece_rows(H.mouth_mesh, "teeth")
     tongue_rows = piece_rows(H.mouth_mesh, "tongue")
     ids_up = np.concatenate([[m["left"]], m["upper"][::-1], [m["right"]]])
@@ -158,7 +161,14 @@ def build_mouth_morphs(M):
         M.skin(NAMES[key][0], d)
         dl = d[ids3]                                      # lip margin offsets in ring-3 column order
         name = NAMES[key][0]
-        M.book.add(name, "mouth", dl[cols] * follow[:, None], A_rows)
+        P = cav_rest + dl[cols] * follow[:, None]
+        surf_m = H.surf.moved(V + d)
+        tri, bary = surf_m.bind(P[inner, 0], P[inner, 2], strict=False)
+        ok = tri >= 0
+        if ok.any():
+            q = np.nonzero(inner)[0][ok]
+            P[q, 1] = np.maximum(P[q, 1], surf_m.point(tri[ok], bary[ok])[:, 1] + behind)
+        M.book.add(name, "mouth", P - cav_rest, A_rows)
         du = dl[ids_up][order]
         tx = H.teeth_x
         t_off = np.stack([np.interp(tx, xs_up[order], du[:, k]) for k in range(3)], -1)

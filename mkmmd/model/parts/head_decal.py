@@ -27,8 +27,11 @@ class SkinSurface:
     """The front-facing skin triangles of the face mesh and a point lookup in the front (x, z) plane."""
 
     def __init__(self, V, F, group, skin_group=0):
-        self.V = np.asarray(V, float)
         self.T = triangles([f for f, g in zip(F, group) if g == skin_group])
+        self._place(V)
+
+    def _place(self, V):
+        self.V = np.asarray(V, float)
         self.N = vertex_normals(self.V, self.T)
         P = self.V[self.T]
         n = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
@@ -38,6 +41,13 @@ class SkinSurface:
         Q = P[self.ids][:, :, [0, 2]]
         self.lo = Q.min(1)
         self.hi = Q.max(1)
+
+    def moved(self, V):
+        """The same skin triangles at other vertex positions (the skin under a morph)."""
+        out = object.__new__(SkinSurface)
+        out.T = self.T
+        out._place(V)
+        return out
 
     def bind(self, x, z, chunk=256, strict=True):
         """Triangle index (into self.T) and barycentric weights of the front-most skin triangle at each (x, z); points
@@ -119,59 +129,86 @@ _TRI_BC = np.array([(1 / 3, 1 / 3, 1 / 3), (0.6, 0.2, 0.2), (0.2, 0.6, 0.2), (0.
                     (0.5, 0.0, 0.5)])
 
 
-def clear_skin(dec, faces, clearance=1.6e-4, iters=12):
+def _deficits(s, P, faces, clearance, along_normal=True):
+    """Per vertex of the faces (strip quads / triangles over the positions P), how far it must rise for them to lie
+    `clearance` in front of the skin: measured at sample points of each face (along the skin's normal, or along -y) and at
+    the skin's vertices under it (the piecewise-linear skin peaks there)."""
+    pts, owners = [], []
+    for f in faces:
+        if len(f) == 4:
+            A, B, C, D = (P[i] for i in f)           # strip order: lo_k, lo_k+1, hi_k+1, hi_k
+            for u, v in _QUAD_UV:
+                pts.append((1 - v) * ((1 - u) * A + u * B) + v * ((1 - u) * D + u * C))
+                owners.append(f)
+        else:
+            for bc in _TRI_BC:
+                pts.append(sum(w * P[i] for w, i in zip(bc, f[:3])))
+                owners.append(f)
+    pts = np.asarray(pts)
+    tri, bary = s.bind(pts[:, 0], pts[:, 2], strict=False)
+    ok = tri >= 0
+    add = np.zeros(len(P))
+    if ok.any():
+        sk = s.point(tri[ok], bary[ok])
+        if along_normal:
+            height = ((pts[ok] - sk) * s.normal(tri[ok], bary[ok])).sum(1)
+        else:
+            height = sk[:, 1] - pts[ok, 1]
+        deficit = np.maximum(clearance - height, 0.0)
+        for d, i in zip(deficit, np.nonzero(ok)[0]):
+            if d > 0:
+                for v in owners[i]:
+                    add[v] = max(add[v], d)
+    sv = s.V[s.vert_ids]
+    lo, hi = P[:, [0, 2]].min(0), P[:, [0, 2]].max(0)
+    sv = sv[(sv[:, 0] >= lo[0]) & (sv[:, 0] <= hi[0]) & (sv[:, 2] >= lo[1]) & (sv[:, 2] <= hi[1])]   # the faces' extent
+    for f in faces:
+        tris = [(f[0], f[1], f[2]), (f[0], f[2], f[3])] if len(f) == 4 else [tuple(f[:3])]
+        for t in tris:
+            A, B, C = P[t[0]], P[t[1]], P[t[2]]
+            d = (B[2] - C[2]) * (A[0] - C[0]) + (C[0] - B[0]) * (A[2] - C[2])
+            if abs(d) < 1e-14:
+                continue
+            w0 = ((B[2] - C[2]) * (sv[:, 0] - C[0]) + (C[0] - B[0]) * (sv[:, 2] - C[2])) / d
+            w1 = ((C[2] - A[2]) * (sv[:, 0] - C[0]) + (A[0] - C[0]) * (sv[:, 2] - C[2])) / d
+            w2 = 1.0 - w0 - w1
+            m = (w0 > 1e-6) & (w1 > 1e-6) & (w2 > 1e-6)
+            if not m.any():
+                continue
+            y_face = w0[m] * A[1] + w1[m] * B[1] + w2[m] * C[1]
+            over = y_face - (sv[m, 1] - clearance)             # > 0: the face is behind the skin vertex (seen from -y)
+            over = np.maximum(over, 0.0)
+            if over.max() > 0:
+                for v in t:
+                    add[v] = max(add[v], float(over.max()) / 0.6)
+    return add
+
+
+def clear_skin(dec, faces, clearance=1.6e-4, iters=12, max_lift=0.0015):
     """Raise the decal's vertices until the faces lie at least `clearance` above the skin: a strip is flat between its vertices,
     so over a concave or ridged stretch of skin (the socket around an eye) its quads would otherwise cut below the surface
-    and the skin would show through. Each face is sampled on a small grid (quads) or at 7 barycentric points (triangles)."""
-    s = dec.surf
+    and the skin would show through. Each face is sampled on a small grid (quads) or at 7 barycentric points (triangles).
+    No vertex rises more than `max_lift` (a lift moves it along the skin's normal, sideways too where the skin curves into a
+    hole, which can find it new skin to clear without end)."""
     faces = [list(f) for f in faces]
+    h_top = dec.h + max_lift
     for _ in range(iters):
-        P = dec.positions()
-        pts, owners = [], []
-        for f in faces:
-            if len(f) == 4:
-                A, B, C, D = (P[i] for i in f)           # strip order: lo_k, lo_k+1, hi_k+1, hi_k
-                for u, v in _QUAD_UV:
-                    pts.append((1 - v) * ((1 - u) * A + u * B) + v * ((1 - u) * D + u * C))
-                    owners.append(f)
-            else:
-                for bc in _TRI_BC:
-                    pts.append(sum(w * P[i] for w, i in zip(bc, f[:3])))
-                    owners.append(f)
-        pts = np.asarray(pts)
-        tri, bary = s.bind(pts[:, 0], pts[:, 2], strict=False)
-        ok = tri >= 0
-        add = np.zeros(len(dec.h))
-        if ok.any():
-            sk = s.point(tri[ok], bary[ok])
-            nr = s.normal(tri[ok], bary[ok])
-            height = ((pts[ok] - sk) * nr).sum(1)
-            deficit = np.maximum(clearance - height, 0.0)
-            for d, i in zip(deficit, np.nonzero(ok)[0]):
-                if d > 0:
-                    for v in owners[i]:
-                        add[v] = max(add[v], d)
-        # the piecewise-linear skin peaks at its vertices: every skin vertex under a face must stay behind the face's plane
-        sv = s.V[s.vert_ids]
-        for f in faces:
-            tris = [(f[0], f[1], f[2]), (f[0], f[2], f[3])] if len(f) == 4 else [tuple(f[:3])]
-            for t in tris:
-                A, B, C = P[t[0]], P[t[1]], P[t[2]]
-                d = (B[2] - C[2]) * (A[0] - C[0]) + (C[0] - B[0]) * (A[2] - C[2])
-                if abs(d) < 1e-14:
-                    continue
-                w0 = ((B[2] - C[2]) * (sv[:, 0] - C[0]) + (C[0] - B[0]) * (sv[:, 2] - C[2])) / d
-                w1 = ((C[2] - A[2]) * (sv[:, 0] - C[0]) + (A[0] - C[0]) * (sv[:, 2] - C[2])) / d
-                w2 = 1.0 - w0 - w1
-                m = (w0 > 1e-6) & (w1 > 1e-6) & (w2 > 1e-6)
-                if not m.any():
-                    continue
-                y_face = w0[m] * A[1] + w1[m] * B[1] + w2[m] * C[1]
-                over = y_face - (sv[m, 1] - clearance)             # > 0: the face is behind the skin vertex (seen from -y)
-                over = np.maximum(over, 0.0)
-                if over.max() > 0:
-                    for v in t:
-                        add[v] = max(add[v], float(over.max()) / 0.6)
+        add = _deficits(dec.surf, dec.positions(), faces, clearance)
         if add.max() < 1e-5:
             return
-        dec.h = dec.h + 1.1 * add
+        dec.h = np.minimum(dec.h + 1.1 * add, h_top)
+
+
+def clear_points(s, P, faces, clearance=1.6e-4, iters=12, max_lift=0.0015):
+    """clear_skin for free positions (a morph's target, (n, 3)) over the skin surface `s`: the vertices rise toward the viewer
+    (-y), at most `max_lift`, until the faces lie `clearance` in front of the skin where they are over it. Returns the
+    raised positions."""
+    faces = [list(f) for f in faces]
+    P = np.array(P, float)
+    y_top = P[:, 1] - max_lift
+    for _ in range(iters):
+        add = _deficits(s, P, faces, clearance, along_normal=False)
+        if add.max() < 1e-5:
+            break
+        P[:, 1] = np.maximum(P[:, 1] - 1.1 * add, y_top)
+    return P
