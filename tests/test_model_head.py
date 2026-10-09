@@ -372,3 +372,15 @@ def test_lash_bands_do_not_fold():
             if abs(area) > 1e-10:
                 signs.append(np.sign(area))
         assert len(set(signs)) == 1, (name, "folded quads", signs)
+
+
+def test_a_band_that_drops_less_closes_into_a_shorter_flick():
+    """The closed eye ends in a flick down and out, as the open band runs down the eye's outer side: a band that drops
+    less (the spec's lash out_v) closes into a shorter flick in the same direction; the head part's own drawing (Rin's)
+    closes as it always has."""
+    from mkmmd.model.parts import head_eye as EY
+    rin = np.array(HL.closed_flick({}))
+    soft = np.array(HL.closed_flick({"lash": {"out_v": 0.6 * EY.UPPER_LASH["out_v"]}}))
+    assert tuple(rin) == HL.CLOSED_FLICK
+    assert np.linalg.norm(soft) == pytest.approx(0.6 * np.linalg.norm(rin))
+    assert soft @ rin == pytest.approx(np.linalg.norm(soft) * np.linalg.norm(rin))     # same direction

@@ -16,7 +16,8 @@ from . import head_skin as SK
 SHEET = dict(gap=EY.SHEET_GAP, nu=30, rows=7, tuck=0.0010, sliver=0.00006)
 DISPLAY_GAP = 0.0023                    # strips ride this far in front of the eyeball shell: clear of the sheets' faces
 CLOSED_WIDTH = 0.0054                   # lash band thickness when the eye is drawn closed
-CLOSED_FLICK = (0.0058, -0.0046)        # the drawn line ends in a flick down and out (the band's run down the outer side) ...
+CLOSED_FLICK = (0.0058, -0.0046)        # the drawn line ends in a flick down and out (the band's run down the outer side;
+                                        # for UPPER_LASH's out_v: closed_flick scales it with a spec's) ...
 CLOSED_TAIL = (-0.0050, 0.0005)         # ... and starts in a point this far from the inner corner (the band's tail)
 ROUND = 200                             # smoothing passes that round the drawn line where it turns (Lids.band_path)
 OUT_LIFT = 0.0007                       # morphed strips stand this much further off the skin outside the opening (Lids.disp)
@@ -38,11 +39,20 @@ def strip_keep(k, tip=False, ends_pointed=False):
     return keep
 
 
+def closed_flick(cfg):
+    """The closed eye's flick for the [head] table `cfg`: CLOSED_FLICK scaled with how far the open band runs down the eye's
+    outer side (its lash out_v against UPPER_LASH's), so a band that drops less closes into a shorter flick."""
+    out_v = float(((cfg or {}).get("lash") or {}).get("out_v", EY.UPPER_LASH["out_v"]))
+    k = out_v / EY.UPPER_LASH["out_v"]
+    return (CLOSED_FLICK[0] * k, CLOSED_FLICK[1] * k)
+
+
 class Lids:
     """Sheets and strip targets of one eye."""
 
-    def __init__(self, shape, eye, nu=None):
+    def __init__(self, shape, eye, nu=None, flick=CLOSED_FLICK):
         self.shape, self.e = shape, eye
+        self.flick = tuple(flick)                     # the closed line's flick (closed_flick)
         self.sg = eye["sign"]
         self.cx, self.cz = eye["centre"]
         self.bar, self.alm, self.dip = eye["lid_shell"], eye["alm"], eye["dip"]
@@ -124,7 +134,7 @@ class Lids:
         """Centre line (n, 2) of the drawn closed eye at the band's lid parameters s: kind 'arc' (along `edge`), 'chevron',
         'dash'. `ends` = (s_in, s_peel): the lid parameters of the open band's inner point and of where it meets the lid;
         in an arc its tail (s < s_peel) runs straight to a point CLOSED_TAIL from the inner corner. Past s = 1 (the band's run
-        down the eye's outer side) the line goes on straight in a flick, CLOSED_FLICK. The line is drawn on a fixed grid of
+        down the eye's outer side) the line goes on straight in a flick (closed_flick). The line is drawn on a fixed grid of
         lid parameters that runs on straight past both ends, rounded (ROUND passes: about 1 mm) where it turns, and sampled
         at s."""
         s_in, s_peel = ends
@@ -150,7 +160,7 @@ class Lids:
             return np.where(k < 0.5, lo_tip + (apex - lo_tip) * (k / 0.5), apex + (hi_tip - apex) * ((k - 0.5) / 0.5))
         P = np.empty((len(q), 2))
         P[lid] = along(q[lid])
-        flick = np.array(CLOSED_FLICK if kind != "chevron" else (0.0030, 0.0020))
+        flick = np.array(self.flick if kind != "chevron" else (0.0030, 0.0020))
         P[~lid] = along(np.array([1.0]))[0] + ((q[~lid] - 1.0) / EY.OUTER_RUN)[:, None] * flick
         for _ in range(ROUND):
             P[1:-1] = 0.25 * P[:-2] + 0.5 * P[1:-1] + 0.25 * P[2:]

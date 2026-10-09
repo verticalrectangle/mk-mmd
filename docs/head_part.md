@@ -113,7 +113,8 @@ The eyes sit on the planes, their outer corners further back than the inner ones
   inner half, pointed at both ends. Curves between these points leave and arrive along the given directions (`_hermite`), so every
   shape is set by points, lengths and angles. The lower lash lies under the bottom of the lower lid, heaviest towards its outer end;
   brows are crescents pointed at both ends. The closed-eye drawings (`head_lid`) start in a point `CLOSED_TAIL` from the inner
-  corner and end in a flick down and out (`CLOSED_FLICK`, the band's run down the outer side), rounded over about 1 mm where they
+  corner and end in a flick down and out (`CLOSED_FLICK`, the band's run down the outer side, scaled with the spec's `out_v`
+  by `closed_flick`: a band that drops less closes into a shorter flick), rounded over about 1 mm where they
   turn; the fork and the wing fold into the drawn line, the crease follows it (fades in hau). An eye that stays open (the moods'
   lowered lids, surprised) moves everything above it with the band: the band's lower edge onto the lowered lid, the rest as far
   as the lid drops at its lid parameter, held at the band's `hold` (where the band meets the lid, its turn), so the tail, the

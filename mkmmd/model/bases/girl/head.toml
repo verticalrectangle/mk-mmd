@@ -10,3 +10,18 @@ source = "param"
 cheek = [0.0219, 0.0735]
 mouth = [0.0029, 0.0615]
 chin = [-0.0171, 0.0300]
+
+# her own eye drawing, softer than Rin's (head_eye.UPPER_LASH, LASH_WING, LASH_FORK are Rin's): a short, low wing, a
+# small fork at the inner end, a thinner band that runs less far down the outer side. The closed eye follows: its flick
+# scales with out_v (head_lid.closed_flick). bases/rin/head.toml puts Rin's drawing back.
+[head.lash]
+width = 0.0072
+out_v = -0.0030
+out_tip = 24.0
+
+[head.lashwing]
+length = 0.0055
+angle = 40.0
+
+[head.lashfork]
+length = 0.0030

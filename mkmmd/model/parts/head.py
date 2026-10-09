@@ -445,7 +445,7 @@ def build(ctx):
 
     # ---- anime lids: skin-coloured sheets tucked behind the lid margins (the skin itself never moves for a blink)
     lids_mesh = MeshAcc("lids")
-    lids = {sd: HL.Lids(shape, e) for sd, e in eyes.items()}
+    lids = {sd: HL.Lids(shape, e, flick=HL.closed_flick(cfg)) for sd, e in eyes.items()}
     sheets = {}
     for sd, L in lids.items():
         sheets[sd] = {}

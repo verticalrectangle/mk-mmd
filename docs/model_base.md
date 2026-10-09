@@ -5,8 +5,8 @@ from one and changes only what it wants; when the base improves, every character
 
 | Base | What it is |
 |---|---|
-| `girl` | the neutral base: generated body and face, a chin-length chestnut bob, brown eyes, a plain navy dress with blue frills and a calf-length skirt, black Mary-Janes, CC0 hands |
-| `rin` | the worked example: `girl` plus Rin's red hair, twin braids, cat ears and tails, red eyes, leaf-print dress with green frills and a calf ribbon (Rin Kaenbyou of Touhou) |
+| `girl` | the neutral base: generated body and face, a chin-length chestnut bob, brown eyes drawn soft (a short low wing, a thin band), a plain navy dress with blue frills and a calf-length skirt, black Mary-Janes, CC0 hands |
+| `rin` | the worked example: `girl` plus Rin's red hair, twin braids, cat ears and tails, red eyes in her cat-like drawing, leaf-print dress with green frills and a calf ribbon (Rin Kaenbyou of Touhou) |
 
 ## Start
 
@@ -24,7 +24,7 @@ build base:girl --out DIR` builds a base on its own.
 
 `include = ["base:girl"]` merges the base's files first, then the character's own tables on top: tables merge key by key,
 any other value (lists too) is replaced, the character wins. So a character file holds only what differs. Read
-`mkmmd/model/bases/rin/`: four short files that turn the girl into Rin. A path value `"base:girl/hand.npz"` names a file
+`mkmmd/model/bases/rin/`: five short files that turn the girl into Rin. A path value `"base:girl/hand.npz"` names a file
 inside a base.
 
 | Table | In the base | What it changes |

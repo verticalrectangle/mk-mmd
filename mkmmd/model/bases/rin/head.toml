@@ -1,0 +1,14 @@
+# Rin's eyes over the girl base: the girl draws softer eyes (bases/girl/head.toml); Rin keeps the cat-like drawing the
+# head part draws by default (head_eye.UPPER_LASH, LASH_WING, LASH_FORK): the long wing, the inner fork, the outer corner
+# squared off and running down, and the closed eye's full flick.
+[head.lash]
+width = 0.0080
+out_v = -0.0045
+out_tip = 18.0
+
+[head.lashwing]
+length = 0.0112
+angle = 52.0
+
+[head.lashfork]
+length = 0.0068

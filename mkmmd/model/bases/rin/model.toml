@@ -1,10 +1,10 @@
 # Rin (Rin Kaenbyou of Touhou): the worked example of a character on the girl base. The base comes first; her own files
-# hold only what she changes: the red hair, eyes and black cat ears (colors.toml), the twin braids, cat ears and two cat
-# tails (hair.toml), and her dress's leaf print, green frills and calf ribbon (outfit.toml). Her body, face and hands are
-# the base's.
+# hold only what she changes: the red hair, eyes and black cat ears (colors.toml), her cat-like eye drawing (head.toml:
+# the girl draws softer eyes), the twin braids, cat ears and two cat tails (hair.toml), and her dress's leaf print, green
+# frills and calf ribbon (outfit.toml). Her body, face shape and hands are the base's.
 #   mk model build base:rin --out /tmp/rin
 #   mk model new mychar --from rin          # start from Rin instead of the neutral girl
 [model]
 name = "rin"
-include = ["base:girl", "colors.toml", "hair.toml", "outfit.toml"]
+include = ["base:girl", "colors.toml", "head.toml", "hair.toml", "outfit.toml"]
 out = "~/mk-assets/models/rin"
