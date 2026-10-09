@@ -2,19 +2,26 @@
 standard skeleton from its landmarks, analytic skin weights, static colliders and the skin material with its generated
 texture and toon ramp. Everything is driven by the spec: `[proportions]` (measured landmarks, torso cuts,
 limb diameters, foot) and the optional `[body]` table (see below); other characters only need their own proportions.
+The hands have their own design (body_hand.DESIGN), or come from a hand mesh asset (body_hand_mesh): their finger
+joints are made from it, not read from the landmarks.
 
 `[body]` keys (all optional):
   skin           {base, shade, blush, nail}  hex colours (default: [colors.skin] of the spec)
   nails          true | false | "#rrggbb"    nail plates on the fingertips (default true, pale pink); a colour paints them
   source         "procedural" (default: the body is built from the spec's proportions) | "pmx" (taken from an existing PMX
                  model, see body_pmx.py: [body.pmx] path, materials, ...)
-  resolution     {torso, arm, leg}           ring point counts (default 32, 24, 24)
-  hand, land, dims                           overrides forwarded to body_shape.resolve
+  resolution     {torso, arm, leg}           ring point counts (default 32, the hand's seam, 24; the arm must have as
+                 many points as the hand's seam (32 for the designed hand): the hand is welded onto its last ring)
+  hand           the hand's design, key by key over body_hand.DESIGN (length, palm, knuckles, fingers, width, taper,
+                 depth, palm_depth, split, splay, curl, thumb, nail ...); or `mesh = "path/hand.npz"`, a left hand drawn
+                 elsewhere (format: body_hand_mesh; a relative path is taken against the spec's folder, `base:girl/hand.npz`
+                 names a model base's) with only length, bend and nail
+  land, dims                                 overrides forwarded to body_shape.resolve
   skeleton       options of skeleton.standard_bones (e.g. {twist = "split"})
 
 Published in `Part.info`: landmarks (every standard bone head, the extra points `toe_end`, `tail_root`, ... and the
 mirrored right side), neck_top (the seam ring the head builds on), skin (colours, material and toon names),
-torso_profile, regions (vertex ranges per shell), hand (frame and sizes), foot, colliders."""
+torso_profile, regions (vertex ranges per shell), hand (frame and design), foot, colliders."""
 import numpy as np
 
 from .. import skeleton
@@ -29,6 +36,7 @@ NAIL = "nail"
 # material recipe shared with the face: diffuse 1.0 (the colour is in the texture), ambient 0.5, no specular, a toon ramp
 # with a white lit half and a light pink shadow half
 SKIN_AMBIENT = (0.5, 0.5, 0.5)
+NAIL_AMBIENT = 0.42               # the nails' ambient as a share of their colour (see the nail material)
 
 
 def _ring_point(rows, z_target, theta):
@@ -62,17 +70,17 @@ def extra_landmarks(shape, rows):
 
 
 def smooth_normals(shape, shells, ranges, verts, faces, radius=0.026):
-    """Smooth vertex normals across shells that overlap (pelvis/thighs, shoulder/arm, palm/thumb): every vertex blends its
-    normal with those of nearby vertices of OTHER shells that face the same way, so no shading crease shows where one
-    shell meets another. The top two rings of the torso get radial normals (the head's seam ring uses the same)."""
+    """Smooth vertex normals across shells that overlap (pelvis/thighs, shoulder/arm): every vertex blends its normal
+    with those of nearby vertices of OTHER shells that face the same way, so no shading crease shows where one shell
+    meets another (the hand is welded to the arm, so its seam needs none). The top two rings of the torso get radial
+    normals (the head's seam ring uses the same)."""
     n = G.vertex_normals(verts, faces)
     owner = np.zeros(len(verts), int)
     for k, sh in enumerate(shells):
         a, b = ranges[sh.name]
         owner[a:b] = k
     out = n.copy()
-    zone = np.where(((verts[:, 2] < 0.84) & (verts[:, 2] > 0.60)) | ((verts[:, 2] > 1.02) & (verts[:, 2] < 1.20)) |
-                    ((np.abs(verts[:, 0]) > 0.36) & (verts[:, 2] > 0.80)))[0]
+    zone = np.where(((verts[:, 2] < 0.84) & (verts[:, 2] > 0.60)) | ((verts[:, 2] > 1.02) & (verts[:, 2] < 1.20)))[0]
     for i0 in range(0, len(zone), 400):
         idx = zone[i0:i0 + 400]
         d = np.linalg.norm(verts[idx][:, None, :] - verts[None, :, :], axis=2)
@@ -100,12 +108,12 @@ def build(ctx):
         raise ValueError(f"[body] source must be 'procedural' or 'pmx', got {source!r}")
     prop = ctx.spec.get("proportions") or {}
     colors = (ctx.spec.get("colors") or {}).get("skin") or {}
-    shape = body_shape.resolve(prop, cfg)
+    shape = body_shape.resolve(prop, cfg, base=getattr(ctx.spec, "dir", None))
     for n in shape.notes:
         ctx.log("WARNING " + n)
     res = cfg.get("resolution") or {}
     nails = cfg.get("nails", True)
-    shells = BM.build_shells(shape, int(res.get("torso", 32)), int(res.get("arm", 32)), int(res.get("leg", 24)),
+    shells = BM.build_shells(shape, int(res.get("torso", 32)), res.get("arm"), int(res.get("leg", 24)),
                              nails=bool(nails))
     verts, faces, uvs, face_mat, ranges, s_par, th_par, ring_par, gidx = G.join(shells)
     nv = len(verts)
@@ -155,8 +163,11 @@ def build(ctx):
         else:
             ncol = str(nails)
         nc = body_tex.hex_rgb(ncol)
+        # lit colour = ambient + 0.6 x diffuse (MMD's default light): an ambient of 0.42 x the colour shows the colour
+        # itself instead of washing it out to white
+        amb = tuple(float(x) for x in NAIL_AMBIENT * nc)
         mats.append(Material(NAIL, name_en="nails", diffuse=(float(nc[0]), float(nc[1]), float(nc[2]), 1.0),
-                             specular=(0.20, 0.17, 0.17), shininess=30.0, ambient=(0.55, 0.45, 0.44), toon=toon_name,
+                             specular=(0.20, 0.17, 0.17), shininess=30.0, ambient=amb, toon=toon_name,
                              edge=False, comment="fingernail plates, a separate material so the colour can change"))
         mat_names.append(NAIL)
 
@@ -194,7 +205,7 @@ def build(ctx):
                        "y_front": np.array([r[2] for r in rows]), "y_back": np.array([r[3] for r in rows]),
                        "cuts": np.array(rows)},
         regions=dict(ranges),
-        hand=dict(frame=tuple(np.asarray(x) for x in shape.frame), radius=dict(shape.dims["limb"])),
+        hand=dict(frame=tuple(np.asarray(x) for x in shape.frame), design=shape.hand),
         foot=dict(shape.dims["foot"]),
         mesh="body",
     )

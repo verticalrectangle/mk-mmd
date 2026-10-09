@@ -2,9 +2,9 @@
 
 Every shell skins along its own chain of bones with smooth blends centred on the joints (`chain_weights`): the torso
 along the spine by height (plus the shoulder girdle), an arm along 腕 > 腕捩 > ひじ > 手捩 > 手首 (the twist bones take
-a long ramp so a twist never collapses the skin), a leg along 足 > ひざ > 足首 (the pelvis end blends with 下半身) and
-every finger along its three phalanges (roots blend with 手首). `bones` maps bone names to their head positions
-(from the skeleton); sided names are built from the side prefix."""
+a long ramp so a twist never collapses the skin), the hand from 手首 into each finger's three phalanges by the share of
+the finger every vertex belongs to, a leg along 足 > ひざ > 足首 (the pelvis end blends with 下半身). `bones` maps bone
+names to their head positions (from the skeleton); sided names are built from the side prefix."""
 import numpy as np
 
 from .body_geom import smoothstep, unit
@@ -80,24 +80,26 @@ def spine_weights(shape, z, x, bones):
 
 
 FINGER_JP = {"index": "人指", "middle": "中指", "ring": "薬指", "little": "小指"}
-KNUCKLE = 0.0075                          # half-width (m) of the 手首 -> first phalanx blend around each knuckle
-FINGER_ORDER = ("index", "middle", "ring", "little")
+KNUCKLE = 0.0095                          # half-width (m) of the 手首 -> first phalanx blend around each knuckle
+FINGER_HALF = (KNUCKLE, 0.0065, 0.0055)    # blends at a finger's root, middle and last joints
+THUMB_HALF = (0.012, 0.0075, 0.0060)      # at the thumb's root (the ball of the thumb moves with 親指０), MCP, IP
+
+
+def arm_chain(la, lf, s, jp):
+    """The arm's chain weights along s (arclength from the shoulder joint): 腕 > 腕捩 > ひじ > 手捩 > 手首 (the twist
+    bones take a long ramp so a twist never collapses the skin)."""
+    chain = [f"{jp}腕", f"{jp}腕捩", f"{jp}ひじ", f"{jp}手捩", f"{jp}手首"]
+    Wm = chain_weights(s, [0.40 * la, la, la + 0.40 * lf, la + lf], [0.30 * la, 0.030, 0.30 * lf, 0.016])
+    return {b: Wm[:, i].copy() for i, b in enumerate(chain)}
 
 
 def arm_weights(shape, sh, side):
-    """Weights of an arm shell (s = arclength from the shoulder joint, negative inside the torso). Past the knuckle line
-    the palm's 32-point ring splits into four finger blocks: block f follows that finger's first bone."""
+    """Weights of an arm shell (s = arclength from the shoulder joint, negative inside the torso)."""
     info = sh.info
-    la, lf = info["la"], info["lf"]
     jp = SIDE_JP[side]
     s = sh.s
-    chain = [f"{jp}腕", f"{jp}腕捩", f"{jp}ひじ", f"{jp}手捩", f"{jp}手首"]
-    joints = [0.40 * la, la, la + 0.40 * lf, la + lf]
-    widths = [0.30 * la, 0.030, 0.30 * lf, 0.016]
-    Wm = chain_weights(s, joints, widths)
-    W = {b: Wm[:, i].copy() for i, b in enumerate(chain)}
+    W = arm_chain(info["la"], info["lf"], s, jp)
     # the root follows the shoulder girdle (肩) and, on the underarm side, the chest (上半身2): the deltoid keeps 腕
-    sx = 1.0 if side == "L" else -1.0
     root = 1.0 - smoothstep((s + 0.020) / 0.090)                     # 1 inside the torso, 0 past s = 0.07
     inner = smoothstep((abs(shape.land[f"arm.{side}"][0]) - np.abs(sh.verts[:, 0])) / 0.030)
     low = smoothstep((shape.land[f"arm.{side}"][2] - sh.verts[:, 2] + 0.012) / 0.030)
@@ -107,18 +109,61 @@ def arm_weights(shape, sh, side):
         W[b] = W[b] * (1.0 - f_sh - f_ch)
     _add(W, f"{jp}肩", f_sh)
     _add(W, "上半身2", f_ch)
-    # the finger bases
-    h = KNUCKLE
-    b = smoothstep((s - (info["s_mcp"] - h)) / (2.0 * h))
-    M = 32
-    k = np.floor(np.nan_to_num(sh.theta) / (2 * np.pi / M)).astype(int) % M
-    fi = np.where(k < 16, k // 4, (31 - k) // 4)
-    wrist = f"{jp}手首"
-    base = W[wrist].copy()
-    W[wrist] = base * (1.0 - b)
-    for j, fname in enumerate(FINGER_ORDER):
-        _add(W, f"{jp}{FINGER_JP[fname]}１", base * b * (fi == j))
     return W
+
+
+def hand_shares(i):
+    """{semantic bone: (n,)}: how each vertex of a hand shell's 手首 share splits over the wrist, the thumb's and the
+    fingers' bones. A mesh hand brings its own weights (info `bone_weights`; its forearm share stays on the wrist);
+    the designed hand splits by `member`: the palm keeps it, a finger hands it over to its phalanges along its chain
+    (`chain_s`: root joint at 0, then the middle and last joints), the thumb to thumb0..2 from its root joint."""
+    if "bone_weights" in i:
+        out = {}
+        for k, b in enumerate(i["bone_names"]):
+            b = "wrist" if b == "forearm" else b
+            out[b] = out[b] + i["bone_weights"][:, k] if b in out else i["bone_weights"][:, k].copy()
+        return out
+    out = {"wrist": i["member"][:, 0].copy()}
+    for k, part in enumerate(("index", "middle", "ring", "little", "thumb")):
+        L1, L2, _ = i["lengths"][part]
+        if part == "thumb":
+            names, half = ["thumb0", "thumb1", "thumb2"], THUMB_HALF
+        else:
+            names, half = [f"{part}{c}" for c in "123"], FINGER_HALF
+        share = i["member"][:, k + 1]
+        Wm = chain_weights(i["chain_s"][:, k], [0.0, L1, L1 + L2], half)
+        out["wrist"] += share * Wm[:, 0]
+        for j, b in enumerate(names):
+            out[b] = share * Wm[:, j + 1]
+    return out
+
+
+def hand_bone(b, jp):
+    """The MMD name of semantic hand bone b (wrist, thumb0..2, index1..3, ...) on the side with prefix jp."""
+    if b == "wrist":
+        return f"{jp}手首"
+    if b.startswith("thumb"):
+        return f"{jp}親指" + "０１２"[int(b[-1])]
+    return f"{jp}{FINGER_JP[b[:-1]]}" + "１２３"[int(b[-1]) - 1]
+
+
+def hand_weights(shape, sh, side):
+    """Weights of the hand shell (body_hand or body_hand_mesh): its wrist end blends 手捩 into 手首 like the arm; each
+    vertex's 手首 share then goes to the hand's bones by `hand_shares`."""
+    i = sh.info
+    jp = SIDE_JP[side]
+    W = arm_chain(i["la"], i["lf"], i["la"] + i["lf"] + i["along"], jp)
+    wrist = W.pop(f"{jp}手首")
+    for b, w in hand_shares(i).items():
+        _add(W, hand_bone(b, jp), wrist * w)
+    return W
+
+
+def nail_weights(sh, side):
+    """A nail plate rides on its finger's last phalanx (it starts well past the last joint's blend)."""
+    part, jp = sh.info["part"], SIDE_JP[side]
+    bone = f"{jp}親指２" if part == "thumb" else f"{jp}{FINGER_JP[part]}３"
+    return {bone: np.ones(len(sh.verts))}
 
 
 def leg_weights(shape, sh, side):
@@ -134,25 +179,6 @@ def leg_weights(shape, sh, side):
         W[b] = W[b] * (1.0 - w_lb)
     _add(W, "下半身", w_lb)
     return W
-
-
-def finger_weights(shape, sh, side):
-    info = sh.info
-    jp = SIDE_JP[side]
-    f = info["finger"]
-    s = sh.s
-    s1, s2, s3 = info["s"][1], info["s"][2], info["s"][3]
-    if f == "thumb":
-        chain = [f"{jp}手首", f"{jp}親指０", f"{jp}親指１", f"{jp}親指２"]
-        joints = [s1 - 0.002, s2, s3]
-        widths = [0.012, 0.0075, 0.0060]
-    else:
-        names = FINGER_JP[f]
-        chain = [f"{jp}手首", f"{jp}{names}１", f"{jp}{names}２", f"{jp}{names}３"]
-        joints = [-info["web"], s2, s3]
-        widths = [KNUCKLE, 0.0065, 0.0055]
-    Wm = chain_weights(s, joints, widths)
-    return {b: Wm[:, i].copy() for i, b in enumerate(chain)}
 
 
 def body_weights(shape, shells, ranges, gidx, nverts, bones):
@@ -180,8 +206,10 @@ def body_weights(shape, shells, ranges, gidx, nverts, bones):
             put(sh, arm_weights(shape, sh, side))
         elif kind == "leg":
             put(sh, leg_weights(shape, sh, side))
-        elif kind == "finger":
-            put(sh, finger_weights(shape, sh, side))
+        elif kind == "hand":
+            put(sh, hand_weights(shape, sh, side))
+        elif kind == "nail":
+            put(sh, nail_weights(sh, side))
     tot = np.zeros(nverts)
     for w in out.values():
         tot += w

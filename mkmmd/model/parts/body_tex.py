@@ -2,11 +2,14 @@
 fingertips, heels and ankle bones, painted per atlas tile) and the warm toon ramp. Pure numpy; colours come from the spec.
 
 Atlas tiles are tubes: u runs around the tube (u = angle / 2 pi), v along it. Which u is which side:
-  arm     0 = front (-Y, the thumb side), 0.25 = palm side (down), 0.5 = back (+Y), 0.75 = back of the hand / top of the arm
+  arm     0 = front (-Y, the thumb side), 0.25 = palm side (down), 0.5 = back (+Y), 0.75 = top of the arm
   leg     0 = front (knee cap), 0.25 = inner side of the left leg, 0.5 = back, 0.75 = outer side
-  finger  0.25 = palm side, 0.75 = nail side (the thumb is turned a quarter: palm 0.75, nail 0.25)
-At the knuckle ring the palm's 32 points belong to the fingers: index, middle, ring, little take u = 0.047, 0.172,
-0.297, 0.42 on the palm side and 0.92, 0.797, 0.672, 0.547 on the back."""
+  palm    the back of the hand from the thumb side (0) to the little finger side (~0.5), then the palm from the little
+          finger side back to the thumb side (~1); v along the hand. The designed hand (body_hand) takes u = k / 16 of its
+          16-point rings, a mesh hand (body_hand_mesh) spreads each side evenly over the palm's width; the hand shell's
+          info `palm_u` gives each finger's knuckle column (back u, palm u)
+  fingers u round the finger, v = s / length along the finger's chain: the u of the back and of the palm side per
+          finger in the hand shell's info `tiles` (0.125 and 0.625 for the four fingers)"""
 import numpy as np
 
 from .body_geom import smoothstep
@@ -15,7 +18,6 @@ from .body_mesh import ATLAS
 DEFAULT = dict(base="#fffefc", blush="#f0a09a", blush_knee="#eba79c", nail="#f5c4bc", crease="#e29a92",
                neck_shadow="#e3aa95")
 DEFAULT_TOON = (0.96, 0.84, 0.81)                  # light warm-peach shadow half (lit half = white): never grey
-KNUCKLE_U = {"index": (0.92, 0.047), "middle": (0.797, 0.172), "ring": (0.672, 0.297), "little": (0.547, 0.42)}
 
 
 def hex_rgb(h):
@@ -55,12 +57,34 @@ def _v(sh, s):
     return float(np.clip((s - a) / max(b - a, 1e-9), 0.0, 1.0))
 
 
+def hand_marks(info):
+    """Marks of the hand's tiles from the hand shell's info, all soft and on the palm side or at the tips (the back of
+    the hand and of the fingers stays clean): the heel of the palm, the ball of the thumb, pads under the fingers; on
+    every finger faint joint creases, a pink pad and a pink tip."""
+    out = {}
+    pv = info["palm_v"]
+    v_palm = lambda A: float(np.clip((A - pv["seam"]) / (pv["end"] - pv["seam"]), 0.0, 1.0))
+    m = [(0.72, v_palm(0.25 * info["a_mid"]), 0.16, 0.10, 0.30, "blush"),                     # heel of the palm
+         (0.90, v_palm(0.40 * info["a_mid"]), 0.06, 0.12, 0.22, "blush")]                     # ball of the thumb
+    for part in ("index", "middle", "ring", "little"):
+        A_k = float(np.dot(info["chains"][part][0] - info["wrist"], info["frame"][0]))
+        m.append((info["palm_u"][part][1], v_palm(A_k + 0.004), 0.035, 0.040, 0.40, "blush"))  # pad under the finger
+    out["palm"] = m
+    for part, t in info["tiles"].items():
+        L1, L2, _ = info["lengths"][part]
+        L = t["length"]
+        b, p = t["back_u"], t["front_u"]
+        out[part] = [(p, L1 / L, 0.20, 0.012, 0.35, "crease"), (p, (L1 + L2) / L, 0.20, 0.011, 0.28, "crease"),
+                     (p, 0.95, 0.40, 0.070, 0.60, "blush"), (b, 0.995, 0.50, 0.050, 0.20, "blush")]
+    return out
+
+
 def marks(shells):
     """Colour marks per atlas tile: {tile: [(cu, cv, su, sv, strength, colour key)]} from the shells' joints (see the module
     docstring for what u means). Strength 1 mixes half of the colour in at the centre of the mark."""
     out = {}
     for sh in shells:
-        if sh.name.endswith("_R") or sh.info.get("nail"):
+        if sh.name.endswith("_R") or sh.info.get("kind") == "nail":
             continue
         k = sh.info.get("kind")
         i = sh.info
@@ -73,24 +97,10 @@ def marks(shells):
                           (0.25, _v(sh, i["sA"] + 0.009), 0.07, 0.018, 0.55, "blush_knee"),  # ankle bones
                           (0.75, _v(sh, i["sA"] + 0.007), 0.07, 0.018, 0.55, "blush_knee")]
         elif k == "arm":
-            s_w, s_m = i["la"] + i["lf"], i["s_mcp"]
-            m = [(0.5, _v(sh, i["la"]), 0.18, 0.030, 1.00, "blush_knee"),                 # elbow
-                 (0.25, _v(sh, i["la"] - 0.02), 0.20, 0.060, 0.30, "blush"),               # inner elbow
-                 (0.0, _v(sh, s_w + 0.35 * i["lp"]), 0.5, 0.05, 0.18, "blush"),
-                 (0.75, _v(sh, s_w + 0.8 * i["lp"]), 0.40, 0.06, 0.12, "blush")]
-            for f, (ud, up) in KNUCKLE_U.items():
-                m.append((ud, _v(sh, s_m), 0.040, 0.020, 1.10, "blush"))                  # knuckles on the back of the hand
-                m.append((up, _v(sh, s_m - 0.016), 0.055, 0.026, 0.55, "blush"))          # finger-base pads on the palm
-            out["arm"] = m
-        elif k == "finger":
-            s = i["s"]
-            palm, back = (0.75, 0.25) if i["finger"] == "thumb" else (0.25, 0.75)
-            sv = 0.014 if i["finger"] != "thumb" else 0.012
-            out[i["finger"]] = [
-                (palm, _v(sh, s[2]), 0.20, sv, 0.60, "crease"), (palm, _v(sh, s[3]), 0.20, sv, 0.45, "crease"),   # joint creases
-                (back, _v(sh, s[2]), 0.17, 0.026, 0.65, "blush"), (back, _v(sh, s[3]), 0.15, 0.022, 0.35, "blush"),  # knuckles
-                (palm, 0.97, 0.40, 0.080, 0.90, "blush"), (back, 0.995, 0.50, 0.050, 0.35, "blush"),               # finger tip
-                (palm, _v(sh, s[1]) + 0.01, 0.30, 0.04, 0.35, "blush")]
+            out["arm"] = [(0.5, _v(sh, i["la"]), 0.18, 0.030, 1.00, "blush_knee"),        # elbow
+                          (0.25, _v(sh, i["la"] - 0.02), 0.20, 0.060, 0.30, "blush")]      # inner elbow
+        elif k == "hand":
+            out.update(hand_marks(i))
     return out
 
 

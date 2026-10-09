@@ -118,13 +118,16 @@ def make_bodies(shape, shells, bone_names):
         keep(box_fit(name, bone, V[sel], eye))
     # left side, then mirrored
     sh_, ar, el, wr = (L[f"{k}.L"] for k in ("shoulder", "arm", "elbow", "wrist"))
-    arm, leg = byname["arm_L"], byname["leg_L"]
+    arm, leg, hand = byname["arm_L"], byname["leg_L"], byname["hand_L"]
     la, lf = arm.info["la"], arm.info["lf"]
     a_, r_, n_ = shape.frame
-    pts = [arm.verts[arm.s > la + lf]]
-    for f in ("index", "middle", "ring", "little"):
-        fs = byname[f"{f}_L"]
-        pts.append(fs.verts[fs.s < fs.info["s"][2] + 0.002])
+    # the hand box holds the palm and the fingers' first phalanges (the thumb swings away from it)
+    hi = hand.info
+    part = np.argmax(hi["member"], axis=1)                          # 0 palm, 1..4 index..little, 5 thumb
+    near = part == 0
+    for k, f in enumerate(("index", "middle", "ring", "little")):
+        near |= (part == k + 1) & (hi["chain_s"][:, k] < hi["lengths"][f][0] + 0.002)
+    pts = [hand.verts[near]]
     fv = leg.verts[leg.verts[:, 2] < L["ankle.L"][2] - 0.012]
     left = [
         capsule("col_shoulder_L", "左肩", sh_ + np.array([0.0, 0.0, 0.012]), ar + np.array([0.0, 0.0, 0.004]), 0.034),

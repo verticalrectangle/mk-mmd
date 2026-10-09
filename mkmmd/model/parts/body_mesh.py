@@ -1,13 +1,15 @@
-"""Surface of the body part: torso + neck (one loft up to the neck seam ring), an arm with its palm (one loft), a leg with
-its foot (one bent loft), and the five fingers of each hand (tubes rooted inside the palm). Left side built, right side
-mirrored. Sizes come from `Shape.dims` (torso cuts, limb diameters, foot) and `Shape.land`.
+"""Surface of the body part: torso + neck (one loft up to the neck seam ring), an arm (one loft from inside the shoulder
+to the wrist seam), the hand (body_hand's designed surface, or the mesh body_hand_mesh places, welded to the arm's last
+ring) and a leg with its foot (one bent loft). Left side built, right side mirrored. Sizes come from `Shape.dims` (torso
+cuts, limb diameters, foot), `Shape.hand` (the hand's design) and `Shape.land`.
 
-Shell names: torso, arm_L, leg_L, <finger>_L (index middle ring little thumb), and the same with _R.
-Atlas tiles (u0, v0, u1, v1, v up) place every shell in the skin texture."""
+Shell names: torso, arm_L, hand_L, leg_L, nail_<finger>_L (index middle ring little thumb), and the same with _R.
+Atlas tiles (u0, v0, u1, v1, v up) place every shell in the skin texture; the hand uses the palm and finger tiles."""
 import numpy as np
 
 from . import body_geom as G
-from .body_geom import Path, Table, Shell, tube, mirror_x, unit, pchip
+from . import body_hand, body_hand_mesh
+from .body_geom import Path, Table, tube, mirror_x, pchip
 
 ATLAS = {
     "torso": (0.00, 0.50, 0.50, 1.00),
@@ -18,8 +20,8 @@ ATLAS = {
     "ring": (0.40, 0.25, 0.60, 0.50),
     "little": (0.60, 0.25, 0.80, 0.50),
     "thumb": (0.80, 0.25, 1.00, 0.50),
+    "palm": (0.00, 0.00, 0.50, 0.25),
 }
-FINGERS = ("index", "middle", "ring", "little")
 
 
 def _seg(a, b):
@@ -106,174 +108,22 @@ def torso_shell(shape, M=32):
     return sh
 
 
-# ---------------------------------------------------------------- arm + palm + fingers (one welded surface)
-def hand_cfg(shape):
-    d = dict(web=0.010, gap=0.0013, thenar=0.0085, thenar_radius=0.022, slim=1.0, palm_slim=1.0, knuckle=0.0020,
-             hypothenar=0.0040, pads=0.0024, pad_tip=0.0008)
-    d.update(shape.dims.get("hand", {}))
-    return d
-
-
-def finger_shell(shape, name, rx_web=None, M=8):
-    """A finger tube. The four fingers start at the web ring (`web` metres beyond the knuckle) with 8-point rings
-    (4 palm side + 4 back, ring point j at angle (j + 1/2) * 45 degrees), so they weld to the palm's 32-point ring."""
+# ---------------------------------------------------------------- arm (the hand is welded at the seam)
+def arm_shell(shape, M=32):
+    """The arm tube from inside the shoulder to the seam `body_hand.SEAM` before the wrist joint, open there: the hand is
+    welded onto its last ring, so M is the hand's seam size (hand_module(...).seam_size). Ring point k sits 2 pi k / M
+    from the thumb side (forward at rest) towards the palm side. The path runs on past the wrist along the hand, and the
+    section table to just beyond the wrist, so the hand can sample the forearm's surface there."""
     L = shape.land
     D = shape.dims["limb"]
-    H = hand_cfg(shape)
-    if name == "thumb":
-        joints = [L[f"thumb{i}.L"] for i in (0, 1, 2)] + [L["thumb_tip.L"]]
-        w, t = D["finger_thumb"]
-        back = 0.016
-        scale = [1.00, 1.40, 1.30, 1.14, 1.04, 0.95, 0.80, 0.62]
-        M = 12
-        J1, J2, J3, T = joints
-        a_, r_, n_ = shape.frame
-        root = J1 - unit(J2 - J1) * back + r_ * 0.011 - n_ * 0.004      # rooted inside the palm, towards its centre
-        path = Path([root, J1, J2, J3, T], blend=0.004)
-        s1 = _seg(root, J1)
-        s2 = s1 + _seg(J1, J2)
-        s3 = s2 + _seg(J2, J3)
-        s4 = s3 + _seg(J3, T)
-        knots = [0.0, s1, s1 + 0.5 * (s2 - s1), s2, s2 + 0.5 * (s3 - s2), s3, s3 + 0.6 * (s4 - s3), s4]
-        ss = [0.0, 0.5 * s1, s1, s1 + 0.5 * (s2 - s1), s2 - 0.006, s2, s2 + 0.006, s2 + 0.5 * (s3 - s2), s3 - 0.005, s3,
-              s3 + 0.005, s3 + 0.55 * (s4 - s3), s4]
-        ref = unit(np.cross(unit(J3 - J1), n_))
-        cap0, theta0 = "flat", 0.0
-    else:
-        joints = [L[f"{name}{i}.L"] for i in (1, 2, 3)] + [L[f"{name}_tip.L"]]
-        w, t = D["finger_little"] if name == "little" else D["finger"]
-        scale = [1.0, 0.99, 0.98, 0.97, 0.89, 0.88, 0.78, 0.64]
-        J1, J2, J3, T = joints
-        p_web = J1 + unit(J2 - J1) * H["web"]
-        path = Path([p_web, J2, J3, T], blend=0.004)
-        s1 = 0.0
-        s2 = _seg(p_web, J2)
-        s3 = s2 + _seg(J2, J3)
-        s4 = s3 + _seg(J3, T)
-        knots = [0.0, 0.5 * s2, s2 - 0.005, s2, s2 + 0.5 * (s3 - s2), s3, s3 + 0.6 * (s4 - s3), s4]
-        ss = [0.0, 0.5 * s2, s2 - 0.006, s2, s2 + 0.006, s2 + 0.5 * (s3 - s2), s3 - 0.005, s3, s3 + 0.005,
-              s3 + 0.55 * (s4 - s3), s4]
-        ref = (0.0, -1.0, 0.0)
-        cap0, theta0 = "open", np.pi / 8
-    rx0, ry0 = 0.5 * w * H["slim"], 0.5 * t * H["slim"]
-    sc = np.array(scale)
-    rx = rx0 * sc
-    if rx_web is not None:
-        rx[0] = min(rx[0], rx_web)
-        rx[1] = min(rx[1], 0.5 * (rx[0] + rx[2]) if rx[0] < rx[2] else rx[1])
-    # fingertip pad: a little fuller and shifted to the palm side over the last phalanx
-    pad = np.array([1, 1, 1, 1, 1.0, 1.05, 1.12, 1.16]) if name != "thumb" else np.array([1, 1, 1, 1, 1, 1.03, 1.08, 1.10])
-    oy = np.array([0, 0, 0, 0, 0, 0.0002, 0.5, 0.35]) * np.array([1, 1, 1, 1, 1, 1, H["pad_tip"], H["pad_tip"]])
-    tab = Table(knots, rx=rx, ry=ry0 * sc * pad, ox=np.zeros(8), oy=oy, n=np.full(8, 2.4 if name != "thumb" else 2.2))
-    cap_len = 1.12 if name != "thumb" else 1.10
-    sh = tube(f"{name}_L", path, ss, tab, M, ref, cap0=cap0, cap1="dome", cap_rings=3, theta0=theta0,
-              uv_rect=ATLAS[name], cap_len=(1.0, cap_len))
-    sh.info = dict(kind="finger", finger=name, path=path, s=[0.0, s1, s2, s3, s4], joints=joints,
-                   welded=(name != "thumb"), web=H["web"], tab=tab, ref=ref, cap_len=cap_len)
-    return sh
-
-
-def nail_shell(shape, fsh, nu=7, lift=0.0004):
-    """A nail plate on the back of a fingertip: a quad grid on the finger's surface (rows along the last phalanx, then over
-    the first part of the tip dome), lifted by `lift` metres, rounded at the cuticle and at the free edge."""
-    i = fsh.info
-    s3, s4 = i["s"][3], i["s"][4]
-    ld = s4 - s3
-    frac = [0.00, 0.03, 0.07, 0.13, 0.22, 0.38, 0.55, 0.72, 0.86]           # along the plate on the phalanx
-    gs = [0.30, 0.58, 0.80, 0.93, 1.00, 1.00, 1.00, 0.98, 0.94]             # half-width share of each row
-    doms, gd = (0.40, 0.80, 1.12), (0.85, 0.62, 0.34)                      # rows over the tip dome
-    s_a = s3 + 0.16 * ld
-    rows = [("s", s_a + f * (s4 - s_a), g) for f, g in zip(frac, gs)] + [("d", a, g) for a, g in zip(doms, gd)]
-    th_c = 0.5 * np.pi if i["finger"] == "thumb" else 1.5 * np.pi       # the ring angle of the back of the finger
-    us = np.linspace(-1.0, 1.0, nu)
-    tab, path, ref = i["tab"], i["path"], i["ref"]
-    sec4 = tab(np.array([s4]))
-    rx4, ry4 = float(sec4["rx"][0]), float(sec4["ry"][0])
-    c4, t4 = path.point(np.array([s4]))[0], path.tangent(np.array([s4]))[0]
-    rad = 0.5 * (rx4 + ry4) * i.get("cap_len", 1.25)                       # dome depth (cap_len of the finger tube)
-    P = np.zeros((len(rows), nu, 3))
-    N = np.zeros((len(rows), nu, 3))
-    sv = []
-    for r, (kind, v, g) in enumerate(rows):
-        if kind == "s":
-            sec = tab(np.array([v]))
-            rxs, rys = float(sec["rx"][0]), float(sec["ry"][0])
-            half = 0.5 * 0.60 * 2.0 * rxs * g / max(0.5 * (rxs + rys), 1e-4)
-            p, n = G.surface_point(path, np.full(nu, v), tab, ref, th_c + us * half)
-            P[r], N[r] = p, n
-            sv.append(v)
-        else:
-            half = 0.5 * 0.60 * 2.0 * rx4 * g / max(0.5 * (rx4 + ry4), 1e-4)
-            p4, n4 = G.surface_point(path, np.full(nu, s4), tab, ref, th_c + us * half)
-            ax = c4 + t4 * rad * np.sin(v)
-            P[r] = c4 + (p4 - c4) * np.cos(v) + t4 * rad * np.sin(v)
-            N[r] = G.unit(P[r] - ax)
-            sv.append(s4 + rad * np.sin(v))
-    verts = (P + N * lift).reshape(-1, 3)
-    nr = len(rows)
-    faces, uvs = [], []
-    for r in range(nr - 1):
-        for c in range(nu - 1):
-            faces.append([r * nu + c, r * nu + c + 1, (r + 1) * nu + c + 1, (r + 1) * nu + c])
-            uvs.append(np.array([[0.5, 0.5]] * 4))
-    sh = Shell(f"nail_{fsh.name}")
-    sh.verts = verts
-    sh.faces = faces
-    sh.uv = uvs
-    sh.s = np.repeat(np.array(sv), nu)
-    sh.theta = np.full(len(verts), np.nan)
-    sh.ring = np.full(len(verts), -1)
-    sh.face_mat = [1] * len(faces)
-    n0 = np.cross(verts[faces[0][1]] - verts[faces[0][0]], verts[faces[0][3]] - verts[faces[0][0]])
-    if n0 @ N[0, nu // 2] < 0:
-        sh.flip()
-    sh.info = dict(i, kind="finger", nail=True)
-    return sh
-
-
-def arm_hand_shells(shape, M=32):
-    """[arm_L, index_L, middle_L, ring_L, little_L, thumb_L]: the arm tube runs through the palm to the web ring, where
-    the four fingers continue it (shared vertices) and 3 quads close the slits between them."""
-    L = shape.land
-    D = shape.dims["limb"]
-    H = hand_cfg(shape)
-    assert M == 32, "the palm ring is 4 fingers x (4 palm side + 4 back) points"
-    # finger ring widths at the web: neighbours must not touch
-    p_web = {f: L[f"{f}1.L"] + unit(L[f"{f}2.L"] - L[f"{f}1.L"]) * H["web"] for f in FINGERS}
-    rx_nom = {f: 0.5 * (D["finger_little"][0] if f == "little" else D["finger"][0]) for f in FINGERS}
-    rx_web = dict(rx_nom)
-    for fa, fb in zip(FINGERS[:-1], FINGERS[1:]):
-        space = abs(float(p_web[fb][1] - p_web[fa][1]))
-        room = space - H["gap"]
-        for f in (fa, fb):
-            rx_web[f] = min(rx_web[f], 0.5 * room)
-    fingers = {f: finger_shell(shape, f, rx_web[f]) for f in FINGERS}
-    # target web ring: finger f owns palm-side points 4f..4f+3 and back points 28-4f..31-4f
-    T = np.zeros((32, 3))
-    amap = {}
-    for fi, f in enumerate(FINGERS):
-        ring = fingers[f].rings[0]
-        for j in range(8):
-            k = 4 * fi + j if j < 4 else 28 - 4 * fi + (j - 4)
-            T[k] = ring[j]
-            amap[(f, j)] = k
     J, E, W = L["arm.L"], L["elbow.L"], L["wrist.L"]
-    Qw = T.mean(axis=0)
-    path = Path([J, E, W, Qw], blend=0.035)
+    path = Path([J, E, W, W + shape.frame[0] * 0.04], blend=0.035)
     la, lf = _seg(J, E), _seg(E, W)
-    lp = path.length - la - lf
-    s_w, s_web = la + lf, path.length
+    s_w = la + lf
+    s_seam = s_w + body_hand.SEAM
     top, mid, el = _half(D["upper_arm_top"]), _half(D["upper_arm_mid"]), _half(D["elbow"])
-    ft, fm, wr, pk = _half(D["forearm_top"]), _half(D["forearm_mid"]), _half(D["wrist"]), _half(D["palm_knuckles"])
-    pk = (pk[0] * H["palm_slim"], pk[1] * H["palm_slim"])
+    ft, fm, wr = _half(D["forearm_top"]), _half(D["forearm_mid"]), _half(D["wrist"])
     ball = 1.30
-    # the palm's end section is measured on the web ring so the blend to it is gentle
-    t_end = unit(path.tangent(np.array([s_web]))[0])
-    ef_end = unit(np.array([0.0, -1.0, 0.0]) - (np.array([0.0, -1.0, 0.0]) @ t_end) * t_end)
-    eb_end = np.cross(t_end, ef_end)
-    ya, yb = (T - Qw) @ ef_end, (T - Qw) @ eb_end
-    rx_e, ry_e = 0.5 * (ya.max() - ya.min()), 0.5 * (yb.max() - yb.min())
-    ox_e, oy_e = 0.5 * (ya.max() + ya.min()), 0.5 * (yb.max() + yb.min())
     rows = [
         (0.0, top[0] * ball, top[1] * ball, 0.0, 0.0, 2.0),
         (0.12 * la, top[0] * 1.13, top[1] * 1.13, 0.0, 0.0, 2.0),
@@ -285,73 +135,17 @@ def arm_hand_shells(shape, M=32):
         (la + 0.55 * lf, fm[0], fm[1], 0.0, 0.0, 2.2),
         (la + 0.85 * lf, 0.5 * (fm[0] + wr[0]), 0.5 * (fm[1] + wr[1]) * 0.95, 0.0, 0.0, 2.35),
         (s_w, wr[0], wr[1], 0.0, 0.0, 2.6),
-        (s_w + 0.20 * lp, 0.5 * (wr[0] + pk[0]) * 1.03, 0.5 * (wr[1] + pk[1]) * 0.85, 0.2 * ox_e, 0.0, 2.8),
-        (s_w + 0.50 * lp, pk[0] * 0.97, pk[1] * 0.80, 0.6 * ox_e, 0.0, 3.0),
-        (s_w + 0.80 * lp, rx_e * 1.02, max(ry_e, pk[1] * 0.78), ox_e, oy_e, 3.0),
-        (s_web, rx_e, ry_e, ox_e, oy_e, 3.0),
+        (s_w + 0.02, wr[0], wr[1], 0.0, 0.0, 2.6),
     ]
     R = np.array(rows)
     tab = Table(R[:, 0], rx=R[:, 1], ry=R[:, 2], ox=R[:, 3], oy=R[:, 4], n=R[:, 5])
     ss = [f * la for f in (0.0, 0.08, 0.18, 0.32, 0.46, 0.60, 0.74, 0.86, 0.93, 1.0)]
-    ss += [la + f * lf for f in (0.07, 0.16, 0.30, 0.45, 0.60, 0.75, 0.88, 1.0)]
-    ss += [s_w + f * lp for f in (0.12, 0.26, 0.40, 0.52, 0.63, 0.73, 0.81, 0.88, 0.94, 1.0)]
-    arm = tube("arm_L", path, ss, tab, M, (0.0, -1.0, 0.0), cap0="dome", cap1="open", cap_rings=3,
-               theta0=np.pi / M, uv_rect=ATLAS["arm"], cap_len=(1.0, 1.0))
-    arm.orient_outward() if False else None
-    # blend the palm rings into the web ring
-    idx = arm.ring_index
-    s_ring = np.array([arm.s[idx[i, 0]] for i in range(len(idx))])
-    s0 = s_w + 0.40 * lp
-    for i in range(len(idx)):
-        if s_ring[i] <= s0:
-            continue
-        w_ = float(G.smoothstep((s_ring[i] - s0) / (s_web - s0)))
-        arm.verts[idx[i]] = (1 - w_) * arm.verts[idx[i]] + w_ * T
-    arm.rings = arm.verts[idx]
-    # thenar eminence: a soft bump on the palm side at the thumb's root
-    thumb = finger_shell(shape, "thumb")
-    c = L["thumb0.L"] + shape.frame[2] * 0.004
-    zone = (s_ring[0] * 0 + arm.s > s_w - 0.005) & (arm.s < s_w + 0.7 * lp) & np.isfinite(arm.theta)
-    d = np.linalg.norm(arm.verts - c, axis=1)
-    bump = H["thenar"] * np.exp(-(d / H["thenar_radius"]) ** 2) * zone
-    ctr = np.array([path.point(arm.s[i]) for i in range(len(arm.verts))])
-    out = G.unit(arm.verts - ctr)
-    arm.verts = arm.verts + out * bump[:, None]
-    # knuckle relief on the back of the hand, hypothenar and finger-base pads on the palm side
-    a_h, r_h, n_h = shape.frame
-    th_ = np.nan_to_num(arm.theta)
-    dorsal = (th_ > np.pi) & (th_ < 2 * np.pi) & np.isfinite(arm.theta)
-    palmar = (th_ > 0) & (th_ < np.pi) & np.isfinite(arm.theta)
-    near_hand = arm.s > s_w - 0.01
-    extra = np.zeros(len(arm.verts))                                  # outward displacement (m)
-    for f in FINGERS:
-        c = L[f"{f}1.L"] - n_h * 0.010
-        extra += H["knuckle"] * np.exp(-(np.linalg.norm(arm.verts - c, axis=1) / 0.0105) ** 2) * dorsal * near_hand
-        c = L[f"{f}1.L"] + n_h * 0.009 - a_h * 0.006
-        extra += H["pads"] * np.exp(-(np.linalg.norm(arm.verts - c, axis=1) / 0.0095) ** 2) * palmar * near_hand
-    c = L["wrist.L"] + a_h * 0.032 + r_h * 0.022 + n_h * 0.010
-    extra += H["hypothenar"] * np.exp(-(np.linalg.norm(arm.verts - c, axis=1) / 0.021) ** 2) * palmar * near_hand
-    arm.verts = arm.verts + out * extra[:, None]
-    arm.rings = arm.verts[idx]
-    # web quads between neighbouring fingers (outward = distal)
-    last = idx[-1]
-    for fi in range(3):
-        quad = [last[4 * fi + 3], last[4 * fi + 4], last[27 - 4 * fi], last[28 - 4 * fi]]
-        v = arm.verts[quad]
-        nrm = np.cross(v[1] - v[0], v[3] - v[0])
-        if nrm @ t_end < 0:
-            quad = quad[::-1]
-        arm.faces.append(quad)
-        u = ATLAS["arm"]
-        arm.uv.append(np.array([[u[2], u[3]], [u[2], u[3]], [u[2], u[3]], [u[2], u[3]]]))
-        arm.face_mat.append(0)
-    arm.info = dict(kind="arm", path=path, la=la, lf=lf, lp=lp, s_web=s_web, s_mcp=s_web - H["web"], web=H["web"],
-                    amap=amap)
-    for f in FINGERS:
-        fs = fingers[f]
-        fs.ext = {j: ("arm_L", int(last[amap[(f, j)]] - 0)) for j in range(8)}
-    # arm.ring_index entries are local indices of the arm shell = its own vertex numbers (it has no ext)
-    return arm, fingers, thumb
+    ss += [la + f * lf for f in (0.07, 0.16, 0.30, 0.45, 0.60, 0.74, 0.85)] + [s_seam]
+    ref = (0.0, -1.0, 0.0)
+    arm = tube("arm_L", path, ss, tab, M, ref, cap0="dome", cap1="open", cap_rings=3, theta0=0.0,
+               uv_rect=ATLAS["arm"], cap_len=(1.0, 1.0))
+    arm.info = dict(kind="arm", path=path, tab=tab, ref=ref, la=la, lf=lf, s_w=s_w, s_seam=s_seam, M=M)
+    return arm
 
 
 # ---------------------------------------------------------------- leg + foot
@@ -511,12 +305,21 @@ def leg_shell(shape, M=24):
     return sh
 
 
-def build_shells(shape, M_torso=32, M_arm=32, M_leg=24, nails=True):
-    """All shells, left and right: [torso, arm_L, fingers_L..., thumb_L, leg_L, nails_L, then the right side mirrored]."""
-    arm, fingers, thumb = arm_hand_shells(shape, M_arm)
-    left = [arm] + [fingers[f] for f in FINGERS] + [thumb, leg_shell(shape, M_leg)]
-    if nails:
-        left += [nail_shell(shape, s) for s in [fingers[f] for f in FINGERS] + [thumb]]
+def hand_module(D):
+    """The module that makes the hand of design D: body_hand_mesh for a `mesh`, else body_hand."""
+    return body_hand_mesh if D["mesh"] else body_hand
+
+
+def build_shells(shape, M_torso=32, M_arm=None, M_leg=24, nails=True):
+    """All shells, left and right: [torso, arm_L, hand_L, leg_L, nails_L..., then the right side mirrored]. The hand is
+    welded onto the arm's last ring, which has as many points as the hand's seam (M_arm, when given, must say so)."""
+    hm = hand_module(shape.hand)
+    seam = hm.seam_size(shape.hand)
+    if M_arm is not None and int(M_arm) != seam:
+        raise ValueError(f"[body.resolution] arm must be {seam} (the hand's seam ring), got {M_arm}")
+    arm = arm_shell(shape, seam)
+    hand, nail_shells = hm.hand_shells(shape, arm, ATLAS, nails=nails)
+    left = [arm, hand, leg_shell(shape, M_leg)] + nail_shells
     shells = [torso_shell(shape, M_torso)]
     shells += left
     for sh in left:

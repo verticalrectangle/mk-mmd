@@ -1,19 +1,21 @@
 """Proportions of the body part: every number that sets the body's size and shape is resolved here from the spec
-(`proportions.toml`: landmarks, torso cuts, limb diameters, foot, segments; then the `[body]` table of body.toml), over
-defaults that are the numbers measured for Rin, so the part also builds without a spec.
+(`proportions.toml`: landmarks, torso cuts, limb diameters, foot; then the `[body]` table of body.toml), over built-in
+defaults (a measured slender figure), so the part also builds without a spec.
 
 `resolve(prop, cfg)` returns `Shape`: `land` (semantic bone name -> head position, plus extra non-bone points such as
-`toe_end.L`), `hand` (layout and radii, finger joints regenerated at anatomical proportions between the given knuckle and
-fingertip positions), `dims` (torso cuts, limb sections, foot) and the hand `frame`. Model space: metres, Z up, facing -Y,
-her left is +X; only the left side is stored, the right side is its mirror."""
+`toe_end.L`), `hand` (the hand's design, body_hand.DESIGN with `[body.hand]` over it), `dims` (torso cuts, limb sections,
+foot) and the hand `frame`. The finger joints are not read from the landmarks: they are made from the hand's design at
+the wrist (body_hand.joints), or taken from the hand mesh `[body.hand] mesh` names (body_hand_mesh.joints). Model
+space: metres, Z up, facing -Y, her left is +X; only the left side is stored, the right side is its mirror."""
 import copy
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from .body_geom import unit
+from ..spec import expand
+from . import body_hand, body_hand_mesh
 
-# ---------------------------------------------------------------- defaults (the numbers measured for Rin)
+# ---------------------------------------------------------------- defaults
 LAND = {
     "root": (0.0, -0.0027, -0.0036),
     "center": (0.0, -0.0167, 0.8419),
@@ -31,12 +33,6 @@ LAND = {
     "elbow.L": (0.2539, 0.0132, 1.0140),
     "wrist_twist.L": (0.3395, 0.0089, 0.9702),
     "wrist.L": (0.3941, 0.0061, 0.9418),
-    "thumb0.L": (0.4085, -0.0181, 0.9170),
-    "thumb_tip.L": (0.4626, -0.0241, 0.8677),
-    "index1.L": (0.4506, -0.0132, 0.8993), "index_tip.L": (0.5088, -0.0118, 0.8529),
-    "middle1.L": (0.4545, 0.0068, 0.9016), "middle_tip.L": (0.5210, 0.0063, 0.8487),
-    "ring1.L": (0.4515, 0.0246, 0.9005), "ring_tip.L": (0.5079, 0.0229, 0.8482),
-    "little1.L": (0.4438, 0.0413, 0.8993), "little_tip.L": (0.4946, 0.0398, 0.8599),
     "leg.L": (0.0755, -0.0356, 0.7425),
     "knee.L": (0.0527, -0.0320, 0.4189),
     "ankle.L": (0.0602, -0.0008, 0.0936),
@@ -63,23 +59,9 @@ LIMB = dict(
     calf=(0.0770, 0.0772), shin_low=(0.0583, 0.0482), ankle=(0.0518, 0.0421),
     upper_arm_top=(0.0605, 0.0523), upper_arm_mid=(0.0557, 0.0505), elbow=(0.0529, 0.0483),
     forearm_top=(0.0566, 0.0508), forearm_mid=(0.0463, 0.0466), wrist=(0.0410, 0.0268),
-    palm_knuckles=(0.0742, 0.0321), finger=(0.0176, 0.0119), finger_little=(0.0157, 0.0109), finger_thumb=(0.0209, 0.0142),
 )
 
 FOOT = dict(foot_length=0.1696, foot_width=0.0700, foot_inner_floor_z=0.0229, shoe_y=(-0.1475, 0.0475))
-
-# hand layout (hand frame: `along` the hand from the wrist, `across` from the index side to the little finger side,
-# `vent` out of the palm): anatomical finger proportions between the given knuckle and fingertip positions
-HAND = dict(
-    split=(0.45, 0.285, 0.265),                   # proximal, middle, distal share of a finger's length
-    splay={"index": -2.0, "middle": 0.0, "ring": 3.0, "little": 8.5},              # deg, + towards the little finger
-    curl={"index": (3.0, 5.0, 4.0), "middle": (3.0, 5.0, 4.0), "ring": (3.5, 5.5, 4.5), "little": (4.0, 6.0, 5.0)},
-    thumb_split=(0.40, 0.33, 0.27),
-    thumb_yaw=(16.0, 12.0, 8.0),                  # outward (towards -across) from the hand axis, deg
-    thumb_pitch=(12.0, 8.0, 8.0),                # towards the palm side, deg
-)
-
-FINGERS = ("index", "middle", "ring", "little")
 
 
 @dataclass
@@ -88,7 +70,7 @@ class Shape:
     hand: dict = field(default_factory=dict)
     dims: dict = field(default_factory=dict)
     scale: float = 1.0
-    frame: tuple = None                              # (a, r, n) of the left hand from the landmarks
+    frame: tuple = None                              # (a, r, n) of the left hand (body_hand.frame)
     notes: list = field(default_factory=list)
 
 
@@ -102,51 +84,11 @@ def _vec(v):
     return np.asarray(v, float).reshape(3)
 
 
-def hand_frame_from(land):
-    """(a, r, n) of the left hand: along (wrist -> middle knuckle), across (index -> little), palm normal (down)."""
-    a = unit(land["middle1.L"] - land["wrist.L"])
-    across = unit(land["little1.L"] - land["index1.L"])
-    n = -unit(np.cross(a, across))
-    r = unit(np.cross(n, a))
-    if r @ across < 0:
-        r = -r
-    return a, r, n
-
-
-def finger_joints(land, H):
-    """Regenerate the finger joints of the left hand: knuckle and tip stay where the landmarks put them, the joints in
-    between sit at anatomical proportions along a gently curled line (splay and curl from `H`)."""
-    a, r, n = hand_frame_from(land)
-    out = {}
-    for f in FINGERS:
-        p0 = land[f"{f}1.L"]
-        tip = land[f"{f}_tip.L"]
-        total = float(np.linalg.norm(tip - p0))
-        lens = [total * s for s in H["split"]]
-        sp = np.radians(H["splay"][f])
-        base = np.cos(sp) * a + np.sin(sp) * r
-        p = p0.copy()
-        cum = 0.0
-        out[f"{f}1.L"] = p.copy()
-        for j, (ln, cu) in enumerate(zip(lens, H["curl"][f])):
-            cum += np.radians(cu)
-            p = p + (np.cos(cum) * base + np.sin(cum) * n) * ln
-            out[f"{f}{j + 2}.L" if j < 2 else f"{f}_tip.L"] = p.copy()
-    p = land["thumb0.L"].copy()
-    total = float(np.linalg.norm(land["thumb_tip.L"] - p)) * 1.04
-    out["thumb0.L"] = p.copy()
-    for name, sh, yaw, pitch in zip(("thumb1.L", "thumb2.L", "thumb_tip.L"), H["thumb_split"], H["thumb_yaw"],
-                                    H["thumb_pitch"]):
-        y, q = np.radians(yaw), np.radians(pitch)
-        d = np.cos(q) * (np.cos(y) * a - np.sin(y) * r) + np.sin(q) * n
-        p = p + d * total * sh
-        out[name] = p.copy()
-    return out
-
-
-def resolve(prop=None, cfg=None):
-    """Landmarks, hand layout and section tables from the `[proportions]` spec table `prop` (landmarks, sections,
-    segments, rest_pose, ...) and the `[body]` table `cfg` (overrides: `land`, `hand`, `dims`)."""
+def resolve(prop=None, cfg=None, base=None):
+    """Landmarks, the hand's design and section tables from the `[proportions]` spec table `prop` (landmarks, sections)
+    and the `[body]` table `cfg` (overrides: `land`, `hand`, `dims`). The finger joints come from the hand's design or
+    its mesh (a relative `mesh` path is taken against `base`, the spec's folder); finger landmarks given in the spec are
+    not used (a note says so)."""
     prop = prop or {}
     cfg = cfg or {}
     notes = []
@@ -159,12 +101,16 @@ def resolve(prop=None, cfg=None):
         notes.append("proportions.landmarks missing: built-in numbers used")
     for k, v in (cfg.get("land") or {}).items():
         land[k] = _vec(v)
-    H = copy.deepcopy(HAND)
-    for k, v in (cfg.get("hand") or {}).items():
-        H[k] = v
-    if cfg.get("hand_from_landmarks", False) is False:
-        for k, v in finger_joints(land, H).items():
-            land[k] = v
+    H = body_hand.resolve(cfg.get("hand"))
+    if H["mesh"]:
+        H["mesh"] = str(expand(H["mesh"], base))
+        made, source = body_hand_mesh.joints(land, H), "its mesh ([body.hand] mesh)"
+    else:
+        made, source = body_hand.joints(land, H), "its design ([body.hand])"
+    ignored = sorted(k for k in set(given) | set(cfg.get("land") or {}) if k in made)
+    if ignored:
+        notes.append(f"finger landmarks {', '.join(ignored)} not used: the hand is made from {source}")
+    land.update(made)
     for k in list(land):
         if k.endswith(".L"):
             land[k[:-2] + ".R"] = mirror(land[k])
@@ -184,5 +130,5 @@ def resolve(prop=None, cfg=None):
         else:
             dims[k] = v
     sh = Shape(land=land, hand=H, dims=dims, notes=notes)
-    sh.frame = hand_frame_from(land)
+    sh.frame = body_hand.frame(land, H)
     return sh
