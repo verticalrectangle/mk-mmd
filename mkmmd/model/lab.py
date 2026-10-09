@@ -5,11 +5,11 @@ screenshot of part of one) read back in millimetres.
 A source is a spec (built in-process: the part builders, then the assembler, so the lab sees the PMX `mk model build`
 writes) or a .pmx file. Model space throughout: metres, Z up, -Y forward, +X her left.
 
-  load(src, label=None, overrides=(), parts=None, unit=0.08) -> Model
+  load(src, label=None, overrides=(), parts=None, unit=0.08, workdir=None) -> Model
   Model.deform(pose=None, morphs=None) -> (V, N)
         forward kinematics through the bone tree (rotation grants followed: D bones, twist bones) and linear blend
         skinning with the model's weights. Poses are named by semantic bone (POSES: finger curls, spread, arms down,
-        sit, both sides); a pose name that is one of the model's morphs applies that morph instead.
+        T-pose, sit, both sides); a pose name that is one of the model's morphs applies that morph instead.
   region_mask(model, region, side)       the vertices of a semantic bone's subtree (REGIONS), the whole body for "body"
   render(V, N, T, lit, shade, cam, ...)  orthographic toon render: a vectorised z-buffer (triangles bucketed by their
                                          size in pixels, fragments resolved with np.maximum.at), two-tone shading,
@@ -18,6 +18,8 @@ writes) or a .pmx file. Model space throughout: metres, Z up, -Y forward, +X her
   sheet(models, region, ...)             one scale for every model; the layout records each cell's camera
   trace(marked, sheet_png, layout)       place a marked image on the sheet (ORB features, else multi-scale template
                                          matching), then the red stroke in model space and its distance to the outline
+  trace_points(pts, sheet_png, layout)   the same for a stroke already in sheet pixels (a line drawn over the sheet in
+                                         a Tern whiteboard; mkmmd.review reads those)
 """
 import math
 import shutil
@@ -64,7 +66,7 @@ HAND_POSES = {
 ARMS_DOWN_DEG = 75.0                      # arms_down: the upper arm this far below horizontal
 THUMB_TOWARDS = (1.0, 0.5)                # the thumb flexes towards this mix of (across to the little finger, out of the
                                           # palm): it folds over the fingers in a fist (it is turned ~90 deg from them)
-POSES = ("rest",) + tuple(HAND_POSES) + ("arms_down", "sit")
+POSES = ("rest",) + tuple(HAND_POSES) + ("arms_down", "tpose", "sit")
 
 
 # --------------------------------------------------------------------------------------------------------- small maths
@@ -105,9 +107,14 @@ class Model:
     source: str
     V: np.ndarray            # (n, 3) rest positions (m)
     N: np.ndarray            # (n, 3) rest normals
+    uv: np.ndarray           # (n, 2) texture coordinates, u right and v down (PMX and glTF agree)
     T: np.ndarray            # (t, 3) triangles
     tri_mat: np.ndarray      # (t,) material index
     lit: np.ndarray          # (m, 3) lit colour per material, 0..255 (diffuse times the mean of its texture)
+    rgba: np.ndarray         # (m, 4) diffuse colour and alpha per material, 0..1
+    textures: list           # per material: its texture's absolute path, or None (none, missing, or a spec built in a
+                             # folder that is gone: see `load`)
+    double_sided: np.ndarray  # (m,) materials drawn from both sides
     hidden: np.ndarray       # (m,) materials not drawn (diffuse alpha ~ 0)
     mat_names: list
     bones: list              # bone names
@@ -119,7 +126,9 @@ class Model:
     wi: np.ndarray           # (n, 4) bone index per weight slot
     ww: np.ndarray           # (n, 4) weights (rows sum to 1, or 0 for unweighted vertices)
     morphs: dict             # morph name -> (vertex indices, offsets (k, 3) m); group morphs expanded
+    morph_panels: dict       # morph name -> its PMX panel: 1 eyebrow, 2 eye, 3 mouth, 4 other
     sem: dict                # semantic name -> bone index
+    names: tuple = ("", "")  # the PMX model name, Japanese and English
 
     @property
     def visible(self):
@@ -253,16 +262,18 @@ def from_pmx(pmx, root, unit=0.08, label="model", source=""):
     V = to_model(np.array([v.pos for v in pmx.vertices], float).reshape(-1, 3), unit)
     N = to_model(np.array([v.normal for v in pmx.vertices], float).reshape(-1, 3), 1.0)
     N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+    uv = np.array([v.uv for v in pmx.vertices], float).reshape(-1, 2)
     T = np.asarray(pmx.faces, np.int64).reshape(-1, 3)
     counts = [int(m.index_count) // 3 for m in pmx.materials]
     tri_mat = np.repeat(np.arange(len(counts)), counts)
-    lit, hidden = [], []
+    lit, textures, hidden = [], [], []
     for m in pmx.materials:
         col = np.array(m.diffuse[:3], float)
         f = _find_file(root, pmx.textures[m.texture]) if 0 <= m.texture < len(pmx.textures) else None
         if f is not None:
             col = col * _mean_texture(f)
         lit.append(np.clip(col, 0.0, 1.0) * 255.0)
+        textures.append(str(Path(f).resolve()) if f is not None else None)
         hidden.append(float(m.diffuse[3]) < 0.05)
     names = [b.name for b in pmx.bones]
     heads = to_model(np.array([b.pos for b in pmx.bones], float).reshape(-1, 3), unit)
@@ -297,15 +308,19 @@ def from_pmx(pmx, root, unit=0.08, label="model", source=""):
         if parts:
             morphs[m.name] = (np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts]))
     sem = {s: names.index(b) for s, b in bonemap.build_map({nm: nm for nm in names}).items() if b in names}
-    return Model(label=label, source=source, V=V, N=N, T=T, tri_mat=tri_mat, lit=np.array(lit).reshape(-1, 3),
+    return Model(label=label, source=source, V=V, N=N, uv=uv, T=T, tri_mat=tri_mat, lit=np.array(lit).reshape(-1, 3),
+                 rgba=np.array([m.diffuse[:4] for m in pmx.materials], float).reshape(-1, 4), textures=textures,
+                 double_sided=np.array([bool(m.double_sided) for m in pmx.materials], bool),
                  hidden=np.array(hidden, bool), mat_names=[m.name for m in pmx.materials], bones=names, heads=heads,
                  tails=tails, parents=parents, grants=grants, order=_order(parents, grants), wi=wi, ww=ww,
-                 morphs=morphs, sem=sem)
+                 morphs=morphs, morph_panels={m.name: int(m.panel) for m in pmx.morphs if m.name in morphs}, sem=sem,
+                 names=(pmx.name, pmx.name_en))
 
 
-def load(src, label=None, overrides=(), parts=None, unit=0.08, log=None):
+def load(src, label=None, overrides=(), parts=None, unit=0.08, log=None, workdir=None):
     """A Model from a .pmx file (`unit` metres per PMX unit) or a spec (a path or base:NAME): the spec's `parts`
-    (default all, plus what they need) are built and assembled in a temporary folder, as `mk model build` does."""
+    (default all, plus what they need) are built and assembled as `mk model build` does, in `workdir` (kept: the
+    model's `textures` are the files there) or in a temporary folder removed on return (its `textures` are then None)."""
     s = str(src)
     if s.lower().endswith(".pmx"):
         path = Path(s).expanduser()
@@ -314,10 +329,18 @@ def load(src, label=None, overrides=(), parts=None, unit=0.08, log=None):
         return from_pmx(pmx_io.read(path), path.parent, unit, label or path.stem, str(path))
     spec = SP.load(s, list(overrides))
     cfg = SP.model_cfg(spec)
-    with tempfile.TemporaryDirectory(prefix="mk_lab_") as tmp:
-        built = BD.run(spec, only=parts, tex_dir=Path(tmp) / AS.TEX_DIR, log=log)
+
+    def build(folder):
+        built = BD.run(spec, only=parts, tex_dir=Path(folder) / AS.TEX_DIR, log=log)
         asm = AS.assemble(built, name=cfg["name"], scale=cfg["scale"])
-        return from_pmx(asm.pmx, Path(tmp), cfg["scale"], label or cfg["name"], s)
+        return from_pmx(asm.pmx, Path(folder), cfg["scale"], label or cfg["name"], s)
+    if workdir is not None:
+        Path(workdir).expanduser().mkdir(parents=True, exist_ok=True)
+        return build(Path(workdir).expanduser())
+    with tempfile.TemporaryDirectory(prefix="mk_lab_") as tmp:
+        model = build(tmp)
+    model.textures = [None] * len(model.textures)
+    return model
 
 
 # ------------------------------------------------------------------------------------------------------------- posing
@@ -357,8 +380,14 @@ def _finger_rotations(model, side, deg, spread):
     return out
 
 
+def _below(d):
+    """Degrees a direction points below horizontal, measured in her frontal plane (out to her side, down)."""
+    return math.degrees(math.atan2(-d[2], abs(d[0])))
+
+
 def pose_rotations(model, name):
-    """{bone: 3x3} local rotations of a POSES pose, both sides."""
+    """{bone: 3x3} local rotations of a POSES pose, both sides. arms_down lowers the upper arms to ARMS_DOWN_DEG below
+    horizontal; tpose raises them to horizontal and straightens the elbows so the forearms run on level with them."""
     out = {}
     for side in ("L", "R"):
         sgn = 1.0 if side == "L" else -1.0
@@ -366,13 +395,16 @@ def pose_rotations(model, name):
             if model.sem.get(f"wrist.{side}") is None:
                 continue
             out.update(_finger_rotations(model, side, *HAND_POSES[name]))
-        elif name == "arms_down":
+        elif name in ("arms_down", "tpose"):
             i, e = model.sem.get(f"arm.{side}"), model.sem.get(f"elbow.{side}")
             if i is None or e is None:
                 continue
-            d = unit(model.heads[e] - model.heads[i])
-            below = math.degrees(math.atan2(-d[2], abs(d[0])))
-            out[i] = rot((0.0, 1.0, 0.0), sgn * (ARMS_DOWN_DEG - below))
+            target = ARMS_DOWN_DEG if name == "arms_down" else 0.0
+            below = _below(model.heads[e] - model.heads[i])
+            out[i] = rot((0.0, 1.0, 0.0), sgn * (target - below))      # both turn about the forward axis, so the
+            w = model.sem.get(f"wrist.{side}")                       # elbow's turn adds to the arm's
+            if name == "tpose" and w is not None:
+                out[e] = rot((0.0, 1.0, 0.0), sgn * (below - _below(model.heads[w] - model.heads[e])))
         elif name == "sit":
             for b, deg in ((f"leg.{side}", -90.0), (f"knee.{side}", 90.0)):
                 if model.sem.get(b) is not None:
@@ -908,15 +940,44 @@ def trace(marked, sheet_png, layout, mask_png=None, step_mm=2.0):
     hole[red[:, 1].astype(int), red[:, 0].astype(int)] = 255
     clean = cv2.inpaint(M, cv2.dilate(hole, np.ones((5, 5), np.uint8)), 5, cv2.INPAINT_TELEA)
     A, method, score = _register(clean, S)
-    pts = red @ A[:, :2].T + A[:, 2]
-    best, inside_cell = None, None
+    out = trace_points(red @ A[:, :2].T + A[:, 2], sheet_png, layout, mask_png, step_mm, sheet=S)
+    out["registration"] = {"method": method, "score": score, "scale": round(math.hypot(A[0, 0], A[1, 0]), 4)}
+    return out
+
+
+def sheet_cell(layout, pts):
+    """(cell, mask): the cell of a sheet's layout holding most of the sheet pixels `pts` (k, 2), and which they are."""
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    best, inside = None, None
     for cell in layout["cells"]:
         x, y, w, h = cell["box"]
         m = (pts[:, 0] >= x) & (pts[:, 0] < x + w) & (pts[:, 1] >= y) & (pts[:, 1] < y + h)
-        if best is None or m.sum() > inside_cell.sum():
-            best, inside_cell = cell, m
+        if best is None or m.sum() > inside.sum():
+            best, inside = cell, m
+    return best, inside
+
+
+def cell_world(cell, layout, pts):
+    """(k, 3) model-space points of sheet pixels `pts` (k, 2), on the plane of `cell`'s view through its centre."""
+    x, y, w, h = cell["box"]
+    loc = np.asarray(pts, float).reshape(-1, 2) - (x, y)
+    ppm = float(layout["px_per_m"])
+    c0, r, u = (np.asarray(cell[k], float) for k in ("centre", "right", "up"))
+    return c0[None] + ((loc[:, 0] - w / 2.0) / ppm)[:, None] * r[None] + ((h / 2.0 - loc[:, 1]) / ppm)[:, None] * u[None]
+
+
+def trace_points(pts, sheet_png, layout, mask_png=None, step_mm=2.0, sheet=None):
+    """A stroke given as sheet pixels `pts` (k, 2), in any order (the red pixels `trace` found, or a line drawn over the
+    sheet in a whiteboard), in model space: what `trace` returns, without the registration. `sheet` is the sheet
+    image already read (BGR), else it is read from `sheet_png`."""
+    cv2 = _cv()
+    S = sheet if sheet is not None else cv2.imread(str(sheet_png), cv2.IMREAD_COLOR)
+    if S is None:
+        raise ValueError(f"cannot read {sheet_png}")
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    best, inside_cell = sheet_cell(layout, pts)
     if best is None or inside_cell.sum() < 0.5 * len(pts):
-        raise ValueError("the red line is not on one cell of the sheet")
+        raise ValueError("the line is not on one cell of the sheet")
     x, y, w, h = best["box"]
     mpath = Path(mask_png) if mask_png else Path(sheet_png).with_name(Path(sheet_png).stem + ".mask.png")
     if mpath.is_file():
@@ -933,10 +994,8 @@ def trace(marked, sheet_png, layout, mask_png=None, step_mm=2.0):
     loc = pts[inside_cell] - (x, y)
     ix = np.clip(np.round(loc[:, 0]).astype(int), 0, w - 1)
     iy = np.clip(np.round(loc[:, 1]).astype(int), 0, h - 1)
-    ppm = float(layout["px_per_m"])
-    inset = np.where(sil[iy, ix] > 0, din[iy, ix], -dout[iy, ix]) / ppm * 1000.0
-    c0, r, u = (np.asarray(best[k], float) for k in ("centre", "right", "up"))
-    world = c0[None] + ((loc[:, 0] - w / 2.0) / ppm)[:, None] * r[None] + ((h / 2.0 - loc[:, 1]) / ppm)[:, None] * u[None]
+    inset = np.where(sil[iy, ix] > 0, din[iy, ix], -dout[iy, ix]) / float(layout["px_per_m"]) * 1000.0
+    world = cell_world(best, layout, pts[inside_cell])
     q = world - world.mean(axis=0)
     axis = np.linalg.svd(q, full_matrices=False)[2][0]
     along = q @ axis
@@ -954,7 +1013,6 @@ def trace(marked, sheet_png, layout, mask_png=None, step_mm=2.0):
         samples.append({"along_mm": round((k + 0.5) * step_mm, 1), "region_mm": round(float((p - origin) @ rax) * 1000, 1),
                         "inset_mm": round(float(np.median(inset[m])), 2), "point": [round(float(v), 5) for v in p]})
     return {"cell": best["label"], "model": best["model"], "pose": best["pose"], "view": best["view"],
-            "registration": {"method": method, "score": score, "scale": round(math.hypot(A[0, 0], A[1, 0]), 4)},
             "points": len(loc), "length_mm": round(float(along.max()) * 1000, 1),
             "inset_mm": {"max": round(float(inset.max()), 2), "mean": round(float(inset.mean()), 2),
                          "min": round(float(inset.min()), 2)},

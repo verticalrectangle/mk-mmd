@@ -1,0 +1,28 @@
+/* mk plugin: the review and PMX blocks (data-surface plugin.mk.review / plugin.mk.pmx on their regions). */
+
+/* options side by side, each a framed column; the chosen one ringed in the accent */
+[data-surface='plugin.mk.review'] [data-role='mk.options'] { align-items: stretch; gap: 10px; flex-wrap: wrap; }
+[data-surface='plugin.mk.review'] [data-role='mk.option'] {
+	border: 1px solid var(--l2);
+	border-radius: 10px;
+	padding: 8px 10px;
+	min-width: 12em;
+}
+[data-surface='plugin.mk.review'] [data-role='mk.option'][data-tone='accent'] {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 1px var(--accent);
+}
+[data-surface='plugin.mk.review'] .mk-pick { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+[data-surface='plugin.mk.review'] .mk-pick-id { font-weight: 700; }
+[data-surface='plugin.mk.review'] .mk-pick-label { font-weight: 600; }
+[data-surface='plugin.mk.review'] [data-role='mk.option'] > .sf-badge { align-self: flex-start; }
+
+/* pictures share a row; their name and tools under them */
+[data-surface='plugin.mk.review'] [data-role='mk.pictures'] { gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+[data-surface='plugin.mk.review'] [data-role='mk.tools'],
+[data-surface='plugin.mk.review'] [data-role='mk.models'] { gap: 8px; align-items: center; flex-wrap: wrap; }
+[data-surface='plugin.mk.review'] [data-role='mk.notes'] { margin-top: 4px; }
+
+/* the PMX block's pose and morph chips wrap */
+[data-surface='plugin.mk.pmx'] [data-role='mk.chips'],
+[data-surface='plugin.mk.review'] [data-role='mk.chips'] { flex-wrap: wrap; gap: 6px; }

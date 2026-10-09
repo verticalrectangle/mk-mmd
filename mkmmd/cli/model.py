@@ -4,6 +4,7 @@ import json
 import os
 import random
 import re
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -85,6 +86,19 @@ Example:
   mk model trace ~/Pictures/marked.png --sheet ~/mk-assets/models/girl/lab/hand_L.png
 """
 
+GLB_HELP = """Write a model, posed, as one .glb with its textures inside: what Tern's 3D block (and any glTF viewer) turns,
+pans and zooms. No Blender: a .pmx is read and posed with its own weights; a spec is built in-process, as mk model build
+does. Poses: {poses}; --morph puts morphs on top (NAME or NAME=WEIGHT, repeatable). Prints the model's numbers as JSON
+(names, height, counts, its morphs by panel, the poses its bones allow); --info prints them and writes nothing.
+
+Examples:
+  mk model glb ~/mk-assets/models/rin_mk/rin.pmx --out /tmp/rin.glb          # T-pose
+  mk model glb base:girl --parts body --pose arms_down --out /tmp/girl.glb
+  mk model glb rin.pmx --pose rest --morph まばたき --morph 笑い=0.5 --out /tmp/smile.glb
+  mk model glb base:girl --parts head --pose rest --region head --out /tmp/face.glb   # the face alone, up close
+  mk model glb rin.pmx --info
+"""
+
 
 def add(sub):
     p = sub.add_parser("model", help="build an original character (parts -> PMX, rig.json, review .blend)",
@@ -153,6 +167,22 @@ def add(sub):
     tr.add_argument("marked", metavar="MARKED.png", help="the sheet, or a screenshot of part of it, with a pure red line")
     tr.add_argument("--sheet", required=True, metavar="SHEET.png", help="the lab sheet (its .json and .mask.png beside it)")
     tr.set_defaults(func=run_trace)
+    gl = ss.add_parser("glb", help="a model posed (T-pose by default) as one .glb with its textures (no Blender)",
+                       description=GLB_HELP.format(poses=", ".join(LAB.POSES)),
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    gl.add_argument("model", metavar="MODEL", help="a spec (model.toml, base:NAME) or a .pmx")
+    gl.add_argument("--pose", default="tpose", choices=list(LAB.POSES), help="the pose (default: tpose)")
+    gl.add_argument("--morph", action="append", default=[], metavar="NAME[=WEIGHT]", help="a morph on top (repeatable)")
+    gl.add_argument("--parts", metavar="PARTS", help="parts to build for a spec: a comma list, or all (default: all)")
+    gl.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
+                    help="override a spec value (TOML syntax, repeatable)")
+    gl.add_argument("--region", default="body", choices=list(LAB.REGIONS), help="what to write: body (all, the "
+                    "default), or a semantic bone's subtree: head (the face up close), hand, foot, arm, leg")
+    gl.add_argument("--side", default="L", choices=["L", "R"], help="her side for hand, foot, arm, leg (default: L)")
+    gl.add_argument("--unit", type=float, default=0.08, help="metres per PMX unit of a .pmx (default: 0.08)")
+    gl.add_argument("--out", metavar="FILE.glb", help="where to write it (default: ./<model>-<pose>.glb)")
+    gl.add_argument("--info", action="store_true", help="print the model's numbers only")
+    gl.set_defaults(func=run_glb)
 
 
 def _lab_parts(args):
@@ -216,6 +246,58 @@ def run_trace(args):
         emit(LAB.trace(marked, sheet, json.loads(layout_path.read_text(encoding="utf-8"))))
     except ValueError as e:
         raise UsageError(str(e))
+    return 0
+
+
+PANELS = {0: "system", 1: "eyebrow", 2: "eye", 3: "mouth", 4: "other"}
+
+
+def model_numbers(m):
+    """What a viewer shows of a lab Model: its names, height, counts, morphs by panel and the poses its bones allow."""
+    from ..model import lab as LAB
+    z = m.V[m.visible, 2] if m.visible.any() else m.V[:, 2]
+    return {"name": m.names[0] or m.label, "name_en": m.names[1], "label": m.label, "source": m.source,
+            "height_m": round(float(z.max() - z.min()), 3) if len(z) else 0.0, "vertices": int(len(m.V)),
+            "triangles": int(len(m.T)), "materials": len(m.mat_names), "drawn_materials": int((~m.hidden).sum()),
+            "bones": len(m.bones), "morphs": [{"name": k, "panel": PANELS.get(p, "other")} for k, p in m.morph_panels.items()],
+            "poses": ["rest"] + [p for p in LAB.POSES if p != "rest" and LAB.pose_rotations(m, p)]}
+
+
+def run_glb(args):
+    from ..model import glb as GLB
+    from ..model import lab as LAB
+    t0 = time.time()
+    pmx = args.model.lower().endswith(".pmx")
+    parts = (None if pmx or not args.parts or args.parts.strip() == "all"
+             else [s.strip() for s in args.parts.split(",") if s.strip()])
+    morphs = {}
+    for item in args.morph:
+        name, eq, w = item.partition("=")
+        try:
+            morphs[name.strip()] = float(w) if eq else 1.0
+        except ValueError:
+            raise UsageError(f"--morph {item!r}: NAME or NAME=WEIGHT")
+    with tempfile.TemporaryDirectory(prefix="mk_glb_") as tmp:
+        try:
+            m = LAB.load(args.model, overrides=args.overrides, parts=parts, unit=args.unit, workdir=None if pmx else tmp)
+            rep = model_numbers(m)
+            if args.info:
+                emit({**rep, "seconds": round(time.time() - t0, 1)})
+                return 0
+            V, N = m.deform(args.pose, morphs)
+            keep = None
+            if args.region != "body":
+                inside = LAB.region_mask(m, args.region, args.side)          # vertices of the bone's subtree
+                keep = inside[m.T].all(axis=1)
+                if not keep.any():
+                    raise ValueError(f"nothing of the {args.region} region is drawn")
+        except (SP.SpecError, BD.BuildError, ValueError) as e:
+            raise UsageError(f"{args.model}: {e}")
+        out = Path(args.out).expanduser() if args.out else Path(f"{m.label}-{args.pose}.glb")
+        glb = GLB.write(out, m, V, N, keep=keep, extras={"source": m.source, "pose": args.pose, "morphs": morphs,
+                                                         "region": args.region})
+    emit({**rep, "out": str(out.resolve()), "pose": args.pose, "pose_applied": args.pose in rep["poses"],
+          "morphs_applied": morphs, "glb": glb, "seconds": round(time.time() - t0, 1)})
     return 0
 
 

@@ -37,6 +37,7 @@ degrees (see [Conventions](#conventions)).
 - [Timeline](#timeline)
 - [Cache](#cache)
 - [Characters (mk model)](#characters-mk-model)
+- [Reviews (mk review, the Tern plugin)](#reviews-mk-review-the-tern-plugin)
 
 
 ## Layers
@@ -51,6 +52,8 @@ degrees (see [Conventions](#conventions)).
 | ref | `mkmmd.ref` (`mk ref`) | the CLI only | numpy, opencv, Pillow; MediaPipe with the `ref` extra |
 | timeline | `mkmmd.timeline` (`mk timeline`) | the CLI only | numpy; torch, torchaudio, demucs, faster-whisper with the `timeline` extra |
 | post | `mkmmd.post`, `mkmmd.cutfx`, `mkmmd.matte` (`mk post`, the cut effects) | the CLI only | numpy, opencv, Pillow, `mkmmd.core` |
+| review | `mkmmd.review` (`mk review`) | the CLI only | stdlib, numpy, Pillow, `mkmmd.model.lab` |
+| tern | `tern/` (the Tern plugin: Luau, `plugin.toml`) | Tern's session daemon and windows | Tern's `tern` API; runs `mk` |
 
 Rules:
 
@@ -2707,12 +2710,20 @@ studio (grey world, soft floor discs, optionally key/fill/rim suns) so sheets of
 [--set K=V] [--label NAME] [--out SHEET.png]` (`mkmmd.model.lab`, no Blender) looks at specs (built and assembled
 in-process, so it sees the PMX a build writes) and .pmx files: a sheet with one row per (pose, model), every cell at one
 scale (bodies on one floor line), posed with each model's own weights through the bone tree (rotation grants followed:
-D bones, twists); poses are rest, relaxed, curled, fist, spread, arms_down, sit, or any morph name. Under the cells, the
+D bones, twists); poses are rest, relaxed, curled, fist, spread, arms_down, tpose (upper arms and forearms level), sit,
+or any morph name. Under the cells, the
 rest pose's numbers in mm (heights, widths, lengths, and girths cut across the skin: the innermost loop round a point on
 the skeleton, hidden skin included, so clothes never count). Beside the PNG: `.json` (each cell's camera, the numbers)
 and `.mask.png` (coverage). `mk model trace MARKED.png --sheet SHEET.png` reads a pure red line drawn on the sheet, or on
 a screenshot of part of it (any zoom, window borders), back in model space: the cell, and how far inside (+) or outside
-(-) the outline the line runs every 2 mm, with its place along the region (from the wrist, from the floor). Exit
+(-) the outline the line runs every 2 mm, with its place along the region (from the wrist, from the floor).
+`mk model glb MODEL [--pose tpose] [--morph NAME[=W]] [--region R --side S] [--parts PARTS] [--set K=V] [--out F.glb]`
+(`mkmmd.model.glb`, no Blender) writes a .pmx or a spec, posed with its own weights (T-pose by default), as one binary
+glTF with its textures inside: what Tern's 3D block turns, pans and zooms (it opens OBJ, PLY, STL, glTF, FBX, USD and
+3DS, not PMX). Model space becomes glTF's (+Y up, +Z forward); PMX's clockwise faces are written reversed; each drawn
+material is a primitive with its texture (PNG), BLEND when its texture or diffuse alpha is see-through, two-sided when
+the PMX says so; `--region head` writes the head's subtree alone, so a viewer frames the face. It prints the model's
+numbers as JSON (names, height, counts, morphs by panel, the poses its bones allow; `--info` writes nothing). Exit
 codes as everywhere: 1 when a check or verification fails. A build never deletes the previous files first, because other
 projects may be casting the
 PMX at that moment: the PMX and rig.json are replaced atomically when ready, textures are overwritten in place (stale ones
@@ -2723,3 +2734,35 @@ Blender note: a Blender session that resets the add-on preferences (a script sta
 touches add-ons) can delete mmd_tools' bundled opencc wheel, and every PMX import then fails with "bpy.ops.mmd_tools.
 import_model could not be found"; use another config folder (`BLENDER_USER_CONFIG`) for such scripts. `mk doctor --fix`
 restores the wheel and `mk model build` repairs and retries on its own.
+
+## Reviews (`mk review`, the Tern plugin)
+
+A review puts decisions to a person with pictures, choices and models, and gets the answers back to the agent that asked.
+`NAME.review.toml` (`mkmmd/review.py` has the format): `[review]` title and text (Markdown); `[[question]]` id, ask, text,
+images, models, recommended; `[[question.option]]` id, label, text, images, models. Images are paths beside the review
+(PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a file Tern's 3D block opens, or a .pmx) or
+`{label, spec, parts, set}`, with pose (default tpose), morph and region applied by `mk model glb`. `mk review check`
+names every problem at once; `mk review open NAME.review.toml` checks it, starts `NAME.answers.json` with the pane it
+runs in (`$TERN_PANE`, or `--reply-to`) and opens it beside that pane; `mk review answers` prints the answers with their
+options' labels, what is still open, and the marks.
+
+In Tern, the mk plugin (`tern/` in this repository: `tern plugin link tern/`, or `tern plugin install
+github.com/verticalrectangle/mk-mmd/tern`) shows the review as a block: each question a card with its pictures (a click
+zooms; the viewer steps through them), its models (a button poses one with `mk model glb`, cached in the plugin's data
+folder, and shows it in the tab's 3D preview), its options as cards with a radio, and a notes field (click, type, Esc
+leaves). Choices and notes go to `NAME.answers.json` as they change. **Mark up** puts a picture on a whiteboard beside the
+block; **Read marks** reads back what was drawn: lines and arrows by their ends, boxes, ellipses and ink by their boxes,
+text with its words, each in the picture's own pixels (`NAME.marks.json`). On a lab sheet (its `.json` beside it) `mk
+review answers` turns them into model space with the lab's `trace_points`: a line's length and how far inside or
+outside the outline it runs, a box's size in mm. **Send** writes the message into the answers file and pastes it into the
+agent's chat (`cx.agents:ask`); the dock says whether it went. The plugin also opens any `.pmx` as a PMX block: its
+names and numbers, chips for the poses its bones allow and for its morphs by panel, the model posed in the 3D preview
+(T-pose first), and a lab sheet of the pose.
+
+How the plugin is built (`tern/README.md`): the host half (`review.luau`, `pmx.luau`) runs `mk` with `tern.process.run`
+(`uv run --project` the checkout it sits in, else `mk` on PATH); window-only work (the 3D preview, posting to an agent,
+whiteboards) goes through `mk://` links that the block opens with `cx:open` and the window half claims in
+`tern.route.link`. Window calls have a 50 ms budget, so that half reads and writes no files: a link carries what it
+needs, each whiteboard is read in a timer tick of its own, and results come back to the block as actions on its dock
+(`cx.session:event`), whose 2 s host budget writes the files.
+

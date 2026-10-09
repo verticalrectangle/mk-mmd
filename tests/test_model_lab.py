@@ -121,6 +121,22 @@ def test_fingers_curl_into_the_palm_and_spread_on_both_hands(girl):
         assert gap[1] > gap[0] + 0.01, side
 
 
+def test_t_pose_lays_both_arms_out_level_and_leaves_the_legs(girl):
+    G = girl.matrices(LAB.pose_rotations(girl, "tpose"))
+
+    def head(name):
+        b = girl.sem[name]
+        return (G[b] @ np.r_[girl.heads[b], 1.0])[:3]
+    for side, out in (("L", 1.0), ("R", -1.0)):
+        a, e, w = (head(f"{k}.{side}") for k in ("arm", "elbow", "wrist"))
+        assert abs(LAB._below(e - a)) < 0.05 and abs(LAB._below(w - e)) < 0.05, side   # upper arm and forearm level
+        assert out * (w - a)[0] > 0.9 * np.linalg.norm(w - a), side                   # straight out to her side
+    rest, _ = girl.deform()
+    tpose, _ = girl.deform("tpose")
+    legs = np.isin(girl.dominant, sorted(girl.subtree(girl.sem["leg.L"]) | girl.subtree(girl.sem["leg.R"])))
+    assert np.abs(tpose[legs] - rest[legs]).max() < 1e-9
+
+
 def test_side_by_side_cells_share_one_scale_and_floor():
     small = model_of([(*box((0, 0, 0.5), (0.15, 0.1, 0.5)), (0.9, 0.8, 0.7))])
     tall = model_of([(*box((0, 0, 0.75), (0.15, 0.1, 0.75)), (0.9, 0.8, 0.7))])

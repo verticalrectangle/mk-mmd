@@ -72,9 +72,14 @@ itself to the skin) and the hair follow, but seats, steering wheels and grips in
 3. Look: `mk model lab model.toml --region hand --poses rest,fist,spread` (seconds, no Blender: views and poses with the
    model's own weights, numbers under them; give it the base or a reference .pmx too and they stand side by side at one
    scale), then `mk look` sheets in Blender's toon shading, and `--ab OTHER.blend` next to the base or the previous
-   build. Never call it good before looking at the images.
+   build. In Tern, `mk model glb model.toml --out x.glb` (T-pose by default; `--region head` for the face) opens in its
+   3D block to turn around, and any built `.pmx` opens as a PMX block (numbers, poses, morphs, in 3D). Never call it
+   good before looking at the images.
 4. Read the build log: `WARNING` lines are findings; `verify` must pass.
-5. Repeat.
+5. When a choice is the person's (a look, a route), ask with pictures: write a `NAME.review.toml` (questions, options,
+   images, models) and `mk review open` it beside your chat; their Send posts the answers back to you, and `mk review
+   answers` reads them, with lines drawn on lab sheets in mm (docs/design.md: Reviews).
+6. Repeat.
 
 ## Parts from other artists: what the hands taught
 

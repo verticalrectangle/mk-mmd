@@ -1,0 +1,23 @@
+schema = 1
+id = "mk"
+name = "mk"
+version = "0.1.0"
+description = "mk-mmd in Tern: reviews (pictures, choices, notes, marks drawn on a whiteboard, models turned in 3D; Send posts the answers to the agent) and PMX models (their numbers, T-pose or any pose or morph, turned in the 3D block)."
+icon = "model"
+host = "host.luau"
+window = "window.luau"
+styles = ["mk.css"]
+
+[[blocks]]
+id = "review"
+title = "Review"
+icon = "list-checks"
+files = ["*.review.toml"]
+palette = false
+
+[[blocks]]
+id = "pmx"
+title = "PMX model"
+icon = "model"
+files = ["*.pmx"]
+palette = false
