@@ -13,6 +13,8 @@ and a jaw; a neck column blends in under the chin. The surface is star-shaped ab
 (metres, negative inside)."""
 import numpy as np
 
+from .. import spec as SP
+
 # --------------------------------------------------------------------------------------------- small implicit helpers
 
 
@@ -110,8 +112,7 @@ class Profiles:
     chin's depth with it: a generated face cuts the chin with its jaw, and the loft must still be full where the cut is."""
 
     def __init__(self, a=None):
-        A = dict(ANCHORS)
-        A.update(a or {})
+        A = SP.merge(ANCHORS, a)
         self.a = A
         cy, cz = A["crown"]
         zp = float(A["chin_point"][1]) - float(A.get("loft_bottom", 0.0))       # the loft's lowest point
@@ -225,12 +226,7 @@ FACE = dict(
 
 def face_config(over=None):
     """FACE with `over` merged into it (nested tables key by key, everything else replaced)."""
-    def merge(a, b):
-        out = dict(a)
-        for k, v in (b or {}).items():
-            out[k] = merge(a[k], v) if isinstance(v, dict) and isinstance(a.get(k), dict) else v
-        return out
-    return merge(FACE, over)
+    return SP.merge(FACE, over)
 
 
 def _smoothstep(t):
@@ -355,9 +351,7 @@ class HeadShape:
         self.p.update(kw)
         self.centre = np.array([0.0, float(self.p["neck"]["c"][1]), CENTRE[2]])
         cfg = None if face is None else face_config(face)
-        A = dict(anchors or {})
-        if cfg is not None:
-            A = {**cfg["profile"], **A}
+        A = SP.merge(cfg["profile"] if cfg is not None else {}, anchors)
         self.prof = Profiles(A)
         self.face = None if cfg is None else Face(cfg, self.prof)
         self.ztop, self.zbot = self.prof.ztop, self.prof.zbot

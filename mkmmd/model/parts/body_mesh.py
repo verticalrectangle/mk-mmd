@@ -33,6 +33,16 @@ def _half(pair):
 
 
 # ---------------------------------------------------------------- torso + neck
+TORSO_REF = 0.76                    # the widest cut of the torso the heights below (exponents, bust) were tuned on
+
+
+def _rise(shape):
+    """How far this torso stands above the one the tuned heights were made on: its widest cut against TORSO_REF (0 for
+    the base; [proportions] leg_extra raises the torso and these heights with it)."""
+    T = shape.dims["torso"]
+    return float(np.asarray(T["z"], float)[int(np.argmax(np.asarray(T["width"], float)))]) - TORSO_REF
+
+
 def torso_rows(shape):
     """(z, half width, front y, back y, n) rows of the torso cuts: the pelvis tapers into the crotch below the hips (the
     cuts include the thighs there), and extra rows refine the shoulder line where it turns into the neck. The last row is
@@ -42,7 +52,9 @@ def torso_rows(shape):
     hw = np.array(T["width"], float) / 2
     yf = np.array(T["y_front"], float)
     yb = np.array(T["y_back"], float)
-    nz = pchip([z[0] - 0.08, 0.80, 0.93, 1.03, 1.10, 1.14, z[-1]], [2.4, 2.5, 2.25, 2.3, 2.5, 2.3, 2.0])
+    up = _rise(shape)
+    nz = pchip([z[0] - 0.08, up + 0.80, up + 0.93, up + 1.03, up + 1.10, up + 1.14, z[-1]],
+               [2.4, 2.5, 2.25, 2.3, 2.5, 2.3, 2.0])
     # below the widest cut the thighs carry the silhouette: taper the pelvis into the crotch between them
     z_hip = float(z[int(np.argmax(hw))])
     keep = z >= z_hip - 1e-9
@@ -66,7 +78,7 @@ def torso_rows(shape):
     for _ in range(2):
         ypad = np.concatenate([[yf[0]] * 2, yf, [yf[-1]] * 2])
         sm = np.convolve(ypad, k, mode="valid")
-        sel = (z > 0.97) & (z < zt - 0.05)
+        sel = (z > up + 0.97) & (z < zt - 0.05)
         yf = np.where(sel, sm, yf)
     extra = [z[-1] - 0.0045, z[-1] - 0.0105, z[-1] - 0.0295, z[-1] - 0.0495, z[-1] - 0.068]
     zz = np.array(sorted(set(np.round(list(z) + extra, 6))))
@@ -90,7 +102,7 @@ def torso_shell(shape, M=32):
     yb = np.array([r[3] for r in rows])
     nn = np.array([r[4] for r in rows])
     # a gentle sternum dip between the bust lobes: the front of the cuts is the lobes' extreme, so pull the centre back
-    bust = np.exp(-((z - 1.03) / 0.045) ** 2) * 0.010
+    bust = np.exp(-((z - (_rise(shape) + 1.03)) / 0.045) ** 2) * 0.010
     tab = Table(z, rx=(yb - yf) / 2, ry=hw, ox=-(yb + yf) / 2, oy=np.zeros_like(z), n=nn)
     ss = z - z[0]
     path = Path([[0.0, 0.0, z[0]], [0.0, 0.0, z[-1]]], blend=0.0)

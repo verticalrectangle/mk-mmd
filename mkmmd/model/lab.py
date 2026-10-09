@@ -5,7 +5,7 @@ screenshot of part of one) read back in millimetres.
 A source is a spec (built in-process: the part builders, then the assembler, so the lab sees the PMX `mk model build`
 writes) or a .pmx file. Model space throughout: metres, Z up, -Y forward, +X her left.
 
-  load(src, label=None, overrides=(), parts=None, unit=0.08, workdir=None) -> Model
+  load(src, label=None, overrides=(), parts=None, unit=0.08, workdir=None, cache=None) -> Model
   Model.deform(pose=None, morphs=None) -> (V, N)
         forward kinematics through the bone tree (rotation grants followed: D bones, twist bones) and linear blend
         skinning with the model's weights. Poses are named by semantic bone (POSES: finger curls, spread, arms down,
@@ -317,10 +317,11 @@ def from_pmx(pmx, root, unit=0.08, label="model", source=""):
                  names=(pmx.name, pmx.name_en))
 
 
-def load(src, label=None, overrides=(), parts=None, unit=0.08, log=None, workdir=None):
+def load(src, label=None, overrides=(), parts=None, unit=0.08, log=None, workdir=None, cache=None):
     """A Model from a .pmx file (`unit` metres per PMX unit) or a spec (a path or base:NAME): the spec's `parts`
-    (default all, plus what they need) are built and assembled as `mk model build` does, in `workdir` (kept: the
-    model's `textures` are the files there) or in a temporary folder removed on return (its `textures` are then None)."""
+    (default all, plus what they need) are built and assembled as `mk model build` does (`cache`: a `PartCache` that
+    reuses unchanged parts), in `workdir` (kept: the model's `textures` are the files there) or in a temporary folder
+    removed on return (its `textures` are then None)."""
     s = str(src)
     if s.lower().endswith(".pmx"):
         path = Path(s).expanduser()
@@ -331,7 +332,7 @@ def load(src, label=None, overrides=(), parts=None, unit=0.08, log=None, workdir
     cfg = SP.model_cfg(spec)
 
     def build(folder):
-        built = BD.run(spec, only=parts, tex_dir=Path(folder) / AS.TEX_DIR, log=log)
+        built = BD.run(spec, only=parts, tex_dir=Path(folder) / AS.TEX_DIR, log=log, cache=cache)
         asm = AS.assemble(built, name=cfg["name"], scale=cfg["scale"])
         return from_pmx(asm.pmx, Path(folder), cfg["scale"], label or cfg["name"], s)
     if workdir is not None:
@@ -584,7 +585,8 @@ def _welded(V, tol=1e-5):
 
 def sections(V, T, p, d, weld=None):
     """Loops where the plane through `p` with normal `d` cuts the triangles: a list of {"a", "b": (k, 3) segment ends,
-    "points", "centroid", "perimeter"}. `weld`: canonical vertex ids (see _welded)."""
+    "points", "centroid", "perimeter", "closed"}; closed is False for a chain with loose ends, the cut through a sheet
+    (a skirt, a frill). `weld`: canonical vertex ids (see _welded)."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     V = np.asarray(V, float)
@@ -617,18 +619,21 @@ def sections(V, T, p, d, weld=None):
     g = coo_matrix((np.ones(len(M)), (ka, kb)), shape=(len(keys), len(keys)))
     _, lab = connected_components(g, directed=False)
     seg_lab = lab[ka]
+    deg = np.bincount(np.concatenate([ka, kb]), minlength=len(keys))       # segments meeting at each cut point
     out = []
     for c in np.unique(seg_lab):
         m = seg_lab == c
         pts = np.concatenate([PA[m], PB[m]])
         out.append({"a": PA[m], "b": PB[m], "points": pts, "centroid": pts.mean(axis=0),
-                    "perimeter": float(np.linalg.norm(PA[m] - PB[m], axis=1).sum())})
+                    "perimeter": float(np.linalg.norm(PA[m] - PB[m], axis=1).sum()),
+                    "closed": bool((deg[np.concatenate([ka[m], kb[m]])] == 2).all())})
     return out
 
 
 def _nearest(loops, target, d):
-    """The loop to measure at `target`: the smallest one that encloses it in the cutting plane (normal d), so a limb
-    is measured on its skin and not on the sleeve or skirt around it; else the loop whose centre is nearest."""
+    """The loop to measure at `target`: the smallest closed one that encloses it in the cutting plane (normal d), so a
+    limb is measured on its skin and not on the sleeve or skirt around it (an open cut through a sheet encloses nothing,
+    however its segments cross a ray from the point); else the loop whose centre is nearest."""
     if not loops:
         return None
     d = unit(d)
@@ -644,7 +649,7 @@ def _nearest(loops, target, d):
             x = ax + (0.0 - ay) * (bx - ax) / (by - ay)
         return int(np.count_nonzero(span & (x > 0))) % 2 == 1
 
-    inside = [lp for lp in loops if encloses(lp)]
+    inside = [lp for lp in loops if lp["closed"] and encloses(lp)]
     if inside:
         return min(inside, key=lambda lp: lp["perimeter"])
 

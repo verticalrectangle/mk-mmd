@@ -1,8 +1,8 @@
 # hair.toml - the girl base's hair: a chin-length bob with pointed bangs and side locks (mkmmd/model/parts/hair_head.py;
-# docs/hair_part.md has every key). The twin braids with bows, the cat ears and the two cat tails are built by the same
+# docs/hair_part.md lists the tables a character changes, DEFAULTS in hair_head.py, hair_braids.py, ears.py and tails.py
+# hold every key with its default). The twin braids with bows, the cat ears and the two cat tails are built by the same
 # part and switched off here; the rin example switches them on. Colours: [colors.hair], [colors.ears], [colors.black].
 [hair]
-seed = 1
 dynamic = true                 # rigid bodies + joints for every chain (MMD Bullet); mk's strand solver reads the same chains
 
 [hair.volume]                  # how far the hair stands off the skin (m): crown, front (forehead), side (temples), back
@@ -15,7 +15,7 @@ lift_deg = 28.0
 lift_width_deg = 20.0
 lift_back = 0.5
 
-[hair.ring]                    # the baked angel ring: a thin warm highlight on the upper crown, broken by the clumps
+[hair.ring]                    # the baked angel ring: a thin highlight on the upper crown, broken by the clumps; its colour follows [colors.hair] (ring, ring_core to set it)
 drop = 0.050                   # metres below the top of the hair
 width = 0.015                  # half width of the soft sheen band (m)
 

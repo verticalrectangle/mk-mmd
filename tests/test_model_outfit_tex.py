@@ -63,16 +63,28 @@ def test_constants():
 
 
 def test_module_is_numpy_only():
-    """The module must run inside Blender's Python: stdlib + numpy only (no scipy, no PIL, no bpy)."""
-    tree = ast.parse(Path(ot.__file__).read_text())
-    roots = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            roots.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            assert node.level == 0, "relative imports would pull in other modules"
-            roots.add((node.module or "").split(".")[0])
-    assert roots <= {"functools", "math", "dataclasses", "numpy"}, roots
+    """The module must run inside Blender's Python: stdlib + numpy only (no scipy, no PIL, no bpy), and so must the
+    package modules it imports (the shared colour maths)."""
+    def imports(path):
+        roots, local = set(), []
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                roots.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level:
+                names = [node.module] if node.module else [a.name for a in node.names]
+                local += [path.parents[node.level - 1].joinpath(*n.split(".")).with_suffix(".py") for n in names]
+            elif isinstance(node, ast.ImportFrom):
+                roots.add((node.module or "").split(".")[0])
+        return roots, local
+    roots, todo, seen = set(), [Path(ot.__file__)], set()
+    while todo:
+        path = todo.pop()
+        if path not in seen:
+            seen.add(path)
+            found, local = imports(path)
+            roots |= found
+            todo += local
+    assert roots <= {"functools", "math", "dataclasses", "colorsys", "numpy"}, roots
 
 
 def test_signatures_and_default_sizes():
@@ -177,7 +189,7 @@ def test_dress_palette_statistics(dress512):
 
 
 def test_dress_leaf_family_is_dark_green():
-    pal = ot._palette(None)
+    pal = ot.palette(None)
     base, leaf, hi, dk, acc = (pal[k] for k in ("dress_base", "dress_leaf", "dress_leaf_hi", "dress_leaf_dark",
                                                 "dress_accent"))
     fam = ot._families(pal)
@@ -488,3 +500,25 @@ def test_build_textures_colour_precedence():
     plain = StubCtx()
     ot.build_textures(plain, sizes=SMALL)
     assert np.array_equal(plain.saved["outfit_dress.png"], ctx.saved["outfit_dress.png"])
+
+
+def test_auto_shading_follows_the_cloth_colours():
+    """shading="auto": the dress and frill toon ramps follow the cloth colours instead of Rin's green (cream frills shade
+    warm grey, a navy dress blue) at the tuned depth, and her own colours give the tuned ramps bit for bit."""
+    spec = {"colors": {"outfit": {"dress_base": "#1d2533", "frill": "#e9e2d6"}}}
+    shadow = {}
+    for shading in ("tuned", "auto"):
+        ctx = StubCtx(spec)
+        ot.build_textures(ctx, sizes=SMALL, shading=shading)
+        shadow[shading] = {k: ctx.saved[f"outfit_toon_{k}.png"][-1, 0, :3].astype(int) for k in ("dress", "frill")}
+    r, g, b = shadow["auto"]["frill"]
+    assert r >= g >= b and g - (r + b) / 2 < 4                  # cream's warm grey (tuned: green leads by ~20)
+    r, g, b = shadow["auto"]["dress"]
+    assert b > max(r, g) + 20                                   # navy cloth shades blue (tuned: teal-green)
+    for k in ("dress", "frill"):
+        assert abs(shadow["auto"][k].max() - shadow["tuned"][k].max()) <= 1    # as deep as the tuned shadow
+    rin, tuned = StubCtx(), StubCtx()
+    ot.build_textures(rin, sizes=SMALL, shading="auto")
+    ot.build_textures(tuned, sizes=SMALL)
+    assert sorted(rin.saved) == sorted(tuned.saved)
+    assert all(np.array_equal(rin.saved[n], tuned.saved[n]) for n in tuned.saved)

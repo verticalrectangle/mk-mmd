@@ -3,16 +3,22 @@ black bow, long slightly puffed sleeves with green frilled cuffs, thin black sas
 ruffle over a lighter inner frill), a black ribbon wound round the left calf with a bow near the ankle, and black
 Mary-Jane shoes with a strap and a bow. Colours come from `[colors.outfit]` (outfit_tex DEFAULT_COLORS) and
 `[colors.black]`; `[outfit] print = false` makes the dress plain cloth and `[outfit.legs.ribbon] enabled = false` leaves
-the calf ribbon out (the model bases' neutral girl wears it so).
+the calf ribbon out (the model bases' neutral girl wears it so). `[outfit] shading`: "tuned" (default) keeps the shading
+tuned for Rin's green cloth (toon ramps, ambients, outlines, the ruffle's tint); "auto" makes it follow `[colors.outfit]`
+dress_base, frill and frill_inner (cream frills shade warm grey, not mint). `[outfit.materials.<key>]` (keys dress frill
+frill_inner ruffle satin leg shoe sole) set any Material field on top (`apply_material_overrides`).
 
 Everything is an offset shell of the body surface published by the body part (`outfit_fit`), built from rings
 (`outfit_geo`): bodice, sleeves and ribbons take the body's own skin weights from the nearest surface point; the skirt is a
 cone of chains (スカート) with dynamic bodies. Textures come from `outfit_tex`. Spec: `[outfit]` in outfit.toml; every key
-has a default in DEFAULTS below (sizes are metres for a body 1.7 m tall, scaled by head_tip.z / 1.7).
+has a default in DEFAULTS below (sizes are metres for a body 1.7 m tall, scaled by head_tip.z / 1.7, [proportions]
+leg_extra left out: longer legs make no bigger dress).
 
 Pieces and meshes: outfit_dress (bodice, sleeves, skirt: print fabric), outfit_frills (collar, cuff, hem ruffle: green;
 inner frill: light green), outfit_ribbons (sash, bows, leg ribbon: black satin), outfit_shoes (leather, soles)."""
+from .. import spec as SP
 from ..build import builder
+from ..colour import follow_tint
 from ..part import Material, Part
 from . import outfit_dress as D
 from . import outfit_fit as F
@@ -22,6 +28,7 @@ from . import outfit_rig as RG
 from . import outfit_skirt as SK
 
 DEFAULTS = {
+    "shading": "tuned",     # "tuned": Rin's shading for her dark green dress and green frills; "auto": follows the colours
     "bodice": {"segments": 64, "u_repeat": 2, "collar_h": 0.034, "shoulder_step": 0.003, "min_offset": 0.006,
                "shoulder_reach": 0.03},
     "sash": {"width": 0.0125},
@@ -44,13 +51,6 @@ SATIN_MATS = [MAT_SATIN, MAT_LEG]
 SHOE_MATS = [MAT_SHOE, MAT_SOLE]
 
 
-def merge(base, over):
-    out = dict(base)
-    for k, v in (over or {}).items():
-        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
-    return out
-
-
 MAT_KEYS = {"dress": MAT_DRESS, "frill": MAT_FRILL, "frill_inner": MAT_FRILL_IN, "ruffle": MAT_RUFFLE, "satin": MAT_SATIN,
             "leg": MAT_LEG, "shoe": MAT_SHOE, "sole": MAT_SOLE}
 
@@ -69,23 +69,29 @@ def apply_material_overrides(mats, over):
             setattr(m, f, tuple(v) if isinstance(v, (list, tuple)) else v)
 
 
-def make_materials(tex, over=None):
-    """Material declarations; `tex` maps texture keys to file names ({} -> flat colours); `over`: [outfit.materials]."""
+def make_materials(tex, over=None, cloth=None):
+    """Material declarations; `tex` maps texture keys to file names ({} -> flat colours); `over`: [outfit.materials].
+    `cloth` ([outfit] shading = "auto"): {"dress" | "frill" | "frill_inner": (its colour, Rin's colour)} rgb pairs; the
+    tints tuned for Rin's cloth (ambients, outlines, the ruffle's diffuse tint) then follow the actual colours
+    (`colour.follow_tint`)."""
     g = tex.get
-    edge = (0.03, 0.06, 0.04, 1.0)
+
+    def t(rgb, key):
+        return tuple(float(x) for x in follow_tint(rgb, *cloth[key])) if cloth else rgb
+    edge = t((0.03, 0.06, 0.04), "dress") + (1.0,)
     mats = [
         Material(MAT_DRESS, "dress", diffuse=(1.0, 1.0, 1.0, 1.0), specular=(0.05, 0.06, 0.06), shininess=6.0,
-                 ambient=(0.55, 0.60, 0.58), texture=g("dress", ""), toon=g("toon_dress", ""), double_sided=True,
-                 edge=True, edge_color=edge, edge_size=0.8),
+                 ambient=t((0.55, 0.60, 0.58), "dress"), texture=g("dress", ""), toon=g("toon_dress", ""),
+                 double_sided=True, edge=True, edge_color=edge, edge_size=0.8),
         Material(MAT_FRILL, "dress frill", diffuse=(1.0, 1.0, 1.0, 1.0), specular=(0.04, 0.05, 0.04), shininess=5.0,
-                 ambient=(0.55, 0.62, 0.55), texture=g("frill", ""), toon=g("toon_frill", ""), double_sided=True,
-                 edge=True, edge_color=(0.05, 0.12, 0.07, 1.0), edge_size=0.6),
-        Material(MAT_RUFFLE, "dress hem ruffle", diffuse=(0.76, 0.86, 0.84, 1.0), specular=(0.04, 0.05, 0.04), shininess=5.0,
-                 ambient=(0.55, 0.62, 0.55), texture=g("frill", ""), toon=g("toon_frill", ""), double_sided=True,
-                 edge=True, edge_color=(0.04, 0.10, 0.06, 1.0), edge_size=0.6),
+                 ambient=t((0.55, 0.62, 0.55), "frill"), texture=g("frill", ""), toon=g("toon_frill", ""),
+                 double_sided=True, edge=True, edge_color=t((0.05, 0.12, 0.07), "frill") + (1.0,), edge_size=0.6),
+        Material(MAT_RUFFLE, "dress hem ruffle", diffuse=t((0.76, 0.86, 0.84), "frill") + (1.0,), specular=(0.04, 0.05, 0.04),
+                 shininess=5.0, ambient=t((0.55, 0.62, 0.55), "frill"), texture=g("frill", ""), toon=g("toon_frill", ""),
+                 double_sided=True, edge=True, edge_color=t((0.04, 0.10, 0.06), "frill") + (1.0,), edge_size=0.6),
         Material(MAT_FRILL_IN, "dress inner frill", diffuse=(1.0, 1.0, 1.0, 1.0), specular=(0.04, 0.05, 0.04), shininess=5.0,
-                 ambient=(0.62, 0.66, 0.58), texture=g("frill_inner", ""), toon=g("toon_frill", ""), double_sided=True,
-                 edge=True, edge_color=(0.10, 0.18, 0.10, 1.0), edge_size=0.5),
+                 ambient=t((0.62, 0.66, 0.58), "frill_inner"), texture=g("frill_inner", ""), toon=g("toon_frill", ""),
+                 double_sided=True, edge=True, edge_color=t((0.10, 0.18, 0.10), "frill_inner") + (1.0,), edge_size=0.5),
         Material(MAT_LEG, "leg ribbon", diffuse=(1.0, 1.0, 1.0, 1.0), specular=(0.10, 0.10, 0.12), shininess=40.0,
                  ambient=(0.30, 0.30, 0.34), texture=g("satin_print", ""), toon=g("toon_satin", ""), sphere=g("sphere_satin", ""),
                  sphere_mode="add" if g("sphere_satin") else "none", double_sided=True, edge=True,
@@ -122,20 +128,28 @@ def get_landmarks(ctx):
     return F.Land(merged)
 
 
-def textures(ctx, ribbon=True):
+def textures(ctx, ribbon=True, shading="tuned"):
     """Generated textures (file names by key); `[outfit] textures = false` skips them (flat material colours), `print =
-    false` makes the dress plain cloth; without the calf ribbon (`ribbon` False) its images are not made."""
+    false` makes the dress plain cloth; without the calf ribbon (`ribbon` False) its images are not made; `shading`
+    as [outfit] shading."""
     if ctx.cfg.get("textures", True) is False:
         return {}
     from . import outfit_tex as T
     return T.build_textures(ctx, sizes=ctx.cfg.get("texture_sizes"), dress_print=ctx.cfg.get("print", True) is not False,
-                            leg_ribbon=ribbon)
+                            leg_ribbon=ribbon, shading=shading)
+
+
+def cloth_colours(ctx):
+    """{"dress" | "frill" | "frill_inner": (the character's colour, Rin's colour)} as rgb, for shading = "auto"."""
+    from . import outfit_tex as T
+    pal, rin = T.palette(T.colours(ctx)), T.palette()
+    return {k: (pal[c], rin[c]) for k, c in (("dress", "dress_base"), ("frill", "frill"), ("frill_inner", "frill_inner"))}
 
 
 def guided(ctx, cfg):
     """The measured outfit heights ([proportions.outfit_guides]) fill the keys the spec leaves open."""
     g = ctx.get("proportions.outfit_guides", {}) or {}
-    out = merge(cfg, {})
+    out = SP.merge(cfg, None)
     for sect, key, src in (("bodice", "waist_z", "sash_z"), ("bodice", "collar_top_z", "collar_top_z")):
         if src in g and not out.get(sect, {}).get(key):
             out.setdefault(sect, {})[key] = float(g[src])
@@ -144,13 +158,18 @@ def guided(ctx, cfg):
 
 @builder("outfit", needs=("body",))
 def build(ctx):
-    cfg = guided(ctx, merge(DEFAULTS, ctx.cfg))
+    cfg = guided(ctx, SP.merge(DEFAULTS, ctx.cfg))
     skin = skin_from_body(ctx)
     land = get_landmarks(ctx)
-    fit = F.Fit(land, skin, log=ctx.log, bone_names=ctx.bones())
-    ribbon = LG.merge(LG.DEFAULTS["ribbon"], cfg["legs"].get("ribbon"))["enabled"]
-    tex = textures(ctx, ribbon)
-    mats = make_materials(tex, cfg.get("materials"))
+    extra = float(ctx.get("proportions.leg_extra") or 0.0)         # longer legs make no bigger dress, frills or shoes
+    tip = land.get("head_tip")
+    fit = F.Fit(land, skin, log=ctx.log, bone_names=ctx.bones(),
+                scale=(float(tip[2]) - extra) / 1.7 if extra and tip is not None else None)
+    ribbon = SP.merge(LG.DEFAULTS["ribbon"], cfg["legs"].get("ribbon"))["enabled"]
+    if cfg["shading"] not in ("tuned", "auto"):
+        raise ValueError(f'[outfit] shading must be "tuned" or "auto", got {cfg["shading"]!r}')
+    tex = textures(ctx, ribbon, cfg["shading"])
+    mats = make_materials(tex, cfg.get("materials"), cloth_colours(ctx) if cfg["shading"] == "auto" else None)
     soup_dress = G.Soup("outfit_dress", [MAT_DRESS])
     soup_trim = G.Soup("outfit_frills", [MAT_FRILL, MAT_FRILL_IN, MAT_RUFFLE])
     soup_satin = G.Soup("outfit_ribbons", SATIN_MATS)

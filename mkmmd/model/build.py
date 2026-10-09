@@ -15,7 +15,11 @@ A part builder is a plain function `build(ctx) -> Part` registered with `@builde
         return Part("hair", meshes=[...], ...)
 
 `BuildCtx` (what builders rely on):
-  spec        the merged spec (dict); `cfg` is the table named like the part being built, `section(name)` any table
+  spec        the merged spec (dict, with the [proportions] changes made, `proportions.apply`: leg_extra; watched: after
+              the build the author's keys no builder read are logged as warnings, `[spec] WARNING hair.back.x: never read
+              by any part ...`, one line per top-level table); `cfg` is the table named like the part being built,
+              `section(name)` any table. Merge defaults under a table with `spec.merge(DEFAULTS, cfg)` and read keys by
+              name (not by listing the table) so the reads stay noted.
   tex_dir     Path where PNGs are written (create it yourself never: `save_png` does)
   save_png(name, rgba) -> file name (str, relative to tex_dir; the part name is prefixed unless present)
   parts       dict name -> Part built so far, in spec order (only the dependencies when built with `--only`)
@@ -33,6 +37,7 @@ from pathlib import Path
 import numpy as np
 
 from . import part as P
+from . import proportions as PR
 from . import spec as SP
 
 REGISTRY = {}
@@ -78,7 +83,8 @@ def get_builder(name, spec=None):
 
 class BuildCtx:
     def __init__(self, spec, tex_dir, seed=1, log=None):
-        self.spec = spec
+        self.spec = SP.watch(spec)
+        PR.apply(self.spec)                  # [proportions] leg_extra, before any part reads a height
         self.tex_dir = Path(tex_dir)
         self.seed = int(seed)
         self.parts = {}
@@ -87,6 +93,7 @@ class BuildCtx:
         self.part = ""                       # name of the part being built
         self.timings = {}
         self.textures = []                   # file names written, in order
+        self.cached = []                     # parts reused from the part cache (`run(cache=...)`)
         self._log = log
 
     # ---- spec access
@@ -323,32 +330,47 @@ def plan(spec, only=None):
     return [n for n in names if n in want]
 
 
-def run(spec, only=None, tex_dir=None, log=None, ctx=None):
+def run(spec, only=None, tex_dir=None, log=None, ctx=None, cache=None):
     """Build the parts of `spec` (a `Spec` or dict) and return them as a list, in spec order. `only`: a part name
-    or list (their `needs` are built first). Textures go to `tex_dir` (default `<model.out>/tex`)."""
+    or list (their `needs` are built first). Textures go to `tex_dir` (default `<model.out>/tex`). `cache`
+    (`partcache.PartCache`): reuse the parts whose inputs did not change (their names in `ctx.cached`)."""
     if not isinstance(spec, SP.Spec):
         spec = SP.from_dict(spec)
     cfg = SP.model_cfg(spec)
     ctx = ctx or BuildCtx(spec, tex_dir or (cfg["out"] / "tex"), seed=cfg["seed"], log=log)
-    out = []
-    for name in plan(spec, only):
+    out, keys = [], []                         # keys: the parts' cache keys so far, each chained on the ones before
+    names = plan(spec, only)
+    for name in names:
         entry = get_builder(name, spec)
         ctx.part = name
         t0 = time.time()
-        try:
-            part = entry.fn(ctx)
-        except BuildError:
-            raise
-        except Exception as e:
-            raise BuildError(f"part {name!r} failed: {type(e).__name__}: {e}") from e
-        if not isinstance(part, P.Part):
-            raise BuildError(f"builder {name!r} returned {type(part).__name__}, expected Part")
-        if part.name != name:
-            raise BuildError(f"builder {name!r} returned a Part named {part.name!r}")
-        try:
-            P.check(part)
-        except ValueError as e:
-            raise BuildError(str(e)) from e
+        hit = cache.find(ctx.spec, name, ctx.seed, keys) if cache is not None else None
+        if hit is not None:
+            key, got = hit
+            part = got["part"]
+            _reuse(ctx, got)
+            ctx.cached.append(name)
+        else:
+            n_logs, n_tex, snap = len(ctx.logs), len(ctx.textures), ctx.spec._reads.snapshot()
+            try:
+                part = entry.fn(ctx)
+            except BuildError:
+                raise
+            except Exception as e:
+                raise BuildError(f"part {name!r} failed: {type(e).__name__}: {e}") from e
+            if not isinstance(part, P.Part):
+                raise BuildError(f"builder {name!r} returned {type(part).__name__}, expected Part")
+            if part.name != name:
+                raise BuildError(f"builder {name!r} returned a Part named {part.name!r}")
+            try:
+                P.check(part)
+            except ValueError as e:
+                raise BuildError(str(e)) from e
+            if cache is not None:
+                key = cache.store(ctx.spec, name, ctx.seed, keys, ctx.spec._reads.since(snap), part,
+                                  {f: (ctx.tex_dir / f).read_bytes() for f in ctx.textures[n_tex:]}, ctx.logs[n_logs:])
+        if cache is not None:
+            keys.append(key)
         ctx.timings[name] = round(time.time() - t0, 3)
         ctx.parts[name] = part
         out.append(part)
@@ -358,5 +380,33 @@ def run(spec, only=None, tex_dir=None, log=None, ctx=None):
                 ctx.land[k] = np.asarray(v, float)
         check_refs(out)
         ctx.part = ""
-    ctx.part = ""
+    report_unread(ctx, None if only is None else names)
     return out
+
+
+def _reuse(ctx, got):
+    """Put a cached build's textures, log lines and spec reads back as if its part had just been built."""
+    ctx.tex_dir.mkdir(parents=True, exist_ok=True)
+    for f, data in got["textures"].items():
+        (ctx.tex_dir / f).write_bytes(data)
+        if f not in ctx.textures:
+            ctx.textures.append(f)
+    for line in got["logs"]:
+        ctx.logs.append(line)
+        if ctx._log:
+            ctx._log(line)
+    ctx.spec._reads.add(*got["reads"])
+
+
+def report_unread(ctx, tables=None):
+    """Warn, one line per top-level table, about the author's spec keys no builder read (`spec.unread`): a misspelt key,
+    one in the wrong table or one for a feature that is off must not pass for one that works. `tables`: only these
+    top-level tables (a partial build: the parts it built)."""
+    groups = {}
+    for path, n in SP.unread(ctx.spec, tables):
+        groups.setdefault(path[0], []).append(SP.dotted(path) + (f" (table, {n} keys)" if n else ""))
+    ctx.part = "spec"
+    for items in groups.values():
+        ctx.log(f"WARNING {', '.join(items)}: never read by any part (misspelt, in the wrong table, or for something "
+                f"switched off?)")
+    ctx.part = ""

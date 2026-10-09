@@ -36,17 +36,22 @@ length, so the outline is slightly irregular.
   strips 0.6 mm above the skin shaped like the fringe with rounded teeth (`[hair.bangs.shadow] tooth, valley, round, step, tint, tint2`), drawn with
   the head part's own skin material (same texture, toon, UVs and custom normals, darker and warmer, opaque) and bound to the `face` mesh so it carries
   its morph offsets (`HeadFit.on_face`, `face_morphs`, `face_normals`).
-- **Back hair and nape**: the back hair reaches the collar (`end_above_chin = 0`); the nape edge is a smooth layered wave ending in moderately
-  pointed locks (8 + 7 clumps; the inner layer hangs lower); side locks hang in soft S-curves (`HeadHair.sway`, `[hair.side|back] sway`).
+- **Back hair and nape**: `[hair.back]` (`hair_head.DEFAULTS`): `end_above_chin` (0) is where the locks end, metres above the chin's height (0: about the
+  collar; negative lengthens them, -0.13 reaches the shoulder blades); `count` (8) darker inner clumps hang 2 cm lower under `count - 1` outer ones; `delta`
+  (0) moves the hanging part out from the hair volume: a longer fall needs it (about 0.06 to 0.08 for -0.13), or the locks tuck into the back and the
+  build warns that their chains are inside the body's colliders; `width` (0.076), `thick` (0.018), `sway` (0.008, the soft S-curve, also `[hair.side] sway`).
+  The nape edge is a smooth layered wave ending in moderately pointed locks.
 - **Shading**: the normals of every clump (and of the scalp cap) are blended 88 % (78 % at a clump's edges, so a clump has no rim of its own) towards a
   smooth head-shaped proxy (`hair_head.shade_proxy`: the normal of a vertical axis through the head, `[hair] shade z_hi z_lo`), which gives one terminator
   across the head under mmd_tools' view-normal toon and under any light. The toon step is a soft slope (`[hair.toon] edge 0.52, soft 0.20`) into
   `[colors.hair] toon_shadow_multiplier`.
 - **Atlas**: soft gradients only: a dark-ish root to the base to a lighter tip over the whole height, inner tiles x 0.90 / 0.88 and the cap x 0.80 of the
   outer tone, clump edges 16 % darker with a smooth falloff, no strand lines. The crown highlight ("angel ring") is baked into the atlas
-  (`hair_tex.make_atlas(..., ring_f, ring_w)`, `hair_tex.sheen_alpha`; `[hair.ring] drop, width`): one wide feathered band of light pink-coral with a
-  slightly brighter soft core per outer clump tile, wavy and interrupted at clump edges, faint on the inner tiles, none on the cap or lower than 5 cm
-  under the top. It is baked, not a camera-relative sphere ring, so it follows the head, is dimmed by the lighting and fades long before the fringe.
+  (`hair_tex.make_atlas(..., ring_f, ring_w)`, `hair_tex.sheen_alpha`; `[hair.ring] enabled, drop, width`): one wide feathered band with a slightly
+  brighter soft core per outer clump tile, wavy and interrupted at clump edges, faint on the inner tiles, none on the cap or lower than 5 cm under the top.
+  Its colours are `[colors.hair] ring` and `ring_core`; by default they follow the family: Rin's light pink-coral sheen turned to the hue of the
+  family's `highlight` (`highlight_core`) and scaled by its saturation and value, so chestnut hair gets a dusty rose-beige sheen and dark blue a steel
+  blue one (`hair_tex.follow`); `[hair.ring] enabled = false` bakes none.
   The braids keep `hair_tex.sphere_ring`.
 - **Braids and bows**: the hair part is built before the outfit and cannot see the dress, so `[hair.braids] clearance` (the gap kept to what the outfit will
   be, 0.008 by default) is a spec number: raise it (0.020) for a garment that stands 8-18 mm off the skin around the chest where the braids hang, and re-measure
@@ -59,22 +64,25 @@ length, so the outline is slightly irregular.
 
 | Family | Bones | Notes |
 |---|---|---|
-| bangs | `前髪i_1..2` x 7 | each front-layer clump owns a chain; the back-layer clump beside it rides it |
+| bangs | `前髪i_1..2` x 11 (`[hair.bangs] count`) | each front-layer clump owns a chain; the back-layer clump beside it rides it |
 | side_hair | `横髪左1_1..4`, `横髪右1_1..4` | three clumps per side ride one chain |
-| back_hair | `後髪i_1..4` x 8 | outer-layer chains; inner-layer clumps ride the nearest |
+| back_hair | `後髪i_1..4` x 7 (`[hair.back] count - 1`) | the outer layer's chains; the inner layer's clumps ride the nearest |
 | braid | `三つ編左1..N`, `三つ編右1..N` | bow to bow plus the tuft; bow tails are branches `リボン*` (family of the chain root: braid) |
 | ears | `猫耳左`/`猫耳右` (static twitch bone, tiny static body) + `猫耳左1..3` | `perform.twitch = [{family = "ears", ...}]` rotates exactly the twitch bones |
 | tail | `尻尾1_1..9` (left), `尻尾2_1..9` (right) | parent 下半身 |
 
 Chain bodies sit in groups 4 (hair), 5 (ears), 6 (tails), 7 (ribbons); the first body of each chain is in group 8 and ignores group 0 (the body part's static
-colliders), like the solver's `anchor_free` region. Every chain capsule is at least 5 mm clear of the body part's `col_*` bodies at rest (a body overlapped at
-rest is ignored by the solver for good); the fringe keeps 14 mm from the head collider, the braids 7 mm from the upper-body collider, the tails 16 mm.
+colliders), like the solver's `anchor_free` region. At rest every other chain capsule is clear of the body part's `col_*` bodies (on the bases the closest
+are a fringe capsule 3.7 mm from `col_head` and a back-hair capsule 4.5 mm from a shoulder); a capsule that overlaps one is ignored by the solver for good and
+thrown out by MMD's physics, so the build logs `WARNING hair chain <name>: <bone> is N mm inside <collider> at rest ... ([hair.<table>])` for it.
 
 ## Spec (`hair.toml`)
 
-`[hair] seed, dynamic`, `[hair.volume] top front side back`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]`, `[hair.back]`, `[hair.crown]`,
-`[hair.cap]`, `[hair.braids] enabled ...`, `[hair.ears] enabled ...`, `[hair.tails] enabled ...` (`false` removes the slice). Every key has a default in `DEFAULTS` of
-the module that reads it (`hair_head.py`, `hair_braids.py`, `ears.py`, `tails.py`). Colours: `[colors.hair]`, `[colors.ears]`, `[colors.black]`.
+`[hair] seed, dynamic`, `[hair.volume] top front side back`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]`, `[hair.back] count width thick delta
+end_above_chin sway`, `[hair.ring] enabled drop width`, `[hair.crown]`, `[hair.cap]`, `[hair.braids] enabled ...`, `[hair.ears] enabled ...`, `[hair.tails]
+enabled ...` (`false` removes the slice). Every key has a default in `DEFAULTS` of the module that reads it (`hair_head.py`, `hair_braids.py`, `ears.py`,
+`tails.py`). Colours: `[colors.hair]` (base shadow deep light highlight highlight_core rim toon_shadow_multiplier, and ring ring_core), `[colors.ears]`,
+`[colors.black]`.
 
 ## Run and test
 

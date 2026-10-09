@@ -37,14 +37,6 @@ def toon(ctx, name, shadow):
     return ctx.save_png(name, TEX.toon_ramp(shadow=tuple(shadow)))
 
 
-def cfg_merge(base, over):
-    """Defaults over which the spec table `over` is laid (nested dicts merged, other values replaced)."""
-    out = dict(base)
-    for k, v in (over or {}).items():
-        out[k] = cfg_merge(out[k], v) if isinstance(out.get(k), dict) and isinstance(v, dict) else v
-    return out
-
-
 def srgb_u8(c):
     return tuple(float(x) for x in np.clip(np.asarray(c, float), 0.0, 1.0))
 

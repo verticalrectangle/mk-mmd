@@ -18,6 +18,7 @@ from . import cat_ear_geo as EG
 from .cat_tex import ear_fur, ear_inner, tuft
 from .hair_fit import angles
 from .hair_geo import MeshAccum, Piece, unit
+from .. import spec as SP
 from ..part import Bone, Material, RigidBody
 
 DEFAULTS = {
@@ -147,7 +148,7 @@ def _materials(ctx, pal, tex):
 
 
 def build_ears(ctx, fit, cfg, rig, pal):
-    cfg = CC.cfg_merge(DEFAULTS, cfg)
+    cfg = SP.merge(DEFAULTS, cfg)
     if not cfg["enabled"]:
         return Piece(info={"enabled": False})
     rng = ctx.rng_for(cfg["seed"])

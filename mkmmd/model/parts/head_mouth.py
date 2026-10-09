@@ -6,6 +6,8 @@ a tongue, the lip lines, and the mouth morphs as deformation fields of the lips.
 Head-local metres (see head_shape). The slit is centred on x = 0 at height `z`; the upper lip is above it, the lower below."""
 import numpy as np
 
+from .. import spec as SP
+
 DEFAULTS = dict(
     z=0.0010,                      # height of the closed mouth line over the head bone
     half_width=0.0120,             # half length of the closed mouth
@@ -35,8 +37,7 @@ def add_mouth(sb, cfg=None):
     ring ids, the index sets and the parameters."""
     from .head_skin import lift
 
-    c = dict(DEFAULTS)
-    c.update(cfg or {})
+    c = SP.merge(DEFAULTS, cfg)
     g = sb.g
     hw = c["half_width"]
     nf = int(np.sum((g.theta > 0) & (g.theta < np.radians(60.0))))
@@ -98,8 +99,7 @@ def cavity(m, V, cfg=None, shape=None, behind=0.0025):
             yb = float(np.mean(V[m["ids3"]][:, 1])) + 0.03            # would go on through the throat into the neck
             P[:, 1] = np.maximum(P[:, 1], lift(shape, P[:, 0], P[:, 2], y_back=yb)[:, 1] + behind)
         return P
-    c = dict(INTERIOR)
-    c.update(cfg or {})
+    c = SP.merge(INTERIOR, cfg)
     ring3 = V[m["ids3"]]
     n = m["n"]
     w = m["w"]
@@ -148,8 +148,7 @@ TONGUE = dict(centre=(0.0, 0.0105, -0.0042), semi=(0.0075, 0.0072), tilt_deg=14.
 
 
 def teeth_geometry(A, m, cfg=None):
-    c = dict(TEETH)
-    c.update(cfg or {})
+    c = SP.merge(TEETH, cfg)
     up_idx = np.concatenate([[m["left"]], m["upper"][::-1], [m["right"]]])          # left corner -> right corner
     xs_u = A[up_idx, 0]
     o = np.argsort(xs_u)
@@ -169,8 +168,7 @@ def teeth_geometry(A, m, cfg=None):
 
 
 def tongue_geometry(A, m, cfg=None):
-    c = dict(TONGUE)
-    c.update(cfg or {})
+    c = SP.merge(TONGUE, cfg)
     y0 = float(np.mean(A[:, 1]))
     cx, cy, cz = c["centre"]
     a, b = c["semi"]
@@ -205,8 +203,7 @@ def tongue_geometry(A, m, cfg=None):
 def lip_line_edges(cfg, n=22, width=None, nudge=0.00018):
     """Edges (lo, hi) in the front plane (n, 2) of the upper and lower lip line strips along the closed slit; pointed at
     both corners. Returns {"up": (lo, hi), "low": (lo, hi)}."""
-    c = dict(DEFAULTS)
-    c.update(cfg or {})
+    c = SP.merge(DEFAULTS, cfg)
     width = c["line_width"] if width is None else width
     hw = c["half_width"] * 0.985
     x = np.linspace(-hw, hw, n)
@@ -233,8 +230,7 @@ def lip_field(P, side, cfg, up=0.0, dn=0.0, p=0.9, wx=0.0, cl=0.0, nar=0.0, pro=
     opening's profile exponent (smaller = rounder); wx: the corners move out by this much; cl: the corners rise; nar: the
     mouth narrows (fraction pulled in at the corners); pro: protrusion forward; wave: the closed line takes an omega
     shape (amplitude); drop: the whole lower face goes down."""
-    c = dict(DEFAULTS)
-    c.update(cfg or {})
+    c = SP.merge(DEFAULTS, cfg)
     hw, zm = c["half_width"], c["z"]
     x, z = P[:, 0], P[:, 2]
     d = z - slit_z(c, x)

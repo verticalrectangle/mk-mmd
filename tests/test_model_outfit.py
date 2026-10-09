@@ -47,7 +47,7 @@ def built(tmp_path_factory):
 def pieces(built):
     """The garment patches by tag (before welding), rebuilt from the same fit the part used."""
     ctx, skin, part = built
-    cfg = outfit.guided(ctx, outfit.merge(outfit.DEFAULTS, ctx.cfg))
+    cfg = outfit.guided(ctx, SP.merge(outfit.DEFAULTS, ctx.cfg))
     fit = OF.Fit(OF.Land(ctx.land), skin, bone_names=ctx.bones())
     dress, trim, satin = G.Soup("d", [outfit.MAT_DRESS]), G.Soup("t", [outfit.MAT_FRILL, outfit.MAT_FRILL_IN]), G.Soup("s", outfit.SATIN_MATS)
     rig = RG.Rig()
@@ -187,6 +187,30 @@ def test_part_structure_materials_and_meshes(built):
     for mesh in part.meshes:
         assert mesh.uv is not None and np.isfinite(mesh.uv).all()
         assert mesh.face_mat is not None and set(mesh.mats) <= names
+
+
+def test_auto_shading_materials_follow_the_cloth(tmp_path):
+    """[outfit] shading = "auto": the tints tuned for Rin's green cloth (ambients, outlines, the ruffle's diffuse tint)
+    follow the character's cloth colours at the same depth (cream frills: no green cast; navy cloth: a blue ambient), her
+    own colours give the tuned materials exactly, and a value other than "tuned" / "auto" is refused."""
+    class Cream:
+        spec = {"colors": {"outfit": {"dress_base": "#1d2533", "frill": "#e9e2d6", "frill_inner": "#f6f0e2"}}}
+
+    class Rin:
+        spec = {}
+    tuned = {m.name: m for m in outfit.make_materials({})}
+    auto = {m.name: m for m in outfit.make_materials({}, cloth=outfit.cloth_colours(Cream))}
+    for name, fields in ((outfit.MAT_FRILL, ("ambient", "edge_color")), (outfit.MAT_FRILL_IN, ("ambient", "edge_color")),
+                         (outfit.MAT_RUFFLE, ("ambient", "edge_color", "diffuse"))):
+        for f in fields:
+            r, g, b = getattr(auto[name], f)[:3]
+            assert r >= b and g - (r + b) / 2 < 0.02, (name, f)                          # warm, no green cast
+            assert max(r, g, b) == pytest.approx(max(getattr(tuned[name], f)[:3])), (name, f)   # as dark as Rin's
+    r, g, b = auto[outfit.MAT_DRESS].ambient
+    assert b > max(r, g)
+    assert outfit.make_materials({}, cloth=outfit.cloth_colours(Rin)) == outfit.make_materials({})
+    with pytest.raises(ValueError, match="shading"):
+        outfit.build(make_ctx(tmp_path, {"shading": "Auto"})[0])
 
 
 def test_weights_normalised_capped_and_on_known_bones(built):

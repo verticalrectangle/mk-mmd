@@ -3,9 +3,9 @@
 
 [colors.hair]
 base = "#dc2a2e"           # fiery red (canon #eb3434 / #f53434; slightly deeper so the toon does not wash it out)
-shadow = "#8e1418"         # clump shadow / under-layers (canon #8f1917); 0.42 of the base's lightness
+shadow = "#8e1418"         # clump shadow / under-layers (canon #8f1917); 0.65 of the base's value (HSV)
 deep = "#5a0c12"           # roots, scalp seam, inside of the braids
-light = "#f0503f"          # lit side of the clumps, a touch warmer than base (1.5 x base lightness)
+light = "#f0503f"          # lit side of the clumps, warmer than base (1.09 x its value: a bright red is near the top)
 highlight = "#ff9b7c"      # specular band across the crown and bang tips: pale warm coral
 highlight_core = "#ffd6c0" # brightest centre of the highlight, only a thin streak
 toon_shadow_multiplier = [0.42, 0.44, 0.54]   # hair toon ramp: shadow = base x this (blue-shifted); about #942128

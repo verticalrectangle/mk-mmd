@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from .. import spec as SP
 from ..build import builder
 from ..part import Bone, Material, Mesh, Morph, Part
 from . import head_brow as HB
@@ -283,19 +284,17 @@ def anchors_from(prop, frame, own=None):
         A["chin_point"] = yz(*h["chin_point"])
     if "forehead_front" in h:
         A["forehead"] = yz(*h["forehead_front"])
-    for k, v in (own or {}).items():                  # [head.shape] overrides (head.toml)
-        A[k] = v
-    return A
+    return SP.merge(A, own)                           # [head.shape] overrides (head.toml)
 
 
 def face_from(prop, frame, own=None):
     """The generated face's features (head_shape.FACE overrides, head-local): the spec's [head.face] table, with the nose
     tip taken from `nose_tip` ([y, z], model space) of [proportions.face] or [proportions.head] unless [head.face.nose]
     sets `tip` itself."""
-    face = {k: (dict(v) if isinstance(v, dict) else v) for k, v in (own or {}).items()}
+    face = SP.merge({}, own)
     p = prop or {}
     tip = (p.get("face") or {}).get("nose_tip") or (p.get("head") or {}).get("nose_tip")
-    nose = dict(face.get("nose") or {})
+    nose = SP.merge({}, face.get("nose"))
     if tip is not None and "tip" not in nose:
         nose["tip"] = ((float(tip[0]) - frame.pivot[1]) / frame.s, (float(tip[1]) - frame.pivot[2]) / frame.s)
         face["nose"] = nose
@@ -307,9 +306,7 @@ def colors_of(ctx):
     cfg = ctx.cfg or {}
     out = {}
     for k in ("skin", "eyes", "mouth"):
-        d = dict(c.get(k, {}))
-        d.update(cfg.get(k, {}) or {})
-        out[k] = d
+        out[k] = SP.merge(c.get(k) or {}, cfg.get(k))
     return out
 
 
@@ -330,7 +327,7 @@ def build(ctx):
     guides = prop.get("hair_guides") or {}
 
     # ---- the eyes' layout
-    eye_cfg = dict(cfg.get("eye") or {})
+    eye_cfg = SP.merge({}, cfg.get("eye"))
     if "eye_x" in face_p and "iris" not in eye_cfg:
         eye_cfg["iris"] = (float(face_p.get("iris_x", 0.0422)) / scale, (float(face_p["eye_z"]) - pivot[2]) / scale)
 
@@ -341,10 +338,10 @@ def build(ctx):
                          face=face_from(prop, frame, cfg.get("face")),
                          neck=dict(c=(0.0, float(nc[1]), 0.0), rx=nt["rx"] / scale, ry=nt["ry"] / scale, k=0.014, top=0.02))
     nose = shape.face.c["nose"]
-    grid_cfg = dict(n_cols=None, face_deg=1.7, spacing_face=0.0030, spacing_neck=0.0040, spacing_top=0.0065, mid_deg=0.8,
-                    mid_to=7.0, mid_ramp=6.0, detail=dict(z=(nose["base_z"] - 0.004, nose["root_z"]), spacing=0.0012, ramp=3.0),
-                    ring_z=float(nc[2]))
-    grid_cfg.update(cfg.get("grid", {}))
+    grid_cfg = SP.merge(dict(n_cols=None, face_deg=1.7, spacing_face=0.0030, spacing_neck=0.0040, spacing_top=0.0065,
+                             mid_deg=0.8, mid_to=7.0, mid_ramp=6.0,
+                             detail=dict(z=(nose["base_z"] - 0.004, nose["root_z"]), spacing=0.0012, ramp=3.0),
+                             ring_z=float(nc[2])), cfg.get("grid"))
     shape.ring_z = grid_cfg["ring_z"]
     grid = SK.Grid(shape, grid_cfg)
     sb = SK.SkinBuilder(shape, grid)
@@ -356,7 +353,7 @@ def build(ctx):
         if want is not None and np.abs(frame.to_model(e["E"]) - want).max() > 5e-4:
             ctx.log(f"WARNING eye.{side} landmark {np.round(want, 4).tolist()} differs from the eyeball centre "
                     f"{np.round(frame.to_model(e['E']), 4).tolist()}: the eye bone would pivot off the eyeball")
-    mouth_cfg = dict(cfg.get("mouth") or {})
+    mouth_cfg = SP.merge({}, cfg.get("mouth"))
     if "mouth_z" in face_p and "z" not in mouth_cfg:
         mouth_cfg["z"] = (float(face_p["mouth_z"]) - pivot[2]) / scale
     if "mouth_width" in face_p and "half_width" not in mouth_cfg:
@@ -427,7 +424,7 @@ def build(ctx):
             decals[f"{name}.{side}"] = dec
             strips[f"{name}.{side}"] = dict(sh, tip=sh.get("tip", False), ends_pointed=sh.get("ends_pointed", False), h=h,
                                             faces=faces)
-    brow_cfg = dict(cfg.get("brow") or {})
+    brow_cfg = SP.merge({}, cfg.get("brow"))
     if "brow_z" in face_p and "z" not in brow_cfg:
         brow_cfg["z"] = (float(face_p["brow_z"]) - pivot[2]) / scale
     if "brow_x" in face_p and "x" not in brow_cfg:
@@ -492,8 +489,8 @@ def build(ctx):
     blush = MeshAcc("blush")
     blush_follow, blush_up = {}, {}
     skin_tree = cKDTree(V)
-    bc = dict(centre=(0.050, 0.012), semi=(0.031, 0.0115), hide=-0.0012, show=0.0005, nx=13, nz=7)
-    bc.update(cfg.get("blush") or {})
+    bc = SP.merge(dict(centre=(0.050, 0.012), semi=(0.031, 0.0115), hide=-0.0012, show=0.0005, nx=13, nz=7),
+                  cfg.get("blush"))
     for side, sg in (("L", 1.0), ("R", -1.0)):
         gx, gz = np.meshgrid(np.linspace(-1, 1, bc["nx"]), np.linspace(-1, 1, bc["nz"]))
         x = sg * bc["centre"][0] + sg * gx.ravel() * bc["semi"][0] * np.sqrt(np.clip(1 - 0.5 * gz.ravel() ** 2, 0.3, 1))
@@ -562,7 +559,7 @@ def build(ctx):
         band=nsh.get("color", "#e3aa95"),
         band_w=(float(nsh.get("strength", 0.9)), float(nsh.get("front", 1.0)), float(nsh.get("back", 0.35)))))
     iris_tex = ctx.save_png("iris", TX.iris(col["eyes"]))
-    sclera_cols = dict(col["eyes"])
+    sclera_cols = SP.merge(col["eyes"], None)
     sclera_cols["sclera"] = mix_hex(sclera_cols.get("sclera", "#f6f1f2"), "#ffffff", 0.45)
     sclera_cols["sclera_shadow"] = mix_hex(sclera_cols.get("sclera_shadow", "#cfc8d6"), "#ffffff", 0.25)
     sclera_tex = ctx.save_png("sclera", TX.sclera(sclera_cols, EY.sclera_frame(), skin=skin_base, shade=float(cfg.get("lash_shadow", 0.22))))

@@ -22,10 +22,13 @@ Public API (colours: a dict of '#rrggbb' strings overriding any DEFAULT_COLORS k
   frill_texture(colors=None, size=1024, seed=3, inner=False)
   satin_texture(colors=None, size=512, seed=5, print=False)
   leather_texture(colors=None, size=512, seed=7, sole=False)
-  toon_ramp(kind="dress", size=32)                       'dress' | 'frill' | 'satin' | 'leather'
+  toon_ramp(kind="dress", size=32, cloth=None)           'dress' | 'frill' | 'satin' | 'leather'; cloth: the rgb the dress
+                                                               or frill ramp follows (shading "auto")
   sphere_map(kind="satin", size=128)                     'satin' | 'leather'
-  build_textures(ctx, colors=None, sizes=None, dress_print=True, leg_ribbon=True)   renders + saves everything, returns
-                                                               {key: file name}
+  palette(colors=None)                                   float rgb per colour key
+  colours(ctx, colors=None)                              a build's colour table: defaults, [colors.black], [colors.outfit]
+  build_textures(ctx, colors=None, sizes=None, dress_print=True, leg_ribbon=True, shading="tuned")   renders + saves
+                                                               everything, returns {key: file name}
 
 The dress print is laid out in centimetres on a 30 x 30 cm torus (independent of the render size) and is meant to read
 as a floral from a distance: big motifs, sparsely scattered. Leaves are 4.5-7 cm long, the five-petal flowers 3.5-4.5 cm
@@ -46,6 +49,8 @@ import math
 from dataclasses import dataclass, replace
 
 import numpy as np
+
+from ..colour import follow_tint
 
 DEFAULT_COLORS = {
     "dress_base": "#141b17",
@@ -79,7 +84,7 @@ def _hex(value):
     return np.array([int(s[i:i + 2], 16) for i in (0, 2, 4)], np.float32) / 255.0
 
 
-def _palette(colors=None):
+def palette(colors=None):
     """Float RGB (0..1, sRGB values) per colour key; unknown keys in `colors` are ignored."""
     pal = dict(DEFAULT_COLORS)
     for key, val in (colors or {}).items():
@@ -835,7 +840,7 @@ def _dress_cloth(S, rng):
 def dress_pattern(colors=None, size=2048, seed=11, print=True):
     """Dark dress fabric with a leaf / vine / five-petal flower print, tileable in both axes (0.30 m per tile); with
     print=False the plain cloth: the same weave and mottling, no motifs."""
-    pal = _palette(colors)
+    pal = palette(colors)
     S = int(size)
     s = S / _T
     prims = _dress_layout(int(seed)).prims if print else ()
@@ -933,7 +938,7 @@ def frill_texture(colors=None, size=1024, seed=3, inner=False):
     20 %) at 6 % and 93 % of the height, the upper one shaded with the cloth; woven noise +-2 %. `inner=True` uses the
     `frill_inner` colour, a hint warmer towards the hem, and adds a very faint white scalloped lace line (10 arcs per
     tile, alpha 0.30) with small eyelets, hanging from 80 % of the height."""
-    pal = _palette(colors)
+    pal = palette(colors)
     S = int(size)
     rng = _rng(seed, 303 + (1 if inner else 0))
     base = pal["frill_inner"] if inner else pal["frill"]
@@ -973,7 +978,7 @@ def satin_texture(colors=None, size=512, seed=5, print=False):
     +-4 %); the outer 6 % of the width on each side is a slightly lighter selvedge line (+0.05 in sRGB value). With
     `print=True` a sparse pale grey (0.78, 0.78, 0.80) mark pattern at alpha 0.22 is added, repeating every 1 cm of
     ribbon: a small diamond outline on the centre line, a dot between diamonds, a short dash near each selvedge."""
-    pal = _palette(colors)
+    pal = palette(colors)
     S = int(size)
     rng = _rng(seed, 404)
     base = pal["satin"]
@@ -1010,7 +1015,7 @@ def leather_texture(colors=None, size=512, seed=7, sole=False):
     """Near-black shoe leather (the `sole` colour with sole=True), tileable in u and v (10 cm per tile): very fine
     pebbled grain (+-2.5 % luminance grain, -4.5 % creases between the pebbles, +-1.5 % soft mottling) and a barely
     visible lighter wear patch at the centre (+0.02 in sRGB value, ~11 % of the tile wide)."""
-    pal = _palette(colors)
+    pal = palette(colors)
     S = int(size)
     rng = _rng(seed, 505 + (1 if sole else 0))
     base = pal["sole" if sole else "leather"]
@@ -1032,9 +1037,10 @@ _TOON = {
     "satin": ((0.30, 0.95, (0.70, 0.70, 0.78)),),
     "leather": ((0.38, 0.80, (0.62, 0.66, 0.80)),),
 }
+_TOON_CLOTH = {"dress": "dress_base", "frill": "frill"}       # the cloth colour each tuned ramp goes with
 
 
-def toon_ramp(kind="dress", size=32):
+def toon_ramp(kind="dress", size=32, cloth=None):
     """MMD toon image (size, size, 4): a vertical gradient (row 0 = fully lit white, last row = shaded), every row
     constant along x. The colour is a per-channel multiplier of the lit colour; plateaus joined by smoothstep edges
     (rows are sampled at v = (row + 0.5) / size):
@@ -1045,13 +1051,19 @@ def toon_ramp(kind="dress", size=32):
       leather  1.00 up to v 0.38, soft edge to (0.62, 0.66, 0.80) by 0.80
 
     (dress shadow = deep teal-green, frill shadow multiplies green by 0.62 with red / blue lower, leather shadow is
-    slightly bluish). Alpha is 255."""
+    slightly bluish: tuned for Rin's dark green dress and green frills). `cloth` (rgb, `[outfit] shading = "auto"`): the
+    dress or frill steps follow that cloth colour instead (`colour.follow_tint` against DEFAULT_COLORS' dress_base /
+    frill). Alpha is 255."""
     if kind not in _TOON:
         raise ValueError(f"unknown toon kind {kind!r}; expected one of {sorted(_TOON)}")
+    steps = _TOON[kind]
+    if cloth is not None and kind in _TOON_CLOTH:
+        was = _hex(DEFAULT_COLORS[_TOON_CLOTH[kind]])
+        steps = tuple((a, b, follow_tint(c, cloth, was)) for a, b, c in steps)
     v = (np.arange(size, dtype=np.float32) + 0.5) / size
     col = np.ones((size, 3), np.float32)
     prev = np.ones(3, np.float32)
-    for a, b, c in _TOON[kind]:
+    for a, b, c in steps:
         c = np.array(c, np.float32)
         col = col + (c - prev) * _smooth(a, b, v)[:, None]
         prev = c
@@ -1097,17 +1109,27 @@ def sphere_map(kind="satin", size=128):
 _SIZES = {"dress": 2048, "frill": 1024, "satin": 512, "leather": 512, "toon": 32, "sphere": 128}
 
 
-def build_textures(ctx, colors=None, sizes=None, dress_print=True, leg_ribbon=True):
-    """Render and save every outfit image with `ctx.save_png`; returns {key: file name}. Colours: DEFAULT_COLORS, then the
-    project palette's black items (`ctx.spec["colors"]["black"]`: ribbon -> satin, shoe -> leather, shoe_sole -> sole), then
-    `ctx.spec["colors"]["outfit"]`, then `colors`. `sizes` (optional) overrides the default edge lengths per group
-    (dress 2048, frill 1024, satin 512, leather 512, toon 32, sphere 128); dress_print=False makes the dress plain cloth,
-    leg_ribbon=False leaves out the calf ribbon's images (satin_print, sphere_satin)."""
+def colours(ctx, colors=None):
+    """The outfit's colour table ('#rrggbb' per key): DEFAULT_COLORS, then the project palette's black items
+    (`ctx.spec["colors"]["black"]`: ribbon -> satin, shoe -> leather, shoe_sole -> sole), then `ctx.spec["colors"]
+    ["outfit"]`, then `colors`."""
     cols = dict(DEFAULT_COLORS)
     black = (ctx.spec.get("colors") or {}).get("black") or {}
     cols.update({k: black[v] for k, v in PALETTE_BLACK.items() if v in black})
-    cols.update(((ctx.spec.get("colors") or {}).get("outfit")) or {})
+    outfit = (ctx.spec.get("colors") or {}).get("outfit") or {}
+    cols.update({k: outfit[k] for k in DEFAULT_COLORS if k in outfit})          # looked up: an unknown key stays unread
     cols.update(colors or {})
+    return cols
+
+
+def build_textures(ctx, colors=None, sizes=None, dress_print=True, leg_ribbon=True, shading="tuned"):
+    """Render and save every outfit image with `ctx.save_png`; returns {key: file name}. Colours: `colours(ctx, colors)`.
+    `sizes` (optional) overrides the default edge lengths per group (dress 2048, frill 1024, satin 512, leather 512, toon 32,
+    sphere 128); dress_print=False makes the dress plain cloth, leg_ribbon=False leaves out the calf ribbon's images
+    (satin_print, sphere_satin); shading="auto" makes the dress and frill toon ramps follow their cloth colours."""
+    cols = colours(ctx, colors)
+    pal = palette(cols)
+    cloth = (lambda key: pal[key]) if shading == "auto" else (lambda key: None)
     sz = dict(_SIZES)
     sz.update(sizes or {})
     images = {
@@ -1118,8 +1140,8 @@ def build_textures(ctx, colors=None, sizes=None, dress_print=True, leg_ribbon=Tr
         "satin_print": ("outfit_satin_print.png", lambda: satin_texture(cols, sz["satin"], print=True)),
         "leather": ("outfit_leather.png", lambda: leather_texture(cols, sz["leather"])),
         "sole": ("outfit_sole.png", lambda: leather_texture(cols, sz["leather"], sole=True)),
-        "toon_dress": ("outfit_toon_dress.png", lambda: toon_ramp("dress", sz["toon"])),
-        "toon_frill": ("outfit_toon_frill.png", lambda: toon_ramp("frill", sz["toon"])),
+        "toon_dress": ("outfit_toon_dress.png", lambda: toon_ramp("dress", sz["toon"], cloth("dress_base"))),
+        "toon_frill": ("outfit_toon_frill.png", lambda: toon_ramp("frill", sz["toon"], cloth("frill"))),
         "toon_satin": ("outfit_toon_satin.png", lambda: toon_ramp("satin", sz["toon"])),
         "toon_leather": ("outfit_toon_leather.png", lambda: toon_ramp("leather", sz["toon"])),
         "sphere_satin": ("outfit_sphere_satin.png", lambda: sphere_map("satin", sz["sphere"])),

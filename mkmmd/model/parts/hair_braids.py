@@ -20,6 +20,7 @@ from .hair_braids_geo import TriMesh, collider_clearance, colliders
 from .hair_braids_path import head_refs, make_constraints, plan_side
 from .hair_fit import Volume
 from .hair_geo import MeshAccum, Piece
+from .. import spec as SP
 from ..part import Material
 
 DEFAULTS = {
@@ -78,13 +79,6 @@ DEFAULTS = {
 
 SIDE = {1.0: "左", -1.0: "右"}
 SIDE_KEY = {1.0: "L", -1.0: "R"}
-
-
-def merge(base, over):
-    out = dict(base)
-    for k, v in (over or {}).items():
-        out[k] = merge(out[k], v) if isinstance(out.get(k), dict) and isinstance(v, dict) else v
-    return out
 
 
 class Textures:
@@ -257,7 +251,7 @@ def build_side(ctx, fit, cfg, refs, rig, probes, tex, sx, vol, rng, scale):
 def build_braids(ctx, fit, cfg, rig, pal):
     """The twin braids -> Piece (meshes hair_braid_L / hair_braid_R, materials 三つ編 and 髪リボン); bones, bodies and joints go
     into `rig`."""
-    cfg = merge(DEFAULTS, cfg)
+    cfg = SP.merge(DEFAULTS, cfg)
     if not cfg["enabled"]:
         return Piece(info={"enabled": False})
     body = ctx.parts["body"]

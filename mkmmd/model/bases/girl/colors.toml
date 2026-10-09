@@ -1,19 +1,13 @@
-# colors.toml - the girl base's palette: sRGB hex, one comment per entry. The parts read [colors.skin] (body, face),
-# [colors.hair], [colors.eyes] and [colors.mouth] (head, hair), [colors.ears] (cat ears and tails, when switched on),
-# [colors.black] (ribbons, shoes) and [colors.accent]; the dress takes [colors.outfit] (outfit.toml). The skin, mouth and
-# blacks are Rin's (sampled from studio renders of Reisen's skin as reflectance, see the rin example); the hair, eyes and
-# ears are a neutral chestnut brown that keeps the same tonal structure (shadow ~0.45 of the base's lightness).
+# colors.toml - the girl base's palette: sRGB hex, one comment per entry. The parts read [colors.skin] (the face, the hair's
+# skin seams; the body's own skin colours are body.toml's [body] skin), [colors.hair], [colors.eyes] and [colors.mouth]
+# (head, hair), [colors.ears] (cat ears and tails, when switched on), [colors.black] (ribbons, shoes) and [colors.accent];
+# the dress takes [colors.outfit] (outfit.toml). The skin, mouth and blacks are Rin's (sampled from studio renders of
+# Reisen's skin as reflectance, see the rin example); the hair, eyes and ears are a neutral chestnut brown with the same
+# tonal structure (in HSV value: shadow about 0.6 of the base, deep about 0.4, light about 1.3, highlight about 1.8).
 # Rule: no pure #000000 anywhere; the darkest allowed value is #0b0a0d.
 
 [colors.skin]
 base = "#f0e6d5"           # lit skin mid-tone: pale warm cream
-face_lit = "#f9f0e1"       # face in full light
-shadow = "#d1cec6"         # toon shadow: neutral, not pink: base x (0.74, 0.78, 0.85)
-deep_shadow = "#b3aca9"    # under the chin / inner thigh: base x (0.52, 0.52, 0.60)
-toon_shadow_multiplier = [0.74, 0.78, 0.85]   # lit = 1.0, shadow = this per channel
-blush = "#dda3a9"          # cheek blush overlay colour at 50 % alpha over the base
-blush_knee = "#e4bab1"     # the faint red on knees and calves; keep subtle
-nail = "#f0b3ab"           # fingertip/nail tint (pink-peach); red nails: [colors.accent] nail_red with [body] nails = "red"
 outline = "#8a6a62"        # face/skin outline (edge) colour: warm grey-brown, never black
 
 [colors.hair]
@@ -36,8 +30,6 @@ iris_lower = "#cf9049"     # lower glow: amber
 iris_rim = "#f6d7ad"       # bottom rim light, thin: pale honey
 iris_ring = "#4d2a12"      # dark ring around the pupil
 pupil = "#170b05"          # pupil: a vertical oval, very dark brown
-highlight = "#ffffff"      # big oval highlight, upper side of the iris (same side in both eyes)
-highlight_small = "#fff4ee" # small round highlight, lower side of the iris
 highlight_glow = "#f6dcc0" # soft tinted secondary glow along the lower iris edge
 lash = "#25140e"           # heavy upper lash line and flick: near-black brown
 lash_lower = "#6a4535"     # thin lower lash line (lighter and thinner than the upper)
@@ -58,21 +50,14 @@ tail_tip_sheen = "#83594a" # sheen along the top of the tails
 ribbon = "#17151a"         # all black ribbons and bows (throat bow, sash bow, hair bows); never #000000
 ribbon_shade = "#0d0c0f"   # darkest value anywhere in the model
 ribbon_sheen = "#3b363d"   # satin sheen on the loops
-sash = "#1a181d"           # thin waist sash/belt
 shoe = "#1c1a1f"           # black Mary-Jane shoes
-shoe_sheen = "#4a444d"     # glossy toe-cap highlight
-shoe_strap = "#2b272d"     # the strap
 shoe_sole = "#0f0e11"      # sole and heel
 
 [colors.mouth]
 lip_line = "#c7a19a"       # closed mouth: a thin dusty-rose line
-lip = "#d98a8e"            # lip fill when the mouth opens
 interior = "#7a1824"       # inside of the mouth
-interior_deep = "#4d0e18"  # throat / back of the mouth
 tongue = "#e8727f"         # tongue
-tongue_shade = "#c04c5e"   # shaded underside and centre groove of the tongue
 teeth = "#fffaf2"          # teeth and the fang
-teeth_shade = "#e6d9d2"    # gaps and shaded side of the teeth
 
 [colors.accent]
 nail_red = "#c9262d"       # red nails ([body] nails = "red"; off by default)

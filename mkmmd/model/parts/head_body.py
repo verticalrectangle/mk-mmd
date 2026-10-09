@@ -27,6 +27,7 @@ shape when the hairline, the ear anchors and the face outline are computed. Ears
 import numpy as np
 
 from .. import pmx_take as TK
+from .. import spec as SP
 from ..part import Mesh, Morph, Part
 from . import head_cap as CP
 from . import head_ear as HR
@@ -158,7 +159,7 @@ def _neck_info(body, V, neck, pivot):
 def build(ctx):
     from . import head as H
     cfg = ctx.cfg or {}
-    tc = dict(cfg.get("take") or {})
+    tc = SP.merge({}, cfg.get("take"))
     prop = ctx.spec.get("proportions") or {}
     body = ctx.need("body")
     tk = (body.info or {}).get("take")

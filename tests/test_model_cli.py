@@ -44,7 +44,12 @@ def test_bad_spec_and_unknown_part_are_usage_errors(tmp_path, capsys):
 
 
 def test_no_export_builds_and_checks_parts(tmp_path, capsys):
+    """--no-export runs and checks the builders in a folder of its own: an exported model beside it (its build.json and
+    textures) stays as it was."""
     spec = mannequin_spec(tmp_path)
+    export = Path(SP.load(spec)["model"]["out"]).expanduser()
+    (export / "tex").mkdir(parents=True)
+    (export / "build.json").write_text('{"ok": true, "stage": "done"}', encoding="utf-8")
     code, out = run_cli(["model", "build", str(spec), "--no-export"], capsys)
     assert code == 0 and out["ok"] is True
     names = [p["name"] for p in out["parts"]]
@@ -52,12 +57,29 @@ def test_no_export_builds_and_checks_parts(tmp_path, capsys):
     body = out["parts"][0]
     assert body["bones"] == 76 and body["morphs"] == 6 and body["bodies"] == 19 and body["materials"] == 4
     assert out["textures"] >= 8 and out["warnings"] == []
+    assert Path(out["out"]) == (export / "no_export").resolve()
     tex = Path(out["out"]) / "tex"
     assert (tex / "mannequin_skin.png").exists() and not (Path(out["out"]) / "mannequin.pmx").exists()
+    assert (export / "build.json").read_text(encoding="utf-8") == '{"ok": true, "stage": "done"}'
+    assert not list((export / "tex").iterdir())
     # --only builds into its own folder and rebuilds fewer parts
     code, out = run_cli(["model", "build", str(spec), "--no-export", "--only", "mannequin_hair"], capsys)
     assert code == 0 and [p["name"] for p in out["parts"]] == ["mannequin", "mannequin_hair"]
-    assert out["out"].endswith("only_mannequin_hair")
+    assert Path(out["out"]) == (export / "only_mannequin_hair" / "no_export").resolve()
+
+
+def test_spec_keys_no_part_reads_are_warned(tmp_path, capsys):
+    """Keys no part reads (a misspelt one, a table nobody reads) are warned about in the report, one line per top-level
+    table, and the keys that are read are not; a partial build checks only the tables of the parts it built."""
+    extra = '[mannequin_hair]\nbangs_bones = 4\nlenght = 0.3\n[colors.nothing]\nx = "#102030"\ny = "#203040"\n'
+    spec = mannequin_spec(tmp_path, extra)
+    code, out = run_cli(["model", "build", str(spec), "--no-export"], capsys)
+    assert code == 0 and out["ok"] is True
+    warned = [w for w in out["warnings"] if w.startswith("[spec] WARNING")]
+    assert len(warned) == 2 and "mannequin_hair.lenght" in warned[0] and "colors.nothing" in warned[1]
+    assert "bangs_bones" not in " ".join(warned)
+    code, out = run_cli(["model", "build", str(spec), "--no-export", "--only", "mannequin"], capsys)
+    assert code == 0 and not [w for w in out["warnings"] if w.startswith("[spec]")]
 
 
 def test_builder_failure_is_reported_not_raised(tmp_path, capsys):

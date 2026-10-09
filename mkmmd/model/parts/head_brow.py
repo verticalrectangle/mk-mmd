@@ -2,6 +2,8 @@
 Head-local metres; the left brow (+x) is built, the right is its mirror."""
 import numpy as np
 
+from .. import spec as SP
+
 BROW = dict(
     x=(0.0256, 0.0768),               # inner and outer end (x of the left brow)
     z=0.0995,                         # height of the brow line over the head bone
@@ -20,8 +22,7 @@ def _sm(t):
 
 def centreline(cfg=None, dz=0.0, arch_scale=1.0, d_inner=0.0, d_outer=0.0, dx=0.0, x_scale=1.0, thick_scale=1.0):
     """Centre line (n, 2) in (x, z) of the left brow, and its width per point."""
-    c = dict(BROW)
-    c.update(cfg or {})
+    c = SP.merge(BROW, cfg)
     s = np.linspace(0.0, 1.0, c["n"])
     x0, x1 = c["x"]
     xm = 0.5 * (x0 + x1)

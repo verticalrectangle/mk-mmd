@@ -6,6 +6,7 @@ is a pole. Columns halve in three bands towards the crown so the quads stay abou
 (see head_shape)."""
 import numpy as np
 
+from .. import spec as SP
 from .head_shape import directions
 
 # -------------------------------------------------------------------------------------------------- spacing helpers
@@ -75,11 +76,10 @@ class Grid:
     UPPER = ((2, 66.0), (2, 72.5), (4, 80.0))             # (stride, elevation in degrees) rows above the finest layer
 
     def __init__(self, shape, cfg=None):
-        c = dict(n_cols=96, face_deg=1.9, back_deg=8.0, ring_z=-0.045, phi_end_a=58.0,
-                 spacing_face=0.0029, spacing_neck=0.0036, spacing_top=0.0062, mid_deg=None, mid_to=8.0, mid_ramp=6.0,
-                 detail=None)
-        c.update(cfg or {})
-        self.cfg = c
+        self.cfg = SP.merge(dict(n_cols=96, face_deg=1.9, back_deg=8.0, ring_z=-0.045, phi_end_a=58.0,
+                                 spacing_face=0.0029, spacing_neck=0.0036, spacing_top=0.0062, mid_deg=None, mid_to=8.0,
+                                 mid_ramp=6.0, detail=None), cfg)
+        c = self.cfg
         self.shape = shape
         self.neck = shape.p["neck"]
         self.theta = column_angles(c["n_cols"], c["face_deg"], c["back_deg"], mid_deg=c["mid_deg"], mid_to=c["mid_to"],

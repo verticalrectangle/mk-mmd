@@ -41,7 +41,7 @@ def iris(colors, size=256, seed=3):
     """The iris: a vertical gradient (dark under the lid, crimson in the middle, a coral glow and a pale rim at the bottom),
     a dark limbal ring, a darker ring around the pupil and faint radial fibres. The image is the iris's bounding box
     (row 0 = top); the iris is the inscribed ellipse."""
-    c = {k: hex_rgb(v) for k, v in {**EYE_DEFAULTS, **colors}.items()}
+    c = {k: hex_rgb(colors.get(k) or v) for k, v in EYE_DEFAULTS.items()}
     yy, xx = np.mgrid[0:size, 0:size]
     x = (xx + 0.5) / size * 2 - 1                      # -1..1 left to right
     y = 1 - (yy + 0.5) / size * 2                      # +1 top .. -1 bottom
@@ -86,7 +86,7 @@ def sclera(colors, frame, size=128, skin=None, shade=0.22, shade_k=0.62):
     """Eyeball white painted in eye coordinates (`frame` from head_eye.sclera_frame): the lash's shadow hangs under the upper
     lid margin (`shade` of the opening height, soft lower edge), the corners are a little darker, and the lower edge warms
     toward the skin so the sclera meets it softly."""
-    c = {k: hex_rgb(v) for k, v in {**EYE_DEFAULTS, **colors}.items()}
+    c = {k: hex_rgb(colors.get(k) or v) for k, v in EYE_DEFAULTS.items()}
     r, cc = np.mgrid[0:size, 0:size]
     u = frame["umin"] + (cc + 0.5) / size * (frame["umax"] - frame["umin"])
     v = frame["vmin"] + (1.0 - (r + 0.5) / size) * (frame["vmax"] - frame["vmin"])

@@ -25,12 +25,12 @@ from the weights), chain_s, along, a_mid, tiles, palm_u, palm_v; plus bone_names
 takes the back of the hand from the thumb's edge (u 0) to the little finger's edge (0.5) and the palm back to the thumb's
 edge (1), v along the hand from the seam; a finger tile u round its finger (the back at 0.125, the pad at 0.625), v along
 its chain to the tip."""
-import importlib
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
+from ..spec import make_missing
 from ..subdiv import subdivide
 from . import body_hand as BH
 from .body_geom import Path as Chain, Shell, smoothstep, unit, vertex_normals
@@ -68,46 +68,35 @@ def _load(path, mtime):
     F = [[int(v) for v in f] for f in sd.faces]
     Wd = np.zeros((len(sd.verts), len(BONES)))
     Wd[:, [BONES.index(b) for b in bones]] = np.asarray(sd.L @ W)
-    return dict(verts=np.asarray(sd.verts, float), faces=F, weights=Wd, joints=joints, seam=_seam_loop(F))
-
-
-def _rebuild(p):
-    """Write the missing asset `p` with the maker beside it (make_<stem>.py inside the mkmmd package: its make(out));
-    False when there is none."""
-    maker = p.with_name(f"make_{p.stem}.py")
-    root = Path(__file__).resolve().parents[3]                  # the folder that holds the mkmmd package
-    if not maker.is_file() or root not in maker.resolve().parents:
-        return False
-    importlib.import_module(".".join(maker.resolve().relative_to(root).with_suffix("").parts)).make(p)
-    return p.is_file()
+    return dict(verts=np.asarray(sd.verts, float), faces=F, weights=Wd, joints=joints, seam=open_loop(F))
 
 
 def load(D):
     """The subdivided asset named by the design's `mesh` (in its own frame and scale; shared, not to be changed)."""
     p = Path(str(D["mesh"])).expanduser()
-    if not p.is_file() and not _rebuild(p):
+    if not p.is_file() and not make_missing(p):
         raise ValueError(f"[body.hand] mesh: {p} does not exist")
     return _load(str(p), p.stat().st_mtime)
 
 
-def _seam_loop(faces):
-    """The vertices of the one open boundary of `faces`, in order round it."""
+def open_loop(faces):
+    """The vertices of the one open boundary of `faces`, in order round it (along the faces' own edge direction)."""
     edges = {(f[i], f[(i + 1) % len(f)]) for f in faces for i in range(len(f))}
     nxt = {}
     for a, b in edges:
         if (b, a) not in edges:
             if a in nxt:
-                raise ValueError("the hand mesh's open boundary is not a simple loop")
+                raise ValueError("the mesh's open boundary is not a simple loop")
             nxt[a] = b
     if not nxt:
-        raise ValueError("the hand mesh is closed: it needs an open seam at the wrist")
+        raise ValueError("the mesh is closed: it needs one open boundary, its seam")
     loop = [min(nxt)]
     while nxt[loop[-1]] != loop[0]:
         loop.append(nxt[loop[-1]])
         if len(loop) > len(nxt):
-            raise ValueError("the hand mesh's open boundary is not a simple loop")
+            raise ValueError("the mesh's open boundary is not a simple loop")
     if len(loop) != len(nxt):
-        raise ValueError("the hand mesh has more than one open boundary: it may only be open at the wrist")
+        raise ValueError("the mesh has more than one open boundary: it may only be open at its seam")
     return np.array(loop)
 
 

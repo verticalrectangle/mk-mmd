@@ -208,6 +208,39 @@ def test_textures():
     assert 0 <= u0 < u1 <= hair_tex.CAP_U0
 
 
+def test_crown_sheen_follows_the_colour_family():
+    """The baked sheen keeps Rin's exact pink-coral for her own family, takes the hue of another family's highlight (a
+    dark-blue family gets a blue sheen, not a pink band), yields to explicit `ring` keys, and can be switched off."""
+    rin = hair_tex.palette()
+    assert np.array_equal(rin["ring"], hair_tex.SHEEN) and np.array_equal(rin["ring_core"], hair_tex.SHEEN_CORE)
+    blue = hair_tex.palette({"base": "#1e3063", "shadow": "#101a3a", "light": "#314980", "highlight": "#738dba",
+                             "highlight_core": "#afbed1"})
+    for key in ("ring", "ring_core"):
+        r, g, b = blue[key]
+        assert b > g > r, (key, blue[key])
+    set_ = hair_tex.palette({"ring": "#806040", "ring_core": "#a08060"})
+    assert np.allclose(set_["ring"] * 255, [0x80, 0x60, 0x40]) and np.allclose(set_["ring_core"] * 255, [0xa0, 0x80, 0x60])
+    T = hair_tex.TILE_PX
+    on = hair_tex.make_atlas(rin, np.random.default_rng(0))[:512, :T].astype(int)
+    off = hair_tex.make_atlas(rin, np.random.default_rng(0), ring=False)[:512, :T].astype(int)
+    assert on[:, :, 1].max() > off[:, :, 1].max() + 40                       # the sheen is the lightest thing on the crown
+    assert np.array_equal(on[int(0.6 * 512):], off[int(0.6 * 512):])          # and nothing else changes
+
+
+def test_chains_inside_the_body_colliders_are_reported():
+    """`hair.overlaps` names every chain whose capsules overlap a static collider at rest, with its deepest bone; a
+    clear chain, and a chain whose only overlap is its first body (that one ignores the colliders), are not reported."""
+    box = PT.RigidBody(name="col_upper_body2", bone="上半身2", shape="box", size=(0.08, 0.06, 0.10),
+                       location=(0.0, 0.0, 1.0), mode="static")
+    rig = Rig()
+    rig.chain("in_", [[0.0, 0.12, 1.30], [0.0, 0.10, 1.15], [0.0, 0.05, 1.05], [0.0, 0.04, 0.98]], "頭", radius=0.01)
+    rig.chain("clear_", [[0.0, 0.20, 1.30], [0.0, 0.20, 1.15], [0.0, 0.20, 1.00]], "頭", radius=0.01)
+    rig.chain("root_", [[0.0, 0.05, 1.05], [0.0, 0.10, 1.20], [0.0, 0.10, 1.35]], "頭", radius=0.01)
+    found = hair.overlaps(rig, [box])
+    assert [(base, bone, which) for _, base, bone, which in found] == [("in_", "in_3", "col_upper_body2")]
+    assert -0.032 < found[0][0] < -0.025               # its deepest bone: axis 2 cm inside the box's back face, radius 1 cm
+
+
 # ---------------------------------------------------------------- the head hair
 def test_head_hair_chain_families(head_only):
     _, _, rig, piece = head_only

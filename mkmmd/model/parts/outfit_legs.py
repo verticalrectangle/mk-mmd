@@ -44,6 +44,7 @@ v 0..1 across; leather and sole about metres / 0.10 (tileable)."""
 import numpy as np
 
 from .. import skin as SK
+from .. import spec as SP
 from . import outfit_geo as G
 from . import outfit_rig as RG
 
@@ -74,14 +75,6 @@ DEFAULTS = {
         "bow": {"size": 0.0190, "loop": 1.0, "loop_w": 0.62, "ribbon_w": 0.60, "tail_len": 1.0, "droop": 0.10, "lift": 0.0005},
     },
 }
-
-
-def merge(base, over):
-    """Recursive dict merge (over wins)."""
-    out = dict(base)
-    for k, v in (over or {}).items():
-        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
-    return out
 
 
 def _u(v):
@@ -326,7 +319,7 @@ def leg_ribbon(fit, cfg, soup_satin, rig, anchor_bodies=None, colliders=None):
     tail_lift {"A": m, "B": m} (extra lift along the skin normal that clears the colliders) and tail_clearance (smallest
     clearance of a non-root tail body from the colliders, m; None without `colliders`)."""
     S, L = fit.S, fit.L
-    c = merge(DEFAULTS["ribbon"], (cfg or {}).get("ribbon"))
+    c = SP.merge(DEFAULTS["ribbon"], (cfg or {}).get("ribbon"))
     knee, ankle = L["knee.L"], L["ankle.L"]
     axis = _u(knee - ankle)
     az = max(float(axis[2]), 1e-6)
@@ -1012,7 +1005,7 @@ def shoes(fit, cfg, soup_shoes, soup_satin, rig=None):
     Returns {"L": info, "R": info, "min_dist", "sole_min_z"}; info has the Patches (model space), the grid of the upper, the
     measured distances of the leather to the skin, the sole size and height, the Foot (landmarks, floor, length, width)."""
     S = fit.S
-    c = merge(DEFAULTS["shoe"], (cfg or {}).get("shoe"))
+    c = SP.merge(DEFAULTS["shoe"], (cfg or {}).get("shoe"))
     res = {}
     for side in ("L", "R"):
         F = Foot(fit, side)

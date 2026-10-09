@@ -21,6 +21,9 @@ base. A character made with `mk model new` is such a file: the base, then only w
     spec["hair"]["length"]        # a plain dict
     spec.get_path("model.out")    # Path with `~` expanded
     spec.digest()                 # sha1 of the merged content (cache keys)
+
+Unread keys: the builders see the spec through `watch(spec)`, which notes every key they read (also through `merge`
+with their defaults); `unread(watched)` lists the rest, so a misspelt or invented key is reported, not silently ignored.
 """
 import copy
 import hashlib
@@ -34,11 +37,17 @@ class SpecError(ValueError):
 
 
 class Spec(dict):
-    """The merged spec (a dict) plus where it came from: `path` (main file), `dir`, `files` (all files read)."""
+    """The merged spec (a dict) plus where it came from: `path` (main file), `dir`, `files` (all files read), `origin`
+    (key path (tuple) -> the file that set it last, as text, "--set" for a command-line override; empty for a spec made
+    in memory)."""
 
     path = None
     dir = Path(".")
     files = ()
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.origin = {}
 
     def section(self, name):
         """A top-level table by name ({} when absent)."""
@@ -99,14 +108,219 @@ def expand(path, base=None):
     return p
 
 
+def make_missing(path):
+    """Write the missing asset `path` with the maker beside it (make_<stem>.py inside the mkmmd package, whose make(out)
+    writes it: a base's make_hand, make_body); False when there is none."""
+    import importlib
+    p = Path(path)
+    maker = p.with_name(f"make_{p.stem}.py")
+    root = Path(__file__).resolve().parents[2]                  # the folder that holds the mkmmd package
+    if not maker.is_file() or root not in maker.resolve().parents:
+        return False
+    importlib.import_module(".".join(maker.resolve().relative_to(root).with_suffix("").parts)).make(p)
+    return p.is_file()
+
+
 def merge(a, b):
-    """Deep merge: `b` over `a`. Dicts merge key by key, everything else in `b` replaces. Returns a new dict."""
-    out = copy.deepcopy(a)
-    for k, v in b.items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = merge(out[k], v)
+    """Deep merge: `b` over `a` (None: nothing). Tables merge key by key, everything else in `b` replaces. Returns a new
+    dict; the inputs are not changed. With a watched input (a spec table as the builders see it, `watch`) the result is
+    watched too: reading a key that came from the spec notes it, and a key the spec tables under it do not set is noted
+    as missed there."""
+    b = {} if b is None else b
+    reads = next((t._reads for t in (b, a) if isinstance(t, Watched)), None)
+    srcs = list(dict.fromkeys(s for t in (b, a) if isinstance(t, Watched) for s in t._srcs))     # b's tables win
+    out = {} if reads is None else Watched(reads, srcs=srcs)
+    for src in (a, b):
+        paths = src._paths if isinstance(src, Watched) else {}
+        for k, v in dict.items(src):
+            cur = dict.get(out, k)
+            if src is b and isinstance(v, dict) and isinstance(cur, dict):
+                v = merge(cur, v)
+            else:
+                v = merge(v, None) if isinstance(v, dict) else copy.deepcopy(v)
+            dict.__setitem__(out, k, v)
+            if reads is not None:
+                if k in paths:
+                    out._paths[k] = paths[k]
+                else:
+                    out._paths.pop(k, None)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------- what was read
+class Reads:
+    """What the builders read from a watched spec, as paths (tuples of keys): `seen` the keys whose values were read,
+    `missed` the keys looked up that the spec does not set (a builder would read them once set), `listed` the tables
+    whose keys were listed (their key set matters)."""
+
+    def __init__(self):
+        self.seen, self.missed, self.listed = set(), set(), set()
+
+    def snapshot(self):
+        return set(self.seen), set(self.missed), set(self.listed)
+
+    def since(self, snap):
+        """(seen, missed, listed) added since `snapshot()` returned `snap`."""
+        return self.seen - snap[0], self.missed - snap[1], self.listed - snap[2]
+
+    def add(self, seen, missed, listed):
+        self.seen |= set(seen)
+        self.missed |= set(missed)
+        self.listed |= set(listed)
+
+
+class Watched(dict):
+    """A spec table that notes what is read from it (`Reads`): looking a key up ([k], get, in, setdefault, pop) notes
+    its value as seen, or as missed where the spec does not set it; listing or copying the table (iteration, keys,
+    values, items, copy, dict(t), {**t}, update from it) notes every value and the table as listed. Its tables are Watched
+    too. `_paths`: key -> the spec path of its value (keys a builder's defaults gave, merged in with `merge`, have none);
+    `_srcs`: the spec paths of the tables it stands for, the one that wins first."""
+
+    def __init__(self, reads, paths=None, srcs=()):
+        super().__init__()
+        self._reads = reads
+        self._paths = {} if paths is None else paths
+        self._srcs = tuple(srcs)
+
+    def _note(self, k):
+        p = self._paths.get(k)
+        if p is not None:
+            self._reads.seen.add(p)
+        for s in self._srcs:                        # the tables above the one that set it (all: none set it)
+            q = s + (k,)
+            if q == p:
+                break
+            self._reads.missed.add(q)
+
+    def _note_all(self):
+        self._reads.seen.update(self._paths.values())
+        self._reads.listed.update(self._srcs)
+
+    def __getitem__(self, k):
+        self._note(k)
+        return dict.__getitem__(self, k)
+
+    def get(self, k, default=None):
+        self._note(k)
+        return dict.get(self, k, default)
+
+    def __contains__(self, k):
+        self._note(k)
+        return dict.__contains__(self, k)
+
+    def setdefault(self, k, default=None):
+        self._note(k)
+        return dict.setdefault(self, k, default)
+
+    def pop(self, k, *default):
+        self._note(k)
+        return dict.pop(self, k, *default)
+
+    def __iter__(self):
+        self._note_all()
+        return dict.__iter__(self)
+
+    def keys(self):
+        self._note_all()
+        return dict.keys(self)
+
+    def values(self):
+        self._note_all()
+        return dict.values(self)
+
+    def items(self):
+        self._note_all()
+        return dict.items(self)
+
+    def copy(self):
+        self._note_all()
+        return dict(dict.items(self))
+
+    def __deepcopy__(self, memo):
+        return merge(self, None)                    # still watched: reads of the copy are noted like the original's
+
+
+class WatchedSpec(Watched, Spec):
+    """`watch(spec)`: the whole spec, watched, with the Spec attributes and methods."""
+
+
+def watch(spec):
+    """A copy of `spec` (its tables; the values are shared) that notes what is read from it (`_reads`); `unread`
+    reports the keys nobody read."""
+    out = WatchedSpec(Reads(), srcs=((),))
+    out.path, out.dir, out.files = getattr(spec, "path", None), getattr(spec, "dir", Path(".")), getattr(spec, "files", ())
+    out.origin = getattr(spec, "origin", {})
+
+    def fill(dst, src, prefix):
+        for k, v in dict.items(src):
+            dst._paths[k] = prefix + (k,)
+            if isinstance(v, dict):
+                child = Watched(dst._reads, srcs=(prefix + (k,),))
+                fill(child, v, prefix + (k,))
+                v = child
+            dict.__setitem__(dst, k, v)
+    fill(out, spec, ())
+    return out
+
+
+def at(spec, path):
+    """(True, value) at `path` in `spec`, (False, None) when it is not set; looks without noting a read."""
+    cur = spec
+    for k in path:
+        if not isinstance(cur, dict) or not dict.__contains__(cur, k):
+            return False, None
+        cur = dict.__getitem__(cur, k)
+    return True, cur
+
+
+def leaves(d, prefix=()):
+    """The paths (tuples) of every value in `d` that is not a table, tables entered."""
+    for k, v in dict.items(d):
+        if isinstance(v, dict):
+            yield from leaves(v, prefix + (k,))
         else:
-            out[k] = copy.deepcopy(v)
+            yield prefix + (k,)
+
+
+def dotted(path):
+    """A spec path (tuple of keys) as text: keys joined by dots, a key with a dot in it quoted."""
+    return ".".join(f'"{k}"' if "." in str(k) else str(k) for k in path)
+
+
+def from_base(origin):
+    """Whether a key's origin (`Spec.origin` value) is a file of a model base shipped with mk."""
+    return origin not in (None, "--set") and Path(origin).is_relative_to(BASES.resolve())
+
+
+def unread(spec, tables=None, bases=False):
+    """What no builder read from a watched spec (`watch`), in spec order: [(path, n)], path a tuple of keys, n None for
+    a key, else the number of keys under a table nothing in was read (reported once as a whole; empty tables are not, and
+    a table made only of tables, like [colors], is never whole: its tables are reported). Only the author's keys count:
+    those a model base set are left out (the bases keep keys for features a character may switch on) unless `bases`.
+    `tables`: only these top-level tables (default: all but [model], which the command line reads)."""
+    seen = spec._reads.seen
+    touched = {p[:i] for p in seen for i in range(1, len(p))}           # tables something below was read from
+    origin = getattr(spec, "origin", {})
+    out = []
+
+    def mine(p):
+        return bases or not from_base(origin.get(p))
+
+    def walk(t, top):
+        for k, v in dict.items(t):
+            if top and (k == "model" or (tables is not None and k not in tables)):
+                continue
+            p = t._paths[k]
+            if not isinstance(v, Watched):
+                if p not in seen and mine(p):
+                    out.append((p, None))
+            elif p in touched or (len(v) and all(isinstance(x, dict) for x in dict.values(v))):
+                walk(v, False)
+            else:
+                n = sum(1 for q in leaves(v, p) if mine(q))
+                if n:
+                    out.append((p, n))
+    walk(spec, True)
     return out
 
 
@@ -120,7 +334,7 @@ def _read(path):
         raise SpecError(f"{path}: {e}") from None
 
 
-def _load(path, seen, files):
+def _load(path, seen, files, origin):
     path = Path(path).expanduser().resolve()
     if path in seen:
         chain = " -> ".join(str(p) for p in [*seen, path])
@@ -139,8 +353,9 @@ def _load(path, seen, files):
         own = {**own, "model": model}
     merged = {}
     for inc in incs:
-        merged = merge(merged, _load(expand(inc, path.parent), (*seen, path), files))
+        merged = merge(merged, _load(expand(inc, path.parent), (*seen, path), files, origin))
     merged = merge(merged, own)
+    origin.update((p, str(path)) for p in leaves(own))         # in merge order: the file that set a key last wins
     files.append(path)
     return merged
 
@@ -154,7 +369,7 @@ def parse_value(text):
 
 
 def apply_overrides(spec, overrides):
-    """Set dotted keys from `["hair.length=0.3", ...]` (CLI `--set`); returns the spec."""
+    """Set dotted keys from `["hair.back.end_above_chin=-0.05", ...]` (CLI `--set`); returns the spec."""
     for item in overrides or ():
         if "=" not in item:
             raise SpecError(f"override {item!r}: expected key=value")
@@ -166,6 +381,8 @@ def apply_overrides(spec, overrides):
             if not isinstance(cur, dict):
                 raise SpecError(f"override {item!r}: {k} is not a table")
         cur[keys[-1]] = parse_value(val.strip())
+        if isinstance(getattr(spec, "origin", None), dict):
+            spec.origin.update((p, "--set") for p in leaves({keys[-1]: cur[keys[-1]]}, tuple(keys[:-1])))
     return spec
 
 
@@ -173,12 +390,13 @@ def load(path, overrides=None):
     """Load and merge a spec file (see the module docstring); `base:NAME` loads a model base. `overrides`: ["a.b=1", ...]
     applied last."""
     path = expand(path)
-    files = []
-    merged = _load(path, (), files)
+    files, origin = [], {}
+    merged = _load(path, (), files, origin)
     spec = Spec(merged)
     spec.path = Path(path).expanduser().resolve()
     spec.dir = spec.path.parent
     spec.files = tuple(files)
+    spec.origin = origin
     apply_overrides(spec, overrides)
     return spec
 

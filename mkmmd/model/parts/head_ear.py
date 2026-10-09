@@ -2,6 +2,8 @@
 the hair). Head-local metres; the left ear (+x) is built, the right is its mirror."""
 import numpy as np
 
+from .. import spec as SP
+
 EAR = dict(
     centre=(0.0027, 0.0463),            # (y, z) of the ear centre in head-local metres
     size=(0.0112, 0.0182),              # half width (y) and half height (z) of the ear outline
@@ -36,8 +38,7 @@ def _height(r, rim, dimple, base=-0.0010):
 def ear(shape, cfg=None, n_rings=None):
     """(verts (n, 3), faces, info) of the left ear. Faces are CCW seen from outside (+x). `info` has the anchor points:
     top, lobe, front, back (on the rim), centre (the dimple), out (unit vector)."""
-    c = dict(EAR)
-    c.update(cfg or {})
+    c = SP.merge(EAR, cfg)
     rings = np.asarray(c["rings"], float)
     ns = int(c["spokes"])
     cy, cz = c["centre"]

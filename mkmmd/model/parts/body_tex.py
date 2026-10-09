@@ -133,6 +133,57 @@ def skin_texture(mk, pal, size=1024, flush=FLUSH, neck=None):
     return np.dstack([np.clip(img * 255 + 0.5, 0, 255), np.full((size, size), 255.0)]).astype(np.uint8)
 
 
+def bake(uv_tris, pos_tris, colour, size=1024, dilate=4):
+    """Paint a skin given as triangles: (img (size, size, 3) floats, painted (size, size) bool). Every texel whose centre
+    lies in a triangle's UV footprint (`uv_tris` (t, 3, 2), v up) gets colour(P) for the points P (k, 3) the triangle puts
+    there (barycentric in `pos_tris` (t, 3, 3)); then the painted area grows `dilate` texels (a new texel is the mean of
+    its painted neighbours) so filtering at an island's edge never reads an unpainted texel."""
+    px = np.stack([uv_tris[..., 0] * size - 0.5, (1.0 - uv_tris[..., 1]) * size - 0.5], -1)
+    lo = np.floor(px.min(1)).astype(int)
+    span = np.ceil(px.max(1)).astype(int) - lo + 1
+    big = span.max(1)
+    img = np.zeros((size, size, 3))
+    done = np.zeros((size, size), bool)
+    k = 1
+    while k < 2 * max(int(big.max()), 1):
+        sel = np.flatnonzero((big <= k) & (big > k // 2))
+        k *= 2
+        if not len(sel):
+            continue
+        n = int(big[sel].max())
+        oy, ox = np.mgrid[0:n, 0:n]
+        X = lo[sel, 0][:, None] + ox.ravel()[None]
+        Y = lo[sel, 1][:, None] + oy.ravel()[None]
+        a, b, c = px[sel, 0], px[sel, 1], px[sel, 2]
+        v0, v1 = b - a, c - a
+        den = v0[:, 0] * v1[:, 1] - v0[:, 1] * v1[:, 0]
+        ok = np.abs(den) > 1e-12
+        den = np.where(ok, den, 1.0)
+        qx, qy = X - a[:, 0:1], Y - a[:, 1:2]
+        w1 = (qx * v1[:, 1:2] - qy * v1[:, 0:1]) / den[:, None]
+        w2 = (v0[:, 0:1] * qy - v0[:, 1:2] * qx) / den[:, None]
+        w0 = 1.0 - w1 - w2
+        inside = ok[:, None] & (w0 >= -1e-6) & (w1 >= -1e-6) & (w2 >= -1e-6) & (X >= 0) & (Y >= 0) & (X < size) & (Y < size)
+        t, j = np.nonzero(inside)
+        if not len(t):
+            continue
+        P = (w0[t, j, None] * pos_tris[sel[t], 0] + w1[t, j, None] * pos_tris[sel[t], 1]
+             + w2[t, j, None] * pos_tris[sel[t], 2])
+        img[Y[t, j], X[t, j]] = colour(P)
+        done[Y[t, j], X[t, j]] = True
+    for _ in range(dilate):
+        acc = np.zeros_like(img)
+        cnt = np.zeros((size, size))
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            src = np.roll(np.roll(done, dy, 0), dx, 1)
+            acc += np.where(src[..., None], np.roll(np.roll(img, dy, 0), dx, 1), 0.0)
+            cnt += src
+        grow = ~done & (cnt > 0)
+        img[grow] = acc[grow] / cnt[grow][:, None]
+        done |= grow
+    return img, done
+
+
 def toon_ramp(pal, mult, width=32, height=32, edge=0.5, soft=0.10):
     """Toon ramp (rows from the lit white at the top to the shadow colour `mult` at the bottom, as MMD reads it)."""
     v = np.linspace(1.0, 0.0, height)                        # row 0 = lit

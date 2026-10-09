@@ -166,6 +166,20 @@ def test_limb_girth_is_cut_on_the_skin_inside_a_sleeve():
     assert abs(nums["girth at 35 %"] - 2000 * np.pi * 0.05) < 0.01 * 2000 * np.pi * 0.05
 
 
+def test_an_open_cut_through_a_sheet_is_not_a_loop_round_the_limb():
+    """A skirt piece beside the leg cuts into an open chain: however often a ray from the leg's point crosses it, it does
+    not enclose the point, so the girth stays the skin's even where the piece is shorter than the skin's loop."""
+    limb = cylinder(0.05, 0.1, 1.0)
+    th = np.radians(np.linspace(60, 120, 9))                        # an arc 0.25 m in front of the leg, crossing -Y
+    piece = (np.array([[0.15 * np.cos(t), -0.4 + 0.15 * np.sin(t), z] for t in th for z in (0.3, 0.9)]),
+             [f for i in range(len(th) - 1) for f in ((2 * i, 2 * i + 2, 2 * i + 3), (2 * i, 2 * i + 3, 2 * i + 1))])
+    bones = [("root", (0, 0, 0), -1, None), ("左足", (0, 0, 1.0), 0, None), ("左ひざ", (0, 0, 0.55), 1, None),
+             ("左足首", (0, 0, 0.1), 2, None)]
+    m = model_of([(*limb, (1, 0.9, 0.8)), (*piece, (0.2, 0.2, 0.3))], bones=bones,
+                 weights=[1] * (len(limb[0]) + len(piece[0])))
+    assert LAB.measure(m, "leg", "L")["girth at 35 %"] == pytest.approx(2000 * np.pi * 0.05, rel=0.01)
+
+
 def test_a_red_line_on_a_screenshot_reads_back_in_millimetres(girl, tmp_path):
     cv2 = LAB._cv()
     img, layout, cover = LAB.sheet([girl], region="hand", poses=["rest", "relaxed"], views=["back", "palm"], size=300)

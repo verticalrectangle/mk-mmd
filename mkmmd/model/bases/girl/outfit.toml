@@ -5,6 +5,7 @@
 # modules; sizes are metres for a 1.7 m body (scaled by head_tip.z / 1.7).
 [outfit]
 print = false                       # plain cloth (true: the leaf and flower print of outfit_tex.dress_pattern)
+shading = "auto"                    # the shadows, outlines and ruffle tint follow [colors.outfit] ("tuned": Rin's green ones)
 # textures = false                  # skip the generated textures (flat colours): fast geometry iterations
 [outfit.skirt]
 columns = 20                        # chains around the skirt (spacing 18 deg: thighs and seat edges never open gaps)

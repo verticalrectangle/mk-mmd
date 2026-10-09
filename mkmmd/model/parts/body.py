@@ -8,8 +8,9 @@ joints are made from it, not read from the landmarks.
 `[body]` keys (all optional):
   skin           {base, shade, blush, nail}  hex colours (default: [colors.skin] of the spec)
   nails          true | false | "#rrggbb"    nail plates on the fingertips (default true, pale pink); a colour paints them
-  source         "procedural" (default: the body is built from the spec's proportions) | "pmx" (taken from an existing PMX
-                 model, see body_pmx.py: [body.pmx] path, materials, ...)
+  source         "procedural" (default: the body is built from the spec's proportions) | "mesh" (an artist's whole body
+                 fitted to the skeleton, see body_donor.py: `mesh = "base:girl/body.npz"`) | "pmx" (taken from an existing
+                 PMX model, see body_pmx.py: [body.pmx] path, materials, ...)
   resolution     {torso, arm, leg}           ring point counts (default 32, the hand's seam, 24; the arm must have as
                  many points as the hand's seam (32 for the designed hand): the hand is welded onto its last ring)
   hand           the hand's design, key by key over body_hand.DESIGN (length, palm, knuckles, fingers, width, taper,
@@ -25,6 +26,7 @@ torso_profile, regions (vertex ranges per shell), hand (frame and design), foot,
 import numpy as np
 
 from .. import skeleton
+from .. import spec as SP
 from ..build import builder
 from ..part import Material, Mesh, Part
 from . import body_geom as G
@@ -97,6 +99,72 @@ def smooth_normals(shape, shells, ranges, verts, faces, radius=0.026):
     return out
 
 
+def skin_look(ctx, cfg):
+    """The skin's colours and material numbers: [colors.skin] under [body] skin and neck_shadow (both routes that draw
+    their own skin use them)."""
+    skin_cfg = SP.merge((ctx.spec.get("colors") or {}).get("skin") or {}, cfg.get("skin"))
+    nk = cfg.get("neck_shadow") or {}
+    if nk.get("color"):
+        skin_cfg["neck_shadow"] = nk["color"]
+    sk = cfg.get("skin") or {}
+    return dict(cfg=skin_cfg, pal=body_tex.palette(skin_cfg),
+                mult=np.array(sk.get("toon_shadow_multiplier", body_tex.DEFAULT_TOON), float),
+                ambient=tuple(float(x) for x in sk.get("ambient", SKIN_AMBIENT)),
+                specular=tuple(float(x) for x in sk.get("specular", (0.0, 0.0, 0.0))),
+                shininess=float(sk.get("shininess", 0.0)), flush=float(sk.get("flush", body_tex.FLUSH)),
+                neck=dict(height=float(nk.get("height", 0.045)), strength=float(nk.get("strength", 0.9))))
+
+
+def skin_materials(ctx, cfg, look, tex_name, toon_name):
+    """([skin material, + the nail material unless [body] nails = false], their names)."""
+    nails = cfg.get("nails", True)
+    edge = body_tex.hex_rgb(look["cfg"].get("outline", "#8a6a62"))
+    mats = [Material(SKIN, name_en="skin", diffuse=(1.0, 1.0, 1.0, 1.0), specular=look["specular"],
+                     shininess=look["shininess"], ambient=look["ambient"], texture=tex_name, toon=toon_name, edge=True,
+                     edge_color=(float(edge[0]), float(edge[1]), float(edge[2]), 1.0), edge_size=0.6,
+                     comment="body skin: generated atlas + toon ramp")]
+    mat_names = [SKIN]
+    if nails:
+        accent = (ctx.spec.get("colors") or {}).get("accent") or {}
+        if nails is True:
+            ncol = look["cfg"].get("nail", "#f0b3ab")
+        elif str(nails).lower() == "red":
+            ncol = accent.get("nail_red", "#c9262d")
+        else:
+            ncol = str(nails)
+        nc = body_tex.hex_rgb(ncol)
+        # lit colour = ambient + 0.6 x diffuse (MMD's default light): an ambient of 0.42 x the colour shows the colour
+        # itself instead of washing it out to white
+        amb = tuple(float(x) for x in NAIL_AMBIENT * nc)
+        mats.append(Material(NAIL, name_en="nails", diffuse=(float(nc[0]), float(nc[1]), float(nc[2]), 1.0),
+                             specular=(0.20, 0.17, 0.17), shininess=30.0, ambient=amb, toon=toon_name,
+                             edge=False, comment="fingernail plates, a separate material so the colour can change"))
+        mat_names.append(NAIL)
+    return mats, mat_names
+
+
+def skin_info(look, tex_name, toon_name, z_top):
+    """The published `skin` and `neck_shadow` (the shadow band ends at the seam, `z_top`)."""
+    pal, mult, neck = look["pal"], look["mult"], look["neck"]
+    return dict(
+        skin=dict(base=body_tex.rgb_hex(pal["base"]), shade=body_tex.rgb_hex(pal["base"] * mult),
+                  blush=body_tex.rgb_hex(pal["blush"]), blush_knee=body_tex.rgb_hex(pal["blush_knee"]),
+                  toon_mult=tuple(float(x) for x in mult), ambient=look["ambient"], specular=look["specular"],
+                  shininess=look["shininess"], tone=body_tex.rgb_hex(body_tex.base_tone(pal, look["flush"])),
+                  toon=toon_name, texture=tex_name, material=SKIN),
+        neck_shadow=dict(z_top=float(z_top), height=neck["height"], strength=neck["strength"],
+                         color=body_tex.rgb_hex(pal["neck_shadow"]), front=1.0, back=0.35,
+                         note="mix(skin, color, strength * (back + (front - back) * (0.5 + 0.5 cos(theta)) ** 1.5)) at the seam, "
+                              "smoothstep to the skin over `height` metres below it; theta 0 = front, + towards her left"))
+
+
+def neck_ring(nt, n=32):
+    """(n, 3) points of the seam ellipse `nt` (neck_top): point k at 2 pi k / n from the front (-Y) towards +X."""
+    th = 2 * np.pi * np.arange(n) / n
+    c, s = G.superellipse(th, 2.0)
+    return np.stack([nt["center"][0] + nt["rx"] * s, nt["center"][1] - nt["ry"] * c, np.full(n, nt["z"])], 1)
+
+
 @builder("body")
 def build(ctx):
     cfg = ctx.cfg or {}
@@ -104,10 +172,12 @@ def build(ctx):
     if source == "pmx":
         from .body_pmx import build_pmx
         return build_pmx(ctx)
+    if source == "mesh":
+        from .body_donor import build_donor
+        return build_donor(ctx)
     if source != "procedural":
-        raise ValueError(f"[body] source must be 'procedural' or 'pmx', got {source!r}")
+        raise ValueError(f"[body] source must be 'procedural', 'mesh' or 'pmx', got {source!r}")
     prop = ctx.spec.get("proportions") or {}
-    colors = (ctx.spec.get("colors") or {}).get("skin") or {}
     shape = body_shape.resolve(prop, cfg, base=getattr(ctx.spec, "dir", None))
     for n in shape.notes:
         ctx.log("WARNING " + n)
@@ -128,48 +198,15 @@ def build(ctx):
     weights = body_weights.body_weights(shape, shells, ranges, gidx, nv, deform)
 
     # ---- materials and textures
-    skin_cfg = dict(colors)
-    skin_cfg.update(cfg.get("skin") or {})
-    nk = cfg.get("neck_shadow") or {}
-    if nk.get("color"):
-        skin_cfg["neck_shadow"] = nk["color"]
-    pal = body_tex.palette(skin_cfg)
-    sk = cfg.get("skin") or {}
-    mult = np.array(sk.get("toon_shadow_multiplier", body_tex.DEFAULT_TOON), float)
-    ambient = tuple(float(x) for x in sk.get("ambient", SKIN_AMBIENT))
-    specular = tuple(float(x) for x in sk.get("specular", (0.0, 0.0, 0.0)))
-    shininess = float(sk.get("shininess", 0.0))
-    flush = float(sk.get("flush", body_tex.FLUSH))
+    look = skin_look(ctx, cfg)
     torso = shells[0]
     z0, z1 = torso.s_range
-    neck = dict(height=float(nk.get("height", 0.045)), strength=float(nk.get("strength", 0.9)))
-    neck["v_h"] = neck["height"] / (z1 - z0)
-    tex = body_tex.skin_texture(body_tex.marks(shells), pal, flush=flush, neck=neck)
-    toon = body_tex.toon_ramp(pal, mult)
+    neck = dict(look["neck"], v_h=look["neck"]["height"] / (z1 - z0))
+    tex = body_tex.skin_texture(body_tex.marks(shells), look["pal"], flush=look["flush"], neck=neck)
+    toon = body_tex.toon_ramp(look["pal"], look["mult"])
     tex_name = ctx.save_png("skin", tex)
     toon_name = ctx.save_png("skin_toon", toon)
-    edge = body_tex.hex_rgb(skin_cfg.get("outline", "#8a6a62"))
-    mats = [Material(SKIN, name_en="skin", diffuse=(1.0, 1.0, 1.0, 1.0), specular=specular, shininess=shininess,
-                     ambient=ambient, texture=tex_name, toon=toon_name, edge=True,
-                     edge_color=(float(edge[0]), float(edge[1]), float(edge[2]), 1.0), edge_size=0.6,
-                     comment="body skin: generated atlas + toon ramp")]
-    mat_names = [SKIN]
-    if nails:
-        accent = (ctx.spec.get("colors") or {}).get("accent") or {}
-        if nails is True:
-            ncol = skin_cfg.get("nail", "#f0b3ab")
-        elif str(nails).lower() == "red":
-            ncol = accent.get("nail_red", "#c9262d")
-        else:
-            ncol = str(nails)
-        nc = body_tex.hex_rgb(ncol)
-        # lit colour = ambient + 0.6 x diffuse (MMD's default light): an ambient of 0.42 x the colour shows the colour
-        # itself instead of washing it out to white
-        amb = tuple(float(x) for x in NAIL_AMBIENT * nc)
-        mats.append(Material(NAIL, name_en="nails", diffuse=(float(nc[0]), float(nc[1]), float(nc[2]), 1.0),
-                             specular=(0.20, 0.17, 0.17), shininess=30.0, ambient=amb, toon=toon_name,
-                             edge=False, comment="fingernail plates, a separate material so the colour can change"))
-        mat_names.append(NAIL)
+    mats, mat_names = skin_materials(ctx, cfg, look, tex_name, toon_name)
 
     normals = smooth_normals(shape, shells, ranges, verts, faces)
     mesh = Mesh("body", verts=verts, faces=faces, uv=np.concatenate(uvs, 0), face_mat=face_mat, mats=mat_names,
@@ -185,22 +222,11 @@ def build(ctx):
     landmarks.update(extra)
     nt = BM.neck_top(shape)
     N = 32
-    th = 2 * np.pi * np.arange(N) / N
-    c, s = G.superellipse(th, 2.0)
-    ring = np.stack([nt["center"][0] + nt["rx"] * s, nt["center"][1] - nt["ry"] * c, np.full(N, nt["z"])], 1)
     info = dict(
         landmarks=landmarks,
         tail_normal=tail_n,
-        neck_top=dict(nt, ring=ring, n=N, start="front", dir="ccw_from_above"),
-        skin=dict(base=body_tex.rgb_hex(pal["base"]), shade=body_tex.rgb_hex(pal["base"] * mult),
-                  blush=body_tex.rgb_hex(pal["blush"]), blush_knee=body_tex.rgb_hex(pal["blush_knee"]),
-                  toon_mult=tuple(float(x) for x in mult), ambient=ambient, specular=specular, shininess=shininess,
-                  tone=body_tex.rgb_hex(body_tex.base_tone(pal, flush)), toon=toon_name, texture=tex_name,
-                  material=SKIN),
-        neck_shadow=dict(z_top=float(z1), height=neck["height"], strength=neck["strength"],
-                         color=body_tex.rgb_hex(pal["neck_shadow"]), front=1.0, back=0.35,
-                         note="mix(skin, color, strength * (back + (front - back) * (0.5 + 0.5 cos(theta)) ** 1.5)) at the seam, "
-                              "smoothstep to the skin over `height` metres below it; theta 0 = front, + towards her left"),
+        neck_top=dict(nt, ring=neck_ring(nt, N), n=N, start="front", dir="ccw_from_above"),
+        **skin_info(look, tex_name, toon_name, z1),
         torso_profile={"rows": np.array([r[0] for r in rows]), "half_width": np.array([r[1] for r in rows]),
                        "y_front": np.array([r[2] for r in rows]), "y_back": np.array([r[3] for r in rows]),
                        "cuts": np.array(rows)},

@@ -5,11 +5,13 @@ base shade for outer layers, tiles 2-3 a shade darker for inner layers; every ti
 middle with a darker rim, and has one or two sparse strand lines) and a cap tile (the right 128 px, plain, for the scalp cap):
   HEAD    rows 0..511    v in (0.5, 1]: a vertical gradient by HEIGHT, f = 0 at the top of the hair to f = 1 at the lowest hair:
                          dark root, base red, slightly lighter tips; plus the baked angel ring: per clump tile a thin soft patch
-                         of light coral-gold at f ~ ring_f (the upper crown), never across a whole clump, never on the cap
-                         tile, never down at the fringe. v = head_v(z, z_top, z_bot)
+                         of the sheen colour (`ring`, `ring_core` of the palette) at f ~ ring_f (the upper crown), never across a
+                         whole clump, never on the cap tile, never down at the fringe. v = head_v(z, z_top, z_bot)
   STRAND  rows 512..1023 v in [0.5, 0]: root-to-tip gradient along a strand, t = 0 root .. 1 tip.   v = strand_v(t)
 u in 0..1 across a clump: `clump_u(rng, dark)` picks a tile for a clump, `cap_u(theta)` maps the cap."""
 import numpy as np
+
+from ..colour import follow
 
 W, H = 512, 1024
 HEAD_ROWS = 512
@@ -31,12 +33,18 @@ TOON_SHADOW = (0.42, 0.44, 0.54)          # colors.hair.toon_shadow_multiplier: 
 
 def palette(colors=None):
     """name -> float rgb (sRGB values) for the hair, from the `[colors.hair]` table (DEFAULTS fill the gaps). Extra
-    names derived here: `root` (deep), `tip` (light shifted towards the highlight)."""
+    names derived here: `root` (deep), `tip` (light shifted towards the highlight), and the crown sheen `ring` and
+    `ring_core`: given as keys of their own, else Rin's light pink-coral sheen (SHEEN, SHEEN_CORE) following the family's
+    highlight (`follow`), so a whole colour family brings its own sheen."""
+    colors = colors or {}
     pal = dict(DEFAULTS)
-    pal.update({k: v for k, v in (colors or {}).items() if k in DEFAULTS and isinstance(v, str)})
+    pal.update({k: colors[k] for k in DEFAULTS if isinstance(colors.get(k), str)})   # unknown keys stay unread
     out = {k: srgb(v) for k, v in pal.items()}
     out["root"] = out["deep"]
     out["tip"] = out["light"]
+    for key, sheen, ref in (("ring", SHEEN, "highlight"), ("ring_core", SHEEN_CORE, "highlight_core")):
+        given = colors.get(key)
+        out[key] = srgb(given) if isinstance(given, str) else follow(sheen, out[ref], srgb(DEFAULTS[ref]))
     return out
 
 
@@ -128,7 +136,7 @@ def _tiles(rng, h, strength=1.0):
     return S, RIM
 
 
-SHEEN = np.array([0.94, 0.58, 0.58])         # the crown sheen: a light, less saturated warm pink-coral (never peach or white)
+SHEEN = np.array([0.94, 0.58, 0.58])         # Rin's crown sheen: a light, less saturated warm pink-coral (never peach or white)
 SHEEN_CORE = np.array([0.97, 0.72, 0.70])
 # per clump tile: (centre offset in ring half-widths, width scale, strength, u where it fades in, u where it fades out, wave
 # phase). The outer-layer tiles (0, 1) carry the sheen, the inner ones (2, 3) only a little: where clumps part, it is
@@ -151,15 +159,15 @@ def sheen_alpha(f, x, params, fc, h):
     return amp * win[None, :] * band, amp * win[None, :] * core
 
 
-def make_atlas(pal, rng, ring_f=0.15, ring_w=0.045):
+def make_atlas(pal, rng, ring_f=0.15, ring_w=0.045, ring=True):
     """The hair atlas as (1024, 512, 4) uint8 (sRGB, alpha 255).
 
     Head region: soft gradients only. Outer tiles (0-1): a slightly darker root at the top of the hair -> base -> a lighter tip
     over the whole height; inner tiles (2-3) and the cap just a little darker (x 0.90 / 0.88 / 0.80), clump edges a touch darker
-    with a soft falloff. The baked crown sheen: per outer tile one wide feathered light pink-coral band (centre at height
-    fraction `ring_f`, half width `ring_w` as a fraction of the height range) with a slightly brighter soft core, a wavy centre
-    line, interrupted at clump edges, faint on the inner tiles, none on the cap tile; it follows the head and the lighting
-    instead of crossing the bangs like a camera-relative sphere ring does."""
+    with a soft falloff. The baked crown sheen (`ring` false: none): per outer tile one wide feathered band of `pal["ring"]`
+    (centre at height fraction `ring_f`, half width `ring_w` as a fraction of the height range) with a slightly brighter soft
+    core of `pal["ring_core"]`, a wavy centre line, interrupted at clump edges, faint on the inner tiles, none on the cap tile;
+    it follows the head and the lighting instead of crossing the bangs like a camera-relative sphere ring does."""
     img = np.zeros((H, W, 3))
     shadow, base, light = pal["shadow"], pal["base"], pal["light"]
     tone = np.concatenate([np.repeat(np.asarray(TILE_TONE), TILE_PX), np.full(W - N_TILES * TILE_PX, CAP_TONE)])
@@ -168,12 +176,12 @@ def make_atlas(pal, rng, ring_f=0.15, ring_w=0.045):
     S, RIM = _tiles(rng, HEAD_ROWS)
     img[:HEAD_ROWS] = np.clip(outer[:, None, :] * tone[None, :, None] * (1.0 - 0.16 * RIM[..., None]) * S[..., None], 0, 1)
     x = (np.arange(TILE_PX) + 0.5) / TILE_PX
-    for k, params in enumerate(TILE_SHEEN):
+    for k, params in enumerate(TILE_SHEEN if ring else ()):
         a, c = sheen_alpha(f, x, params, ring_f, ring_w)
         sl = slice(k * TILE_PX, (k + 1) * TILE_PX)
         blk = img[:HEAD_ROWS, sl]
-        blk = blk * (1 - a[..., None]) + SHEEN * a[..., None]
-        blk = blk * (1 - 0.45 * c[..., None]) + SHEEN_CORE * (0.45 * c[..., None])
+        blk = blk * (1 - a[..., None]) + pal["ring"] * a[..., None]
+        blk = blk * (1 - 0.45 * c[..., None]) + pal["ring_core"] * (0.45 * c[..., None])
         img[:HEAD_ROWS, sl] = np.clip(blk, 0, 1)
     # ---- strand region: root to tip, the same soft tones, no sheen
     t = (np.arange(H - HEAD_ROWS) + 0.5) / (H - HEAD_ROWS)

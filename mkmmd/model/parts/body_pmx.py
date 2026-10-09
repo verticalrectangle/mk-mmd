@@ -31,6 +31,7 @@ import numpy as np
 
 from ...core import bonemap
 from .. import pmx_take
+from .. import spec as SP
 from ..build import BuildError
 from ..part import Material, Mesh, Morph, Part
 from . import body_pmx_fit as F
@@ -77,7 +78,7 @@ def compare_with_spec(land, prop, log, tol=0.003, skip=("eye", "toe")):
 
 def build_pmx(ctx):
     cfg = ctx.cfg or {}
-    pc = dict(cfg.get("pmx") or {})
+    pc = SP.merge({}, cfg.get("pmx"))
     prop = ctx.spec.get("proportions") or {}
     if not pc.get("path") or not pc.get("materials"):
         raise BuildError("body source = 'pmx' needs [body.pmx] path and materials")

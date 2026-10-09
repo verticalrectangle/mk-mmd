@@ -2650,10 +2650,21 @@ builders = {tails = "mkmmd.model.parts.hair"}       # part -> module when it is 
 ```
 
 **Spec** (`mkmmd.model.spec`): tables merge key by key, anything else (lists too) is replaced; `Spec.files` lists what
-was read; `--set a.b=1` overrides. **Model bases** are complete characters shipped in `mkmmd/model/bases/<name>/`
-(`girl`, the neutral base; `rin`, the worked example on it): `include = ["base:girl"]` merges one under the file's own
-tables, `"base:girl/hand.npz"` names a file inside it, and `mk model build base:girl` builds it alone; [model_base.md](model_base.md)
-is the playbook for making a character from one. **Builders** are `mkmmd/model/parts/<part>.py` with `@builder("hair", needs=(...))
+was read, `Spec.origin` the file that set each key last; `--set a.b=1` overrides. The builders see the spec watched
+(`spec.watch`): after a build, every key of the author's that no part read is a warning, one line per top-level table
+(`[spec] WARNING hair.back.x: never read by any part ...`; a `--only` build checks the tables of the parts it built). Keys a
+model base set are left out (they serve features a character may switch on), and `tests/test_model_bases.py` keeps the
+bases free of dead ones. A builder merges its defaults under its table with `spec.merge(DEFAULTS, cfg)` and reads keys
+by name; listing or copying a table counts as reading all of it. **Model bases** are complete characters shipped in
+`mkmmd/model/bases/<name>/` (`girl`, the neutral base; `rin`, the worked example on it): `include = ["base:girl"]` merges
+one under the file's own tables, `"base:girl/hand.npz"` names a file inside it, and `mk model build base:girl` builds it
+alone; [model_base.md](model_base.md) is the playbook for making a character from one. `[proportions] leg_extra = 0.03`
+(`mkmmd.model.proportions`, made on the builders' spec before any part reads it) lengthens the legs: every height from the
+hip joint up rises, the thigh and shin stretch alike, the feet stay. The **body** part draws its skin one of three ways
+(`[body] source`; `mkmmd/model/parts/body.py` lists the keys): `procedural`, lofted from
+`[proportions]`; `mesh`, an artist's whole body fitted to the skeleton (`body_donor.py`: the girl base's is Blender
+Studio's stylized body, CC0, which `bases/girl/make_body.py` rebuilds from its source); `pmx`, taken from an existing PMX
+(`body_pmx.py`). **Builders** are `mkmmd/model/parts/<part>.py` with `@builder("hair", needs=(...))
 def build(ctx) -> Part` (`mkmmd.model.build`): `ctx.spec`, `ctx.cfg` (the part's own table), `ctx.save_png(name, rgba)`
 (into `<out>/tex`, part name prefixed, the returned file name goes into `Material.texture/toon/sphere`), `ctx.parts`
 (built so far), `ctx.land` (landmarks: every part's `info["landmarks"]`, semantic name -> np.array(3)), `ctx.rng`,
@@ -2695,25 +2706,34 @@ materials (colours, edge, textures), morph panels and English names, display fra
 groups, masks) and joints (pose, limits, springs). Anything beyond tolerance is listed under `verify.problems` and the
 command exits 1.
 
-**CLI.** `mk model build SPEC [--only PARTS] [--out DIR] [--no-export] [--no-blend] [--no-verify] [--set K=V] [--full]`
-prints JSON: per-part numbers (meshes, vertices, faces, bones, materials, morphs, bodies, joints), warnings (lint:
-unweighted vertices, missing UVs, unused vertices), the assembled model's counts, timings, `verify`, and `rig`: required
+**CLI.** `mk model build SPEC [--only PARTS] [--out DIR] [--no-export] [--no-blend] [--no-verify] [--set K=V] [--full] [--no-cache]`
+prints JSON: per-part numbers (meshes, vertices, faces, bones, materials, morphs, bodies, joints), `warnings` (lint:
+unweighted vertices, missing UVs, unused vertices; the parts' findings, `[hair] WARNING ...`; spec keys no part read,
+`[spec] WARNING ...`), the assembled model's counts, timings, `verify`, and `rig`: required
 semantic bones missing, morph map (semantic -> morph), chain families with bone counts, bodies and measurements. Files in
 the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk look <name>.blend --view front,3q
 --target "bone('head').head" --dist 1.2` works), `<name>.rig.json` (what `mk inspect` writes; pass it as `rig =` to a
 `[[cast]]` with `pmx =`), `build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
-`--no-export` only runs and checks the builders; `mk model info SPEC` shows the plan; `mk model new NAME [--from BASE]
-[--dir DIR] [--out DIR]` writes DIR/model.toml, a character that includes the base (default `girl`), and never overwrites
-one; `mk model studio SCENE.blend --out OUT.blend [--floor X,Y ...] [--lights]` copies a built scene with the neutral review
-studio (grey world, soft floor discs, optionally key/fill/rim suns) so sheets of several models compare side by side.
+`--no-export` only runs and checks the builders, into `<out>/no_export/` (an exported model's files stay as they are).
+**Part cache** (`mkmmd.model.partcache`, in `~/.cache/mk/model_parts`): a part is reused, with its textures and its log
+lines, while all it read is unchanged: the code (the package's .py files and the bases' files, by size and time), the
+seed, the parts built before it (chained, so a part built again builds every part after it again) and what it read from
+the spec (the values of its keys, a file a value names by its size and time, the keys it looked up that were not set,
+the key sets of the tables it listed). The report marks each part `cached`; `--no-cache` builds all of them again.
+`mk model info SPEC` shows the plan; `mk model new NAME [--from BASE] [--dir DIR] [--out DIR]` writes DIR/model.toml, a
+character that includes the base (default `girl`), and never overwrites one; `mk model studio SCENE.blend --out OUT.blend
+[--floor X,Y ...] [--lights]` copies a built scene with the neutral review studio (grey world, soft floor discs,
+optionally key/fill/rim suns) so sheets of several models compare side by side.
 `mk model lab MODEL... [--region body|head|hand|foot|arm|leg] [--side L|R] [--views V,..] [--poses P,..] [--parts PARTS]
 [--set K=V] [--label NAME] [--out SHEET.png]` (`mkmmd.model.lab`, no Blender) looks at specs (built and assembled
 in-process, so it sees the PMX a build writes) and .pmx files: a sheet with one row per (pose, model), every cell at one
 scale (bodies on one floor line), posed with each model's own weights through the bone tree (rotation grants followed:
 D bones, twists); poses are rest, relaxed, curled, fist, spread, arms_down, tpose (upper arms and forearms level), sit,
-or any morph name. Under the cells, the
-rest pose's numbers in mm (heights, widths, lengths, and girths cut across the skin: the innermost loop round a point on
-the skeleton, hidden skin included, so clothes never count). Beside the PNG: `.json` (each cell's camera, the numbers)
+or any morph name (`--no-cache`: build every part of a spec again; see the part cache). Under the cells, the
+rest pose's numbers in mm (heights, widths, lengths, and girths cut across the skin: the innermost closed loop round a
+point on the skeleton, hidden skin included, so clothes never count; an open cut through a skirt or a frill encloses
+nothing). A spec builds the body only unless `--parts` says more, so its region boxes (the head's height, width and
+depth) lack the hair a .pmx carries. Beside the PNG: `.json` (each cell's camera, the numbers)
 and `.mask.png` (coverage). `mk model trace MARKED.png --sheet SHEET.png` reads a pure red line drawn on the sheet, or on
 a screenshot of part of it (any zoom, window borders), back in model space: the cell, and how far inside (+) or outside
 (-) the outline the line runs every 2 mm, with its place along the region (from the wrist, from the floor).

@@ -2,6 +2,7 @@
 eye and brow lines, the neck ring and the face region. All in MODEL space (the caller passes the frame)."""
 import numpy as np
 
+from .. import spec as SP
 from . import head_skin as SK
 from .head_shape import directions
 
@@ -9,9 +10,8 @@ from .head_shape import directions
 def skin_shell(shape, ring_z, cfg=None):
     """A coarse closed copy of the head (cranium, face and neck, no eye or mouth holes), star-shaped about
     shape.centre: (verts, triangles) in head-local metres, outward winding."""
-    c = dict(n_cols=48, face_deg=3.5, back_deg=9.0, ring_z=ring_z, spacing_face=0.0075, spacing_neck=0.008,
-             spacing_top=0.010)
-    c.update(cfg or {})
+    c = SP.merge(dict(n_cols=48, face_deg=3.5, back_deg=9.0, ring_z=ring_z, spacing_face=0.0075, spacing_neck=0.008,
+                      spacing_top=0.010), cfg)
     g = SK.Grid(shape, c)
     F = []
     for r in range(len(g.rows) - 1):

@@ -404,7 +404,6 @@ def test_cfg_overrides(built):
     g = rib["grid"]
     assert np.linalg.norm(g[:, -1] - g[:, 0], axis=1).mean() == pytest.approx(0.012 * fit.S, rel=0.1)
     assert out["shoes"]["min_dist"] > built["shoes"]["min_dist"] + 0.5 * MM
-    assert OL.merge(OL.DEFAULTS["shoe"], {"collar": {"h": [0] * 7}})["collar"]["az"] == OL.DEFAULTS["shoe"]["collar"]["az"]
 
 
 def test_module_imports_only_numpy_and_the_outfit_kit():

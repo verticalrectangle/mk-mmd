@@ -13,6 +13,8 @@ sliver deep in the eye. The highlights float in front of the iris (they shift ag
 depth) on their own bones that follow the gaze only partly (a reflection does not move with the eye)."""
 import numpy as np
 
+from .. import spec as SP
+
 
 # -------------------------------------------------------------------------------------------------- the opening
 # The opening is two cubic Beziers between the corners: the upper lid a high, flat-topped arch over the iris that comes
@@ -233,8 +235,7 @@ def add_eye(sb, side, cfg=None):
     `layers` (the IrisPlane), `rim` (the inner rim's positions) and `cfg`."""
     from .head_skin import lift
 
-    c = dict(DEFAULTS)
-    c.update(cfg or {})
+    c = SP.merge(DEFAULTS, cfg)
     sg = 1.0 if side == "L" else -1.0
     cx, cz = sg * c["iris"][0], c["iris"][1]
     alm = Almond()
@@ -649,7 +650,7 @@ def upper_lines(eye, cfg=None):
       crease    the double-eyelid stroke; `gap` = its height over the band's top edge per cross-section
     cfg: the [head] table; its tables lash, lashfork, lashwing, crease override UPPER_LASH, LASH_FORK, LASH_WING, CREASE."""
     cfg = cfg or {}
-    c = dict(UPPER_LASH, **(cfg.get("lash") or {}))
+    c = SP.merge(UPPER_LASH, cfg.get("lash"))
     iu, M = _sorted_arc(eye, "upper")
     il, ML = _sorted_arc(eye, "lower")
     dM = _arc_len(M)
@@ -707,7 +708,7 @@ def upper_lines(eye, cfg=None):
 
     # ---- the fork: its top edge leaves the band's top edge at `base` and curves out to its point; its lower edge is the
     # notch's upper side, from the apex
-    fk = dict(LASH_FORK, **(cfg.get("lashfork") or {}))
+    fk = SP.merge(LASH_FORK, cfg.get("lashfork"))
     t_up = apex + fk["length"] * _dir(fk["angle"])
     d0 = float(at_s(fk["base"]))
     h0 = top(d0)
@@ -716,7 +717,7 @@ def upper_lines(eye, cfg=None):
     out["lashfork"] = dict(lo=f_lo, hi=f_hi, s=np.maximum(lid_s(0.5 * (f_lo[:, 0] + f_hi[:, 0])), s[0]), tip=True)
 
     # ---- the wing: two edges from the band's top edge to the point, each sagging below its chord
-    wg = dict(LASH_WING, **(cfg.get("lashwing") or {}))
+    wg = SP.merge(LASH_WING, cfg.get("lashwing"))
     w_root, w_base = (_along(up_edge, wg[key] * _arc_len(up_edge)[-1]) for key in ("root", "base"))
     w_tip = 0.5 * (w_root + w_base) + wg["length"] * _dir(wg["angle"])
 
@@ -727,7 +728,7 @@ def upper_lines(eye, cfg=None):
                            s=np.linspace(float(lid_s(w_root[0])), 1.0 + OUTER_RUN, wg["n"]), tip=True)
 
     # ---- the crease: a stroke over the band's top edge
-    ck = dict(CREASE, **(cfg.get("crease") or {}))
+    ck = SP.merge(CREASE, cfg.get("crease"))
     ref = top(np.linspace(at_s(ck["s0"]), at_s(ck["s1"]), 40))
     ref = _resample(np.vstack([ref[0] + ck["ext"] * _unit(ref[0] - ref[2]), ref]), ck["n"])
     tg = _unit(np.gradient(ref, axis=0))
@@ -758,8 +759,7 @@ def _tapered(M, off, width, s0, s1, n, up_sign, taper=0.7, bias=0.0, skew=0.0):
 
 def lower_lash(eye, cfg=None):
     """The lower lash: a thin line under the bottom of the lower lid, heaviest towards its outer end."""
-    c = dict(LOWER_LASH)
-    c.update(cfg or {})
+    c = SP.merge(LOWER_LASH, cfg)
     _, M = _sorted_arc(eye, "lower")
     lo, hi, s = _tapered(M, c["gap"], c["width"], c["s0"], c["s1"], c["n"], -1.0, skew=c.get("skew", 0.0))
     return dict(lo=lo, hi=hi, tip=False, ends_pointed=True, s=s)

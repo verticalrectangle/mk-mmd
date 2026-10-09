@@ -15,6 +15,7 @@ from .. import bridge
 from .. import config as CFG
 from ..model import assemble as AS
 from ..model import build as BD
+from ..model import partcache as PC
 from ..model import pmx_io
 from ..model import spec as SP
 from . import doctor
@@ -31,8 +32,8 @@ Examples:
   mk model new mika                                      # ./mika/model.toml: the girl base, ready to change
   mk model build ~/projects/rin/model.toml
   mk model build model.toml --only head                  # head + the parts it needs, into <out>/only_head/
-  mk model build model.toml --no-export                  # run and check the builders only (no Blender)
-  mk model build model.toml --set hair.length=0.3 --out /tmp/try
+  mk model build model.toml --no-export                  # run and check the builders only (no Blender), into <out>/no_export/
+  mk model build model.toml --set hair.back.end_above_chin=-0.05 --out /tmp/try
   mk look <out>/<name>.blend --view front,3q --target "bone('head').head" --dist 1.2 --frames 1
   mk model info model.toml                               # what would be built, in which order
 
@@ -58,11 +59,18 @@ name = "{name}"
 include = ["base:{base}"]
 out = "{out}"
 
-# For example (uncomment and change):
+# For example (uncomment and change; a hair colour is a whole family: set every key, the base's colors.toml has them):
 # [colors.hair]
-# base = "#3b2a2f"
+# base = "#2b2f4a"
+# shadow = "#181b2b"
+# deep = "#0e101b"
+# light = "#373b5e"
+# highlight = "#606189"
+# highlight_core = "#83829a"
+# rim = "#4f517a"
 # [hair.braids]
 # enabled = true
+# clearance = 0.020
 """
 
 LAB_HELP = """Look at models without Blender: views and pose sheets posed with each model's own weights, several models
@@ -108,14 +116,18 @@ def add(sub):
                       description=HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     b.add_argument("spec", metavar="SPEC.toml", help="the model spec (model.toml): [model] plus the part tables")
     b.add_argument("--only", metavar="PARTS", help="comma list of parts to build, plus the parts they need")
-    b.add_argument("--out", metavar="DIR", help="output folder (default: [model] out; with --only: <out>/only_<parts>)")
-    b.add_argument("--no-export", action="store_true", help="only run and check the builders (no PMX, no Blender)")
+    b.add_argument("--out", metavar="DIR", help="output folder (default: [model] out; with --only: <out>/only_<parts>; "
+                                                "with --no-export: .../no_export)")
+    b.add_argument("--no-export", action="store_true", help="only run and check the builders (no PMX, no Blender), into "
+                                                            "their own folder so an exported model's files stay as they are")
     b.add_argument("--blend", action="store_true", help="write the review .blend (default when exporting)")
     b.add_argument("--no-blend", action="store_true", help="skip the review .blend")
     b.add_argument("--no-verify", action="store_true", help="skip the import-back verification")
     b.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
-                   help="override a spec value (TOML syntax, repeatable): hair.length=0.3")
+                   help="override a spec value (TOML syntax, repeatable): hair.bangs.count=9")
     b.add_argument("--full", action="store_true", help="also print the part-by-part warnings and the whole morph list")
+    b.add_argument("--no-cache", action="store_true", help="build every part again (a part whose inputs did not change "
+                                                           "since a build is otherwise reused)")
     b.set_defaults(func=run_build)
     i = ss.add_parser("info", help="print what a build would do (parts in order, output folder, builders)")
     i.add_argument("spec", metavar="SPEC.toml", help="the model spec (model.toml)")
@@ -157,6 +169,7 @@ def add(sub):
     lb.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
                     help="override a value of every spec (TOML syntax, repeatable): body.hand.length=0.15")
     lb.add_argument("--label", action="append", default=[], help="a model's label on the sheet (repeatable, in order)")
+    lb.add_argument("--no-cache", action="store_true", help="build every part of a spec again (see mk model build)")
     lb.add_argument("--size", type=int, default=360, help="cell size in pixels (default: 360)")
     lb.add_argument("--unit", type=float, default=0.08, help="metres per PMX unit of .pmx models (default: 0.08)")
     lb.add_argument("--out", metavar="SHEET.png", help="the sheet (default: <first model's folder or [model] out>/lab/"
@@ -176,6 +189,7 @@ def add(sub):
     gl.add_argument("--parts", metavar="PARTS", help="parts to build for a spec: a comma list, or all (default: all)")
     gl.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
                     help="override a spec value (TOML syntax, repeatable)")
+    gl.add_argument("--no-cache", action="store_true", help="build every part of a spec again (see mk model build)")
     gl.add_argument("--region", default="body", choices=list(LAB.REGIONS), help="what to write: body (all, the "
                     "default), or a semantic bone's subtree: head (the face up close), hand, foot, arm, leg")
     gl.add_argument("--side", default="L", choices=["L", "R"], help="her side for hand, foot, arm, leg (default: L)")
@@ -202,7 +216,8 @@ def run_lab(args):
         t = time.time()
         try:
             m = LAB.load(src, label=args.label[i] if i < len(args.label) else None, overrides=args.overrides,
-                         parts=None if src.lower().endswith(".pmx") else parts, unit=args.unit)
+                         parts=None if src.lower().endswith(".pmx") else parts, unit=args.unit,
+                         cache=None if args.no_cache else PC.PartCache())
         except (SP.SpecError, BD.BuildError, ValueError) as e:
             raise UsageError(f"{src}: {e}")
         while m.label in [x.label for x in models]:          # two models of one name: number the later ones
@@ -279,7 +294,8 @@ def run_glb(args):
             raise UsageError(f"--morph {item!r}: NAME or NAME=WEIGHT")
     with tempfile.TemporaryDirectory(prefix="mk_glb_") as tmp:
         try:
-            m = LAB.load(args.model, overrides=args.overrides, parts=parts, unit=args.unit, workdir=None if pmx else tmp)
+            m = LAB.load(args.model, overrides=args.overrides, parts=parts, unit=args.unit, workdir=None if pmx else tmp,
+                         cache=None if args.no_cache else PC.PartCache())
             rep = model_numbers(m)
             if args.info:
                 emit({**rep, "seconds": round(time.time() - t0, 1)})
@@ -431,6 +447,8 @@ def run_build(args):
     out = Path(args.out).expanduser() if args.out else cfg["out"]
     if only and not args.out:
         out = out / ("only_" + "_".join(only))
+    if args.no_export and not args.out:                # textures and build.json of a check never mix with an export's
+        out = out / "no_export"
     out = out.resolve()
     tex_dir = out / "tex"
     report = {"spec": str(spec.path), "files": [str(f) for f in spec.files], "name": name, "out": str(out),
@@ -451,13 +469,13 @@ def run_build(args):
     t0 = time.time()
     ctx = BD.BuildCtx(spec, tex_dir, seed=cfg["seed"])
     try:
-        parts = BD.run(spec, only=only, ctx=ctx)
+        parts = BD.run(spec, only=only, ctx=ctx, cache=None if args.no_cache else PC.PartCache())
     except BD.BuildError as e:
         report.update(ok=False, stage="parts", error=str(e), trace=traceback.format_exc(), log=ctx.logs[-30:])
         finish(report)
         return CHECK_FAILED
     report["seconds"]["parts"] = round(time.time() - t0, 2)
-    report["parts"] = [part_stats(p, ctx.timings.get(p.name)) for p in parts]
+    report["parts"] = [dict(part_stats(p, ctx.timings.get(p.name)), cached=p.name in ctx.cached) for p in parts]
     warns = BD.check_refs(parts)
     warns += BD.lint(parts)
     missing = BD.check_textures(parts, tex_dir)

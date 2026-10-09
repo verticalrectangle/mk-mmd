@@ -21,6 +21,7 @@ import numpy as np
 from . import cat_common as CC
 from .cat_tex import sheen_sphere, tail_fur
 from .hair_geo import MeshAccum, Piece, arclen, resample, smoothstep, sweep, unit
+from .. import spec as SP
 from ..part import Material
 
 DEFAULTS = {
@@ -224,7 +225,7 @@ def spike_specs(cfg, tube, rng, sg):
 
 
 def build_tails(ctx, fit, cfg, rig, pal):
-    cfg = CC.cfg_merge(DEFAULTS, cfg)
+    cfg = SP.merge(DEFAULTS, cfg)
     if not cfg["enabled"]:
         return Piece(info={"enabled": False})
     col = CC.palette(ctx)

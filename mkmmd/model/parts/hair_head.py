@@ -15,6 +15,7 @@ import numpy as np
 from . import hair_tex as TEX
 from .hair_fit import Volume, angles, dirs, unit
 from .hair_geo import MeshAccum, Piece, arclen, resample, smooth_polyline, smoothstep, strip_normals, sweep
+from .. import spec as SP
 from ..part import Material
 
 
@@ -33,7 +34,7 @@ def hex_rgb(h):
 DEFAULTS = {
     "volume": {"top": 0.036, "front": 0.020, "side": 0.034, "back": 0.027, "lift": 0.016, "lift_deg": 28.0,
                "lift_width_deg": 20.0, "lift_back": 0.5},
-    "ring": {"drop": 0.050, "width": 0.018},           # baked crown highlight: metres below the hair top, half thickness
+    "ring": {"enabled": True, "drop": 0.050, "width": 0.018},  # baked crown sheen: on/off, metres below the hair top, half thickness
     "cap": {"delta": -0.014, "cols": 72, "rows": 15},
     "crown": {"count": 9, "width": 0.070, "thick": 0.016, "delta": -0.004, "swirl": 0.45, "inner_delta": -0.011},
     "bangs": {"count": 11, "width": 0.028, "thick": 0.014, "delta": 0.004, "span_deg": 44.0, "above_eye": 0.027,
@@ -54,13 +55,6 @@ DEFAULTS = {
 
 
 EN = {"前髪": "bangs", "横髪左": "side_L", "横髪右": "side_R", "後髪": "back"}
-
-
-def cfg_merge(base, over):
-    out = dict(base)
-    for k, v in (over or {}).items():
-        out[k] = cfg_merge(out[k], v) if isinstance(out.get(k), dict) and isinstance(v, dict) else v
-    return out
 
 
 # ---------------------------------------------------------------- paths
@@ -154,7 +148,7 @@ class Lock:
 class HeadHair:
     def __init__(self, ctx, fit, cfg, rig, pal):
         self.ctx, self.fit, self.rig, self.pal = ctx, fit, rig, pal
-        self.cfg = cfg_merge(DEFAULTS, cfg)
+        self.cfg = SP.merge(DEFAULTS, cfg)
         self.rng = ctx.rng_for("hair.head")
         self.skull = fit.skull
         v = self.cfg["volume"]
@@ -542,7 +536,8 @@ def build_head_hair(ctx, fit, cfg, rig, pal, layers=("cap", "crown", "bangs", "s
     acc = MeshAccum("hair_head", [hh.mat])
     for name in layers:
         getattr(hh, name)(acc)
-    atlas = TEX.make_atlas(pal, ctx.rng_for("hair.atlas"), ring_f=hh.ring_f, ring_w=hh.ring_w)
+    atlas = TEX.make_atlas(pal, ctx.rng_for("hair.atlas"), ring_f=hh.ring_f, ring_w=hh.ring_w,
+                           ring=bool(hh.cfg["ring"]["enabled"]))
     tex = ctx.save_png("atlas", atlas)
     tn = hh.cfg["toon"]
     toon = ctx.save_png("toon_warm", TEX.toon_ramp(cfg.get("toon_shadow", TEX.toon_multiplier(ctx.get("colors.hair"))),
