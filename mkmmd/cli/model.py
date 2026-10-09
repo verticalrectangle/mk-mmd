@@ -64,6 +64,27 @@ out = "{out}"
 # enabled = true
 """
 
+LAB_HELP = """Look at models without Blender: views and pose sheets posed with each model's own weights, several models
+side by side at one scale, and their numbers (lengths, widths and girths in mm, cut across the skin under any clothes).
+A MODEL is a spec (model.toml or base:NAME: its parts are built and assembled in-process, as mk model build does) or a
+.pmx. Writes SHEET.png, SHEET.json (each cell's camera, the numbers) and SHEET.mask.png (what mk model trace measures
+against). Regions: {regions}. Poses: {poses}, or any of the model's morph names (one row each).
+
+Examples:
+  mk model lab base:girl --region hand --poses rest,relaxed,fist,spread
+  mk model lab model.toml ~/mk-assets/models/rin_mk/rin.pmx --parts all --views front,outer,3q
+  mk model lab model.toml --region head --poses rest,ω,口角上げ --out /tmp/mouth.png
+"""
+
+TRACE_HELP = """Read a red line drawn on a lab sheet back in millimetres. Open the sheet, take a screenshot of the part you
+mean (zoomed or not; window borders are fine), draw on it in pure red, save it. Prints the cell, the line's points in
+model space, and how far inside (+: trim this much) or outside (-: add) the outline it runs, every 2 mm along it, with
+its place along the region (from the wrist for a hand, from the floor for a body).
+
+Example:
+  mk model trace ~/Pictures/marked.png --sheet ~/mk-assets/models/girl/lab/hand_L.png
+"""
+
 
 def add(sub):
     p = sub.add_parser("model", help="build an original character (parts -> PMX, rig.json, review .blend)",
@@ -105,6 +126,97 @@ def add(sub):
     n.add_argument("--dir", metavar="DIR", help="the folder to create (default: ./NAME)")
     n.add_argument("--out", metavar="DIR", help="the character's [model] out (default: ~/mk-assets/models/NAME)")
     n.set_defaults(func=run_new)
+
+    from ..model import lab as LAB
+    lb = ss.add_parser("lab", help="views, pose sheets and side-by-side numbers of models (no Blender)",
+                       description=LAB_HELP.format(regions=", ".join(LAB.REGIONS), poses=", ".join(LAB.POSES)),
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    lb.add_argument("models", nargs="+", metavar="MODEL", help="a spec (model.toml, base:NAME) or a .pmx; several are "
+                                                               "shown side by side at one scale")
+    lb.add_argument("--region", default="body", choices=list(LAB.REGIONS), help="what to frame (default: body)")
+    lb.add_argument("--side", default="L", choices=["L", "R"], help="her side for hand, foot, arm, leg (default: L)")
+    lb.add_argument("--views", metavar="V,..", help="comma list (default per region; body: front,outer,back,3q; "
+                                                    "hand: back,palm,thumb,3q; also inner, top, sole, little, tip)")
+    lb.add_argument("--poses", default="rest", metavar="P,..", help="comma list of poses or morph names, one row each")
+    lb.add_argument("--parts", metavar="PARTS", help="parts to build for a spec: a comma list, or all (default: body; "
+                                                     "head for the head region)")
+    lb.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
+                    help="override a value of every spec (TOML syntax, repeatable): body.hand.length=0.15")
+    lb.add_argument("--label", action="append", default=[], help="a model's label on the sheet (repeatable, in order)")
+    lb.add_argument("--size", type=int, default=360, help="cell size in pixels (default: 360)")
+    lb.add_argument("--unit", type=float, default=0.08, help="metres per PMX unit of .pmx models (default: 0.08)")
+    lb.add_argument("--out", metavar="SHEET.png", help="the sheet (default: <first model's folder or [model] out>/lab/"
+                                                       "<region>[_<side>].png)")
+    lb.set_defaults(func=run_lab)
+    tr = ss.add_parser("trace", help="a red line drawn on a lab sheet (or a screenshot of part of one) in millimetres",
+                       description=TRACE_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    tr.add_argument("marked", metavar="MARKED.png", help="the sheet, or a screenshot of part of it, with a pure red line")
+    tr.add_argument("--sheet", required=True, metavar="SHEET.png", help="the lab sheet (its .json and .mask.png beside it)")
+    tr.set_defaults(func=run_trace)
+
+
+def _lab_parts(args):
+    if args.parts and args.parts.strip() == "all":
+        return None
+    if args.parts:
+        return [s.strip() for s in args.parts.split(",") if s.strip()]
+    return ["head"] if args.region == "head" else ["body"]
+
+
+def run_lab(args):
+    from ..model import lab as LAB
+    t0 = time.time()
+    parts = _lab_parts(args)
+    models, loaded = [], []
+    for i, src in enumerate(args.models):
+        t = time.time()
+        try:
+            m = LAB.load(src, label=args.label[i] if i < len(args.label) else None, overrides=args.overrides,
+                         parts=None if src.lower().endswith(".pmx") else parts, unit=args.unit)
+        except (SP.SpecError, BD.BuildError, ValueError) as e:
+            raise UsageError(f"{src}: {e}")
+        while m.label in [x.label for x in models]:          # two models of one name: number the later ones
+            m.label = f"{m.label} {len(models) + 1}"
+        models.append(m)
+        loaded.append({"label": m.label, "source": src, "vertices": len(m.V), "triangles": len(m.T),
+                       "seconds": round(time.time() - t, 1)})
+    views = [v.strip() for v in args.views.split(",") if v.strip()] if args.views else None
+    poses = [p.strip() for p in args.poses.split(",") if p.strip()]
+    try:
+        img, layout, cover = LAB.sheet(models, region=args.region, side=args.side, views=views, poses=poses,
+                                       size=args.size)
+    except ValueError as e:
+        raise UsageError(str(e))
+    if args.out:
+        out = Path(args.out).expanduser()
+    else:
+        first = args.models[0]
+        folder = (Path(first).expanduser().parent if first.lower().endswith(".pmx")
+                  else SP.model_cfg(SP.load(first, args.overrides))["out"])
+        out = folder / "lab" / (f"{args.region}_{args.side}.png" if args.region in LAB.SIDED else f"{args.region}.png")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out)
+    cover.save(out.with_name(out.stem + ".mask.png"))
+    out.with_suffix(".json").write_text(json.dumps(layout, ensure_ascii=False, indent=1), encoding="utf-8")
+    emit({"sheet": str(out), "layout": str(out.with_suffix(".json")), "cells": len(layout["cells"]), "models": loaded,
+          "numbers": layout["numbers"], "seconds": round(time.time() - t0, 1)})
+    return 0
+
+
+def run_trace(args):
+    from ..model import lab as LAB
+    sheet, marked = Path(args.sheet).expanduser(), Path(args.marked).expanduser()
+    layout_path = sheet.with_suffix(".json")
+    for p in (sheet, marked):
+        if not p.is_file():
+            raise UsageError(f"{p} does not exist")
+    if not layout_path.is_file():
+        raise UsageError(f"{layout_path} does not exist: trace reads sheets made by mk model lab")
+    try:
+        emit(LAB.trace(marked, sheet, json.loads(layout_path.read_text(encoding="utf-8"))))
+    except ValueError as e:
+        raise UsageError(str(e))
+    return 0
 
 
 def run_new(args):

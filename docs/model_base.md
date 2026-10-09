@@ -69,8 +69,10 @@ itself to the skin) and the hair follow, but seats, steering wheels and grips in
 1. Change one table.
 2. Build: `mk model build model.toml --only hair` (that part and what it needs, into `<out>/only_hair/`) while iterating;
    `--no-export` runs the builders without Blender; `--set hair.bangs.count=9` tries a value without editing.
-3. Look: `mk look` sheets of what changed from several sides, and `--ab OTHER.blend` next to the base or the previous build.
-   Never call it good before looking at the images.
+3. Look: `mk model lab model.toml --region hand --poses rest,fist,spread` (seconds, no Blender: views and poses with the
+   model's own weights, numbers under them; give it the base or a reference .pmx too and they stand side by side at one
+   scale), then `mk look` sheets in Blender's toon shading, and `--ab OTHER.blend` next to the base or the previous
+   build. Never call it good before looking at the images.
 4. Read the build log: `WARNING` lines are findings; `verify` must pass.
 5. Repeat.
 
@@ -109,8 +111,9 @@ The format of a hand mesh is in `mkmmd/model/parts/body_hand_mesh.py`.
 - Use exact cross-sections of the mesh. A "14 mm waist" came from sparse vertex slices of overlapping shells.
 - Distrust numbers that are too good: grip results identical to the last run meant the scene still loaded the old build.
   Check what is loaded.
-- When the user marks up a screenshot, register it against the render and turn the marks into millimetres before
-  changing anything. Show previews of the options side by side, and let the user choose on taste.
+- When the user marks up a screenshot of a lab sheet in red, `mk model trace MARKED.png --sheet SHEET.png` turns the
+  marks into millimetres (how far inside or outside the outline, where along the part) before anything changes. Show
+  previews of the options side by side, and let the user choose on taste.
 
 ## Where the base comes from
 

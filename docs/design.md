@@ -2699,7 +2699,17 @@ the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk
 `--no-export` only runs and checks the builders; `mk model info SPEC` shows the plan; `mk model new NAME [--from BASE]
 [--dir DIR] [--out DIR]` writes DIR/model.toml, a character that includes the base (default `girl`), and never overwrites
 one; `mk model studio SCENE.blend --out OUT.blend [--floor X,Y ...] [--lights]` copies a built scene with the neutral review
-studio (grey world, soft floor discs, optionally key/fill/rim suns) so sheets of several models compare side by side. Exit
+studio (grey world, soft floor discs, optionally key/fill/rim suns) so sheets of several models compare side by side.
+`mk model lab MODEL... [--region body|head|hand|foot|arm|leg] [--side L|R] [--views V,..] [--poses P,..] [--parts PARTS]
+[--set K=V] [--label NAME] [--out SHEET.png]` (`mkmmd.model.lab`, no Blender) looks at specs (built and assembled
+in-process, so it sees the PMX a build writes) and .pmx files: a sheet with one row per (pose, model), every cell at one
+scale (bodies on one floor line), posed with each model's own weights through the bone tree (rotation grants followed:
+D bones, twists); poses are rest, relaxed, curled, fist, spread, arms_down, sit, or any morph name. Under the cells, the
+rest pose's numbers in mm (heights, widths, lengths, and girths cut across the skin: the innermost loop round a point on
+the skeleton, hidden skin included, so clothes never count). Beside the PNG: `.json` (each cell's camera, the numbers)
+and `.mask.png` (coverage). `mk model trace MARKED.png --sheet SHEET.png` reads a pure red line drawn on the sheet, or on
+a screenshot of part of it (any zoom, window borders), back in model space: the cell, and how far inside (+) or outside
+(-) the outline the line runs every 2 mm, with its place along the region (from the wrist, from the floor). Exit
 codes as everywhere: 1 when a check or verification fails. A build never deletes the previous files first, because other
 projects may be casting the
 PMX at that moment: the PMX and rig.json are replaced atomically when ready, textures are overwritten in place (stale ones

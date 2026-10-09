@@ -1,14 +1,5 @@
 ## Todo
 
-- [ ] Push the three commits #you
-    Face, hands and bases are on main, not pushed: 40496b8, 6baccbf, 9e4f92a. The bases commit carries the girl's CC0 hand.npz (116 KB).
-- [ ] Bring the lab into the repo before /tmp is wiped #tools
-    The hand lab (hand_lab.py, mesh_lab.py), the study builds and the images you reviewed live in /tmp, which is cleared on every reboot. As `mk model lab` it would serve every part and every agent.
-    - [ ] views and pose sheets with the part's own weights
-    - [ ] side-by-side sheets at the same scale, with a numbers summary
-    - [ ] red lines drawn on a render turned into millimetres
-    - [ ] a faster renderer for dense meshes
-    - [ ] keep the study images (/tmp/rin_body) somewhere that lasts
 - [ ] Fix the face's known flaws #face
     Every character shares the face code, so each fix lands in all of them.
     - [ ] inner eye corners sink about 4 mm deeper than on Miy's model
@@ -23,16 +14,25 @@
     - [ ] build it, refit the outfit, run the checks and the grip
 - [ ] Give the girl her own eyes? #face #you
     She has Rin's eye drawing (the cat-like wing and flick) in brown. Keep it, or give the neutral base a softer look of her own: a few numbers in her head.toml.
-- [ ] Register B-chan's .blend in mk assets #tools
-    The hand's source in ~/mk-assets/sources/bchan: record CC0 1.0, the author's page and the recipe, so the licence checks see it.
 - [ ] Prove the playbook with a fresh agent #base
     A new agent makes a character with `mk model new` and docs/model_base.md alone; fix whatever it trips on.
 
 ## Doing
 
+- [ ] Register B-chan's .blend in mk assets #tools
+    The hand's source in ~/mk-assets/sources/bchan: record CC0 1.0, the author's page and the recipe, so the licence checks see it.
+
 ## Done
 
+- [x] Bring the lab into the repo: `mk model lab` and `mk model trace` #tools
+    Sheets in seconds, no Blender: specs and PMX files side by side at one scale, posed with their own weights (fingers, arms down, sit, any morph), numbers cut across the skin. A red line on a screenshot of a sheet reads back in mm.
+    - [x] views and pose sheets with the part's own weights
+    - [x] side-by-side sheets at the same scale, with a numbers summary
+    - [x] red lines drawn on a render turned into millimetres
+    - [x] a faster renderer for dense meshes (16 hand cells in 1.3 s)
+    - [x] keep the study images somewhere that lasts: mk-tests/rin_model/review/hands_and_bases (with the lab scripts)
 - [x] Face: drawn eye lines, face planes, folded mouth #face
 - [x] Hands: the designed hand, then B-chan's CC0 glove #hands
 - [x] Model bases: the girl and the rin example, `mk model new` #base
 - [x] Commit the work: three commits on main
+- [x] Push the three commits (and this board) to GitHub

@@ -209,7 +209,7 @@ max = 8.0
 | `mk doctor` | checks Blender, mmd_tools, ffmpeg, Python packages, disk and keys (`--fix` repairs mmd_tools' wheels) |
 | `mk inspect` | describes a model (rig.json: semantic bones, chains, bodies, expressions, quirks) or a motion (tempo, energy, travel) |
 | `mk assets` | the local asset registry: `add`, `scan`, `list`, `show` (terms of use), `set` (licence and credit fields), `rm`, `credits` for a project |
-| `mk model` | builds an original MMD character from a spec in code and exports a PMX: `new` (a character on a model base), `build`, `info`, `studio` (see Characters in design.md) |
+| `mk model` | builds an original MMD character from a spec in code and exports a PMX: `new` (a character on a model base), `build`, `info`, `studio`; `lab` (views, pose sheets and side-by-side numbers of specs and PMX files, no Blender) and `trace` (a red line drawn on a lab sheet, in millimetres) (see Characters in design.md) |
 | `mk timeline` | analyses a song span: `analyze` (tempo, beats, bars, loudness, note onsets, sung words by `(line, word)`), `show`, `onsets` |
 | `mk ref` | measures blinks, gaze, nods, sway and mouth in reference clips of real people (`search`, `add`, `track`, `measure`, `sheet`, `clean`; Pexels + MediaPipe); `mk ref photos` fetches licensed Wikimedia photos to model props from |
 | `mk build` | builds the scene from `mk.toml`, stage by stage (`--until`, `--skip`) |
