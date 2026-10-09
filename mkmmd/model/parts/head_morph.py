@@ -48,16 +48,18 @@ def piece_rows(acc, piece):
 class Morpher:
     """Builds every face morph from the geometry: skin offsets from fields, decals riding on the skin, eyeball layers,
     brow strips. `H` is a simple namespace with: V (skin vertices), surf (SkinSurface), decals {piece: Decal}, lines /
-    eyes (MeshAcc), lids / sheets / strips (head_lid), eyes_info {side: eye dict}, brows {side: centre line}, bind_strip, brow_cfg."""
+    eyes (MeshAcc), lids / sheets / strips (head_lid), eyes_info {side: eye dict}, brows {side: centre line}, bind_strip,
+    brow_cfg, and the blush overlay: MeshAcc `blush` and `blush_follow` {piece: (skin vertex ids (n, k), weights (n, k))}."""
 
     def __init__(self, H):
         self.H = H
         self.book = MorphBook({"face": len(H.V), "lines": len(H.lines.V), "eyes": len(H.eyes.V),
-                               "mouth": len(H.mouth_mesh.V), "lids": len(H.lids_mesh.V)})
+                               "mouth": len(H.mouth_mesh.V), "lids": len(H.lids_mesh.V), "blush": len(H.blush.V)})
 
     # ---- skin offsets -> decals
     def skin(self, name, d):
-        """Store skin offsets `d` (n_skin, 3) and move every decal with them."""
+        """Store skin offsets `d` (n_skin, 3) and move every decal with them, and the blush patches hidden under the skin
+        (left behind, they would show through where a mouth shape pulls the cheeks in)."""
         H = self.H
         self.book.add(name, "face", d)
         Vm = H.V + d
@@ -69,6 +71,10 @@ class Morpher:
             delta = dec.positions(Vm, Nm) - dec.positions()
             if np.abs(delta).max() > 0:
                 self.book.add(name, "lines", delta, piece_rows(H.lines, piece))
+        for piece, (near, w) in H.blush_follow.items():
+            delta = (d[near] * w[..., None]).sum(axis=1)
+            if np.abs(delta).max() > 0:
+                self.book.add(name, "blush", delta, piece_rows(H.blush, piece))
 
     # ---- eyes
     def eye_layers(self, name, k_iris=1.0, k_pupil=1.0, k_hl=1.0, dv=0.0, back=0.0, sides=("L", "R")):

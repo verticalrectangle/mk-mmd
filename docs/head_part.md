@@ -75,9 +75,12 @@ The eyes sit on the planes, their outer corners further back than the inner ones
 - **Mouth**: the closed mouth line is folded into the face (`head_mouth` `fold`, `fold_share`): the slit lies `fold` back at the
   middle, (1 - (x / half_width)^2)^2 of it sideways, and the rings round it take their share, so seen from the side the upper lip
   ends in an edge over a notch and the lower lip comes out under it (a line painted on a smooth face disappears in profile; a
-  fold catches the outline and the shadow). The mouth shapes move the lips in z and keep the fold's depth. The interior bag's inner
-  rings stay behind the skin in front of them at rest (`cavity(..., shape)`) and in every mouth morph (`build_mouth_morphs`): they
-  follow the lips further than the skin under the lower lip does.
+  fold catches the outline and the shadow). The mouth shapes move the lips in z and keep the fold's depth; the corner shapes
+  (口角上げ / 口角下げ, the corners' share of い, え, にやり) are bumps round each corner, the middle of the lips left still. The
+  interior bag's inner rings stay behind the skin in front of them at rest (`cavity(..., shape)`) and in every mouth morph
+  (`build_mouth_morphs`): they follow the lips further than the skin under the lower lip does. The 照れ blush patches wait
+  1.2 mm under the cheeks and follow the skin through every mouth shape (each vertex the mix of its four nearest skin vertices'
+  offsets), so a shape that pulls the cheeks in (ω) never shows them.
 - **Eyes** (`head_eye`, `[head.eye]`): an anime eye, not an eyeball. The opening (`CORNER_IN/OUT`, `UPPER`, `LOWER`): the upper lid
   a flat-topped arch that comes down an almost vertical outer side into the outer corner at mid-height, the lower lid a round bowl
   rising into it; seen from the side the lower lid runs straight back and the eye's outer end tucks into the head. Each lid moves
@@ -86,8 +89,11 @@ The eyes sit on the planes, their outer corners further back than the inner ones
   the lid shell (`LidShell`), which follows the face: `centre_depth` behind it over the upper part of the eye, so the upper lid's
   edge sits on the face (a shell curving away above the eye would sink the skin round it into a crater, whose rim stands out over
   the eye), and `lower_depth` behind it at the lower lid (the tuck starts `tuck[0]` below the chord between the corners and is
-  complete `tuck[1]` further down), so the lower lid tucks in behind the cheek. The sheet columns are spaced along the lids, not
-  evenly in u. Behind the opening the white is a **pocket**: a rounded bowl from the inner lid rim (straight back from the margin) to
+  complete `tuck[1]` further down), so the lower lid tucks in behind the cheek. Round the opening the skin sinks into a socket
+  (`Dip`) that fades out over `dip_length`; on the nose side `inner_recess` more sets it back, deepest half way out and flat at
+  both ends, so the skin arrives at the inner corner facing forward instead of diving into it (it dropped 4 mm over the last
+  6 mm). The sheet columns are spaced along the lids, not evenly in u. Behind the opening the white is a **pocket**: a rounded
+  bowl from the inner lid rim (straight back from the margin) to
   `pocket.back` behind the iris, opening out by `pocket.undercut` behind the lids (the iris moves inside it) and always
   `pocket.clear` inside the head. The iris and the pupil are flat discs on the **iris plane** (`IrisPlane`, `iris_plane`),
   `iris_depth` behind the lid margin and turned `iris_yaw_deg` outward like the face, pushed back only as far as covering them

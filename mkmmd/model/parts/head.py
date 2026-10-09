@@ -485,9 +485,13 @@ def build(ctx):
     tgv, tgf = MO.tongue_geometry(A_front, mouth)
     mouth_mesh.add("tongue", tgv, tgf, M_TONGUE, {HEAD: 1.0})
 
-    # ---- blush overlay for 照れ: a big soft patch on each cheek, hidden 1.2 mm under the skin until the morph raises it
+    # ---- blush overlay for 照れ: a big soft patch on each cheek, hidden 1.2 mm under the skin until the morph raises it. It
+    # follows the skin through every mouth shape (each vertex takes the inverse-distance mix of its four nearest skin
+    # vertices' offsets): left in place it would show through where a shape pulls the cheeks in (ω)
+    from scipy.spatial import cKDTree
     blush = MeshAcc("blush")
-    blush_up = {}
+    blush_follow, blush_up = {}, {}
+    skin_tree = cKDTree(V)
     bc = dict(centre=(0.050, 0.012), semi=(0.031, 0.0115), hide=-0.0012, show=0.0005, nx=13, nz=7)
     bc.update(cfg.get("blush") or {})
     for side, sg in (("L", 1.0), ("R", -1.0)):
@@ -504,6 +508,9 @@ def build(ctx):
                  for i in range(nx - 1)]
         uv = np.stack([0.5 + 0.5 * gx.ravel(), 0.5 + 0.5 * gz.ravel()], -1)
         blush.add(f"blush.{side}", Ph, orient(Ph, quads), M_BLUSH, {HEAD: 1.0}, uv=uv, normals=N0)
+        dist, near = skin_tree.query(Ph, k=4)
+        w = 1.0 / np.maximum(dist, 1e-6)
+        blush_follow[f"blush.{side}"] = (near, w / w.sum(axis=1, keepdims=True))
         blush_up[side] = (P0 + bc["show"] * N0) - Ph
 
     # ---- ears
@@ -519,12 +526,11 @@ def build(ctx):
     # ---- morphs
     H = SimpleNamespace(V=V, surf=surf, decals=decals, lines=lines, eyes=eye_mesh, lids=lids, sheets=sheets,
                         lids_mesh=lids_mesh, strips=strips, eyes_info=eyes, brows=brows, bind_strip=bind_strip, brow_cfg=brow_cfg, mouth=mouth,
-                        mouth_mesh=mouth_mesh, teeth_x=txs)
+                        mouth_mesh=mouth_mesh, teeth_x=txs, blush=blush, blush_follow=blush_follow)
     M = HM.Morpher(H)
     HM.build_eye_and_brow_morphs(M)
     HM.build_mouth_morphs(M)
     book = M.book
-    book.sizes["blush"] = len(blush.V)
     for side in ("L", "R"):
         book.add(HM.NAMES["blush"][0], "blush", blush_up[side], np.arange(*blush.pieces[f"blush.{side}"]))
 

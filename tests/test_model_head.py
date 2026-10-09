@@ -301,6 +301,49 @@ def test_the_mouth_interior_stays_behind_the_skin_when_it_opens(head):
         assert gap.min() > 0.0005, (name, gap.min())
 
 
+def test_the_blush_stays_under_the_skin_in_every_mouth_shape(head):
+    """The 照れ patches wait 1.2 mm under the cheeks: every mouth shape must carry them along with the skin (ω pulled the
+    cheeks in and they showed through as dark spots)."""
+    face, blush = mesh(head, "face"), mesh(head, "blush")
+    skin = [f for f, mi in zip(face.faces, face.face_mat) if face.mats[mi] == "顔"]
+    for name in ("あ", "い", "う", "え", "お", "ω", "口角上げ", "口角下げ", "にやり"):
+        surf = DC.SkinSurface(face.verts + face.morphs[name], skin, np.zeros(len(skin), int))
+        Q = blush.verts + blush.morphs.get(name, np.zeros_like(blush.verts))
+        tri, bary = surf.bind(Q[:, 0], Q[:, 2], strict=False)
+        ok = tri >= 0
+        assert ok.sum() > 100
+        gap = Q[ok, 1] - surf.point(tri[ok], bary[ok])[:, 1]
+        assert gap.min() > 0.0005, (name, gap.min())
+
+
+def test_the_corner_shapes_leave_the_middle_of_the_lips_still():
+    """口角上げ / 口角下げ lift and lower the corners, 1.2 cm from the midline: the middle of the lips stays (np.sign(0) put
+    a "corner" on the midline column, and the middle of the upper lip rose 2.8 mm on its own: a crease)."""
+    from mkmmd.model.parts import head_mouth as MO
+    c = dict(MO.DEFAULTS)
+    P = np.array([[x, -0.1, c["z"] + dz] for dz in np.linspace(-0.006, 0.006, 7) for x in np.linspace(-0.004, 0.004, 9)])
+    for key in ("mouth_smile", "mouth_down"):
+        d = MO.lip_field(P, np.zeros(len(P)), c, **MO.SHAPES[key])
+        assert np.abs(d[P[:, 0] == 0.0]).max() < 2e-4, key
+
+
+def test_the_skin_arrives_at_the_inner_corner_of_each_eye_without_diving(head):
+    """Between the nose and the inner corner of each eye the skin sets back early and arrives nearly facing forward, as
+    drawn eyes (and the imported face) do: it dived 3.4 mm over the last 6 mm into the corner, a dark crease. It never
+    goes below the corner either (a pit)."""
+    face = mesh(head, "face")
+    skin = [f for f, mi in zip(face.faces, face.face_mat) if face.mats[mi] == "顔"]
+    surf = DC.SkinSurface(face.verts, skin, np.zeros(len(skin), int))
+    s = np.array([6, 5, 4, 3, 2.5, 2, 1.5, 1, 0.5, 0.25, 0.05]) / 1000          # before the corner, towards the nose
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        poly = np.asarray(head.info["eyes"][side]["opening"])
+        c = poly[np.argmin(sg * poly[:, 0])]
+        tri, bary = surf.bind(c[0] - sg * s, np.full(len(s), c[1]))
+        rel = surf.point(tri, bary)[:, 1] - surf.point(tri[-1:], bary[-1:])[0, 1]   # + = deeper than at the rim
+        assert -rel[0] < 0.0025, (side, -rel[0])
+        assert rel[1:-1].max() < 0.0001, (side, rel[1:-1].max())
+
+
 def test_published_info(head):
     i = head.info
     for k in ("head_center", "head_radii", "skull_top", "skin", "hairline", "hairline_side", "nape", "face_outline", "ears",

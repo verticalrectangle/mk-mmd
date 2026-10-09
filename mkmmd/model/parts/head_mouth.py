@@ -249,7 +249,7 @@ def lip_field(P, side, cfg, up=0.0, dn=0.0, p=0.9, wx=0.0, cl=0.0, nar=0.0, pro=
         corner = 1.5 * np.minimum(a, 1.2) ** 4 * _sm((2.4 - a) / 1.2)       # the corners rise; fades out over the cheek
         f = 1.0 * np.exp(-(s / 0.2) ** 2) - 1.7 * np.exp(-((a - 0.55) / 0.26) ** 2) + corner
         dz = dz + wave * f * _sm(1.0 - np.abs(d) / R)
-    r = np.hypot(x - np.sign(x) * hw, z - zm)
+    r = np.hypot(np.abs(x) - hw, z - zm)        # to the nearer corner (np.sign(0) would put a "corner" on the midline)
     h = _sm(1.0 - r / 0.013)
     dx = np.sign(x) * wx * h
     dz = dz + cl * h

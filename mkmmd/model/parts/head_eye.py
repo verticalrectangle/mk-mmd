@@ -87,6 +87,9 @@ DEFAULTS = dict(
     block_margins=(0.0030, 0.0030, 0.0040, 0.0070),     # grid margin around the opening: left, right, bottom, top
     ring_t=(0.0, 0.36, 0.70, 1.0),       # position of rings 0..3 between the grid block and the opening
     dip_length=0.013,                    # the socket dip fades out this far outside the opening
+    inner_recess=0.0020,                 # ... and on the nose side the skin sets back up to this much more half way out
+                                         # (nothing at the corner or at the dip's edge, flat at both), so it arrives at the
+                                         # inner corner facing forward instead of diving into it
     # the iris plane (iris_plane): iris_depth behind the lid margin at the iris centre (about as far behind the face as
     # drawn eyes sit), facing forward turned iris_yaw_deg outward and iris_pitch_deg up; pushed further back only as far
     # as the skin round the opening (every gaze in `gaze`) and the closed lids (every gaze in `blink_gaze`) need to cover
@@ -155,13 +158,17 @@ def arc_targets(ring_xz, w, h, poly, left_idx, right_idx):
 
 class Dip:
     """Smooth socket depression around one eye opening: the face surface sinks (+y) by D(psi) at the lid margin and
-    fades to nothing `length` outside it (psi = polar angle about the opening's centre)."""
+    fades to nothing `length` outside it (psi = polar angle about the opening's centre). On the nose side `recess` more
+    sinks the skin between the bridge and the inner corner, 16 q^2 (1 - q)^2 of it at q = rho: deepest half way out,
+    nothing and flat at the margin (so the skin never dips below the corner into a pit) and at the dip's edge. A plane
+    receding from the bridge would otherwise keep going back right up to the corner and dive into it, a crease drawn
+    eyes do not have."""
 
-    def __init__(self, centre, sign, alm, psi, depth, length):
+    def __init__(self, centre, sign, alm, psi, depth, length, recess=0.0):
         o = np.argsort(psi)
         self.psi = np.concatenate([psi[o] - 2 * np.pi, psi[o], psi[o] + 2 * np.pi])
         self.depth = np.tile(depth[o], 3)
-        self.c, self.sign, self.alm, self.length = centre, sign, alm, length
+        self.c, self.sign, self.alm, self.length, self.recess = centre, sign, alm, length, recess
 
     def __call__(self, x, z):
         u = self.sign * (np.asarray(x) - self.c[0]) - self.alm.c[0]
@@ -170,7 +177,12 @@ class Dip:
         r = np.hypot(u, v)
         rho = np.maximum(r - np.interp(psi, self.alm.a, self.alm.r), 0.0) / self.length
         t = np.clip(1.0 - rho, 0.0, 1.0)
-        return np.interp(psi, self.psi, self.depth) * t * t * (3.0 - 2.0 * t)
+        out = np.interp(psi, self.psi, self.depth) * t * t * (3.0 - 2.0 * t)
+        if self.recess:
+            nose = np.clip(-np.cos(psi), 0.0, 1.0) ** 2     # 1 straight towards the nose, 0 on the outer half
+            q = np.clip(rho, 0.0, 1.0)
+            out = out + self.recess * nose * 16.0 * q * q * (1.0 - q) ** 2
+        return out
 
 
 class LidShell:
@@ -255,7 +267,7 @@ def add_eye(sb, side, cfg=None):
     shell = LidShell(sb.shape, E, sg, c["centre_depth"], c["lower_depth"], c["tuck"])
     ym = lift(sb.shape, tx, tz)[:, 1]
     ysh = shell.point(tx, tz, c["margin_gap"])[:, 1]
-    dip = Dip((cx, cz), sg, alm, ang, ysh - ym, c["dip_length"])
+    dip = Dip((cx, cz), sg, alm, ang, ysh - ym, c["dip_length"], c["inner_recess"])
     rings = [ring0]
     pos = [P0]
     for k in (1, 2, 3):
@@ -289,13 +301,14 @@ def add_eye(sb, side, cfg=None):
 
 
 def apply_dips(sb, eyes):
-    """Sink the grid vertices around the eyes into the sockets (ring vertices already include their dip)."""
+    """Sink the grid vertices around the eyes into the sockets (ring vertices already include their dip). Each dip fades
+    to nothing within its `dip_length` and acts on its own side only, so the midline columns are left alone."""
     n0 = len(sb.g.V)
     for i in range(n0):
         if i in sb.dead:
             continue
         p = sb.V[i]
-        if abs(p[0]) < 0.02 or abs(p[0]) > 0.11 or p[2] < 0.02 or p[2] > 0.10 or p[1] > -0.02:
+        if abs(p[0]) < 0.004 or abs(p[0]) > 0.11 or p[2] < 0.02 or p[2] > 0.10 or p[1] > -0.02:
             continue
         for e in eyes:
             dy = float(e["dip"](p[0], p[2]))
