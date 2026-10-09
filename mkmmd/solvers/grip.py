@@ -32,10 +32,10 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as Rot
 
-from ..core import bonemap, jsonx
+from ..core import armreach, bonemap, jsonx
 from . import geom
 
-VERSION = 1                                         # bump when a solver's results change (cache keys)
+VERSION = 2                                         # bump when a solver's results change (cache keys)
 FINGERS = tuple(bonemap.FINGERS)                    # thumb index middle ring little; 4 chain entries each
 FOUR = ("index", "middle", "ring", "little")
 DOF = [f"{f}_{j}" for f in FOUR for j in ("mcp", "pip", "dip", "spr")] + ["t_palmar", "t_radial", "t_roll", "t_mcp",
@@ -122,6 +122,16 @@ class HandModel:
             h.update(np.ascontiguousarray(a).tobytes())
         h.update("\0".join(self.names).encode("utf-8"))
         return h.hexdigest()
+
+    def thinned(self, spacing):
+        """The same hand on fewer skin vertices: the first (in vertex order) in each `spacing`-metre cell of the wrist's
+        own frame, so the same vertices are kept wherever the hand sits. For solvers whose cost grows with the vertex
+        count and whose contacts need no denser skin than that."""
+        local = (self.V - self.h[0]) @ self.rest_rot[0]
+        _, keep = np.unique(np.floor(local / float(spacing)).astype(np.int64), axis=0, return_index=True)
+        keep = np.sort(keep)
+        return HandModel(self.side, self.names, self.parents, self.h, self.tails, self.rest_rot, self.V[keep],
+                         self.W[keep], sem=self.sem, arm_world=self.arm_world, arm_chain=self.arm_chain)
 
     # ---- rest anatomy
     def _anatomy(self):
@@ -784,6 +794,13 @@ WHEEL_THUMB_STARTS = np.array([[23, 50, -30, 15, 15], [45, 40, -40, 15, 15], [45
                               float)   # thumb: palmar, radial, roll, mcp, ip
 WHEEL_PITCHES = (0.0, -10.0, -20.0, -5.0, -15.0, -25.0, -8.0, -18.0)   # seeds' start pitch (deg), the fingers' tilt
 WHEEL_NFEV = (60, 20)                   # least-squares iterations: reach (loose softmin), polish (tight)
+WHEEL_SPACING = 0.002                   # the skin is searched on one vertex per 2 mm cell (a dense hand took twice as long)
+# the arm (given by the build in the grip frame: shoulder, upper arm and forearm lengths, up, outward): the wrist's bend
+# against the forearm of the best allowed elbow (mkmmd.core.armreach, as the build scores grips) may reach
+# WHEEL_WRIST_FREE degrees, each WHEEL_WRIST_SIGMA beyond is one residual unit. Without it a hand whose proportions grip
+# best tilted (short fingers, a long palm) tilts, and the wrist takes the tilt (44 degrees on a steering wheel)
+WHEEL_WRIST_FREE = 15.0
+WHEEL_WRIST_SIGMA = 5.0
 
 
 def _wheel_gap(Pg, R, r):
@@ -796,7 +813,7 @@ class _Wheel:
     parameters (WHEEL_PLACE)."""
 
     def __init__(self, hand, radius, tube, approach, wrap, prior=WHEEL_PRIOR, thumb_section=WHEEL_THUMB_SECTION,
-                 thumb_tangent=WHEEL_THUMB_TANGENT):
+                 thumb_tangent=WHEEL_THUMB_TANGENT, arm=None):
         self.hand = hand
         self.R, self.r = float(radius), float(tube)
         self.theta = math.radians(approach)
@@ -804,6 +821,8 @@ class _Wheel:
         self.prior = np.r_[prior, np.zeros(4)]
         self.behind = tuple(float(v) for v in thumb_section)
         self.tangent = tuple(float(v) * 1e-3 for v in thumb_tangent)
+        self.arm = None if arm is None else {k: (np.asarray(v, float) if k in ("shoulder", "up", "out") else float(v))
+                                             for k, v in arm.items()}
         hd, F = hand, hand.F
         self.across = hd.chir * np.cross(hd.ventral, hd.along)            # exactly orthogonal to along and ventral
         self.axes = np.stack([hd.along, self.across, hd.ventral], 1)       # the hand's axes (columns) in its frame
@@ -877,14 +896,26 @@ class _Wheel:
                 max(0.0, self.tangent[0] - tang) / 0.008, max(0.0, tang - self.tangent[1]) / 0.008,
                 max(0.0, WHEEL_THUMB_ALIGN - cosv) / 0.2]
 
+    def wrist_bend(self, A):
+        """Degrees the wrist bends against the forearm of the best allowed elbow (None without an arm, 90 when no elbow
+        is allowed)."""
+        if self.arm is None:
+            return None
+        R, p, hd, m = A["R"], A["p"], self.hand, self.arm
+        bend, _ = armreach.min_bend(m["shoulder"], R.T @ (hd.h[0] - p), m["a"], m["b"], m["up"], m["out"],
+                                    R.T @ hd.along)
+        return 90.0 if bend is None else bend
+
     # ---- residuals
     def residuals(self, x, tau=0.0004):
         """Contacts (12 phalanges, palm, thumb pad at the touching gap), the thumb's place, joint and placement priors,
-        walls (no hand vertex inside the tube) and finger clashes; tau is the softmin's sharpness (m)."""
+        walls (no hand vertex inside the tube), finger clashes and the wrist's bend; tau is the softmin's sharpness (m)."""
         A = self.analyse(x)
+        bend = self.wrist_bend(A)
         return np.concatenate([(self.softmins(A["gap"], tau) - WHEEL_G0) / 0.0005, self.slot_terms(A),
                                0.5 * (x - self.prior) / self.scale, np.maximum(0.0, WHEEL_G0 - A["gap"]) / 0.0001,
-                               self.clash.depth(A["P"], A["H"]) / 0.0003])
+                               self.clash.depth(A["P"], A["H"]) / 0.0003,
+                               [0.0 if bend is None else max(0.0, bend - WHEEL_WRIST_FREE) / WHEEL_WRIST_SIGMA]])
 
     def thumb_residuals(self, z, x, tau=0.0004):
         """The thumb alone (joints z = x[16:21]): pad on the tube, its place, priors, walls, clashes with fingers."""
@@ -987,7 +1018,8 @@ class _Wheel:
                 "penetration_mm": round(max(0.0, -float(gap.min())) * 1e3, 3),
                 "finger_clash_mm": round(float(self.clash.depth(A["P"], A["H"]).max()) * 1e3, 2),
                 "angles_deg": _angles(x[:21]),
-                "placement": {k: round(float(v), 1) for k, v in zip(WHEEL_PLACE, x[21:])}}
+                "placement": {k: round(float(v), 1) for k, v in zip(WHEEL_PLACE, x[21:])},
+                "wrist_bend_deg": None if self.arm is None else round(self.wrist_bend(A), 1)}
 
 
 def _wheel_seed(job):
@@ -1034,6 +1066,16 @@ def _wheel_args(prop, approach, wrap, seeds, tuning):
         if not lo <= hi:
             raise ValueError(f"{key} is a (min, max) pair, got {v!r}")
         kw[key] = (lo, hi)
+    arm = tuning.pop("arm", None)
+    if arm is not None:
+        try:
+            kw["arm"] = {k: [float(c) for c in arm[k]] if k in ("shoulder", "up", "out") else float(arm[k])
+                         for k in ("shoulder", "a", "b", "up", "out")}
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("arm is {shoulder: [x, y, z], a: m, b: m, up: [x, y, z], out: [x, y, z]} in the prop "
+                             "frame") from None
+        if min(kw["arm"]["a"], kw["arm"]["b"]) <= 0.0 or any(len(kw["arm"][k]) != 3 for k in ("shoulder", "up", "out")):
+            raise ValueError("arm: a and b are positive lengths, shoulder / up / out 3-vectors")
     try:
         nfev = tuple(int(n) for n in tuning.pop("nfev", WHEEL_NFEV))
     except (TypeError, ValueError):
@@ -1063,7 +1105,9 @@ def solve_wheel(hand, prop, approach=90.0, wrap=1, seeds=8, workers=None, **tuni
     seeds     parallel starts, the lowest cost wins; workers: processes (default: all cores, 1 = this process)
     tuning    prior {joint: deg} (joints as in DOF), thumb_section (min, max) degrees the thumb contact lies behind the
               palm against the wrap direction, thumb_tangent (min, max) mm it lies from the palm centre along the tube
-              toward the index side, nfev (reach, polish) least-squares iteration limits
+              toward the index side, nfev (reach, polish) least-squares iteration limits; arm {shoulder, a, b, up, out}
+              (prop frame: the shoulder, upper arm and forearm lengths, up and outward directions): the wrist's bend
+              against the forearm of the best allowed elbow stays within WHEEL_WRIST_FREE degrees where the contacts allow
     The report has contacts {finger: gap_mm (best of the three), prox_mm / mid_mm / dist_mm (palmar surface of each
     phalanx), wrapped_deg (round the tube from the palm centre to the distal contact)}, thumb {gap_mm, section_deg
     (contact angle round the tube), behind_palm_deg, tangent_mm (along the tube from the palm centre toward the index),
@@ -1071,6 +1115,7 @@ def solve_wheel(hand, prop, approach=90.0, wrap=1, seeds=8, workers=None, **tuni
     centreline), penetration_mm, finger_clash_mm, angles_deg, placement {dist (mm beyond the design), roll, pitch, yaw}.
     """
     kw, nfev = _wheel_args(prop, approach, wrap, seeds, tuning)
+    hand = hand.thinned(WHEEL_SPACING)
     wheel = _Wheel(hand, **kw)
     runs = _run_seeds(_wheel_seed, [(_hand_args(hand), kw, s, nfev) for s in range(int(seeds))], workers)
     cost, x = min(runs, key=lambda c: c[0])

@@ -82,6 +82,7 @@ import bpy
 import numpy as np
 from mathutils import Euler, Matrix, Quaternion, Vector
 
+from ...core import armreach as AR
 from ...core import fingers as FG
 from ...core import fretting as FR
 from ...core import gripframe as GF
@@ -502,8 +503,6 @@ def _pen_posture(ctx, m, smap, side, h, positions, pole, where):
 
 
 WHEEL_APPROACHES = (0.0, 30.0, 60.0, 90.0)       # palm on the rim's outer and driver sides: the grips a driver uses (deg)
-ELBOW_DOWN = 0.05                                 # m: a chosen elbow is at least this far below its shoulder ...
-ELBOW_STEP = 3.0                                  # deg: ... and not inward of it; the elbow circle is tried in these steps
 WRIST_BEND_WARN = 35.0                            # deg: a wheel hand bent more than this against its forearm is a WARNING
 
 
@@ -524,38 +523,6 @@ def _elbow(S, W, P, a, b):
     ca = (a * a + c * c - b * b) / (2.0 * a * c)
     al = math.acos(max(-1.0, min(1.0, ca)))
     return S + a * (math.cos(al) * u + math.sin(al) * (v / n))
-
-
-def _elbows(S, W, a, b, up, out):
-    """Every elbow the arm can have for a wrist at W (ELBOW_STEP apart round the shoulder-wrist line) that is not inward
-    of the shoulder (along `out`) and at least ELBOW_DOWN below it (along `up`); the straight arm's when W is out of
-    reach (the IK then stretches the arm toward it); [] when no elbow is allowed."""
-    sw = W - S
-    c = float(np.linalg.norm(sw))
-    if c < 1e-6:
-        return []
-    u = sw / c
-    if c >= a + b:
-        E = S + a * u
-        return [E] if float((E - S) @ out) >= 0.0 and float((E - S) @ up) <= -ELBOW_DOWN else []
-    p = np.cross(u, up)
-    if np.linalg.norm(p) < 1e-6:
-        p = np.cross(u, out)
-    p /= np.linalg.norm(p)
-    q = np.cross(u, p)
-    al = math.acos(max(-1.0, min(1.0, (a * a + c * c - b * b) / (2.0 * a * c))))
-    out_l = []
-    for f in np.radians(np.arange(0.0, 360.0, ELBOW_STEP)):
-        E = S + a * (math.cos(al) * u + math.sin(al) * (math.cos(f) * p + math.sin(f) * q))
-        if float((E - S) @ out) >= 0.0 and float((E - S) @ up) <= -ELBOW_DOWN:
-            out_l.append(E)
-    return out_l
-
-
-def _bend(E, W, hand_dir):
-    """Degrees between the forearm from elbow E to wrist W and the hand's direction (the joint_limits check's `wrist`)."""
-    d = (W - E) / np.linalg.norm(W - E)
-    return math.degrees(math.acos(float(np.clip(d @ hand_dir, -1.0, 1.0))))
 
 
 def _arm_frame(ctx, m, smap, side, p, out_dir):
@@ -587,21 +554,25 @@ def _wheel_for_arm(ctx, where, G, prop, params, arrays, af, label, free_elbow, w
     """An arm-chosen wheel grip: the grips a driver uses (palm on the rim's outer or driver side, WHEEL_APPROACHES, the
     `wraps`) are solved, and each is scored by how straight the wrist is on the forearm the arm makes: with the elbow in
     its pole's plane, or, `free_elbow`, at the best elbow the arm can have that is not inward of its shoulder and is below
-    it (`_elbows`). The straightest that meets the grip's gates wins. Returns (params, res, rep, info, elbow): the elbow
-    in the prop's frame when it was chosen, else None."""
+    it (mkmmd.core.armreach). The straightest that meets the grip's gates wins. With a free elbow the solver is given the
+    arm too (in the grip's frame), so it looks for grips the forearm can meet straight. Returns (params, res, rep, info,
+    elbow): the elbow in the prop's frame when it was chosen, else None."""
     Gl = af["to_prop"] @ np.asarray(G, float)
     S, P, a, b = af["S"], af["P"], af["a"], af["b"]
+    g0, Rg = Gl[:3, 3], Gl[:3, :3] / np.linalg.norm(Gl[:3, :3], axis=0)
+    arm = {"shoulder": [float(v) for v in Rg.T @ (S - g0)], "a": float(a), "b": float(b),
+           "up": [float(v) for v in Rg.T @ af["up"]], "out": [float(v) for v in Rg.T @ af["out"]]}
     tried = []
     for th in WHEEL_APPROACHES:
         for wrap in wraps:
-            cand = dict(params, approach=float(th), wrap=int(wrap))
+            cand = dict(params, approach=float(th), wrap=int(wrap), **({"arm": arm} if free_elbow else {}))
             res, rep = ctx.solve("mkmmd.solvers.grip", arrays, {"style": "wheel", "prop": prop, "params": cand},
                                  f"{label}-a{th:.0f}w{wrap:+d}")
             r = rep.get("report", {})
             Wf = Gl @ np.linalg.inv(np.asarray(res["target_in_wrist"], float))      # the wrist head frame, prop frame
             W, h = Wf[:3, 3], Wf[:3, :3] @ af["hand_local"]
-            elbows = _elbows(S, W, a, b, af["up"], af["out"]) if free_elbow else [_elbow(S, W, P, a, b)]
-            scored = [(_bend(E, W, h), E) for E in elbows if E is not None]
+            elbows = AR.elbows(S, W, a, b, af["up"], af["out"]) if free_elbow else [_elbow(S, W, P, a, b)]
+            scored = [(float(AR.bend(E, W, h)), E) for E in elbows if E is not None]
             bend, E = min(scored, key=lambda t: t[0]) if scored else (None, None)
             gaps = [v.get("gap_mm") for v in (r.get("contacts") or {}).values() if isinstance(v, dict)]
             ok = (all(g is not None and g <= 3.0 for g in gaps) and (r.get("penetration_mm") or 0.0) <= 1.0

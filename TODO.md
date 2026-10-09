@@ -12,11 +12,16 @@
 
 ## Doing
 
-- [ ] Wheel grip with the CC0 hand #hands
-    The wrist bends 44° on the wheel (18° with the designed hand), past the 35° line where the build warns, and each hand takes about 3.5 min to solve (75 s before). Find out why: the longer palm, the hand frame or the grip's targets.
-
 ## Done
 
+- [x] Wheel grip with the CC0 hand #hands
+    The wrist bent 44° on the wheel (18° with the designed hand), past the 35° line where the build warns, and each hand took about 3.5 min to solve. Now 18° on both hands, in 142 s and 112 s.
+    - [x] why: the solver only saw the rim and tilted the long-palmed, short-fingered hand 25° to wrap it; the arm came after and had to bend the wrist
+    - [x] the solver is given the arm and keeps the wrist within 15° of the forearm: 44° → 18° (designed hand 18° → 16°)
+    - [x] the skin searched on one vertex per 2 mm of the hand's own frame: 277 s → 142 s (left), 166 s → 112 s (right)
+    - [x] tests (the allowed elbows, the solver given an arm), each shown failing on its bug; docs
+    - [x] both hands on the wheel, rendered before and after (review/next_steps/33)
+    - [x] commit
 - [x] Fix the face's known flaws #face
     Every character shares the face code, so each fix lands in all of them.
     - [x] the skin dived into the inner eye corners (4.0 mm over the last 6 mm; now 1.9, Miy's 1.8): a recess on the nose side of the socket

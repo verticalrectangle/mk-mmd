@@ -1579,7 +1579,10 @@ over 3 mm, penetration or finger clash over 1 mm) and reports each hand's digest
   point at the character when the card gives it the other way. Without `approach` the grip is chosen for the arm: the palm on
   the rim's outer or driver side (0, 30, 60, 90) with either `wrap` is solved, and the one whose wrist bends least on the forearm
   the arm can make wins; without a `pole` the elbow is chosen with it (out from the shoulder and at least 5 cm below it, the
-  pole put where that elbow points), with one the elbow is the pole's. The digest gives `approach`, `wrap`,
+  pole put where that elbow points; `mkmmd.core.armreach`), with one the elbow is the pole's. With a chosen elbow the solver
+  is given the arm too (shoulder, upper arm and forearm, up, outward) and keeps the wrist within 15 degrees of the forearm the
+  best allowed elbow gives where the contacts allow: a grip found for the rim alone tilted a short-fingered, long-palmed hand
+  and bent its wrist 44 degrees. The skin is searched on one vertex per 2 mm. The digest gives `approach`, `wrap`,
   `wrist_bend_deg`, `elbow` (`chosen` or `pole`), `reach` (arm lengths to the wrist) and every grip `tried`; a bend over 35
   degrees, or a wheel out of reach, is a WARNING. `approach` and `wrap` given turn the grip by hand (`wrap` default -1: the
   fingers go round the outside of the rim, then its front). A hand that follows a turning wheel also says

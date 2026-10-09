@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from mkmmd.cli import grip as cli
+from mkmmd.core import armreach as AR
 from mkmmd.core import gripframe as GF
 from mkmmd.solvers import geom
 from mkmmd.solvers import grip as G
@@ -567,6 +568,32 @@ def test_wheel_thumb_section_tuning_moves_the_thumb_round_the_tube():
     behind = res["report"]["contacts"]["thumb"]["behind_palm_deg"]
     assert 90.0 <= behind <= 140.0
     assert wheel_solved("R")["report"]["contacts"]["thumb"]["behind_palm_deg"] < 95.0
+
+
+def test_wheel_with_the_arm_given_keeps_the_wrist_straight_and_still_holds():
+    """The build hands the solver the arm (shoulder, upper arm and forearm, up, outward, in the grip frame). A grip found
+    for the rim alone can point the hand where no allowed elbow's forearm can continue it (a hand with short fingers and
+    a long palm bent 44 degrees at the wrist on a steering wheel); given the arm, the solver turns the hand to where the
+    forearm can meet it, every contact still holding."""
+    hand, R, r = HANDS["R"], 0.19, 0.015
+    up, out = np.array([0.0, 0.0, 1.0]), np.array([0.0, 1.0, 0.0])
+
+    def wrist_and_axis(res):                                   # the wrist head and the hand's axis in the grip frame
+        T = np.array(res["target_in_wrist"])
+        Rf, pf = hand.rest_rot[0] @ T[:3, :3], hand.h[0] + hand.rest_rot[0] @ T[:3, 3]
+        return Rf.T @ (hand.h[0] - pf), Rf.T @ hand.along
+
+    W, along = wrist_and_axis(wheel_solved("R"))
+    side = np.cross(along, up) / np.linalg.norm(np.cross(along, up))
+    S = W - 0.42 * (math.cos(math.radians(60)) * along + math.sin(math.radians(60)) * side)  # 60 deg off the hand's axis
+    arm = {"shoulder": S.tolist(), "a": 0.26, "b": 0.23, "up": up.tolist(), "out": out.tolist()}
+    res = G.solve_wheel(hand, {"radius": R, "tube": r}, approach=90.0, wrap=1, seeds=2, workers=1, arm=arm)
+    free_bend, _ = AR.min_bend(S, W, 0.26, 0.23, up, out, along)
+    W2, along2 = wrist_and_axis(res)
+    bend, _ = AR.min_bend(S, W2, 0.26, 0.23, up, out, along2)
+    assert free_bend > 28.0 and bend < 22.0, (free_bend, bend)
+    assert res["report"]["wrist_bend_deg"] == pytest.approx(bend, abs=0.2)
+    wheel_holds(hand, res, R, r)
 
 
 def test_wheel_result_has_the_uniform_shape_and_serialises():
@@ -1188,7 +1215,7 @@ def test_wheel_grip_lands_on_the_worlds_rim_at_the_clock_position(side, clock):
     assert -0.5 <= gap[palm].min() * 1e3 <= 1.5
     pc = M[:3, :3] @ hand.palm_c + M[:3, 3] - c                              # the palm sits at the clock position
     perp = pc - (pc @ a) * a
-    assert np.degrees(np.arccos(GF.unit(perp) @ Gw[:3, 0])) < 3.0
+    assert np.degrees(np.arccos(np.clip(GF.unit(perp) @ Gw[:3, 0], -1.0, 1.0))) < 3.0
     assert pc @ a > 0.0                                                      # ... on the character's side of the rim
     # a steering wheel turned about its axis carries the hand with it: the same grip, rotated rigidly
     turn = G._rotm(a, 35.0)
