@@ -56,7 +56,8 @@ square crop of a vertical master). Put the plan in comments of `mk.toml` or a lo
 
 1. **Know the model.** `mk inspect MODEL.pmx` (or `mk assets add MODEL.pmx --kind model`) and read the summary: `kind`, `quirks`, chain
    `families`, `expressions`, `measure`. Quirks are things that will bite later (missing bones, non-bone vertex groups, locked physics
-   joints, missing textures).
+   joints, missing textures). A character that does not exist yet is made from a model base: `mk model new NAME`, then
+   [model_base.md](model_base.md); `mk model build` writes the PMX and the rig.json a `[[cast]]` takes.
 2. **Register and clear licences.** `mk assets add` for everything you use, then `mk assets show SLUG --terms`, read the readme lines, and fill
    in `license`, `restrictions` and `credit` with `mk assets set`. `mk assets credits` fails while anything used is unreviewed.
 3. **Set up the project.** An `mk.toml` with `[project]` (fps, frame0, duration, blend), one `[[output]]` per output, the `[[cast]]`,

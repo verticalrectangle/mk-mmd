@@ -14,7 +14,8 @@ plane (the `toe_end` landmark, z = 0), flat, so it is flat whenever the foot is.
 `cfg` is the `[outfit.legs]` table; DEFAULTS below is merged under `cfg["ribbon"]` / `cfg["shoe"]` (nested tables merge
 key by key). Sizes are metres at S = 1 and are multiplied by `fit.S` (S = head_tip.z / 1.7 = 0.793 for Rin); angles are degrees.
 
-ribbon  width 0.0145 (band, 1.15 cm at S), turns 4.5, span [0.0935, 0.877] (fractions of the way ankle -> knee, = the guides
+ribbon  enabled true (false: the outfit has no ribbon), width 0.0145 (band, 1.15 cm at S), turns 4.5, span [0.0935, 0.877]
+        (fractions of the way ankle -> knee, = the guides
         calf_ribbon_z [0.124, 0.379] for Rin; `z` = [z0, z1] overrides), offset 0.004 (height above the skin, 3.2 mm) + cup
         0.0005 (edges), handedness +1 (counter-clockwise going up), segments 26 per turn, cols 5; bow_angle 40 (azimuth of the
         knot, 0 = front, +90 = her left), bow_size/loop/loop_w/ribbon_w/droop/lift = `outfit_geo.bow`; tail_len 0.040 (2 chains
@@ -50,6 +51,7 @@ TAU = G.TAU
 
 DEFAULTS = {
     "ribbon": {
+        "enabled": True,
         "width": 0.0145, "turns": 4.5, "z": None, "span": [0.0935, 0.8770], "offset": 0.0040, "cup": 0.0005,
         "handedness": 1.0, "segments": 26, "cols": 5,
         "bow_angle": 40.0, "bow_size": 0.0190, "bow_loop": 1.05, "bow_loop_w": 0.62, "bow_ribbon_w": 0.62,

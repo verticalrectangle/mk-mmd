@@ -13,6 +13,10 @@ Included files are merged first, in order (later files override earlier ones), t
 on top. Tables merge key by key; every other value (lists included) is replaced. Included files may have their own
 `[model] include`. The merged dict keeps no `include` key; `Spec.files` lists every file read, in merge order.
 
+Model bases: `include = ["base:girl"]` merges a complete character shipped with mk (`mkmmd/model/bases/girl/model.toml`
+and what it includes) under the file's own tables, and a path value `"base:girl/hand.npz"` names a file inside that
+base. A character made with `mk model new` is such a file: the base, then only what it changes (docs/model_base.md).
+
     spec = load("model.toml")
     spec["hair"]["length"]        # a plain dict
     spec.get_path("model.out")    # Path with `~` expanded
@@ -67,8 +71,28 @@ def dig(d, dotted, default=None):
     return cur
 
 
+BASES = Path(__file__).parent / "bases"
+BASE_PREFIX = "base:"
+
+
+def bases():
+    """Names of the model bases shipped with mk: the folders of BASES that hold a model.toml."""
+    return sorted(p.name for p in BASES.iterdir() if (p / "model.toml").is_file()) if BASES.is_dir() else []
+
+
+def base_path(ref):
+    """`base:NAME` -> that base's model.toml; `base:NAME/sub/path` -> the file at sub/path inside the base."""
+    name, _, sub = str(ref)[len(BASE_PREFIX):].partition("/")
+    if name not in bases():
+        raise SpecError(f"no model base {name!r}; bases: {', '.join(bases()) or 'none'}")
+    return BASES / name / (sub or "model.toml")
+
+
 def expand(path, base=None):
-    """Path with `~` expanded; relative paths are taken against `base` (default: the cwd)."""
+    """Path with `~` expanded; `base:NAME[/file]` names a model base or a file in it (`base_path`); other relative paths
+    are taken against `base` (default: the cwd)."""
+    if str(path).startswith(BASE_PREFIX):
+        return base_path(path)
     p = Path(str(path)).expanduser()
     if not p.is_absolute() and base is not None:
         p = Path(base) / p
@@ -146,7 +170,9 @@ def apply_overrides(spec, overrides):
 
 
 def load(path, overrides=None):
-    """Load and merge a spec file (see the module docstring). `overrides`: ["a.b=1", ...] applied last."""
+    """Load and merge a spec file (see the module docstring); `base:NAME` loads a model base. `overrides`: ["a.b=1", ...]
+    applied last."""
+    path = expand(path)
     files = []
     merged = _load(path, (), files)
     spec = Spec(merged)

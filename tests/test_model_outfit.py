@@ -209,6 +209,20 @@ def test_cross_part_references_are_consistent(built):
     assert BD.check_refs([ctx.parts["body"], part], strict=True) == []
 
 
+def test_calf_ribbon_switches_off(built, tmp_path):
+    """`[outfit.legs.ribbon] enabled = false`: no ribbon round the calf (no tail chain, no ribbon material) and none of
+    its images written; the default outfit has all of them."""
+    def ribbon(ctx, part):
+        return ({b.name for b in part.bones if b.name.startswith("リボン脚")}, outfit.MAT_LEG in {m.name for m in part.materials},
+                {f.name for f in ctx.tex_dir.iterdir() if "satin_print" in f.name or "sphere_satin" in f.name})
+    on_bones, on_mat, on_files = ribbon(*built[::2])
+    assert on_bones and on_mat and len(on_files) == 2
+    ctx, _, _ = make_ctx(tmp_path, {"legs": {"ribbon": {"enabled": False}}})
+    part = outfit.build(ctx)
+    PT.check(part)
+    assert ribbon(ctx, part) == (set(), False, set())
+
+
 def test_chain_families_and_structure(built):
     ctx, skin, part = built
     fam = {}

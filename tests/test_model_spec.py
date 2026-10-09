@@ -91,3 +91,17 @@ def test_digest_is_stable_and_content_based():
     c = SP.from_dict({"a": {"x": 1, "y": 3}, "b": 1})
     assert a.digest() == b.digest() != c.digest()
     assert SP.dig(a, "a.y") == 2 and SP.dig(a, "a.zzz", 5) == 5 and a.lookup("b") == 1
+
+
+def test_bases_load_by_name_under_the_file(tmp_path):
+    """`base:NAME` merges a model base shipped with mk under the including file (its own keys win, the base's other keys
+    stay), names a file inside the base, and loads the base as a main spec; an unknown base is an error listing them."""
+    main = write(tmp_path / "c" / "model.toml", '[model]\nname = "c"\ninclude = ["base:girl"]\n[hair.bangs]\ncount = 3\n')
+    s, base = SP.load(main), SP.load("base:girl")
+    assert s["model"]["name"] == "c" and s["model"]["parts"] == base["model"]["parts"]
+    assert s["hair"]["bangs"]["count"] == 3 != base["hair"]["bangs"]["count"]
+    assert s["hair"]["bangs"]["above_eye"] == base["hair"]["bangs"]["above_eye"] and s["colors"] == base["colors"]
+    assert s.files == (*base.files, main.resolve())
+    assert SP.expand("base:girl/hand.npz").is_file() and SP.expand("base:girl") == base.path
+    with pytest.raises(SP.SpecError, match="no model base 'nobody'; bases: girl"):
+        SP.load(write(tmp_path / "x.toml", '[model]\ninclude = ["base:nobody"]\n'))

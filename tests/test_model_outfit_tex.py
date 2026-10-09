@@ -264,6 +264,14 @@ def test_dress_colors_override(dress256):
     assert ot.dress_pattern({"nonsense": "#123456"}, size=64).tolist() == ot.dress_pattern(None, size=64).tolist()
 
 
+def test_plain_dress_is_the_cloth_alone(dress256):
+    """print=False: no motif anywhere, only the cloth's weave and mottling, within a few levels of the base colour; the
+    printed dress has its leaves far off it."""
+    plain = ot.dress_pattern(size=256, print=False)
+    assert np.abs(plain[..., :3].astype(np.float32) - DRESS_BASE).max() <= 3.0
+    assert np.abs(dress256[..., :3].astype(np.float32) - DRESS_BASE).max() > 20.0
+
+
 def test_dress_leaf_motifs_have_two_tones(dress512):
     """Leaves are two-tone with darker veins: the green channel inside the print is not flat."""
     _, green, _ = dress_masks(dress512)

@@ -27,6 +27,7 @@ described like `mk inspect` does (rig.json). A review .blend with a neutral stud
 builder, the assembly or the verification fails.
 
 Examples:
+  mk model new mika                                      # ./mika/model.toml: the girl base, ready to change
   mk model build ~/projects/rin/model.toml
   mk model build model.toml --only head                  # head + the parts it needs, into <out>/only_head/
   mk model build model.toml --no-export                  # run and check the builders only (no Blender)
@@ -35,6 +36,32 @@ Examples:
   mk model info model.toml                               # what would be built, in which order
 
 Output files in <out>: <name>.pmx, tex/*.png, <name>.blend, <name>.rig.json, build.json (the printed report).
+"""
+
+NEW_HELP = """Start a character from a model base shipped with mk (mkmmd/model/bases/): writes DIR/model.toml, whose
+[model] includes the base, so the character is the base plus the tables written under it. Change it one table at a time
+and build; docs/model_base.md lists the tables, what they change, and how to check the result. Bases: {bases}.
+
+Examples:
+  mk model new mika                                      # ./mika/model.toml on the girl base
+  mk model new mika --from rin --dir ~/chars/mika        # start from the worked example instead
+  mk model build mika/model.toml
+"""
+
+NEW_SPEC = """# {name}: a character on the "{base}" model base (mkmmd/model/bases/{base}/). The base comes first; every table
+# written below goes over it key by key, so write only what changes. docs/model_base.md lists the tables and what they
+# change; mkmmd/model/bases/rin/ is a worked example (the girl base plus Rin's hair, ears, tails, dress and colours).
+#   mk model build model.toml            # PMX, textures, rig.json and a review .blend in [model] out
+[model]
+name = "{name}"
+include = ["base:{base}"]
+out = "{out}"
+
+# For example (uncomment and change):
+# [colors.hair]
+# base = "#3b2a2f"
+# [hair.braids]
+# enabled = true
 """
 
 
@@ -69,6 +96,33 @@ def add(sub):
     s.add_argument("--lights", action="store_true", help="add key/fill/rim suns (default: the scene has its own)")
     s.add_argument("--height", type=float, default=1.6, help="model height for aiming the lights")
     s.set_defaults(func=run_studio)
+
+    n = ss.add_parser("new", help="start a character on a model base (a folder with a model.toml that includes it)",
+                      description=NEW_HELP.format(bases=", ".join(SP.bases()) or "none"),
+                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    n.add_argument("name", help="the character's name: the PMX model name and the output file stem")
+    n.add_argument("--from", dest="base", default="girl", metavar="BASE", help="the base to start from (default: girl)")
+    n.add_argument("--dir", metavar="DIR", help="the folder to create (default: ./NAME)")
+    n.add_argument("--out", metavar="DIR", help="the character's [model] out (default: ~/mk-assets/models/NAME)")
+    n.set_defaults(func=run_new)
+
+
+def run_new(args):
+    if args.base not in SP.bases():
+        raise UsageError(f"no model base {args.base!r}; bases: {', '.join(SP.bases()) or 'none'}")
+    if not re.fullmatch(r"[\w-]+", args.name):
+        raise UsageError(f"name {args.name!r}: letters, digits, '_' and '-' only (it is the output file stem)")
+    folder = Path(args.dir or args.name).expanduser()
+    spec_file = folder / "model.toml"
+    if spec_file.exists():
+        raise UsageError(f"{spec_file} exists: pick another name or --dir")
+    folder.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text(NEW_SPEC.format(name=args.name, base=args.base, out=args.out or f"~/mk-assets/models/{args.name}"),
+                         encoding="utf-8")
+    spec = SP.load(spec_file)
+    emit({"created": str(spec_file.resolve()), "base": args.base, "files": [str(f) for f in spec.files],
+          "build": f"mk model build {spec_file}"})
+    return 0
 
 
 def run_studio(args):

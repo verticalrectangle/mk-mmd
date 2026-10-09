@@ -1,0 +1,11 @@
+# Rin's dress over the girl base: the leaf and flower print on near-black green cloth, green frills, and the black ribbon
+# wound round her left calf.
+[outfit]
+print = true
+[outfit.legs.ribbon]
+enabled = true
+
+[colors.outfit]
+dress_base = "#141b17"             # near-black green: the dress reads black, the frills carry the green
+frill = "#3f8f4f"                  # collar, cuffs and the skirt's ruffle: green
+frill_inner = "#9ccb8f"            # the lighter inner frill: light green

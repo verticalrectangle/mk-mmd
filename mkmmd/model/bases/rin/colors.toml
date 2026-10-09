@@ -1,0 +1,33 @@
+# Rin's colours over the girl base (only what differs). Her canon palette from the official art (the SA portrait, sampled
+# by eye and k-means), pushed through Reisen's tonal structure: how far her shadows and highlights sit from her base colour.
+
+[colors.hair]
+base = "#dc2a2e"           # fiery red (canon #eb3434 / #f53434; slightly deeper so the toon does not wash it out)
+shadow = "#8e1418"         # clump shadow / under-layers (canon #8f1917); 0.42 of the base's lightness
+deep = "#5a0c12"           # roots, scalp seam, inside of the braids
+light = "#f0503f"          # lit side of the clumps, a touch warmer than base (1.5 x base lightness)
+highlight = "#ff9b7c"      # specular band across the crown and bang tips: pale warm coral
+highlight_core = "#ffd6c0" # brightest centre of the highlight, only a thin streak
+toon_shadow_multiplier = [0.42, 0.44, 0.54]   # hair toon ramp: shadow = base x this (blue-shifted); about #942128
+rim = "#ff7a62"            # thin back-light rim on the outer edge of the side locks and braids (sphere map)
+
+[colors.eyes]
+iris_top = "#2e050c"       # gradient, top (under the upper lid): very dark wine
+iris_upper = "#7a0c1c"     # upper-middle: deep red
+iris_mid = "#c1121f"       # middle: crimson, the dominant iris colour
+iris_lower = "#ff4a3d"     # lower glow: coral red
+iris_rim = "#ffc2a0"       # bottom rim light, thin: peach
+iris_ring = "#8c0f1d"      # dark ring around the pupil
+pupil = "#1f0307"          # pupil: a vertical oval, very dark red-black
+highlight_glow = "#ffd0c0" # soft tinted secondary glow along the lower iris edge
+lash = "#2a0a10"           # heavy upper lash line and flick: near-black wine
+lash_lower = "#6b1d2a"     # thin lower lash line
+brow = "#7a1218"           # eyebrows: dark red-brown, faint, mostly hidden under the bangs
+
+[colors.ears]
+outer = "#1b1517"          # cat ears, outside and rim: black with a warm tint
+outer_sheen = "#3d3236"    # soft sheen along the ear's outer edge
+inner = "#8e2236"          # inside of the ear: dark red-pink (canon: red inner with pale tufts)
+inner_deep = "#5a1224"     # the hollow of the ear
+tail = "#1e181a"           # the two black cat tails: the ears' black, slightly lifted
+tail_tip_sheen = "#463a3e" # sheen along the top of the tails

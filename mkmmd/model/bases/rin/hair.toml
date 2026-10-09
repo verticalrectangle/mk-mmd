@@ -1,0 +1,12 @@
+# Rin's hair over the girl base: the base's bob plus her twin braids with black bows, black cat ears and two cat tails.
+[hair.braids]
+enabled = true
+clearance = 0.020               # centreline to body skin (+ half the plait): 0.012 more than the bare-body default, because the
+                                # blouse stands 8-18 mm off the skin around the chest where the braids hang (checked against
+                                # outfit_dress: no braid vertex under the dress, nearest 6 mm; at 0.008 28 vertices were 8 mm under)
+
+[hair.ears]
+enabled = true
+
+[hair.tails]
+enabled = true                 # two black cat tails from the lower back (fan convention)

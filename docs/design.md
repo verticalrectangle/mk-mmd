@@ -2644,7 +2644,10 @@ builders = {tails = "mkmmd.model.parts.hair"}       # part -> module when it is 
 ```
 
 **Spec** (`mkmmd.model.spec`): tables merge key by key, anything else (lists too) is replaced; `Spec.files` lists what
-was read; `--set a.b=1` overrides. **Builders** are `mkmmd/model/parts/<part>.py` with `@builder("hair", needs=(...))
+was read; `--set a.b=1` overrides. **Model bases** are complete characters shipped in `mkmmd/model/bases/<name>/`
+(`girl`, the neutral base; `rin`, the worked example on it): `include = ["base:girl"]` merges one under the file's own
+tables, `"base:girl/hand.npz"` names a file inside it, and `mk model build base:girl` builds it alone; [model_base.md](model_base.md)
+is the playbook for making a character from one. **Builders** are `mkmmd/model/parts/<part>.py` with `@builder("hair", needs=(...))
 def build(ctx) -> Part` (`mkmmd.model.build`): `ctx.spec`, `ctx.cfg` (the part's own table), `ctx.save_png(name, rgba)`
 (into `<out>/tex`, part name prefixed, the returned file name goes into `Material.texture/toon/sphere`), `ctx.parts`
 (built so far), `ctx.land` (landmarks: every part's `info["landmarks"]`, semantic name -> np.array(3)), `ctx.rng`,
@@ -2693,10 +2696,12 @@ semantic bones missing, morph map (semantic -> morph), chain families with bone 
 the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk look <name>.blend --view front,3q
 --target "bone('head').head" --dist 1.2` works), `<name>.rig.json` (what `mk inspect` writes; pass it as `rig =` to a
 `[[cast]]` with `pmx =`), `build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
-`--no-export` only runs and checks the builders; `mk model info SPEC` shows the plan; `mk model studio SCENE.blend --out
-OUT.blend [--floor X,Y ...] [--lights]` copies a built scene with the neutral review studio (grey world, soft floor discs,
-optionally key/fill/rim suns) so sheets of several models compare side by side. Exit codes as everywhere: 1 when a
-check or verification fails. A build never deletes the previous files first, because other projects may be casting the
+`--no-export` only runs and checks the builders; `mk model info SPEC` shows the plan; `mk model new NAME [--from BASE]
+[--dir DIR] [--out DIR]` writes DIR/model.toml, a character that includes the base (default `girl`), and never overwrites
+one; `mk model studio SCENE.blend --out OUT.blend [--floor X,Y ...] [--lights]` copies a built scene with the neutral review
+studio (grey world, soft floor discs, optionally key/fill/rim suns) so sheets of several models compare side by side. Exit
+codes as everywhere: 1 when a check or verification fails. A build never deletes the previous files first, because other
+projects may be casting the
 PMX at that moment: the PMX and rig.json are replaced atomically when ready, textures are overwritten in place (stale ones
 removed after the PMX is written), `.mk/build.lock` makes two builds into one folder take turns, and `build.json` reads
 `{"ok": false, "stage": "running"}` until the build ends (failures are kept there too).

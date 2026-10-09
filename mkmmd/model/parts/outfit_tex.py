@@ -17,13 +17,15 @@ Real-world tile sizes (metres of cloth covered by ONE tile along u, and along v 
 
 Public API (colours: a dict of '#rrggbb' strings overriding any DEFAULT_COLORS key, unknown keys are ignored):
 
-  dress_pattern(colors=None, size=2048, seed=11)         dark fabric with a leaf / vine / five-petal flower print
+  dress_pattern(colors=None, size=2048, seed=11, print=True)   dark fabric with a leaf / vine / five-petal flower print
+                                                               (print=False: the plain cloth)
   frill_texture(colors=None, size=1024, seed=3, inner=False)
   satin_texture(colors=None, size=512, seed=5, print=False)
   leather_texture(colors=None, size=512, seed=7, sole=False)
   toon_ramp(kind="dress", size=32)                       'dress' | 'frill' | 'satin' | 'leather'
   sphere_map(kind="satin", size=128)                     'satin' | 'leather'
-  build_textures(ctx, colors=None, sizes=None)           renders + saves everything, returns {key: file name}
+  build_textures(ctx, colors=None, sizes=None, dress_print=True, leg_ribbon=True)   renders + saves everything, returns
+                                                               {key: file name}
 
 The dress print is laid out in centimetres on a 30 x 30 cm torus (independent of the render size) and is meant to read
 as a floral from a distance: big motifs, sparsely scattered. Leaves are 4.5-7 cm long, the five-petal flowers 3.5-4.5 cm
@@ -830,16 +832,16 @@ def _dress_cloth(S, rng):
     return (1.0 + 0.012 * mott + 0.010 * (w / 1.5) + 0.008 * thread).astype(np.float32)
 
 
-def dress_pattern(colors=None, size=2048, seed=11):
-    """Dark dress fabric with a leaf / vine / five-petal flower print, tileable in both axes (0.30 m per tile)."""
+def dress_pattern(colors=None, size=2048, seed=11, print=True):
+    """Dark dress fabric with a leaf / vine / five-petal flower print, tileable in both axes (0.30 m per tile); with
+    print=False the plain cloth: the same weave and mottling, no motifs."""
     pal = _palette(colors)
     S = int(size)
     s = S / _T
-    lay = _dress_layout(int(seed))
+    prims = _dress_layout(int(seed)).prims if print else ()
     fam = _families(pal)
     img = np.empty((S, S, 3), np.float32)
     img[:] = pal["dress_base"]
-    prims = lay.prims
     for p in prims:
         if isinstance(p, _Leaf) and p.kind == "ghost":
             _draw_leaf(img, p, s, fam["ghost"])
@@ -1095,11 +1097,12 @@ def sphere_map(kind="satin", size=128):
 _SIZES = {"dress": 2048, "frill": 1024, "satin": 512, "leather": 512, "toon": 32, "sphere": 128}
 
 
-def build_textures(ctx, colors=None, sizes=None):
+def build_textures(ctx, colors=None, sizes=None, dress_print=True, leg_ribbon=True):
     """Render and save every outfit image with `ctx.save_png`; returns {key: file name}. Colours: DEFAULT_COLORS, then the
     project palette's black items (`ctx.spec["colors"]["black"]`: ribbon -> satin, shoe -> leather, shoe_sole -> sole), then
     `ctx.spec["colors"]["outfit"]`, then `colors`. `sizes` (optional) overrides the default edge lengths per group
-    (dress 2048, frill 1024, satin 512, leather 512, toon 32, sphere 128)."""
+    (dress 2048, frill 1024, satin 512, leather 512, toon 32, sphere 128); dress_print=False makes the dress plain cloth,
+    leg_ribbon=False leaves out the calf ribbon's images (satin_print, sphere_satin)."""
     cols = dict(DEFAULT_COLORS)
     black = (ctx.spec.get("colors") or {}).get("black") or {}
     cols.update({k: black[v] for k, v in PALETTE_BLACK.items() if v in black})
@@ -1108,7 +1111,7 @@ def build_textures(ctx, colors=None, sizes=None):
     sz = dict(_SIZES)
     sz.update(sizes or {})
     images = {
-        "dress": ("outfit_dress.png", lambda: dress_pattern(cols, sz["dress"])),
+        "dress": ("outfit_dress.png", lambda: dress_pattern(cols, sz["dress"], print=dress_print)),
         "frill": ("outfit_frill.png", lambda: frill_texture(cols, sz["frill"])),
         "frill_inner": ("outfit_frill_inner.png", lambda: frill_texture(cols, sz["frill"], inner=True)),
         "satin": ("outfit_satin.png", lambda: satin_texture(cols, sz["satin"])),
@@ -1122,4 +1125,6 @@ def build_textures(ctx, colors=None, sizes=None):
         "sphere_satin": ("outfit_sphere_satin.png", lambda: sphere_map("satin", sz["sphere"])),
         "sphere_leather": ("outfit_sphere_leather.png", lambda: sphere_map("leather", sz["sphere"])),
     }
+    if not leg_ribbon:                                          # the calf ribbon's own images: no ribbon, no images
+        del images["satin_print"], images["sphere_satin"]
     return {key: ctx.save_png(name, make()) for key, (name, make) in images.items()}

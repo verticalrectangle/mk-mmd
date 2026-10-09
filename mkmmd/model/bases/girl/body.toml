@@ -1,0 +1,14 @@
+# body.toml - the girl base's body: generated from [proportions] by the body part (mkmmd/model/parts/body.py lists every
+# [body] key: skin look, nails, resolution, the hand, land and dims overrides, skeleton options).
+[body]
+source = "procedural"
+# the generated skin look: peach cream with a warm toon, the nail plates' tint, the neck shadow band the face continues
+skin = { base = "#fffefc", blush = "#f0a09a", blush_knee = "#eba79c", crease = "#e29a92", nail = "#f5c4bc", toon_shadow_multiplier = [0.96, 0.84, 0.81], ambient = [0.5, 0.5, 0.5], specular = [0.0, 0.0, 0.0], shininess = 0.0, flush = 0.0 }
+neck_shadow = { height = 0.045, strength = 0.9, color = "#e3aa95" }
+nails = true            # nail plates on the fingertips (own "nail" material): true | false | "red" ([colors.accent] nail_red) | "#rrggbb"
+
+# the hands: a CC0 hand mesh drawn by an artist (hand.npz in this folder; make_hand.py rebuilds it from its source),
+# placed at the wrist by mkmmd/model/parts/body_hand_mesh.py. Without `mesh` the body draws its own hands from
+# body_hand.DESIGN (the design keys then apply).
+[body.hand]
+mesh = "base:girl/hand.npz"

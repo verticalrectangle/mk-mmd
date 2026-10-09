@@ -1,7 +1,9 @@
-"""Rin's outfit: the canonical dark green-black leaf-print dress with green frills (stand-up collar frill with a small black
-bow, long slightly puffed sleeves with green frilled cuffs, thin black sash, full A-line skirt ending in a deep green
+"""The outfit (by default Rin's): a dark green-black leaf-print dress with green frills (stand-up collar frill with a small
+black bow, long slightly puffed sleeves with green frilled cuffs, thin black sash, full A-line skirt ending in a deep green
 ruffle over a lighter inner frill), a black ribbon wound round the left calf with a bow near the ankle, and black
-Mary-Jane shoes with a strap and a bow.
+Mary-Jane shoes with a strap and a bow. Colours come from `[colors.outfit]` (outfit_tex DEFAULT_COLORS) and
+`[colors.black]`; `[outfit] print = false` makes the dress plain cloth and `[outfit.legs.ribbon] enabled = false` leaves
+the calf ribbon out (the model bases' neutral girl wears it so).
 
 Everything is an offset shell of the body surface published by the body part (`outfit_fit`), built from rings
 (`outfit_geo`): bodice, sleeves and ribbons take the body's own skin weights from the nearest surface point; the skirt is a
@@ -120,12 +122,14 @@ def get_landmarks(ctx):
     return F.Land(merged)
 
 
-def textures(ctx):
-    """Generated textures (file names by key); `[outfit] textures = false` skips them (flat material colours)."""
+def textures(ctx, ribbon=True):
+    """Generated textures (file names by key); `[outfit] textures = false` skips them (flat material colours), `print =
+    false` makes the dress plain cloth; without the calf ribbon (`ribbon` False) its images are not made."""
     if ctx.cfg.get("textures", True) is False:
         return {}
     from . import outfit_tex as T
-    return T.build_textures(ctx, sizes=ctx.cfg.get("texture_sizes"))
+    return T.build_textures(ctx, sizes=ctx.cfg.get("texture_sizes"), dress_print=ctx.cfg.get("print", True) is not False,
+                            leg_ribbon=ribbon)
 
 
 def guided(ctx, cfg):
@@ -144,7 +148,8 @@ def build(ctx):
     skin = skin_from_body(ctx)
     land = get_landmarks(ctx)
     fit = F.Fit(land, skin, log=ctx.log, bone_names=ctx.bones())
-    tex = textures(ctx)
+    ribbon = LG.merge(LG.DEFAULTS["ribbon"], cfg["legs"].get("ribbon"))["enabled"]
+    tex = textures(ctx, ribbon)
     mats = make_materials(tex, cfg.get("materials"))
     soup_dress = G.Soup("outfit_dress", [MAT_DRESS])
     soup_trim = G.Soup("outfit_frills", [MAT_FRILL, MAT_FRILL_IN, MAT_RUFFLE])
@@ -159,9 +164,10 @@ def build(ctx):
     D.throat_bow(fit, cfg["bow"], soup_satin, rig, info, "首", nb.name if nb else None)
     lb = ctx.find_body("下半身")
     sk = SK.skirt(fit, cfg["skirt"], info, soup_dress, soup_trim, rig, lb.name if lb else None)
-    shin = ctx.find_body("左ひざ")
-    statics = [rb for p in ctx.parts.values() for rb in p.bodies if rb.mode == "static"]
-    LG.leg_ribbon(fit, cfg["legs"], soup_satin, rig, {"左ひざ": shin.name if shin else None}, statics)
+    if ribbon:
+        shin = ctx.find_body("左ひざ")
+        statics = [rb for p in ctx.parts.values() for rb in p.bodies if rb.mode == "static"]
+        LG.leg_ribbon(fit, cfg["legs"], soup_satin, rig, {"左ひざ": shin.name if shin else None}, statics)
     LG.shoes(fit, cfg["legs"], soup_shoes, soup_satin, rig)
     meshes = [m for m in (soup_dress.mesh(), soup_trim.mesh(), soup_satin.mesh(), soup_shoes.mesh())]
     used = {n for m in meshes for n in m.mats}

@@ -1,0 +1,23 @@
+# outfit.toml - the girl base's outfit: the outfit part's dress (mkmmd/model/parts/outfit.py: a bodice with a stand-up
+# collar frill and a small bow, puffed sleeves with frilled cuffs, a thin sash, a full skirt ending in a ruffle over an inner
+# frill, Mary-Jane shoes) in plain navy cloth with blue frills. The leaf print and the ribbon round the left calf are
+# switched off here; the rin example switches them on. Every key has a default in outfit.py (DEFAULTS) and the piece
+# modules; sizes are metres for a 1.7 m body (scaled by head_tip.z / 1.7).
+[outfit]
+print = false                       # plain cloth (true: the leaf and flower print of outfit_tex.dress_pattern)
+# textures = false                  # skip the generated textures (flat colours): fast geometry iterations
+[outfit.skirt]
+columns = 20                        # chains around the skirt (spacing 18 deg: thighs and seat edges never open gaps)
+rows = 4                            # bones per chain: the first starts just below the hip joints, the last carries the ruffle
+[outfit.sleeve]
+cuff_physics = true                 # 4 small chains per cuff frill (family sleeve)
+[outfit.bodice]
+collar_physics = true               # 6 small chains on the collar frill (family coat)
+[outfit.legs.ribbon]
+enabled = false                     # true: a black ribbon wound round the left calf with a bow near the ankle
+
+# the cloth and frill colours (outfit_tex DEFAULT_COLORS has every key); ribbons, shoes and soles take [colors.black]
+[colors.outfit]
+dress_base = "#1d2533"              # dark navy cloth
+frill = "#4a5d86"                   # collar, cuffs and the skirt's ruffle: muted blue
+frill_inner = "#aebbd6"             # the lighter inner frill under the ruffle: pale blue-grey

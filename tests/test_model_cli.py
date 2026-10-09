@@ -83,6 +83,21 @@ def test_set_overrides_reach_the_builders(tmp_path, capsys):
     assert code == 0 and hair["bones"] == 5
 
 
+def test_new_starts_a_character_on_a_base(tmp_path, capsys):
+    """`mk model new NAME` writes NAME/model.toml: the base under the character's own [model] (name, out), loadable as is;
+    it never overwrites a spec, and an unknown base is a usage error naming the bases."""
+    d = tmp_path / "mika"
+    code, out = run_cli(["model", "new", "mika", "--dir", str(d), "--out", str(tmp_path / "out")], capsys)
+    assert code == 0 and out["base"] == "girl" and Path(out["created"]) == (d / "model.toml").resolve()
+    s, base = SP.load(d / "model.toml"), SP.load("base:girl")
+    assert SP.model_cfg(s)["name"] == "mika" and SP.model_cfg(s)["out"] == tmp_path / "out"
+    assert {k: v for k, v in s.items() if k != "model"} == {k: v for k, v in base.items() if k != "model"}
+    code, out = run_cli(["model", "new", "mika", "--dir", str(d)], capsys)
+    assert code == 2 and "exists" in out["error"]
+    code, out = run_cli(["model", "new", "x", "--from", "nobody", "--dir", str(tmp_path / "x")], capsys)
+    assert code == 2 and "bases: girl" in out["error"] and not (tmp_path / "x").exists()
+
+
 def have_blender():
     try:
         cfg = CFG.load()

@@ -1,0 +1,17 @@
+# The "girl" model base: a complete, neutral anime girl that mk builds from these files alone (generated body and face,
+# hair, dress and shoes, and CC0 hands). A character is this base plus the tables it changes:
+#   mk model new NAME                      # NAME/model.toml with include = ["base:girl"] (docs/model_base.md)
+#   mk model build base:girl --out /tmp/girl          # the base itself, to look at
+# mkmmd/model/bases/rin/ is the worked example: this base plus Rin's hair, cat ears, tails, dress and colours.
+[model]
+name = "girl"
+parts = ["body", "head", "hair", "outfit"]
+include = ["proportions.toml", "colors.toml", "body.toml", "head.toml", "hair.toml", "outfit.toml"]
+out = "~/mk-assets/models/girl"
+seed = 1
+
+[model.needs]
+body = []
+head = ["body"]
+hair = ["body", "head"]
+outfit = ["body"]

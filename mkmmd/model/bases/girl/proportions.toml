@@ -1,0 +1,373 @@
+# proportions.toml - the girl base's proportions: every size of the body and the face layout (the head part's
+# [proportions.face]), the outfit's guide heights and the reference numbers the parts check against.
+#
+# Where the numbers come from: they were made for Rin (the rin example builds on this base) from Miy's Reisen model, by
+# measuring it, never by copying its mesh: every number is Reisen's measured number (tools/measure.py on her rest pose)
+# scaled, S_BODY = 0.95 below the head pivot and S_HEAD = 0.985 for the head (about the pivot). The comments below still
+# speak of Rin and Reisen; keep this note when the base is shared.
+#
+# Everything lives under [proportions.*] so it cannot collide with the part files' own tables. Model space: metres, Z up,
+# the character faces -Y, feet on z = 0, centred on x = 0, her LEFT is +X.  Only the left (.L) side is listed; .R is the
+# x-mirror.
+#
+# HEIGHT: crown (hair top, ears excluded) 1.427 m = 95.5 % of Reisen's 1.494 m; the head is 98.5 % of Reisen's absolute
+# size on a 95 % body = 5.41 heads tall (Reisen 5.58): a slightly bigger head reads cuter and keeps the face layout, eye
+# size and style. Seats, steering wheels and grips of the mk pipeline are made for this size.
+
+[proportions]
+s_body = 0.95
+s_head = 0.985
+reisen_height = 1.4935          # crown incl. hair, no ears
+height = 1.4267                           # Rin, crown incl. hair, no ears (cat ears add ~0.09)
+height_skull = 1.3988                     # top of the bare skull
+head_height_skull = 0.2355   # chin (under the jaw) to skull top
+head_height_hair = 0.2635
+heads_tall_hair = 5.415
+heads_tall_skull = 5.939
+eye_height = 1.2604
+eye_fraction_from_chin = 0.412   # Reisen's eye line sits LOW in the head (41 %); keep it
+
+
+[proportions.landmarks]
+# Head positions of the standard bones, named like mkmmd/core/bonemap.py (.R = mirror of .L); the model's skeleton
+# (mkmmd.model.skeleton.standard_bones) takes these.  head_tip = end of the head bone; toe.L = ball of the foot,
+# toe_end.L = front of the foot at the floor; eye.L = eyeball-sphere centre (RinHead's pivot); eyes = the 両目 control bone above the face.
+# No finger joints: Rin's hands have their own design (the generated body's [body.hand], mkmmd body_hand.DESIGN), and
+# the finger joints are made from it at the wrist.
+
+root = [0.0000, -0.0027, -0.0036]
+center = [0.0000, -0.0167, 0.8419]
+groove = [0.0000, -0.0167, 0.8564]
+waist = [0.0000, -0.0508, 0.8823]
+lower_body = [0.0000, -0.0508, 0.8766]
+upper_body = [0.0000, -0.0508, 0.8880]
+upper_body2 = [0.0000, -0.0479, 0.9680]
+neck = [0.0000, 0.0020, 1.1563]
+head = [0.0000, -0.0045, 1.2041]
+head_tip = [0.0001, -0.0133, 1.3483]
+eyes = [0.0000, -0.0981, 1.4489]
+"eye.L" = [0.0422, -0.0458, 1.2604]
+"shoulder_p.L" = [0.0438, 0.0084, 1.1265]
+"shoulder.L" = [0.0438, 0.0084, 1.1265]
+"shoulder_c.L" = [0.1025, 0.0057, 1.0781]
+"arm.L" = [0.0868, 0.0057, 1.1206]
+"arm_twist.L" = [0.1893, 0.0081, 1.0560]
+"elbow.L" = [0.2539, 0.0132, 1.0140]
+"wrist_twist.L" = [0.3395, 0.0089, 0.9702]
+"wrist.L" = [0.3941, 0.0061, 0.9418]
+"leg.L" = [0.0755, -0.0356, 0.7425]
+"knee.L" = [0.0527, -0.0320, 0.4189]
+"ankle.L" = [0.0602, -0.0008, 0.0936]
+"toe.L" = [0.0569, -0.0796, 0.0390]
+"toe_end.L" = [0.0538, -0.1566, 0.0000]
+"leg_ik.L" = [0.0601, -0.0006, 0.0902]
+"toe_ik.L" = [0.0538, -0.1566, 0.0000]
+
+[proportions.rest_pose]
+# Reisen's rest pose is an A-pose with arms 32.5 deg below horizontal; Rin copies it (the pipeline's grips and
+# poses were developed on it).  Angles in degrees below the horizontal (x-z plane) for the left arm.
+upper_arm_deg = 32.5
+forearm_deg = 27.2
+hand_deg = 33.6
+leg_knock_in_deg = 4.0   # hip to knee, towards the midline
+
+[proportions.segments]
+# Bone-segment lengths (m).  Reisen -> Rin (x0.95).
+upper_arm = 0.1984          # Reisen 0.2088
+forearm = 0.1575              # Reisen 0.1658
+# the hand (wrist to fingertip, palm, finger segments) is Rin's own design: [body.hand] / mkmmd body_hand.DESIGN
+thigh = 0.3241                  # Reisen 0.3412
+shin = 0.3267                    # Reisen 0.3439
+neck = 0.0483                    # neck bone, Reisen 0.0508
+shoulder_joint_width = 0.1736      # arm head to arm head, Reisen 0.1827
+hip_joint_width = 0.1510           # leg head to leg head, Reisen 0.1589
+ankle_to_toe_tip = 0.1896
+
+[proportions.sections.torso]
+# Horizontal cuts of the body under the clothes (arms excluded): z (height), full width (x extent), y_front / y_back
+# (the front is -Y).  Hips are the widest cut, the waist the narrowest (hourglass: waist/hip = 0.54).
+z = [0.7220, 0.7410, 0.7600, 0.7790, 0.7980, 0.8170, 0.8360, 0.8550, 0.8740, 0.8930, 0.9120, 0.9310, 0.9500, 0.9690, 0.9880, 1.0070, 1.0260, 1.0450, 1.0640, 1.0830, 1.1020, 1.1210, 1.1400, 1.1590]
+width = [0.2110, 0.2336, 0.2458, 0.2408, 0.2322, 0.2215, 0.2027, 0.1864, 0.1708, 0.1555, 0.1426, 0.1337, 0.1359, 0.1412, 0.1506, 0.1570, 0.1687, 0.1730, 0.1703, 0.1675, 0.1436, 0.1060, 0.0763, 0.0458]
+y_front = [-0.0805, -0.1012, -0.1064, -0.1081, -0.1088, -0.1063, -0.1059, -0.1071, -0.1073, -0.1054, -0.1050, -0.1045, -0.1043, -0.1036, -0.1017, -0.1025, -0.1095, -0.0866, -0.0825, -0.0724, -0.0558, -0.0406, -0.0238, -0.0246]
+y_back = [0.0462, 0.0547, 0.0584, 0.0587, 0.0564, 0.0495, 0.0390, 0.0243, 0.0154, 0.0080, 0.0056, 0.0066, 0.0141, 0.0218, 0.0333, 0.0404, 0.0452, 0.0499, 0.0536, 0.0565, 0.0562, 0.0535, 0.0456, 0.0359]
+
+[proportions.sections.landmark]
+# Named cuts: [z, width, y_front, y_back]
+hip = [0.7600, 0.2458, -0.1064, 0.0584]          # widest
+waist = [0.9310, 0.1337, -0.1045, 0.0066]         # narrowest
+chest = [1.0260, 0.1687, -0.1095, 0.0452]         # deepest (bust)
+
+[proportions.sections.neck]
+# Neck ring just under the jaw: diameter across (x), diameter front-back (y), and the y of its front and back
+# (Reisen's neck is thin and slightly forward-leaning).  The cut widens fast below z = 1.149 into the shoulder line.
+z = 1.1590
+width = 0.0458
+depth = 0.0605
+y_front = -0.0246
+y_back = 0.0359
+base_width = 0.0763                # at z = 1.140
+
+[proportions.sections.limb]
+# Cross-section diameters [major, minor] (m) perpendicular to the bone, from skin cuts of Reisen x0.95.
+thigh_top = [0.1280, 0.1098]        # 10 % down the thigh
+thigh_mid = [0.1030, 0.0881]
+thigh_low = [0.0768, 0.0694]        # just above the knee
+knee = [0.0781, 0.0663]
+calf = [0.0770, 0.0772]          # widest calf, 25 % down the shin
+shin_low = [0.0583, 0.0482]
+ankle = [0.0518, 0.0421]           # narrowest, 85 % down the shin
+upper_arm_top = [0.0605, 0.0523]
+upper_arm_mid = [0.0557, 0.0505]
+elbow = [0.0529, 0.0483]
+forearm_top = [0.0566, 0.0508]
+forearm_mid = [0.0463, 0.0466]
+wrist = [0.0410, 0.0268]            # flat: wide x thin
+# the hand's widths are Rin's own design ([body.hand] / mkmmd body_hand.DESIGN)
+
+[proportions.sections.foot]
+# Shoe (with a small heel) and the foot inside it, one side: length (y), width (x), and the heel/sole height.  Reisen's rest
+# foot is plantarflexed (34 deg ankle to ball), the pipeline's leg IK expects that.
+shoe_length = 0.1950
+shoe_width = 0.0814
+shoe_y = [-0.1475, 0.0475]      # toe (front) .. heel (back)
+shoe_x = [0.0174, 0.0989]
+sole_z = 0.0
+foot_length = 0.1696
+foot_width = 0.0700
+foot_inner_floor_z = 0.0229
+
+[proportions.head]
+# The head as Reisen draws it (an inverted egg: widest at the temples, narrow pointed chin), scaled about the pivot.
+pivot = [0.0000, -0.0045, 1.2041]                       # 頭 bone head, model space
+crown_skull = 1.3988
+crown_hair = 1.4267
+chin_under_jaw = 1.1632                # lowest point of the face shell (jaw hinge, y = -0.025)
+chin_point = [-0.0811, 1.1778]       # [y, z] of the front-lowest chin point
+nose_tip = [-0.1188, 1.2321]        # [y, z]
+forehead_front = [-0.1135, 1.3206]   # [y, z] front-most skull point
+width_max = 0.1895                   # skull width at the temples, z = 1.325
+width_eye_level = 0.1653
+width_cheek = 0.1421                   # z = 1.226
+width_mouth = 0.1198                   # z = 1.207
+width_chin = 0.0588                    # z = 1.187
+skull_depth = 0.1970                    # forehead to back of skull [INFERENCE: the face shell is open at the back; hair cap less its thickness]
+skull_back_y = 0.0839                  # [INFERENCE]
+hair_cap_width = 0.2679                  # hair volume around the skull at z = 1.315 (width 0.269 in Reisen, depth 0.236)
+hair_cap_back_y = 0.1105
+# Named widths above (temples, eye level, cheeks, mouth, chin) and the named points (forehead, nose tip, chin point) are the
+# whole description of the head outline: proportions only, no dense outline tables.
+
+[proportions.face]
+# Face layout, absolute metres.  Reisen's values are in the comments.  Style: huge eyes at the face's full width, set LOW (41 %
+# up from the chin), a tiny mouth and a hint of a nose, brows faint and mostly under the bangs.
+eye_z = 1.2604                         # eye centre height (Reisen 1.3246)
+eye_x = 0.0476                          # eyeball centre x (Reisen 0.0483); iris centre x = 0.0422 (slightly cross-eyed, Reisen 0.0428)
+eye_spacing = 0.0952                    # centre to centre; inner-corner gap 0.0313; outer corners span 0.1682 (= the face width at eye level)
+eye_width = 0.0685                      # visible eye incl. the lash wing (Reisen 0.0695)
+eye_height = 0.0496                     # visible opening (Reisen 0.0504); the upper lash line rides 0.0186 above it
+eye_outer_tilt_deg = 4.0                         # Rin: outer corner slightly UP (cheeky); Reisen is ~0
+iris_width = 0.0358                      # Reisen 0.0363
+iris_height = 0.0433                     # taller than wide, 87 % of the opening; Reisen 0.0440
+eye_depth_y = -0.0939                       # front of the eyeball (iris plane y = -0.0863)
+upper_lash_top_z = 1.3038                # top of the lash flick
+lower_lash_z = 1.2359
+brow_z = 1.3036                            # brow line (Reisen +0.043 above the eye centre)
+brow_x = [0.0256, 0.0768]                    # inner .. outer end of the brow, per side
+brow_thickness = 0.0035
+nose_tip = [-0.1188, 1.2321]          # [y, z]; protrudes 0.0164 past the face plane
+nose_hint_z = [1.2233, 1.2361]               # the single short nose line (bottom, top)
+mouth_z = 1.2051                          # closed-mouth line centre (Reisen 1.2685)
+mouth_width = 0.0453                        # closed (Reisen ~0.048); corners lifted 0.0030
+mouth_open_width = 0.0520                   # the "a" shape interior (Reisen 0.0528)
+mouth_open_height = 0.0349
+mouth_open_z = [1.1887, 1.2235]
+mouth_front_y = -0.0972
+chin_to_mouth = 0.0273                      # lowest chin point to mouth line
+fang = true                                       # canon: a small fang may show in the smile morph
+
+[proportions.hair_guides]
+# Targets for the hair and ears (design, from the canon portrait plus Rin's proportions); owners may refine.
+hairline_centre_z = 1.3869          # where the bangs start on the crown (the forehead is hidden by bangs)
+hairline_temple = [0.0936, 1.3297]        # [x, z] hairline at the temples
+bangs_bottom_z = 1.3097                   # blunt cut just above the eyes (the upper lash line is 1.3038)
+side_lock_bottom_z = 1.1778                # chin length
+side_lock_x = 0.0965                         # lock centre line, per side (just outside the face)
+back_hair_bottom_z = 1.1751                   # nape length: ends about a collar-height above the collar top
+braid_root = [0.0867, 0.0297, 1.2214]      # [x, y, z] behind and below the ear
+braid_path = [[0.0867, 0.0297, 1.2214], [0.098, 0.000, 1.1263], [0.112, -0.055, 1.1006], [0.115, -0.080, 1.0300], [0.113, -0.088, 0.9800]]   # one side: root, below the ear, in front of the shoulder, bottom bow, tuft end
+braid_end_z = 0.9800                       # tip incl. the loose tuft: just under the bust line
+braid_bow_z = [1.1263, 1.0300]                 # top bow beside the jaw, bottom bow at the chest
+cat_ear_base = [0.0709, -0.0294, 1.3638]       # [x, y, z] base centre on the skull top, per side
+cat_ear_width = 0.0739
+cat_ear_height = 0.0936                        # above the hair surface (about 0.36 head heights)
+cat_ear_tilt_out_deg = 12.0
+human_ear_z = 1.2504                         # centre height of the (hidden) human ears
+human_ear_x = 0.0886
+human_ear_y = -0.0018
+
+[proportions.outfit_guides]
+# Heights for the outfit, derived from the body above (canon: stand collar, long sleeves with frilled cuffs, sash at the
+# waist, A-line skirt to just below the knee, leg ribbon, Mary Janes).
+collar_top_z = 1.1593           # stand collar tops out just under the jaw
+sash_z = 0.9310                           # at the narrowest cut
+skirt_waist_z = 0.9110
+skirt_hem_z = 0.3689                           # just below the knee (knee at 0.419)
+calf_ribbon_z = [0.1236, 0.3789]               # spiral wound round the left calf, bow near the ankle
+cuff_z_arm_end = 0.1578                       # forearm length: the frilled cuff ends at the wrist
+
+[proportions.reisen]
+# Reisen's own measured numbers (unscaled), for A/B checks against Rin's render.
+crown_hair = 1.4935
+crown_skull = 1.4651
+bunny_ear_top = 1.7139
+chin_under_jaw = 1.226
+chin_point = [-0.0825, 1.2408]
+eye_z = 1.3246
+head_height_skull = 0.2391
+head_height_hair = 0.2675
+heads_tall_hair = 5.5832
+heads_tall_skull = 6.1276
+head_width_max = 0.1924
+head_width_eye_level = 0.1678
+head_width_cheek = 0.1443
+head_width_mouth = 0.1216
+head_width_chin = 0.0597
+shoulder_height = 1.1795
+shoulder_width = 0.1827
+hip_height = 0.7816
+knee_height = 0.441
+ankle_height = 0.0986
+waist_width = 0.1407
+hip_width = 0.2587
+chest_width = 0.1776
+
+[proportions.ratios]
+# Dimensionless proportions, Rin (left value in the comment: Reisen).  The face and body ratios are the style: keep them.
+heads_tall_hair = 5.415      # Reisen 5.583
+heads_tall_skull = 5.939      # Reisen 6.128
+head_width_over_height = 0.805      # Reisen 0.805
+eye_line_fraction_from_chin = 0.412      # Reisen 0.412
+mouth_line_fraction_from_chin = 0.178      # Reisen 0.178
+eye_width_over_head_width = 0.361      # Reisen 0.361
+eye_height_over_eye_width = 0.725      # Reisen 0.725
+iris_height_over_eye_height = 0.873      # Reisen 0.873
+eye_outer_span_over_face_width_at_eyes = 1.018      # Reisen 1.018
+inner_eye_gap_over_head_width = 0.165      # Reisen 0.165
+mouth_width_over_head_width = 0.239      # Reisen 0.249
+cheek_width_over_temple_width = 0.750      # Reisen 0.750
+chin_width_over_temple_width = 0.310      # Reisen 0.310
+neck_width_over_head_width = 0.242      # Reisen 0.251
+shoulder_joint_width_over_height = 0.122      # Reisen 0.122
+hip_width_over_shoulder_joint_width = 1.416      # Reisen 1.416
+waist_over_hip = 0.544      # Reisen 0.544
+chest_over_waist = 1.262      # Reisen 1.262
+hip_joint_height_over_height = 0.520      # Reisen 0.523
+arm_length_over_height = 0.360      # Reisen 0.362
+hand_over_height = 0.098      # Reisen 0.111 (Rin's own hand: [body.hand], smaller and soft)
+hand_over_head_height = 0.595      # Reisen 0.694
+shoe_length_over_height = 0.137      # Reisen 0.137
+upper_arm_over_forearm = 1.259      # Reisen 1.259
+thigh_over_shin = 0.992      # Reisen 0.992
+
+[proportions.neck_visible]
+# The visible neck is short: from under the jaw to the collar line (the shirt/collar hides the rest).
+length = 0.0246            # [INFERENCE: read off the front render, jaw underside z 1.226 to the collar top about z 1.20 in Reisen's units]
+bone_length = 0.0483               # the neck bone, Reisen 0.0508
+
+# Skin-hugging static colliders for the body part (mk's strand solver collides hair/ears/tails/skirts with the model's
+# rigid bodies); left side listed, the right side is the x-mirror.  Capsule = segment a-b with radius r.  Add about
+# 0.004 m for cloth where a garment sits on top.  [INFERENCE for the torso cylinders: fitted to the section tables.]
+[[proportions.collider]]
+bone = "head"
+shape = "sphere"
+a = [0.0000, -0.0148, 1.3048]
+radius = 0.0940
+note = "hugs the skull; hair adds its own thickness"
+
+[[proportions.collider]]
+bone = "neck"
+shape = "capsule"
+a = [0.0000, 0.0020, 1.1563]
+b = [0.0000, -0.0045, 1.2041]
+radius = 0.0266
+note = "neck bone to head pivot"
+
+[[proportions.collider]]
+bone = "upper_body2"
+shape = "capsule"
+a = [0.0000, -0.0340, 0.9780]
+b = [0.0000, -0.0300, 1.1263]
+radius = 0.0740
+note = "chest, bust included"
+
+[[proportions.collider]]
+bone = "upper_body"
+shape = "capsule"
+a = [0.0000, -0.0490, 0.9066]
+b = [0.0000, -0.0450, 0.9680]
+radius = 0.0580
+note = "waist to under-bust"
+
+[[proportions.collider]]
+bone = "lower_body"
+shape = "capsule"
+a = [-0.0750, -0.0240, 0.7900]
+b = [0.0750, -0.0240, 0.7900]
+radius = 0.0820
+note = "pelvis: a capsule along x (rotate 90 deg about y)"
+
+[[proportions.collider]]
+bone = "shoulder.L"
+shape = "capsule"
+a = [0.0438, 0.0084, 1.1265]
+b = [0.0868, 0.0057, 1.1206]
+radius = 0.0340
+note = "clavicle to shoulder joint"
+
+[[proportions.collider]]
+bone = "arm.L"
+shape = "capsule"
+a = [0.0868, 0.0057, 1.1206]
+b = [0.2539, 0.0132, 1.0140]
+radius = 0.0266
+note = "upper arm"
+
+[[proportions.collider]]
+bone = "elbow.L"
+shape = "capsule"
+a = [0.2539, 0.0132, 1.0140]
+b = [0.3941, 0.0061, 0.9418]
+radius = 0.0232
+note = "forearm"
+
+[[proportions.collider]]
+bone = "wrist.L"
+shape = "capsule"
+a = [0.3941, 0.0061, 0.9418]
+b = [0.4545, 0.0068, 0.9016]
+radius = 0.0220
+note = "palm"
+
+[[proportions.collider]]
+bone = "leg.L"
+shape = "capsule"
+a = [0.0755, -0.0356, 0.7425]
+b = [0.0527, -0.0320, 0.4189]
+radius = 0.0478
+note = "thigh (tapers 0.060 -> 0.037)"
+
+[[proportions.collider]]
+bone = "knee.L"
+shape = "capsule"
+a = [0.0527, -0.0320, 0.4189]
+b = [0.0602, -0.0008, 0.0936]
+radius = 0.0347
+note = "shin (tapers 0.039 -> 0.024)"
+
+[[proportions.collider]]
+bone = "ankle.L"
+shape = "capsule"
+a = [0.0602, -0.0008, 0.0936]
+b = [0.0538, -0.1366, 0.0120]
+radius = 0.0320
+note = "foot incl. shoe"
