@@ -7,7 +7,7 @@ playbook.
 
 | Base | What it is |
 |---|---|
-| `girl` | the neutral base: generated body and face, a chin-length chestnut bob, brown eyes drawn soft (a short low wing, a thin band), a plain navy dress with blue frills and a calf-length skirt, black Mary-Janes, CC0 hands |
+| `girl` | the neutral base: Blender Studio's stylized body (CC0) fitted to her skeleton, a generated face, a chin-length chestnut bob, brown eyes drawn soft (a short low wing, a thin band), a plain navy dress with blue frills and a calf-length skirt, black Mary-Janes, CC0 hands |
 | `rin` | the worked example: `girl` plus Rin's red hair, twin braids, cat ears and tails, red eyes in her cat-like drawing, leaf-print dress with green frills and a calf ribbon (Rin Kaenbyou of Touhou) |
 
 ## Start
@@ -113,8 +113,8 @@ the base's size.
 - A character is done when it builds and verifies with an empty `warnings` list, and its sheets have been looked at from
   all sides.
 - Library changes come with tests that fail on the bug they guard against, and the full suite passes.
-- Never commit built models, renders or downloaded sources. The one committed mesh is the base's CC0 hand,
-  `mkmmd/model/bases/girl/hand.npz`.
+- Never commit built models, renders or downloaded sources. The committed meshes are the base's CC0 hand and body,
+  `mkmmd/model/bases/girl/hand.npz` and `body.npz` (`make_hand.py` and `make_body.py` rebuild them from their sources).
 - Library code names no character; characters live in `mkmmd/model/bases/` and in project specs.
 
 ## Measuring and judging
@@ -131,9 +131,10 @@ the base's size.
 ## Parts from other artists: what the hands and the body taught
 
 The base's hands were designed in code three times, and each looked worse than the next try with a CC0 glove from an
-artist's model. The generated body's boxy shoulders, hip ledge and thin legs call for the same: `[body] source = "mesh"`
-fits Blender Studio's stylized body (CC0) to her skeleton instead. Organic shapes (hands, bodies, faces) come out better
-from an artist's mesh; code fits it, rigs it, welds it and checks it.
+artist's model. The generated body's boxy shoulders, hip ledge and thin legs went the same way: the girl wears Blender
+Studio's stylized body (CC0), fitted to her skeleton (`[body] source = "mesh"`; `"procedural"` still draws the generated
+one). Organic shapes (hands, bodies, faces) come out better from an artist's mesh; code fits it, rigs it, welds it and
+checks it.
 
 - **Licence on the author's page.** Read the terms where the author publishes them, not in a search summary. CC0 (public
   domain) needs no credit. Record the source and licence in the asset (make_hand writes `license` and `source` into
@@ -160,8 +161,14 @@ from an artist's mesh; code fits it, rigs it, welds it and checks it.
   leg) is a harmonic field between seed regions, so it follows the surface: the side of the chest under the arm stays
   torso. Fit with long hand-overs, weight with short ones (`SHARE`): the upper arm is all arm 7 cm past the joint.
 - **Fit to her skeleton, keep its flesh.** Each limb segment turns and stretches onto her bone, the girth scaled by her
-  size only; the torso warps by height through her hip joints, shoulder joints and neck seam; the foot keeps its flat
-  stance on the shoe's inner floor. Her rig, heights and grips stay what they were, so nothing downstream moves.
+  size only (her neck seam's height over the donor's, `leg_extra` left out: longer legs make no wider body); the torso
+  warps by height through her hip joints, shoulder joints and neck seam; the foot keeps its flat stance on the shoe's
+  inner floor. Her rig, heights and grips stay what they were, so nothing downstream moves.
+- **The neighbours meet new flesh.** Build every part on it and read the warnings. A real neck widens into the shoulders
+  sooner than the generated one: the back hair now keeps 4 mm off the body's skin (`hair_head.off_body`), and colliders
+  fitted to the skin a bone owns took the trapezius with the shoulder (a ball of 6 cm radius reaching 4 cm above the
+  skin, the hair's chains inside it), so the shoulder's are as wide as its top (`body_donor.shoulder_tops`). Sharper
+  creases (the armpit) need distances signed by the edge's normal, not one face's (`outfit_fit.Skin.outward`).
 - **Cut where the neighbour starts.** The body's head comes off at a level plane just under the jaw and its neck ring is
   laid onto the seam ellipse the head builds on; each forearm is cut at an edge loop just before the hand's seam and a
   strip joins it to a ring of the hand's 56 points sampled from the fitted skin.
@@ -173,4 +180,6 @@ The format of a hand mesh is in `mkmmd/model/parts/body_hand_mesh.py`, of a body
 - Proportions and the face layout: Reisen's measured numbers (Miy's model, measured and never copied), scaled x0.95 for
   the body and x0.985 for the head. Keep this note when the base is shared (proportions.toml says it too).
 - Hands: the left glove of B-chan by AmarilloArts, CC0 1.0.
+- Body: the stylized female body of Blender Studio's Human Base Meshes v1.4.1 ("by Blender Studio and community
+  contributions", CC0 1.0, blender.org's demo files), fitted to her skeleton; she keeps her proportions, it gives the flesh.
 - Rin's hair, ears, tails and dress are her character design (Touhou); the neutral girl carries none of it.

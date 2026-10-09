@@ -3,7 +3,8 @@
 `Skin` is a triangulated body surface with optional per-vertex weights. It answers the questions a tailor asks:
  - `outline`: the radial profile of a cross-section (a plane through a centre, rays from the centre, nearest or
    farthest crossing), the base of every offset shell (bodice rings, sleeves, ribbon turns, shoe stations);
- - `closest`: signed distance to the surface (negative inside), closest point and barycentrics, in chunks;
+ - `closest`: signed distance to the surface (negative inside), closest point and barycentrics, in chunks; signed by the
+   face's normal, or on an edge or a corner by its pseudo-normal (`outward`);
  - `transfer`: skin weights of the nearest body surface points for garment vertices, optionally restricted to bones.
 `Land` wraps the landmark dict (semantic names such as `arm.L`, `knee.R`) with fallbacks; `provisional_skin` builds a
 simple mannequin from landmarks so the outfit can be developed and tested before (or without) the real body."""
@@ -204,14 +205,49 @@ class Skin:
     # ---- distances and weights (mkmmd.model.skin does the nearest-surface search and the weight transfer)
     def closest(self, pts):
         """(signed distance (q,), closest point (q, 3), tri index (q,), barycentric (q, 3)) of points to the surface;
-        negative = behind the surface (the winding decides)."""
+        negative = behind the surface (the winding decides, through `outward`)."""
         pts = np.asarray(pts, float).reshape(-1, 3)
         q, tri, bary, _ = SK.closest_on_mesh(pts, self.verts, self.tris)
-        A, B, C = (self.verts[self.tris[tri, i]] for i in range(3))
-        nrm = G.unit(np.cross(B - A, C - A)) * (-1.0 if self._flip else 1.0)
         dist = np.linalg.norm(pts - q, axis=1)
-        sgn = np.where(np.einsum("ij,ij->i", pts - q, nrm) < 0, -1.0, 1.0)
+        sgn = np.where(np.einsum("ij,ij->i", pts - q, self.outward(tri, bary)) < 0, -1.0, 1.0)
         return dist * sgn, q, tri, bary
+
+    def outward(self, tri, bary):
+        """Unit outward normals (q, 3) at surface points given as (triangle, barycentric) that tell in front from behind
+        for the points closest to them: the face's normal inside a face; on an edge the sum of the normals of the faces
+        that share it, at a corner the normals of the faces round it weighted by their angles there (the angle-weighted
+        pseudo-normals of Baerentzen and Aanaes). A point behind a fold, such as deep under an armpit's crease, is closest
+        to the fold's edge, where one face's normal may say in front: which face the search returns is arbitrary."""
+        tri, bary = np.asarray(tri, int), np.asarray(bary, float).reshape(-1, 3)
+        fn, edge, corner = self._pseudo_normals()
+        n = fn[tri]
+        on = (bary > 1e-9).sum(1)
+        e, c = np.flatnonzero(on == 2), np.flatnonzero(on == 1)
+        if len(e):
+            n[e] = G.unit(edge[tri[e], np.argmin(bary[e], axis=1)])
+        if len(c):
+            n[c] = G.unit(corner[self.tris[tri[c], np.argmax(bary[c], axis=1)]])
+        return n
+
+    def _pseudo_normals(self):
+        """(face (T, 3) unit, edge (T, 3, 3): per triangle the edge opposite each corner, corner (V, 3)) outward normals,
+        the last two unnormalised sums (see `outward`); made once per surface."""
+        pn = getattr(self, "_pn", None)
+        if pn is None:
+            V, T = self.verts, self.tris
+            A, B, C = (V[T[:, i]] for i in range(3))
+            fn = G.unit(np.cross(B - A, C - A)) * (-1.0 if self._flip else 1.0)
+            corner = np.zeros_like(V)
+            for k in range(3):
+                a, b = G.unit(V[T[:, (k + 1) % 3]] - V[T[:, k]]), G.unit(V[T[:, (k + 2) % 3]] - V[T[:, k]])
+                np.add.at(corner, T[:, k], fn * np.arccos(np.clip(np.einsum("ij,ij->i", a, b), -1.0, 1.0))[:, None])
+            ends = np.sort(np.stack([T[:, [1, 2]], T[:, [2, 0]], T[:, [0, 1]]], 1).reshape(-1, 2), axis=1)
+            _, inv = np.unique(ends, axis=0, return_inverse=True)
+            inv = inv.reshape(-1)
+            sums = np.zeros((int(inv.max()) + 1 if len(inv) else 0, 3))
+            np.add.at(sums, inv, np.repeat(fn, 3, axis=0))
+            pn = self._pn = (fn, sums[inv].reshape(len(T), 3, 3), corner)
+        return pn
 
     def transfer(self, pts, bones=None, fallback=None, faces=None, smooth=0):
         """Skin weights {bone: (q,)} of the nearest surface points for `pts`; `bones` restricts the donor bones (the rest
@@ -525,19 +561,20 @@ class Fit:
 
     def push_out(self, pts, margin, iters=3):
         """Move points closer than `margin` to the body surface (or behind it) out to `margin` from the nearest surface
-        point: along the line from that point when in front, along the surface normal when behind. Returns (n, 3)."""
+        point, the shortest way: along the line from that point when in front, along it the other way when behind (inside
+        a face that is the face's normal; behind an edge or a corner the line turns smoothly between its faces' normals),
+        along the surface's outward normal (`Skin.outward`) when on it. Returns (n, 3)."""
         P = np.array(pts, float).reshape(-1, 3)
         for _ in range(iters):
-            d, q, tri, _ = self.skin.closest(P)
+            d, q, tri, bary = self.skin.closest(P)
             bad = d < margin - 1e-6
             if not bad.any():
                 break
-            A, B, C = (self.skin.verts[self.skin.tris[tri[bad], i]] for i in range(3))
-            fn = G.unit(np.cross(B - A, C - A)) * (-1.0 if self.skin._flip else 1.0)
+            fn = self.skin.outward(tri[bad], bary[bad])
             n = P[bad] - q[bad]
             nl = np.linalg.norm(n, axis=1, keepdims=True)
-            front = (d[bad] >= 0)[:, None] & (nl > 1e-6)
-            P[bad] = q[bad] + np.where(front, n / np.maximum(nl, 1e-12), fn) * margin
+            line = (nl > 1e-6) & ((d[bad] >= 0) | (bary[bad] <= 1e-9).any(1))[:, None]
+            P[bad] = q[bad] + np.where(line, np.sign(d[bad])[:, None] * n / np.maximum(nl, 1e-12), fn) * margin
         return P
 
     def conform(self, rings, margin, passes=3, closed=True, pin_first=False):

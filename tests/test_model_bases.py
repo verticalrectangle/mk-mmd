@@ -13,13 +13,15 @@ OFF = {"girl": {"colors.ears", "colors.black.ribbon_shade", "colors.black.ribbon
 
 @pytest.mark.parametrize("name", SP.bases())
 def test_base_builds(name, tmp_path):
-    """Each base builds, every part valid and consistent; and every key in its files is read by a part, but the ones of
-    the features it switches off: a dead key in a base would be copied into characters and changed to no effect."""
+    """Each base builds with no warning (the playbook's rule for a finished character: no part finding, such as a hair
+    chain inside a body collider), every part valid and consistent; and every key in its files is read by a part, but the
+    ones of the features it switches off: a dead key in a base would be copied into characters and changed to no effect."""
     spec = SP.load(f"base:{name}", [SMALL])
     ctx = BD.BuildCtx(spec, tmp_path, seed=SP.model_cfg(spec)["seed"])
     parts = BD.run(spec, ctx=ctx)
     assert [p.name for p in parts] == spec["model"]["parts"]
     assert BD.check_refs(parts, strict=True) == []
+    assert ctx.warnings == []
     assert {SP.dotted(p) for p, _ in SP.unread(ctx.spec, bases=True)} <= OFF.get(name, set())
 
 

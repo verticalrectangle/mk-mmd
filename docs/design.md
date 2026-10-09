@@ -2662,7 +2662,7 @@ alone; [model_base.md](model_base.md) is the playbook for making a character fro
 (`mkmmd.model.proportions`, made on the builders' spec before any part reads it) lengthens the legs: every height from the
 hip joint up rises, the thigh and shin stretch alike, the feet stay. The **body** part draws its skin one of three ways
 (`[body] source`; `mkmmd/model/parts/body.py` lists the keys): `procedural`, lofted from
-`[proportions]`; `mesh`, an artist's whole body fitted to the skeleton (`body_donor.py`: the girl base's is Blender
+`[proportions]`; `mesh`, an artist's whole body fitted to the skeleton (`body_donor.py`; the girl base wears one, Blender
 Studio's stylized body, CC0, which `bases/girl/make_body.py` rebuilds from its source); `pmx`, taken from an existing PMX
 (`body_pmx.py`). **Builders** are `mkmmd/model/parts/<part>.py` with `@builder("hair", needs=(...))
 def build(ctx) -> Part` (`mkmmd.model.build`): `ctx.spec`, `ctx.cfg` (the part's own table), `ctx.save_png(name, rgba)`

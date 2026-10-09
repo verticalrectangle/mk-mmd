@@ -165,7 +165,7 @@ class Surface:
 
     def closest(self, pts):
         """(signed distance (n,), closest point (n, 3), triangle (n,), barycentric (n, 3)); negative = behind the surface
-        (as `Skin.closest`)."""
+        (as `Skin.closest`, signed by `Skin.outward`)."""
         P = np.asarray(pts, float).reshape(-1, 3)
         n = len(P)
         dist, qs, tri, bary = np.empty(n), np.empty((n, 3)), np.empty(n, int), np.empty((n, 3))
@@ -184,7 +184,7 @@ class Surface:
             first = hit[np.concatenate([[True], gid[1:] != gid[:-1]])]
             sl = slice(s, s + len(Pc))
             qs[sl], tri[sl], bary[sl] = q[first], ti[first], b[first]
-            side = ((Pc - q[first]) * self.nrm[ti[first]]).sum(1)
+            side = ((Pc - q[first]) * self.sk.outward(ti[first], b[first])).sum(1)
             dist[sl] = np.sqrt(d2[first]) * np.where(side < 0.0, -1.0, 1.0)
         return dist, qs, tri, bary
 

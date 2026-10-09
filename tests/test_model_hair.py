@@ -493,6 +493,25 @@ def test_real_head_cap_boundary_is_smooth(real_head):
     assert (np.linalg.norm(d, axis=1) - fit.skull.radius(d)).min() > 0.002          # nothing of the hair inside the skin
 
 
+# ---------------------------------------------------------------- on the girl base (her mesh body)
+def test_girl_head_hair_keeps_off_her_body(tmp_path):
+    """The girl's back locks hang to the nape, where her body's neck widens into the shoulders sooner than the skull hull
+    the hanging hair is kept off (the head's neck, straight on under it): every head-hair vertex the body's skin answers
+    for (below the neck seam, or up to the gap above it beside the neck) is hair_head.BODY_GAP off that skin, outside."""
+    from mkmmd.model import spec as SP
+    from mkmmd.model.parts.outfit_fit import Skin
+    spec = SP.load("base:girl")
+    ctx = BD.BuildCtx(spec, tmp_path, seed=SP.model_cfg(spec)["seed"])
+    BD.run(spec, only=["hair"], ctx=ctx)
+    body, nt = ctx.parts["body"], ctx.parts["body"].info["neck_top"]
+    X = next(m for m in ctx.parts["hair"].meshes if m.name == "hair_head").verts
+    over = ((X[:, 0] - nt["center"][0]) / nt["rx"]) ** 2 + ((X[:, 1] - nt["center"][1]) / nt["ry"]) ** 2 <= 1.0
+    near = (X[:, 2] < nt["z"]) | ((X[:, 2] < nt["z"] + hair_head.BODY_GAP) & ~over)
+    assert near.any()                                                # the nape's locks reach down to the body
+    d = Skin.from_meshes([m for m in body.meshes if len(m.verts)], "body").closest(X[near])[0]
+    assert d.min() >= hair_head.BODY_GAP - 1e-4
+
+
 # ---------------------------------------------------------------- the full part
 def test_full_part_validity(built):
     ctx, part = built

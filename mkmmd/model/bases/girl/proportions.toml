@@ -21,8 +21,8 @@
 # Head positions of the standard bones, named like mkmmd/core/bonemap.py (.R = mirror of .L); the model's skeleton
 # (mkmmd.model.skeleton.standard_bones) takes these.  head_tip = end of the head bone; toe.L = ball of the foot,
 # toe_end.L = front of the foot at the floor; eye.L = eyeball-sphere centre (RinHead's pivot); eyes = the 両目 control bone above the face.
-# No finger joints: Rin's hands have their own design (the generated body's [body.hand], mkmmd body_hand.DESIGN), and
-# the finger joints are made from it at the wrist.
+# No finger joints: the hands have their own design (the body's [body.hand], mkmmd body_hand.DESIGN), and the finger
+# joints are made from it at the wrist.
 
 root = [0.0000, -0.0027, -0.0036]
 center = [0.0000, -0.0167, 0.8419]

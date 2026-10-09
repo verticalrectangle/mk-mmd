@@ -6,7 +6,8 @@ Spec (`[body]` in body.toml): `source = "mesh"` and `mesh = "base:girl/body.npz"
 spec's folder; a missing asset with a maker beside it is made on first use), plus the procedural body's keys that still
 apply: skin, nails, neck_shadow, hand (the hands are the hand part's, welded on at the wrists), land, dims, skeleton.
 
-The fit (`fit`) takes the asset's own space to the character's; k is her neck seam's height over the donor's neck cut:
+The fit (`fit`) takes the asset's own space to the character's; k is her neck seam's height over the donor's neck cut,
+[proportions] leg_extra left out (longer legs make no wider body):
   torso  a warp by height: the donor's hip joints, shoulder joints and neck cut go to the heights of her leg and arm joints
          and her neck seam (straight from the hips up to LEAD below the shoulder joints, a monotone bend from there to the
          neck); each height is scaled across (x) and front to back (y) by k, except where joints pin it: x at the hip and
@@ -25,7 +26,7 @@ Weights: the torso's share by the procedural spine rules (body_weights.spine_wei
 procedural chains along her limbs (arm_weights, leg_weights), the hands and nails as on the procedural body. The skin
 texture: the asset's UVs fill the atlas's top half, painted with the procedural body's marks placed on the fitted skin
 (knee caps, heels, elbows ...) and its neck shadow; the hands keep their tiles in the bottom half. Colliders are fitted to
-the skin as for an imported body (body_pmx_fit.fit_bodies).
+the skin as for an imported body (body_pmx_fit.fit_bodies), the shoulders as wide as the shoulder's top (shoulder_tops).
 
 The asset (an .npz):
   verts (n, 3), face_flat, face_sizes   the skin, faces counter-clockwise from outside, open only at the neck cut
@@ -42,6 +43,7 @@ The asset (an .npz):
 Published in `Part.info` as by the procedural body (body.py): landmarks (+ tail_root, bust_front taken from the skin, as
 for an imported body), tail_normal, neck_top, skin, neck_shadow, torso_profile (cuts of the skin's torso region), regions
 (vertex ids per region), hand, foot; plus source = "mesh"."""
+from dataclasses import replace
 from functools import lru_cache
 
 import numpy as np
@@ -181,14 +183,14 @@ def foot_map(V, on_foot, d, ankle, toe_end, foot):
     return lambda P: ankle + (P - d["ankle"]) @ A.T
 
 
-def fit(A, shape, nt):
+def fit(A, shape, nt, extra=0.0):
     """(n, 3) the asset's vertices in the character's space (module docstring): `shape` her body_shape.Shape, `nt` her
-    neck seam (body_mesh.neck_top)."""
+    neck seam (body_mesh.neck_top), `extra` her [proportions] leg_extra."""
     J, L, V, M = A["joints"], shape.land, A["verts"], A["member"]
     ring = V[A["neck"]]
     rx_d, ry_d = 0.5 * float(np.ptp(ring[:, 0])), 0.5 * float(np.ptp(ring[:, 1]))
     yc_d = 0.5 * float(ring[:, 1].min() + ring[:, 1].max())
-    k = float(nt["z"]) / A["neck_z"]
+    k = (float(nt["z"]) - extra) / A["neck_z"]
     hip, sh, nz = J["hip"], J["shoulder"], A["neck_z"]
     leg, arm = np.asarray(L["leg.L"], float), np.asarray(L["arm.L"], float)
     zmap = height_map((hip[2], sh[2], nz), (leg[2], arm[2], float(nt["z"])))
@@ -498,7 +500,7 @@ def build_donor(ctx):
     nails = cfg.get("nails", True)
 
     # ---- the fitted skin, cut at the wrists
-    V = fit(A, shape, nt)
+    V = fit(A, shape, nt, float(ctx.get("proportions.leg_extra") or 0.0))
     onto_seam(V, A["neck"], nt)
     faces, twin = A["faces"], A["mirror"]
     tris = G.triangulated(faces)
@@ -594,6 +596,7 @@ def build_donor(ctx):
     fg = F.face_groups(tri, Gr)
     head = land["head"]
     bodies = F.fit_bodies(verts, Gr, land, None, names, head_hint=(head + np.array([0.0, -0.0103, 0.1007]), 0.094))
+    bodies = shoulder_tops(bodies, verts, land)
     extra, tail_n = F.extra_landmarks(verts, tri, normals, land, fg)
     landmarks = dict(shape.land)
     landmarks.update(extra)
@@ -613,3 +616,29 @@ def build_donor(ctx):
     )
     return Part("body", meshes=[mesh], materials=mats, bones=bones, bodies=bodies,
                 frames=skeleton.standard_frames(bones), info=info)
+
+
+def shoulder_tops(bodies, verts, land):
+    """The shoulder colliders as wide as the top of the shoulder: from the bone line up to the skin over it (the median
+    within 30 degrees of straight up), where hair and straps rest. fit_bodies sizes a shoulder by the spread of the skin
+    its bones own; this body's shoulder bones own a stretch of upper chest and back, and their ball stood 4 cm above the
+    skin, so hair hanging behind the neck sat inside it. Never wider than fitted; the same segment as fit_bodies'."""
+    def point(sem):
+        p = np.asarray(land[f"{sem}.L"], float).copy()
+        p[0] = 0.5 * (abs(land[f"{sem}.L"][0]) + abs(land[f"{sem}.R"][0]))
+        return p
+    a, b = point("shoulder") + np.array([0.0, 0.0, 0.012]), point("arm") + np.array([0.0, 0.0, 0.004])
+    V = np.asarray(verts, float)
+    V = np.concatenate([V[V[:, 0] > 0], V[V[:, 0] < 0] * np.array([-1.0, 1.0, 1.0])])
+    d, t = F._seg_dist(V, a, b)
+    over = ((V - (a + t[:, None] * (b - a)))[:, 2] > np.cos(np.radians(30.0)) * d) & (t > 0.0) & (t < 1.0)
+    if over.sum() < 4:
+        return bodies
+    span = float(np.linalg.norm(b - a))
+    out = []
+    for rb in bodies:
+        if rb.name in ("col_shoulder_L", "col_shoulder_R"):
+            r = min(float(rb.size[0]), float(np.median(d[over])))
+            rb = replace(rb, size=(r, max(span - 2.0 * r, 0.004), 0.0))
+        out.append(rb)
+    return out

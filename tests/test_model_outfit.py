@@ -157,6 +157,32 @@ def test_section_of_a_cylinder_and_signed_distance():
     assert d[0] == pytest.approx(0.03, abs=2e-3) and d[1] == pytest.approx(-0.06, abs=2e-3)
 
 
+def test_signed_distance_is_right_round_sharp_folds():
+    """Inside or outside, the sign is right for points whose nearest skin point is a sharp fold's edge, in every direction
+    round it: behind a narrow notch (an armpit's crease) and beyond a sharp ridge. The two faces at such an edge
+    disagree about the side, and which of them the search returns is arbitrary; `Skin.closest` and the shoes' `Surface`
+    alike."""
+    from mkmmd.model.parts import outfit_legs as OL
+    poly = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.1, 1.0], [1.0, 0.3], [0.9, 1.0], [0.0, 1.0], [-1.0, 0.5]])
+    n = len(poly)
+    V = np.concatenate([np.c_[poly, np.zeros(n)], np.c_[poly, np.ones(n)], [[1.0, 0.1, 0.0], [1.0, 0.1, 1.0]]])
+    sides = [(i, (i + 1) % n, n + (i + 1) % n, n + i) for i in range(n)]       # the polygon runs counter-clockwise
+    caps = [(2 * n, (i + 1) % n, i) for i in range(n)] + [(2 * n + 1, n + i, n + (i + 1) % n) for i in range(n)]  # fans
+    skin = OF.Skin(V, sides + caps)
+    phi = np.radians(np.arange(72) * 5.0 + 2.5)
+    P = np.concatenate([np.c_[c + 0.05 * np.c_[np.cos(phi), np.sin(phi)], np.full(72, 0.5)]
+                        for c in (np.array([1.0, 0.3]), np.array([-1.0, 0.5]))])   # round the notch's apex, the ridge's tip
+    x, y = P[:, 0], P[:, 1]
+    a, b = poly, np.roll(poly, -1, 0)
+    dy = np.where(b[:, 1] != a[:, 1], b[:, 1] - a[:, 1], 1.0)
+    cross = ((a[:, 1] > y[:, None]) != (b[:, 1] > y[:, None])) & \
+        (x[:, None] < a[:, 0] + (y[:, None] - a[:, 1]) * (b[:, 0] - a[:, 0]) / dy)
+    inside = cross.sum(1) % 2 == 1
+    assert inside.any() and (~inside).any()
+    for d in (skin.closest(P)[0], OL.Surface(skin).closest(P)[0]):
+        assert ((d < 0) == inside).all()
+
+
 def test_push_out_enforces_the_margin_and_leaves_clear_points(built):
     ctx, skin, part = built
     fit = OF.Fit(OF.Land(ctx.land), skin)

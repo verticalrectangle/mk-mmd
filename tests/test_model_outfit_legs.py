@@ -1,8 +1,8 @@
 """The legs of Rin's outfit (mkmmd/model/parts/outfit_legs.py): the black ribbon wound round the left calf with its bow and two
 dynamic tails, and the Mary-Jane shoes on both feet.
 
-What is checked, for a stand-in mannequin (`outfit_fit.provisional_skin`) and, when MK_TEST_RIN_MODEL names a character project
-whose body part builds, for the real body part:
+What is checked, for a stand-in mannequin (`outfit_fit.provisional_skin`), for the girl base's body (the artist's mesh it
+wears) and, when MK_TEST_RIN_MODEL names a character project whose body part builds, for that project's body part:
   - leg ribbon: every vertex of the spiral lies 2..6 mm above the skin (`Skin.closest`), the band winds `turns` times round the
     shin between the ankle and the knee on the left leg only, texture u counts tiles of 4 cm;
   - tail chains: bone names classify as "ribbon", parent 左ひざ, unique names, dynamic bodies (root in group 8, the rest in 7) that
@@ -49,14 +49,10 @@ def mannequin_fit():
     return F.Fit(lm, F.provisional_skin(lm, scale=scale)), None
 
 
-def real_fit(tmp_path_factory):
-    if SPEC is None:
-        pytest.skip(WHY)
+def real_fit(tmp_path_factory, spec):
+    """The outfit fit on the body part `spec` builds (a base or a project's model.toml)."""
     from mkmmd.model import spec as SP
-    try:
-        body = BD.run(SP.load(str(SPEC)), only="body", tex_dir=str(tmp_path_factory.mktemp("legs_body")))[0]
-    except Exception as e:                                           # the project's body may not build here
-        pytest.skip(f"real body part does not build: {e}")
+    body = BD.run(SP.load(str(spec)), only="body", tex_dir=str(tmp_path_factory.mktemp("legs_body")))[0]
     skin = F.Skin.from_meshes([m for m in body.meshes if len(m.verts)], "body")
     return F.Fit(F.Land(dict(body.info["landmarks"])), skin), body
 
@@ -73,15 +69,23 @@ def build_legs(fit, cfg=None, anchor=None, colliders=None):
             "colliders": colliders}
 
 
-@pytest.fixture(scope="module", params=["mannequin", "real"])
+@pytest.fixture(scope="module", params=["mannequin", "girl", "real"])
 def built(request, tmp_path_factory):
     if request.param == "mannequin":
         fit, body = mannequin_fit()
         out = build_legs(fit)
     else:
-        fit, body = real_fit(tmp_path_factory)
+        if request.param == "girl":
+            fit, body = real_fit(tmp_path_factory, "base:girl")
+        elif SPEC is None:
+            pytest.skip(WHY)
+        else:
+            try:
+                fit, body = real_fit(tmp_path_factory, SPEC)
+            except Exception as e:                                   # the project's body may not build here
+                pytest.skip(f"real body part does not build: {e}")
         out = build_legs(fit, anchor={"左ひざ": "col_shin_L"}, colliders=[rb for rb in body.bodies if rb.mode == "static"])
-    out["kind"], out["body"] = request.param, body
+    out["kind"], out["body"] = ("mannequin" if request.param == "mannequin" else "real"), body
     return out
 
 
@@ -284,9 +288,11 @@ def test_toe_box_closes_over_the_toes(built):
         F_ = sh[side]["foot"]
         sk = F_.skin
         V = sk.verts[np.unique(sk.tris)]
-        foot = V[(V[:, 2] < F_.floor + 0.022 * F_.S) & (V[:, 1] < F_.c_a[1] + 0.02)]      # the footprint, toes included
+        # the footprint before the ankle, the toe box's (round a heel the welt runs a little inside its widest point: the
+        # leather rounds over the sole); every toe lies inside the leather's plan outline
+        foot = V[(V[:, 2] < F_.floor + 0.022 * F_.S) & (V[:, 1] < F_.c_a[1])]
         welt = sh[side]["grid"][:, 0, :2]
-        assert inside_poly(foot[:, :2], welt).all()                  # every toe lies inside the leather's plan outline
+        assert inside_poly(foot[:, :2], welt).all()
         assert sh[side]["grid"][..., 1].min() < F_.y_tip - 0.004      # and the leather reaches beyond the longest toe
 
 

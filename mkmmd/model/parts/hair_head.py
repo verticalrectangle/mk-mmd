@@ -5,7 +5,8 @@ Everything is built around `HeadFit.skull` and a `Volume` (how far the hair stan
 crown clumps -7 mm, main clumps 0, front clumps +6 mm. Clumps ("locks") are lens-shaped shells swept along meridian paths
 (attached to the hull, then hanging); the locks of bangs, side hair and back hair hang from dynamic chains (bones
 前髪i_k, 横髪左i_k, 後髪i_k; a chain also carries the back-layer clumps next to it), the cap and crown clumps are rigid on
-the head bone.
+the head bone. Hanging locks keep BODY_GAP off the body part's skin below the neck seam (`off_body`): the hull goes on
+under the head as a straight neck, a body's neck may widen sooner.
 
 Vertex heights drive the texture (hair_tex.head_v), so the angel-ring band is one ring around the head across every clump."""
 from dataclasses import dataclass, field, replace
@@ -13,8 +14,10 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from . import hair_tex as TEX
+from .hair_braids_path import relax
 from .hair_fit import Volume, angles, dirs, unit
 from .hair_geo import MeshAccum, Piece, arclen, resample, smooth_polyline, smoothstep, strip_normals, sweep
+from .outfit_fit import Skin
 from .. import spec as SP
 from ..part import Material
 
@@ -55,6 +58,7 @@ DEFAULTS = {
 
 
 EN = {"前髪": "bangs", "横髪左": "side_L", "横髪右": "side_R", "後髪": "back"}
+BODY_GAP = 0.004               # every vertex of a lock below the neck seam keeps this off the body's skin (m)
 
 
 # ---------------------------------------------------------------- paths
@@ -157,6 +161,10 @@ class HeadHair:
                          lift_back=v["lift_back"])                          # shared with the other builders
         self.vol = fit.vol
         self.head_body = ctx.find_body("頭")
+        body = getattr(ctx, "parts", {}).get("body")
+        nt = (body.info or {}).get("neck_top") if body is not None else None
+        self._body = (body, nt) if nt is not None else None
+        self._skin = None
         self.chains = {}
         self.top_z = self.vol.max_z()
         self.z_top = self.top_z + 0.004
@@ -258,18 +266,72 @@ class HeadHair:
         self.stats["cap_verts"] = len(V)
 
     # ---- clumps
+    def clump(self, lk):
+        """The swept clump (hair_geo.Strip) of a lock, as `emit` meshes it."""
+        return sweep(lk.path, radial_hint(self.skull, lk.path), lk.width, lk.thick, tip=lk.tip, tip_start=lk.tip_start,
+                     tip_power=lk.tip_power, root_w=lk.root_w, curv=lk.curv, tilt=lk.tilt, end_taper=lk.end_taper,
+                     k_outer=self.cfg["k_outer"], bulge=self.cfg["bulge"])
+
     def emit(self, acc, lk, chain=None):
         win = TEX.clump_u(self.rng_tex, dark=lk.dark)
         if lk.narrow:
             win = (win[0] + 0.40 * (win[1] - win[0]), win[0] + 0.60 * (win[1] - win[0]))
         dz = float(self.rng_tex.uniform(-0.0035, 0.0035))          # moves this clump's highlight a little
-        st = sweep(lk.path, radial_hint(self.skull, lk.path), lk.width, lk.thick, tip=lk.tip, tip_start=lk.tip_start,
-                   tip_power=lk.tip_power, root_w=lk.root_w, curv=lk.curv, tilt=lk.tilt, end_taper=lk.end_taper, k_outer=self.cfg["k_outer"], bulge=self.cfg["bulge"])
+        st = self.clump(lk)
         uv = self.height_uv(st.verts, st.q, win, dz)
         w = {"頭": np.ones(len(st.verts))} if chain is None else chain.weights(st.verts)
         nrm = strip_normals(st, self.proxy_normals(st.verts), self.cfg["normal_mix"], self.cfg["edge_mix"])
         acc.add(st.verts, st.faces, uv, 0, weights=w, normals=nrm)
         return st
+
+    def off_body(self, lk):
+        """`lk` with its path lifted where its clump comes closer than BODY_GAP to the body's skin. The skull hull the
+        hanging locks are kept off goes on under the head as a straight neck, so a lock that hangs to the nape ends inside
+        a body whose neck widens sooner. The body ends at the neck seam, open there: measured are the clump's vertices
+        below the seam and up to the gap above it, but not the ones over the neck's open top (inside the seam's ellipse:
+        the head's, where the body's skin says nothing). Each vertex short of the gap lifts the path point nearest along
+        the lock, the shortest way off the skin, and hair_braids_path.relax blurs the lift along the path: the lock bends
+        smoothly over the skin and its chain, made from the path, follows. A lock already clear comes back as it was."""
+        if self._body is None:
+            return lk
+        body, nt = self._body
+        (cx, cy), rx, ry, z_seam = nt["center"], float(nt["rx"]), float(nt["ry"]), float(nt["z"])
+
+        def measured(X):
+            over = (X[:, 2] >= z_seam) & (((X[:, 0] - cx) / rx) ** 2 + ((X[:, 1] - cy) / ry) ** 2 <= 1.0)
+            return np.flatnonzero((X[:, 2] < z_seam + BODY_GAP) & ~over)
+
+        X = self.clump(lk).verts
+        low = measured(X)
+        if not len(low):
+            return lk
+        if self._skin is None:
+            self._skin = Skin.from_meshes([m for m in body.meshes if len(m.verts)], "body")
+        T = self._skin.verts[self._skin.tris]
+        lo, hi = X[low].min(0) - 0.05, X[low].max(0) + 0.05     # the skin within reach (a lift moves a lock ~1 cm)
+        skin = self._skin.where(tri_mask=((T.max(1) >= lo) & (T.min(1) <= hi)).all(1))
+        if not len(skin.tris):
+            return lk
+
+        def field(Q):
+            st = self.clump(replace(lk, path=Q))
+            low = measured(st.verts)
+            sd, away = np.full(len(Q), np.inf), np.zeros_like(Q)
+            if not len(low):
+                return sd, away
+            V = st.verts[low]
+            d, q, tri, bary = skin.closest(V)
+            n = V - q
+            nl = np.linalg.norm(n, axis=1, keepdims=True)
+            out = np.where(nl > 1e-6, np.sign(d)[:, None] * n / np.maximum(nl, 1e-12), skin.outward(tri, bary))
+            k = np.abs(arclen(Q)[None, :] - st.arc[low][:, None]).argmin(1)
+            order = np.lexsort((d, k))                          # per path point its vertex furthest under the gap
+            first = order[np.concatenate([[True], k[order][1:] != k[order][:-1]])]
+            sd[k[first]], away[k[first]] = d[first], out[first]
+            return sd, away
+        if not (field(lk.path)[0] < BODY_GAP).any():
+            return lk
+        return replace(lk, path=relax(lk.path, [(BODY_GAP, field)]))
 
     def make_chain(self, base, lock, kind, n_bones, s_root, radius):
         P = lock.path
@@ -478,8 +540,9 @@ class HeadHair:
                                   dth=sgn * np.radians(1.5), delta0=-0.013, delta1=c["delta"] + 0.002 * i + self.rng.uniform(-0.003, 0.005),
                                   z_end=z_end + extra, x_end=sgn * (x_t + self.rng.uniform(-0.004, 0.004)), end_dir=[-sgn * 0.22, 0.0, -1.0], n_att=24)
                 P = self.sway(P, c["sway"] * (1.0 if (i + (sgn > 0)) % 2 else -1.0) * self.rng.uniform(0.7, 1.1), z_leave, z_end + extra)
-                leaders.append(Lock(f"side{tag}{i}", P, w, c["thick"], tip="point", tip_start=0.50, tip_power=1.25,
-                                    root_w=0.6, curv=9.0, layer=2 + layer, theta=th0, dark=(i == 2)))
+                leaders.append(self.off_body(Lock(f"side{tag}{i}", P, w, c["thick"], tip="point", tip_start=0.50,
+                                                  tip_power=1.25, root_w=0.6, curv=9.0, layer=2 + layer, theta=th0,
+                                                  dark=(i == 2))))
             main = leaders[1]
             ch = self.make_chain(f"横髪{tag}1_", main, "hair", 4, self.s_at_z(main.path, z_leave), 0.010)
             self.chains[f"side{tag}"] = ch
@@ -510,9 +573,9 @@ class HeadHair:
                 P = self.sway(P, c["sway"] * (1.0 if (i + layer) % 2 else -1.0) * self.rng.uniform(0.6, 1.1),
                               float(fit.center[2]) - 0.02, z_end)
                 w = c["width"] * self.rng.uniform(0.9, 1.25)
-                locks.append(Lock(f"back{layer}_{i}", P, w, c["thick"], tip="point",
-                                  tip_start=self.rng.uniform(0.55, 0.68), tip_power=1.15, root_w=0.5, curv=7.0,
-                                  layer=4 + layer, theta=th0, dark=(layer == 0)))
+                locks.append(self.off_body(Lock(f"back{layer}_{i}", P, w, c["thick"], tip="point",
+                                                tip_start=self.rng.uniform(0.55, 0.68), tip_power=1.15, root_w=0.5,
+                                                curv=7.0, layer=4 + layer, theta=th0, dark=(layer == 0))))
         outer = [l for l in locks if l.layer == 5]
         inner = [l for l in locks if l.layer == 4]
         ec = fit.ear_centre("L")

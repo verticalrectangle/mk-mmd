@@ -1,5 +1,5 @@
-# The "girl" model base: a complete, neutral anime girl that mk builds from these files alone (generated body and face,
-# hair, dress and shoes, and CC0 hands). A character is this base plus the tables it changes:
+# The "girl" model base: a complete, neutral anime girl that mk builds from these files alone (a CC0 body and hands
+# fitted to her skeleton, a generated face, hair, dress and shoes). A character is this base plus the tables it changes:
 #   mk model new NAME                      # NAME/model.toml with include = ["base:girl"] (docs/model_base.md)
 #   mk model build base:girl --out /tmp/girl          # the base itself, to look at
 # mkmmd/model/bases/rin/ is the worked example: this base plus Rin's hair, cat ears, tails, dress and colours.
