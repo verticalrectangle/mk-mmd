@@ -36,7 +36,7 @@ def add(sub):
                    "(default: the project's frame0; without a project the scene's first frame)")
     p.add_argument("--list", metavar="KIND",
                    help="list names instead: armatures bones semantic morphs cameras markers collections actions "
-                        "objects")
+                        "objects materials")
     p.add_argument("--armature", help="which armature `bone()` uses when the scene has several")
     p.add_argument("--summary", action="store_true", help="print min/max/mean instead of every value")
     add_project_arg(p)

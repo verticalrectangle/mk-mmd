@@ -25,9 +25,9 @@ Presets: draft (50 %, 16 samples, no motion blur), preview (50 %, 32 samples, mo
 motion blur). [render] in mk.toml can override samples, shutter (motion blur, 0.35) and engine (eevee, cycles,
 workbench); --samples and --percent override the preset for one run.
 
-Shots with a render-time look (`style = "silhouette"`, `reflection = {...}` in [[shot]], see docs/design.md: Shots) are
-rendered in it, inside the same Blender job: the frame on disk is the finished flat frame, not a pass. --no-styles renders
-every shot as it is lit.
+Shots with a render-time look (`style = "silhouette"` or `"vector"`, `reflection = {...}` in [[shot]], see docs/design.md:
+Shots) are rendered in it, inside the same Blender job: the frame on disk is the finished flat frame, not a pass.
+--no-styles renders every shot as it is lit.
 
 [[transition]] and [[insert]] entries (docs/design.md: Shots: Transitions and inserts) need more than the cut's frames: the
 other shot's frames (plates), a silhouette's figure (mattes) and projected anchors. They are rendered next to the frames

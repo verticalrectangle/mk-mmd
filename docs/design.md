@@ -1782,8 +1782,9 @@ shot starts on the frame `round(frame0 + from * fps)`.
 | `frame` | `{subject, fill, solve}`: solves the lens, or the distance, for each output so the subject fills a share of the frame height. `subject` is a target or a list of targets (one world point is written `[[x, y, z]]`); its height is the vertical extent of those points (at least 0.25 m) plus 0.15 m of headroom, taken at the median of about twelve frames of the shot. `fill` is the share of the frame height (default 0.45). `solve = "lens"` (default) sets one lens for the whole shot (a keyed `lens` is replaced), `"distance"` keeps the lens and moves the camera along the aim line by one factor |
 | `shift` | `[x, y]`, Blender's lens shift: fractions of the larger image side, the picture moving the other way (a positive `y` moves it down; probed in Blender 4.2.3); constant, or keyed in `keys[].shift` (default `[0, 0]`). See the crop below |
 | `dof` | `{focus, fstop, offset}`: depth of field; `focus` is any target (required), keyed as the distance from the camera on every frame, less `offset` metres (default 0): the focus plane sits that much nearer the camera than the target. A character's eye bones (`"cast:rin"`) are inside the head, 4-8 cm behind the face's surface (more for `.head`, the base of the skull), while a close-up at f/2.8 keeps only a few centimetres sharp: give a face target `offset = 0.05`. `fstop` (default 2.8). Without `dof` nothing blurs |
-| `aspect.<output>` | `{...}`, `[shot.aspect.<output>]`: that output's own version of the shot. It may hold any key above except `name`, `from`, `to`, `plate` and `aspect`. The tables `frame`, `dof`, `colors`, `knockout` and `reflection` merge key by key with the shot's own (`frame = { fill = 0.6 }` keeps the `subject`); every other key, targets and lists included, is replaced whole; `reflection = false` switches an inherited reflection off for that output. A table for an output the project does not have is an error |
+| `aspect.<output>` | `{...}`, `[shot.aspect.<output>]`: that output's own version of the shot. It may hold any key above except `name`, `from`, `to`, `plate` and `aspect`. The tables `frame`, `dof`, `colors`, `tones`, `knockout` and `reflection` merge key by key with the shot's own (`frame = { fill = 0.6 }` keeps the `subject`); every other key, targets and lists included, is replaced whole; `reflection = false` switches an inherited reflection off for that output. A table for an output the project does not have is an error |
 | `style`, `colors`, `hide`, `keep`, `accent`, `tint`, `knockout`, `grow`, `samples` | the silhouette look, below |
+| `style`, `colors`, `tones`, `hide`, `keep` | the vector look, below (with the project's `[vector]` table) |
 | `reflection` | the window reflection, below |
 
 ```toml
@@ -1835,9 +1836,9 @@ without `subject`; a window of an effect that needs frames from a shot before `[
 tables (the message names the shot and the output: `shot 'storm' (16x9): ...`). It logs a WARNING for a plate no effect uses and for
 an object pattern that matches nothing.
 
-### Looks: silhouette and reflection
+### Looks: silhouette, vector and reflection
 
-Two looks need more than the lit scene. They belong to the shot and are switched on and off frame by frame by `mk render` and
+Three looks need more than the lit scene. They belong to the shot and are switched on and off frame by frame by `mk render` and
 `mk look` (`mkmmd/blender/styles.py`; the normalised specs per output are in the shot table), put back everything they change, and
 leave `mk post` to grade the finished frames as usual. `mk render --no-styles` and `mk look --no-styles` draw every shot as lit. A
 shot has one look per output: `style` and `reflection` together are an error. A silhouette shot can show a reflection in one output
@@ -1854,7 +1855,7 @@ objects warns although it matches at render time.
 
 | Key | Meaning |
 |---|---|
-| `style` | `"silhouette"`: the flat look, a flat background, the scene as one colour, accents in another. `"none"` (in `[shot.aspect.<output>]`) switches an inherited look off; nothing else is accepted |
+| `style` | `"silhouette"`: the flat look, a flat background, the scene as one colour, accents in another. `"vector"`: the flat-vector look, below. `"none"` (in `[shot.aspect.<output>]`) switches an inherited look off; nothing else is accepted |
 | `colors` | `{background, subject, accent}`, each a palette slot, `#hex`, `"a:b:t"` mix (`t` weighs the second) or `[r, g, b]` in 0..1 (defaults `base`, `text`, `surface`) |
 | `hide`, `keep` | objects not rendered (walls, outside, rain), minus `keep` |
 | `accent` | objects in the accent colour. One with a transparent material (a lightning bolt) keeps its softness; the others (earbud cords) are painted over everything and grown by `grow` so a thin wire reads |
@@ -1895,6 +1896,64 @@ composed inside the render call from passes that work (`compose_silhouette`, num
   last.
 - Silhouettes are always 8-bit.
 
+Vector. `style = "vector"`: a flat-vector drawing of the scene. Every material is filled with a tone of the project's `[vector]`
+table: one colour, two (lit and in shadow under one hard light), or a few picked by the texture's brightness, so what a model draws
+on itself (irises, lash lines, a mouth) carries over into the palette. Lines run round the figures, where two parts meet
+and where one part passes in front of another. The shot itself gives `style`, and may give `colors` and `tones` (laid over the
+project's, key by key: a shot inside an inverted palette swaps a few) and `hide` / `keep`; the silhouette's other keys are an error
+in a vector shot.
+
+| `[vector]` key | Meaning |
+|---|---|
+| `colors` | `{background, line, inner}`: the background, the outline round the figures and the inner lines (palette slot, `#hex`, `"a:b:t"` or `[r, g, b]`; defaults `base`, `text`, and `inner` the line's colour) |
+| `tones` | `{name = tone}`. A tone is a colour (flat), `{lit, shade}` (the second where the look's light does not reach: the far side and cast shadows; no `shade` is flat) or `{colors = [n colours], at = [n - 1 brightness steps], grey}`: drawn, each texel takes the colour of its brightness band (sRGB luma), and the last colour only texels greyer than `grey` (saturation, default 1: all), so a bright tinted iris stays in the band below the white highlights. Default `{fill = {lit = "text", shade = "subtle"}}` |
+| `materials` | `[{match, tone, group}]`, in order: a material takes the first rule whose `match` (material name patterns, fnmatch, Blender's `.001` suffix ignored) fits it, else the tone `fill` (or the first tone). Lines are drawn where two `group`s meet; a material without one is its own group, so skin and the shirt get a line between them, and a face and its eyes that share a group do not. `mk q BLEND --list materials` names a scene's materials with the name a rule matches; the shots stage logs a WARNING for a rule that names no material in the scene |
+| `lines` | `{outline, inner}`: line widths in px at 1080 on the frame's short side (default 5 and 2) |
+| `shadow` | the share of the light's full strength below which a two-tone surface takes its `shade` colour (default 0.3); cast shadows always do |
+| `light` | `[x, y, z]` toward the light that casts the shadows, in the world (default `[0.45, -0.35, 0.82]`: above, in front, from the figure's left) |
+
+```toml
+[vector]
+colors = { background = "#FFD21F", line = "#1B2A6B" }
+
+[vector.tones]
+white = { lit = "#FFFFFF", shade = "#8FB4F0" }
+dark = "#1B2A6B"
+iris = { colors = ["#1B2A6B", "#8FB4F0", "#FFFFFF"], at = [0.55, 0.88], grey = 0.15 }
+
+[[vector.materials]]
+match = ["skin", "face"]                 # your model's own material names
+tone = "white"
+group = "face"
+
+[[vector.materials]]
+match = "eye*"
+tone = "iris"
+group = "face"
+
+[[shot]]
+name = "flip"
+style = "vector"
+colors = { background = "#1B2A6B", line = "#FFD21F" }   # the inverted palette for this shot
+tones = { dark = "#FFD21F" }
+```
+
+The frame is composed with numpy (`compose_vector`) from Workbench passes rendered at twice the frame's size and boxed down, which
+antialiases the fills and the lines:
+
+- `id`: flat light, every material's viewport colour set to its number (Raw, no antialiasing, a float EXR: exact; a material under
+  half opaque is left out, as the other passes leave it out). The compositor writes the Z pass of the same render, so the scene must
+  have no compositor tree of its own.
+- `tex`: flat light and the textures (only when a tone is drawn).
+- `shade`: the studio light, fixed in the world, with shadows cast from `light`, on plain white. A two-tone surface is in shadow under
+  `shadow` times the light on a white surface facing it (0.40 in Raw); the shadow is opened and closed by one pass pixel, so no
+  sliver or pinhole is left.
+- Lines: the outline runs round everything; inner lines run where two groups meet and where the depth breaks (its second
+  difference beyond 1 cm plus 0.4 % of the distance), so a surface turning away draws no line but a chin over the neck, a hand over
+  the face or one hair strand over another does. Both are drawn as round pens, then the frame is boxed down.
+- Type is rendered as for the silhouette and laid over the drawing.
+- A vector shot's figure can be a transition's matte, as a silhouette's can.
+
 Reflection. `reflection = {object = "<glass>"}` shows what stands in front of a window pane; screen-space tracing cannot see what is
 behind the camera. EEVEE Next draws it through a plane light probe on the glass (a probe the set already has at the pane, else one is
 made) and a mirror layer mixed in front of the glass shader: the shader becomes
@@ -1934,7 +1993,7 @@ without Blender). A **window** is the run of frames an effect changes: the `dur`
 folder, named by Blender frame (`<frame>.png`, five digits):
 
 - `plate/<shot>/<frame>.png`: a shot's frame; a shot that is in the cut at that frame is its own plate: the cut's frame.
-- `matte/<shot>/<frame>.png` and `back/<shot>/<frame>.png`, for an expand or collapse: the silhouette shot's figure alone as coverage,
+- `matte/<shot>/<frame>.png` and `back/<shot>/<frame>.png`, for an expand or collapse: the flat shot's figure alone as coverage,
   drawn at twice the frame's size, and its frame without the figure.
 - `point/<key>/<frame>.json`: a projected anchor or centre, `p` (frame fractions from the top left), `depth` and `m` (frame heights
   per metre at that depth, which sizes things given in metres); the key is `t<i>` for transition `i`'s `center`, `i<j>` for insert
@@ -1952,9 +2011,9 @@ A transition has these keys; the kind decides the rest, and a key of another kin
 | `dur` | window length in seconds, ending at the cut (default 0.4; 0.18 for `slash`) |
 | `ease` | `in` (u², slow start), `out` (1 - (1 - u)²) or `inout` (smoothstep) (default `in`; `inout` for `slash`) |
 
-`expand`: the figure of the OUTGOING silhouette shot grows and turns; inside it plays the next shot. `collapse`: the INCOMING
-silhouette shot's figure starts huge with the outgoing shot inside it and shrinks onto its place, landing on the cut (an expand played
-backwards). The figure's shot must be a silhouette (`style = "silhouette"`) in every output.
+`expand`: the figure of the OUTGOING flat shot grows and turns; inside it plays the next shot. `collapse`: the INCOMING flat shot's
+figure starts huge with the outgoing shot inside it and shrinks onto its place, landing on the cut (an expand played backwards).
+The figure's shot must have a flat look (`style = "silhouette"` or `"vector"`) in every output.
 
 | Key | Meaning |
 |---|---|
@@ -1992,9 +2051,9 @@ An insert is a thought bubble over the host shot holding another shot (picture i
 | `aspect.<output>` | `{size, offset, ratio}`: that output's own geometry; nothing else may be overridden |
 
 ```toml
-[[transition]]               # the figure of the OUTGOING silhouette shot grows and turns; inside it plays the next shot
+[[transition]]               # the figure of the OUTGOING flat shot grows and turns; inside it plays the next shot
 at = 3.86                    # clip seconds of the cut: a shot starts there; the window is the 0.4 s before it
-kind = "expand"              # "collapse": the INCOMING silhouette shot's figure starts huge and shrinks onto its place
+kind = "expand"              # "collapse": the INCOMING flat shot's figure starts huge and shrinks onto its place
 dur = 0.4
 scale = [1, "fill"]          # "fill": exactly what fills the frame at the last frame (first of a collapse)
 turn = [0, 90]               # degrees, clockwise on screen, linear

@@ -186,8 +186,8 @@ def test_a_slash_has_no_matte_and_shows_the_incoming_shot_behind_the_band():
     ({"at": 2.5, "kind": "slash"}, "no shot start at that frame"),
     ({"at": 0.0, "kind": "slash"}, "no shot before the cut"),
     ({"at": 2.0, "kind": "expand", "dur": 2.5}, "starts before shot 's1' does"),
-    ({"at": 4.0, "kind": "expand"}, "must be a silhouette"),               # l1 is lit: no figure to grow
-    ({"at": 6.0, "kind": "collapse"}, "must be a silhouette")])            # l2 is lit
+    ({"at": 4.0, "kind": "expand"}, "must have a flat look"),             # l1 is lit: no figure to grow
+    ({"at": 6.0, "kind": "collapse"}, "must have a flat look")])          # l2 is lit
 def test_transitions_that_do_not_fit_the_cut_are_refused(spec, frag):
     with pytest.raises(TR.TransitionError, match=frag):
         plan(transition=[spec])

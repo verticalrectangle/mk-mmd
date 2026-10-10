@@ -97,8 +97,10 @@ fingertip bone's `.tail` and the prop.
 - **Shots** ([Shots](design.md#shots)): one `[[shot]]` per cut, a camera per output is made for you. Mount the camera on a car or a set, aim it at a target
   (`"cast:rin.head"`), give lens and lag; `frame = {subject, fill, solve}` solves the lens or dolly per output. A shot that two outputs frame differently
   overrides keys in `[shot.aspect.<output>]`.
-- **Looks**: `style = "silhouette"` (flat background, the scene in one colour, accents in another) and `reflection` (her image in a pane) are composed at render time;
-  `mk look` draws them as `mk render` will, `--no-styles` draws the shot as lit.
+- **Looks**: `style = "silhouette"` (flat background, the scene in one colour, accents in another), `style = "vector"` (a flat-vector drawing: every material a tone
+  of the project's `[vector]` table, two-tone shading, outlines) and `reflection` (her image in a pane) are composed at render time; `mk look` draws them as
+  `mk render` will, `--no-styles` draws the shot as lit. A vector look starts with the model's material names: `mk q BLEND --list materials` lists them with
+  the name a `[vector] materials` rule matches, and the shots stage warns about a rule that names none.
 - **Transitions and inserts**: composited by `mk post` from layers `mk render` draws next to the frames. Windows may not overlap and must lie inside one shot of the
   cut; the build refuses a window that starts before `[scene] start`. Preview a frame inside one with `mk look`.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
@@ -220,7 +222,7 @@ The build:
   built (`look = "camera"` in `[perform.<cast>]` fails). Aim at a bone or a point instead.
 - An empty `[pose.rin]` table does nothing, and a standing pose needs explicit feet targets (`{cast = "rin", point = [x, y, 0]}`): `feet = "floor"` or `"seat"` without a `sit` fails.
 - `mk look` removes the timeline markers for debug views (they switch cameras every frame) and keeps them for the cut; its orbit camera clips at 100 m and cuts far skylines away.
-- A silhouette or reflection shot is a finished flat frame on disk (composed inside the render job): `--no-styles` shows the lit scene instead, in `mk look` and `mk render`.
+- A silhouette, vector or reflection shot is a finished flat frame on disk (composed inside the render job): `--no-styles` shows the lit scene instead, in `mk look` and `mk render`.
 - After editing a `[[transition]]` or `[[insert]]` run `mk build` again (the cameras of the shots that lend frames are keyed at build; `mk render` tells you when they are not).
 - A scripted driver is an animation that needs no Python only while its expression is a Blender *simple expression*, and Blender stores at most 255 characters of it (a longer one is silently cut there and then fails).
   `%`, `**`, `sign` and `copysign` are not simple (`fmod`, `pow`, `floor`, `clamp`, `smoothstep`, `lerp`, `min`, `max`, `abs`, `sin`, `cos`, `radians`, `sqrt`, `if ... else`, `and`, `or` are); check

@@ -205,11 +205,12 @@ def insert_for(ins, output):
 
 
 # ================================================================================================= the plan
-def is_silhouette(shot, output):
-    """Whether the `[[shot]]` table (raw mk.toml) is a silhouette in the output aspect."""
+def has_figure(shot, output):
+    """Whether the `[[shot]]` table (raw mk.toml) has a flat look in the output aspect (`style = "silhouette"` or
+    `"vector"`): a figure that can be a transition's matte."""
     merged = dict(shot)
     merged.update((shot.get("aspect") or {}).get(output) or {})
-    return merged.get("style") == "silhouette"
+    return merged.get("style") in ("silhouette", "vector")
 
 
 def cut_shot(cuts, frame):
@@ -280,9 +281,9 @@ def plan(data, fps, frame0, palette):
             tr["matte"], tr["plate"] = None, tr["in"]
         if tr["matte"]:
             for o in outputs:
-                if not is_silhouette(by_name[tr["matte"]], o):
-                    raise TransitionError(f"{what}: shot {tr['matte']!r} must be a silhouette (style = \"silhouette\") "
-                                          f"in output {o!r}: its figure is the shape that {tr['kind']}s")
+                if not has_figure(by_name[tr["matte"]], o):
+                    raise TransitionError(f"{what}: shot {tr['matte']!r} must have a flat look (style = \"silhouette\" "
+                                          f"or \"vector\") in output {o!r}: its figure is the shape that {tr['kind']}s")
         windows.append((first, cut - 1, what))
         out["transitions"].append(tr)
 

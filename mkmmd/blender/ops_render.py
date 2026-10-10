@@ -1,11 +1,12 @@
 """render_frames: render frames of one output aspect into a folder, claiming each frame with an empty file first so
 several Blender processes can share a range (an empty file left by a crashed process is cleared by the CLI before
 it starts again). Frames are named <frame>.png (Blender frame numbers). Shots with a render-time look (`style =
-"silhouette"`, `reflection = {...}`, see mkmmd.blender.styles) are rendered in that look; args["styles"] = false
-renders every shot as it is lit. args["demands"] ({frame: [item]}, mkmmd.core.transition.demands) are the layers the
-transitions and inserts of the project need next to those frames (plates, mattes, projected points: see
-mkmmd.blender.transition), drawn on the same terms. Screen type (docs/design.md: Text, Screen type) is kept off the frame:
-`screen/<frame>.png` (RGBA, written before the frame) holds it, for `mk post` to lay over the cut's frame and its effects."""
+"silhouette"` or `"vector"`, `reflection = {...}`, see mkmmd.blender.styles) are rendered in that look;
+args["styles"] = false renders every shot as it is lit. args["demands"] ({frame: [item]},
+mkmmd.core.transition.demands) are the layers the transitions and inserts of the project need next to those frames
+(plates, mattes, projected points: see mkmmd.blender.transition), drawn on the same terms. Screen type (docs/design.md:
+Text, Screen type) is kept off the frame: `screen/<frame>.png` (RGBA, written before the frame) holds it, for `mk post`
+to lay over the cut's frame and its effects."""
 import os
 import time
 

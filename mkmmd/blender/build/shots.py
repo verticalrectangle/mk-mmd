@@ -22,6 +22,8 @@
                                  mkmmd.blender.styles; colors = {background, subject, accent}, hide / keep / accent =
                                  [object patterns], tint = [{object, prop, color, gain, glow}], knockout = {objects,
                                  color}, grow, samples (docs/design.md: Shots)
+  style = "vector"               the flat-vector look: the project's [vector] table (tones, materials, lines, shadow,
+                                 light) with the shot's own colors = {background, line, inner}, tones, hide / keep
   reflection = {object = "<glass>", strength, dim, roughness, hide, only, bend, world, tint}   her image in a window
                                  pane: a plane light probe and a mirror layer on the glass object, made at render time
   plate = true                   not in the cut (no `from` / `to` needed): a shot that only a [[transition]] or [[insert]]
@@ -30,6 +32,7 @@
 The scene keeps the shot table in scene["mk_shots"] (JSON; per output aspect the normalised style and reflection, colours
 resolved; `keyed`: the frames the cameras are keyed over; `plate`) so `mk look` and `mk render` bind the markers to each
 aspect's cameras and switch the look per frame."""
+import fnmatch
 import json
 import math
 import zlib
@@ -69,14 +72,15 @@ def _vfov_scale(size):
 
 
 def _styles(ctx, spec, outs, name):
-    """{aspect: {"silhouette" | "reflection": normalised spec}} for the shot's render-time looks (the table that
-    mkmmd.blender.styles reads; colours resolved against the project palette)."""
+    """{aspect: {"silhouette" | "vector" | "reflection": normalised spec}} for the shot's render-time looks (the table
+    that mkmmd.blender.styles reads; colours resolved against the project palette, a vector look with the project's
+    [vector] table)."""
     styles, seen = {}, set()
     recs = None
     for out in outs:
         asp = out["name"]
         try:
-            norm = SS.normalize(SP.merged(spec, (spec.get("aspect") or {}).get(asp)), ctx.palette)
+            norm = SS.normalize(SP.merged(spec, (spec.get("aspect") or {}).get(asp)), ctx.palette, ctx.data.get("vector"))
         except SS.StyleError as e:
             raise BuildError(f"shot {name!r} ({asp}): {e}") from None
         if "reflection" in norm:
@@ -93,6 +97,14 @@ def _styles(ctx, spec, outs, name):
                     recs = recs if recs is not None else ST.object_records(bpy.context.scene)
                     if not SS.select(recs, [pat]):
                         ctx.log(f"WARNING shot {name!r}: {kind} {key} pattern {pat!r} matches no object")
+            for i, rule in enumerate(look.get("materials", []) if kind == "vector" else []):
+                if ("materials", i) in seen:
+                    continue
+                seen.add(("materials", i))
+                names = {SS.vector_name(m.name) for m in bpy.data.materials}
+                if not any(fnmatch.fnmatchcase(n, p) for n in names for p in rule["match"]):
+                    ctx.log(f"WARNING [vector] materials[{i}] (tone {rule['tone']!r}): match {rule['match']} names no "
+                            f"material in the scene")
         if norm:
             styles[asp] = norm
     return styles

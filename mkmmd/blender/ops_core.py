@@ -7,6 +7,7 @@ import numpy as np
 from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
+from ..core import shotstyle as SS
 from . import scene as S
 from .runtime import CTX, op
 
@@ -56,8 +57,15 @@ def list_names(args):
     if kind == "objects":
         return [{"name": o.name, "type": o.type, "parent": o.parent.name if o.parent else None,
                  "hide_render": o.hide_render} for o in sc.objects]
+    if kind == "materials":                          # `match`: the name a [vector] materials rule matches
+        users = {}
+        for o in sc.objects:
+            for s in getattr(o, "material_slots", ()):
+                if s.material is not None and o.name not in users.setdefault(s.material.name, []):
+                    users[s.material.name].append(o.name)
+        return [{"name": n, "match": SS.vector_name(n), "objects": obs} for n, obs in users.items()]
     raise ValueError(f"unknown kind {kind!r}: armatures bones semantic morphs cameras markers collections actions "
-                     f"objects")
+                     f"objects materials")
 
 
 def _namespace(arm_name):

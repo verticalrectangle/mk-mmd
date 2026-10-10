@@ -3,14 +3,14 @@ checks the shots stage makes before it builds a camera. The stage reads the keys
 `mkmmd.core.shotstyle` the look's), so a key added to the stage is added here too."""
 from .screentype import deep_merge
 
-LOOK = ("style", "colors", "hide", "keep", "accent", "tint", "knockout", "grow", "samples", "reflection")
+LOOK = ("style", "colors", "tones", "hide", "keep", "accent", "tint", "knockout", "grow", "samples", "reflection")
 OWN = ("name", "from", "to", "plate", "aspect")                     # a shot's own: no per-output table changes them
 SHOT = OWN + ("mount", "at", "look", "lens", "roll", "lag", "shake", "keys", "frame", "shift", "dof") + LOOK
 ASPECT = tuple(k for k in SHOT if k not in OWN)
 FRAME = ("subject", "fill", "solve")
 DOF = ("focus", "fstop", "offset")
 KEYS = ("t", "at", "look", "lens", "shift")
-TABLES = ("frame", "dof", "colors", "knockout", "reflection")      # laid over the shot's own key by key; the rest is replaced
+TABLES = ("frame", "dof", "colors", "tones", "knockout", "reflection")   # laid over the shot's own key by key; the rest is replaced
 
 
 class ShotError(ValueError):

@@ -26,9 +26,9 @@ Views:
   --view LIST        preset directions around --target, relative to the cast member's facing:
                      """ + " ".join(PRESETS) + """
                      or yaw:elev pairs such as 20:15 (degrees; yaw 0 = in front, 90 = the model's left)
-  Shots of the cut with a render-time look (`style = "silhouette"`, `reflection = {...}` in [[shot]]) are drawn in it,
-  as `mk render` draws them; --no-styles draws every shot as it is lit. Frames inside a [[transition]] / [[insert]] and
-  frames with screen type are previewed composited, as `mk post` makes them.
+  Shots of the cut with a render-time look (`style = "silhouette"` or `"vector"`, `reflection = {...}` in [[shot]]) are
+  drawn in it, as `mk render` draws them; --no-styles draws every shot as it is lit. Frames inside a [[transition]] /
+  [[insert]] and frames with screen type are previewed composited, as `mk post` makes them.
 
 Layout: one image per frame, view and output, written to --out as <view>_<output>_<frame>.jpg (the cut is view `cut`,
 orbit views are named after their preset or yaw_elev, orbits without --output are the square output `sq`); --sheet adds

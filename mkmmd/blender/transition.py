@@ -120,8 +120,9 @@ class Layers:
 
     def _matte(self, item, paths):
         lk = self.looks
-        if lk.kind != "silhouette":
-            raise RuntimeError(f"shot {item['shot']!r} is not a silhouette in output {self.aspect!r}: its figure cannot be a matte")
+        if lk.kind not in ("silhouette", "vector"):
+            raise RuntimeError(f"shot {item['shot']!r} has no flat look in output {self.aspect!r}: its figure cannot be a "
+                               f"matte")
         p = lk.passes()
         ST._save(paths[0], lk.compose(p, subject=False))
         a = lk.matte()

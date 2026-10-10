@@ -4,11 +4,12 @@ expression), relative to a model's facing.
 
 args: frames; views [{name, kind: shot|camera|orbit, camera, target (expr), facing (armature or null), yaw, elev,
 dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out (folder); hide [object names];
-only [object names: hide every other mesh]; styles (default true: shots with a render-time look, `style = "silhouette"` or
-`reflection`, are rendered in it, see mkmmd.blender.styles); layers {dir, demands} (the layers transitions and inserts need
-for the cut's frames, drawn per size into <dir>/<size name>/ before the views: mkmmd.blender.transition; the CLI composites
-them over the cut's images). Each image of a shot view reports `screen`: the RGBA layer of its screen type
-(<out>/<size name>/screen/<frame>.png, mkmmd.core.screentype) or None; the CLI lays it over the image last, as `mk post` does."""
+only [object names: hide every other mesh]; styles (default true: shots with a render-time look, `style = "silhouette"`,
+`"vector"` or `reflection`, are rendered in it, see mkmmd.blender.styles); layers {dir, demands} (the layers transitions
+and inserts need for the cut's frames, drawn per size into <dir>/<size name>/ before the views: mkmmd.blender.transition;
+the CLI composites them over the cut's images). Each image of a shot view reports `screen`: the RGBA layer of its screen
+type (<out>/<size name>/screen/<frame>.png, mkmmd.core.screentype) or None; the CLI lays it over the image last, as
+`mk post` does."""
 import math
 import os
 

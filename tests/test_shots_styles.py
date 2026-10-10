@@ -1,6 +1,7 @@
 """Shot styles and lens shift, bpy-free (mkmmd.core.shotstyle): the crop arithmetic behind `shift`, colour and object
-resolution, the normalised `silhouette` / `reflection` specs, the cut lookup and the numpy composition of a silhouette
-frame. The Blender half (mkmmd.blender.styles, build/shots.py) is checked by rendering and looking (docs/design.md: Shots).
+resolution, the normalised `silhouette` / `vector` / `reflection` specs, the cut lookup and the numpy composition of a
+silhouette and of a vector frame. The Blender half (mkmmd.blender.styles, build/shots.py) is checked by rendering and
+looking (docs/design.md: Shots).
 Fixtures use made-up object names and colours only."""
 import io
 
@@ -386,3 +387,151 @@ def test_the_composition_is_float32_rgb_of_the_pass_size():
     spec = _spec()
     out = SS.compose_silhouette({"flat": np.zeros((5, 7, 4), np.float32)}, spec, [])
     assert out.shape == (5, 7, 3) and out.dtype == np.float32 and 0.0 <= out.min() and out.max() <= 1.0
+
+
+# ---------------------------------------------------------------- the vector look
+VEC = {"colors": {"background": "#FFD21F", "line": "#1B2A6B", "inner": "#0000FF"},
+       "tones": {"white": {"lit": "#FFFFFF", "shade": "#8FB4F0"}, "dark": "#1B2A6B",
+                 "eyes": {"colors": ["#000000", "#8FB4F0", "#FFFFFF"], "at": [0.4, 0.8], "grey": 0.2}},
+       "materials": [{"match": ["skin", "face"], "tone": "white", "group": "skin"}, {"match": "Yellow*", "tone": "dark"},
+                     {"match": "eye", "tone": "eyes", "group": "skin"}]}
+
+
+def _vec(shot=None, project=VEC):
+    return SS.normalize({"name": "v", "style": "vector", **(shot or {})}, DAWN, project)["vector"]
+
+
+def _rgb(h):
+    return np.asarray(SS.resolve_colour(h, DAWN), np.float32)
+
+
+def test_a_vector_shot_lays_its_colours_and_tones_over_the_projects():
+    v = _vec({"colors": {"line": "#FFD21F", "background": "#1B2A6B"}, "tones": {"dark": "#FFD21F"}})
+    assert np.allclose(v["colors"]["background"], _rgb("#1B2A6B")) and np.allclose(v["colors"]["line"], _rgb("#FFD21F"))
+    assert np.allclose(v["colors"]["inner"], _rgb("#0000FF"))                 # the project's own inner stays
+    assert np.allclose(v["tones"]["dark"]["lit"], _rgb("#FFD21F")) and v["tones"]["white"]["kind"] == "lit"
+    assert v["default"] == "white"                                            # no `fill` tone: the first one
+    plain = _vec(project={"colors": {"line": "#1B2A6B"}})
+    assert np.allclose(plain["colors"]["inner"], plain["colors"]["line"])    # inner defaults to the line colour
+    assert plain["default"] == "fill" and plain["materials"] == []
+
+
+@pytest.mark.parametrize("shot, project, frag", [
+    ({}, dict(VEC, outlines=2), "unknown keys"),
+    ({}, dict(VEC, tones={"t": {"lit": "#fff", "grey": 0.2}}), "unknown keys"),
+    ({}, dict(VEC, tones={"t": {"colors": ["#000", "#fff"], "at": [0.5, 0.6]}}), "n - 1 brightness steps"),
+    ({}, dict(VEC, tones={"t": {"colors": ["#000", "#888", "#fff"], "at": [0.6, 0.5]}}), "increasing"),
+    ({}, dict(VEC, materials=[{"match": "skin", "tone": "nope"}]), "not one of the tones"),
+    ({}, dict(VEC, materials=[{"tone": "white"}]), "expected"),
+    ({}, dict(VEC, lines={"outline": -1}), "negative"),
+    ({}, dict(VEC, shadow=1.5), "0..1"),
+    ({}, dict(VEC, light=[0, 0]), "light"),
+    ({"grow": 2}, VEC, "silhouette keys"),
+    ({"colors": {"subject": "#fff"}}, VEC, "expected a table with background, line, inner")])
+def test_bad_vector_specs_are_style_errors(shot, project, frag):
+    with pytest.raises(SS.StyleError, match=frag):
+        _vec(shot, project)
+
+
+def test_tones_belong_to_the_vector_style_only():
+    with pytest.raises(SS.StyleError, match="tones belong to the vector style"):
+        SS.normalize(dict(SIL, tones={"dark": "#000"}), DAWN)
+    with pytest.raises(SS.StyleError, match="tones belong to the vector style"):
+        SS.normalize({"name": "lit", "tones": {"dark": "#000"}}, DAWN)
+
+
+def test_the_material_table_takes_the_first_rule_and_ignores_blenders_suffix():
+    tones, groups = SS.vector_table(["skin", "face.001", "Yellow2", "hair", "Yellow2.001", "eye"], _vec())
+    assert tones == [None, "white", "white", "dark", "white", "dark", "eyes"]   # hair: no rule, the default tone
+    assert groups[1] == groups[2] == groups[6]                                 # one group: no line between them
+    assert groups[3] == groups[5] != groups[1]                                 # no group: the material's own name
+    assert groups[4] not in (groups[1], groups[3]) and groups[0] == 0
+
+
+def _passes(ids, depth=3.0, shade=0.4, tex=None):
+    ids = np.asarray(ids, np.int32)
+    p = {"id": ids, "depth": np.broadcast_to(np.asarray(depth, np.float64), ids.shape).copy(),
+         "shade": np.broadcast_to(np.asarray(shade, np.float32), ids.shape).copy()}
+    if tex is not None:
+        p["tex"] = tex
+    return p
+
+
+def _compose(p, mats, **kw):
+    spec = _vec(**kw)
+    return SS.compose_vector(p, spec, SS.vector_table(mats, spec), scale=1), spec
+
+
+def test_a_lit_tone_takes_its_shade_colour_under_the_shadow_threshold():
+    ids = np.zeros((40, 60), np.int32)
+    ids[5:35, 5:55] = 1
+    shade = np.full(ids.shape, 0.4, np.float32)
+    shade[:, 30:] = 0.3 * SS.LIGHT_FULL - 0.01                                # just under the look's default shadow
+    out, spec = _compose(_passes(ids, shade=shade), ["skin"])
+    assert np.allclose(out[20, 15], _rgb("#FFFFFF")) and np.allclose(out[20, 45], _rgb("#8FB4F0"))
+    assert np.allclose(out[1, 1], _rgb("#FFD21F"))                              # the background, flat
+
+
+def test_a_one_pixel_lit_sliver_in_a_shadow_is_taken_out():
+    ids = np.zeros((40, 60), np.int32)
+    ids[5:35, 5:55] = 1
+    shade = np.zeros(ids.shape, np.float32)
+    shade[:, 30] = 0.4
+    out, _ = _compose(_passes(ids, shade=shade), ["skin"])
+    assert np.allclose(out[10:30, 10:50], _rgb("#8FB4F0"))
+
+
+def test_a_drawn_tone_picks_its_colour_by_the_textures_brightness_and_greys_take_the_last():
+    ids = np.zeros((40, 80), np.int32)
+    ids[5:35, 5:75] = 1
+    tex = np.zeros((40, 80, 3), np.float32)
+    tex[:, :20] = 0.2                                                         # dark: the first colour
+    tex[:, 20:40] = 0.6                                                       # the middle band
+    tex[:, 40:60] = 0.95                                                      # bright and grey: the last colour
+    tex[:, 60:] = [1.0, 0.92, 0.75]                                           # bright but tinted (luma 0.92): one down
+    out, _ = _compose(_passes(ids, tex=tex), ["eye"])
+    assert np.allclose(out[20, 12], _rgb("#000000")) and np.allclose(out[20, 30], _rgb("#8FB4F0"))
+    assert np.allclose(out[20, 50], _rgb("#FFFFFF")) and np.allclose(out[20, 68], _rgb("#8FB4F0"))
+
+
+def _two_blocks(mats, line=10.0):
+    ids = np.zeros((216, 216), np.int32)
+    ids[20:196, 20:108], ids[20:196, 108:196] = 1, 2
+    return _compose(_passes(ids), mats, project=dict(VEC, lines={"outline": 30.0, "inner": line}))
+
+
+def test_an_inner_line_runs_where_two_groups_meet_and_none_inside_one_group():
+    out, spec = _two_blocks(["skin", "Yellow2"])
+    inner = _rgb("#0000FF")
+    assert np.allclose(out[100, 107], inner) and np.allclose(out[100, 60], _rgb("#FFFFFF"))
+    out, _ = _two_blocks(["skin", "face"])                                    # one group: no line between them
+    assert not np.isclose(out[30:186, 30:186], inner).all(-1).any()
+
+
+def test_the_outline_is_drawn_round_the_figure_in_the_line_colour():
+    out, _ = _two_blocks(["skin", "Yellow2"])
+    line = _rgb("#1B2A6B")
+    assert np.allclose(out[100, 20], line) and np.allclose(out[100, 18], line) and np.allclose(out[100, 22], line)
+    assert np.allclose(out[100, 10], _rgb("#FFD21F"))
+
+
+def test_a_depth_step_draws_a_line_and_a_surface_turning_away_does_not():
+    ids = np.zeros((216, 216), np.int32)
+    ids[20:196, 20:196] = 1
+    inner = _rgb("#0000FF")
+    step = np.full(ids.shape, 3.0)
+    step[:, 108:] = 2.7                                                       # a part 30 cm in front of the rest
+    out, _ = _compose(_passes(ids, depth=step), ["skin"])
+    assert np.allclose(out[100, 107], inner) or np.allclose(out[100, 108], inner)
+    slope = np.broadcast_to(np.linspace(1.0, 5.3, 216), ids.shape)            # 2 cm a pixel: steep, but smooth
+    out, _ = _compose(_passes(ids, depth=slope), ["skin"])
+    assert not np.isclose(out[30:186, 30:186], inner).all(-1).any()
+
+
+def test_without_the_subject_the_vector_frame_is_its_background_at_the_frames_size():
+    ids = np.zeros((40, 60), np.int32)
+    ids[5:35, 5:55] = 1
+    spec = _vec()
+    out = SS.compose_vector(_passes(ids), spec, SS.vector_table(["skin"], spec), scale=2, subject=False)
+    assert out.shape == (20, 30, 3) and out.dtype == np.float32
+    assert np.allclose(out, _rgb("#FFD21F"))

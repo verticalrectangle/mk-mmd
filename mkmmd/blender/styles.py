@@ -1,6 +1,6 @@
-"""Render-time looks of a shot (docs/design.md: Shots): the flat `silhouette` and the window `reflection`, switched on and
-off per frame by `mk render` (ops_render) and `mk look` (ops_look) from the shot table that `mk build` keeps in
-scene["mk_shots"] (mkmmd.blender.build.shots; the normalised specs are mkmmd.core.shotstyle's).
+"""Render-time looks of a shot (docs/design.md: Shots): the flat `silhouette`, the flat `vector` and the window
+`reflection`, switched on and off per frame by `mk render` (ops_render) and `mk look` (ops_look) from the shot table that
+`mk build` keeps in scene["mk_shots"] (mkmmd.blender.build.shots; the normalised specs are mkmmd.core.shotstyle's).
 
     looks = Looks(scene)
     for f in frames:
@@ -28,6 +28,14 @@ from the passes that do work, all inside the one render call of a frame and comp
          `mk post` lays it over the cut and its effects; `prepare` answers "screen" for a shot with no look of its own); its
          `knockout` type goes into the knock pass of a silhouette, in the picture.
 No file is left behind and nothing in the scene stays changed.
+
+vector. A flat-vector drawing of the scene in the project's tones, composed with numpy (`compose_vector`) from Workbench
+passes at SS.VECTOR_SCALE times the frame's size, boxed down:
+  id     flat light, every material's viewport colour its id (`vector_table`), Raw, no antialiasing, a float EXR: exact;
+         the compositor writes the Z pass to an EXR on the same render (the scene must have no compositor of its own)
+  tex    flat light, the textures: what a drawn tone (eyes, mouth) takes its colours from (only when a tone is drawn)
+  shade  the studio light, fixed in the world, with cast shadows from the look's `light`, on plain white (Raw)
+  type   as for the silhouette, laid over the drawing.
 
 reflection. A plane light probe at the glass object and, in the glass material, a mirror layer in front of the glass
 shader (mkmmd.blender.mirror). EEVEE Next fills a glossy surface on a probe's plane with the mirrored view of the whole
@@ -251,7 +259,7 @@ class Looks:
             self.table = json.loads(self.sc.get("mk_shots", "[]"))
         except ValueError:
             self.table = []
-        self.kind = None                  # "silhouette" | "reflection" | None
+        self.kind = None                  # "silhouette" | "vector" | "reflection" | None
         self.key = None                   # (shot name, aspect, kind) of the look that is entered
         self.spec = None
         self.rs = Restore()
@@ -325,7 +333,7 @@ class Looks:
         if rgba is not None and layer is not None:
             _save_rgba(layer, rgba)
             rgba = None
-        if self.kind == "silhouette":
+        if self.kind in ("silhouette", "vector"):
             img = self.compose(self.passes())
         elif rgba is not None:
             img = self._shoot_scene()
@@ -439,9 +447,10 @@ class Looks:
                            ("show_cavity", False), ("show_shadows", False), ("show_specular_highlight", False)):
                 rs.attr(sh, k, val)
 
-    def _shoot(self, tag):
-        """Render the current frame into a temporary PNG and read it back -> (h, w, 4) float32."""
-        path = os.path.join(tempfile.gettempdir(), f"mk_pass_{os.getpid()}_{tag}.png")
+    def _shoot(self, tag, ext=".png"):
+        """Render the current frame into a temporary file (the image settings' type, named with `ext`) and read it back ->
+        (h, w, 4) float32."""
+        path = os.path.join(tempfile.gettempdir(), f"mk_pass_{os.getpid()}_{tag}{ext}")
         self.sc.render.filepath = path
         try:
             bpy.ops.render.render(write_still=True)
@@ -586,7 +595,9 @@ class Looks:
         self.tint_values = vals
 
     def passes(self):
-        """The renders of the current frame that the silhouette is composed from: {name: array}, for inspection."""
+        """The renders of the current frame that the flat look is composed from: {name: array}, for inspection."""
+        if self.kind == "vector":
+            return self._vector_passes()
         cl, out = self.cl, {}
         out["flat"] = self._flat()
         if cl["soft"]:
@@ -605,12 +616,132 @@ class Looks:
         return out
 
     def compose(self, p, subject=True):
-        """The finished silhouette frame (float RGB, display space) from the passes `passes()` made; `subject = False`
-        leaves the figure out (the frame round a transition's window)."""
+        """The finished flat frame (float RGB, display space) from the passes `passes()` made; `subject = False` leaves the
+        figure out (the frame round a transition's window)."""
+        if self.kind == "vector":
+            img = SS.compose_vector(p, self.spec, self.vtable, subject=subject)
+            if "type" in p:
+                a = np.clip(p["type"][..., 3:4], 0.0, 1.0)
+                img = img * (1.0 - a) + p["type"][..., :3] * a
+            return img
         return SS.compose_silhouette(p, self.spec, self.tint_values, hard=bool(self.cl["hard"]), subject=subject)
 
-    def _render_silhouette(self, path):
-        _save(path, self.compose(self.passes()))
+    # ---------------------------------------------------------------- vector
+    def _enter_vector(self, name, spec):
+        rs = self.rs
+        objs = [o for o in self._objects() if not o.hide_render]
+        recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
+        hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
+        cl = {"hide": [], "subject": [], "type": []}
+        for o in objs:
+            if o.name in hide:
+                cl["hide"].append(o.name)
+                rs.attr(o, "hide_render", True)
+            else:
+                cl["type" if is_type(o) else "subject"].append(o.name)
+        mats = []
+        for n in cl["subject"]:
+            ob = bpy.data.objects[n]
+            for m in [s.material for s in ob.material_slots if s.material is not None] + _materials(ob):
+                if m.name not in mats:
+                    mats.append(m.name)
+        self.cl, self.vmats = cl, mats
+        self.vtable = SS.vector_table(mats, spec)
+        self.info = {**{k: len(v) for k, v in cl.items()}, "materials": len(mats)}
+
+    def _vector_passes(self):
+        """The passes `compose_vector` reads, at SS.VECTOR_SCALE times the frame's size (see the module docstring)."""
+        r, s, out = self.sc.render, SS.VECTOR_SCALE, {}
+        rs = Restore()
+        try:
+            rs.attr(r, "resolution_x", r.resolution_x * s)
+            rs.attr(r, "resolution_y", r.resolution_y * s)
+            self._visibility(rs, show=self.cl["subject"])
+            out["id"], out["depth"] = self._vector_ids()
+            if any(t["kind"] == "drawn" for t in self.spec["tones"].values()):
+                out["tex"] = self._vector_pass("tex")[..., :3]
+            out["shade"] = self._vector_pass("shade")[..., 0]
+        finally:
+            rs.run()
+        live = [n for n in self.cl["type"] if not bpy.data.objects[n].hide_render]
+        if live:
+            out["type"] = self._type(live, holdout=self.cl["subject"])
+        return out
+
+    def _vector_ids(self):
+        """(ids, depth): every material's viewport colour is its id (Raw, no antialiasing, a float EXR: exact; a material
+        under half opaque is left out, as Workbench leaves it out of the other passes), and the compositor writes the Z
+        pass of the same render to an EXR."""
+        sc, rs = self.sc, Restore()
+        try:
+            self._film(rs, WORKBENCH, "Raw")
+            rs.attr(sc.display, "render_aa", "OFF")
+            rs.attr(sc.display.shading, "color_type", "MATERIAL")
+            ims = sc.render.image_settings
+            for k, val in (("file_format", "OPEN_EXR"), ("color_depth", "32"), ("exr_codec", "ZIP")):
+                rs.attr(ims, k, val)
+            for k, n in enumerate(self.vmats, 1):
+                m = bpy.data.materials[n]
+                rs.attr(m, "diffuse_color", ((k % 256) / 255.0, (k // 256) / 255.0, 0.0, float(m.diffuse_color[3] >= 0.5)))
+            depth = self._depth_compositor(rs)
+            px = self._shoot("vid", ".exr")
+            ids = np.where(px[..., 3] > 0.5, np.rint(px[..., 0] * 255.0) + 256.0 * np.rint(px[..., 1] * 255.0), 0.0)
+            return ids.astype(np.int32), depth()
+        finally:
+            rs.run()
+
+    def _depth_compositor(self, rs):
+        """Render Layers' Depth -> a File Output EXR in the temp folder, on a scene with no compositor of its own. Returns
+        a function that reads it back after the render ((h, w) metres, top row first) and deletes it."""
+        sc = self.sc
+        ours = ("CompositorNodeRLayers", "CompositorNodeComposite")
+        if sc.use_nodes and sc.node_tree is not None and any(n.bl_idname not in ours for n in sc.node_tree.nodes):
+            raise RuntimeError("the scene has a compositor tree of its own; the vector look's depth pass needs the compositor")
+        rs.attr(sc, "use_nodes", True)
+        rs.attr(sc.render, "use_compositing", True)
+        rs.attr(bpy.context.view_layer, "use_pass_z", True)
+        nt = sc.node_tree
+        for n in list(nt.nodes):                                 # a freshly enabled tree holds a default Render Layers
+            nt.nodes.remove(n)                                   # and Composite; the pass uses its own
+        rl, comp = nt.nodes.new("CompositorNodeRLayers"), nt.nodes.new("CompositorNodeComposite")
+        fo = nt.nodes.new("CompositorNodeOutputFile")
+        mine = [rl, comp, fo]
+        stem = f"mk_pass_{os.getpid()}_depth_"
+        fo.base_path = tempfile.gettempdir()
+        fo.format.file_format, fo.format.color_depth, fo.format.color_mode = "OPEN_EXR", "32", "RGB"
+        fo.file_slots[0].path = stem
+        nt.links.new(rl.outputs["Image"], comp.inputs["Image"])
+        nt.links.new(rl.outputs["Depth"], fo.inputs[0])
+        rs.call(lambda: [nt.nodes.remove(n) for n in mine])
+        path = os.path.join(tempfile.gettempdir(), f"{stem}{sc.frame_current:04d}.exr")
+
+        def read():
+            try:
+                return _read_rgba(path)[..., 0]
+            finally:
+                if os.path.exists(path):
+                    os.unlink(path)
+        return read
+
+    def _vector_pass(self, kind):
+        """`tex`: the textures under flat light (display space); `shade`: the studio light, fixed in the world, with cast
+        shadows from the look's `light`, on plain white (Raw)."""
+        sc, rs = self.sc, Restore()
+        try:
+            sh, d = sc.display.shading, sc.display
+            if kind == "tex":
+                self._film(rs, WORKBENCH, "Standard")
+                rs.attr(sh, "color_type", "TEXTURE")
+            else:
+                self._film(rs, WORKBENCH, "Raw")
+                for k, val in (("light", "STUDIO"), ("color_type", "SINGLE"), ("single_color", (1.0, 1.0, 1.0)),
+                               ("show_shadows", True), ("shadow_intensity", 1.0), ("use_world_space_lighting", True)):
+                    rs.attr(sh, k, val)
+                for k, val in (("light_direction", tuple(self.spec["light"])), ("shadow_shift", 0.1), ("shadow_focus", 0.0)):
+                    rs.attr(d, k, val)
+            return self._shoot("v" + kind)
+        finally:
+            rs.run()
 
     # ---------------------------------------------------------------- reflection
     def _enter_reflection(self, name, spec):
