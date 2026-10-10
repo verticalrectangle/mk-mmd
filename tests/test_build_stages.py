@@ -565,3 +565,45 @@ def test_a_group_morph_is_keyed_through_the_bound_sliders_and_sums_with_its_memb
     code, q = cli(["q", str(tmp_path / "build" / "t.blend"), expr, "--frames", "61", "--project", str(tmp_path)], capsys)
     assert code == 0, q                                                   # a new Blender: the drivers survive the reload
     assert q["values"][0] == [[pytest.approx(0.2 + 0.5 * 0.8), pytest.approx(0.8)]]
+
+
+FUSES = """[[prop]]
+name = "fa"
+card = "library:fuse"
+at = [0.3, 0.2, 0.5]
+
+[[prop]]
+name = "fb"
+card = "library:fuse"
+at = [-0.4, 0.1, 0.2]
+scale = 2.0
+slots = { lit = 1.0 }
+
+[[key]]
+target = "fa"
+prop = "lit"
+keys = [[0.0, 1.0]]
+
+[[key]]
+target = "fb"
+prop = "burn"
+keys = [[1.0, 0.0], [1.5, 0.97]]
+"""
+
+
+def test_a_fuse_s_spark_rides_the_end_of_its_rope_wherever_the_prop_stands_and_whatever_its_size(make, capsys):
+    import numpy as np
+    from mkmmd.blender.library.props import fuse_layout as FL
+    code, out = make(FUSES, with_cast=False, until="keys")
+    assert code == 0, out.get("error")
+    assert not warnings(out)                                              # built grown: the rope is a round form
+    expr = ("[list(obj(n + '_spark').matrix.translation) + [obj(n + '_spark').matrix.to_scale()[0]] for n in ('fa', 'fb')]")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "61,76", "--project", str(make.root)],
+                  capsys)                                                 # t 1.0 (grown), 1.5 (fb burned down)
+    assert code == 0, q
+    (fa1, fb1), (_, fb2) = ([np.array(v) for v in f] for f in q["values"])
+    tip = np.array(FL.CURL[-1])
+    assert np.linalg.norm(fa1[:3] - (np.array([0.3, 0.2, 0.5]) + tip)) < 2e-3          # at the tip, counted once
+    assert np.linalg.norm(fb1[:3] - (np.array([-0.4, 0.1, 0.2]) + 2.0 * tip)) < 4e-3   # the scaled rope's tip
+    assert fb1[3] / fa1[3] == pytest.approx(2.0, rel=1e-3)                # the spark grows with the prop
+    assert np.linalg.norm(fb2[:3] - np.array([-0.4, 0.1, 0.2])) < 0.03   # burned down to the socket
