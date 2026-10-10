@@ -12,9 +12,10 @@ side, clear of a mic held at the mouth and of its cord.
 
 Every place is made natural before it is keyed (`resolve`):
 - the wrist: the elbow an arm IK gives (the pose stage's default pole, mkmmd.core.armreach) fixes the forearm, and a hand
-  that would bend more than WRIST degrees from it is turned toward it; a mic place is aimed instead (AIM): the hand
-  continues the forearm as far as a grip on a mic pointing that way allows; two hands that meet in one shape (SHAPED, the
-  two-hand heart) keep the orientation written for them, sized to the arm so it suits any body;
+  that would bend more than WRIST degrees from it is turned toward it; a place for a fist round a held thing (a mic, a
+  hammer) is aimed instead (AIM): the hand continues the forearm as far as a grip on a handle pointing that way allows; two
+  hands that meet in one shape (SHAPED, the two-hand heart) keep the orientation written for them, sized to the arm so it
+  suits any body;
 - the skin: given the build's distance to the member's own body, clothes and hair (`clear`), the hand comes in from
   outside and stops where it first comes within its margin: an arm held out (OUT) swings in round the shoulder, so it
   stays in reach (a hanging hand rises off a wide skirt), a hand by the body comes in straight (TOUCH, else straight out
@@ -72,12 +73,17 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
     "point": ((-0.14, -1.0, 0.05), 0.95),
     "up": ((0.17, -0.09, 1.0), 0.93),
     "mic_across": ((-0.6, -0.8, 0.0), 0.85),
+    "bonk_up": ((0.35, -0.1, 1.0), 0.7),
+    "bonk": ((0.12, -1.0, -0.75), 0.95),
 }
-AIM = {  # a mic place: where the mic points (its grille), for the left hand, x mirrored for the right. A fist holds a mic
-    # across its palm, so a straight wrist keeps the mic square to the forearm: the aims lean from upright, no more
+AIM = {  # a fist round a handle (a mic, a hammer): where the handle points, for the left hand, x mirrored for the right. A
+    # fist holds a handle across its palm, so a straight wrist keeps it square to the forearm: the aims lean from upright
     "mic_lens": (0.0, -0.4, 0.92),                     # held out, leaning to the lens
     "mic_up": (0.0, 0.08, 1.0),                        # raised forward and up, the mic upright over it (the palm in)
     "mic_across": (-0.25, -0.3, 0.92),                 # held out to the other side, upright for a partner there
+    "bonk_up": (0.0, 0.55, 0.83),                      # a hammer cocked up and back over the shoulder
+    "bonk": (0.0, -0.55, 0.83),                        # struck: its head's face comes forward and down on what is in
+                                                       # front at the height of the chest (a box, a door)
 }
 TOUCH = {  # a place on the body: the way the hand comes in to it, for the left hand, x mirrored for the right
     "chest": (0.0, -1.0, 0.0),
@@ -131,6 +137,8 @@ def place(name, side, marks):
         "heart_push": (chest + marks["reach"] * _v(s * 0.21, -0.69, 0.21), _v(-s * 0.8, 0, 0.6), _v(-s * 0.52, -0.5, -0.69),
                        "heart2"),
         "bunny": (eye + _v(s * 0.09, 0.01, 0.17), _v(s * 0.1, -0.2, 1), _v(0, -1, 0), "paw"),
+        "bonk_up": (out("bonk_up"), _v(0, -0.5, 0.85), _v(-s, 0, 0), "curled"),
+        "bonk": (out("bonk"), _v(0, -0.8, -0.5), _v(-s, 0, 0), "curled"),
     }
     if name not in P:
         raise MoveError(f"no hand place {name!r} (have {', '.join(sorted(P))})")
@@ -274,9 +282,10 @@ def resolve(name, side, marks, clear=None):
     return pt, dd, pp, shape, moved, bend(dd, f)
 
 
-# hand: "places" ((place, share of dur), ...) or "beats" (one place: `on` the beat, `off` halfway to the next, offsets in
-# the character's frame); both: both hands play it (mic_ok: the mic hand too; two_hands: it needs both free); lean / tilt:
-# degrees held over the move; twitch: a head flick on its start; face: (semantic morph, value) held over the move
+# hand: "places" ((place, share of dur), ...) or "beats" (`place` + `on` on each beat inside it, or on the entry's `hits`,
+# `off_place` (default `place`) + `off` halfway to the next; offsets in the character's frame; a move with an off place of
+# its own starts there: its wind-up); both: both hands play it (mic_ok: the mic hand too; two_hands: it needs both free);
+# lean / tilt: degrees held over the move; twitch: a head flick on its start; face: (semantic morph, value) held over it
 MOVES = {
     "bounce_hand": {"hand": "beats", "place": "bounce", "on": (0, 0, -0.05), "off": (0, 0, 0)},
     "chest_pat": {"hand": "beats", "place": "chest", "on": (0, 0, 0), "off": (0, -0.035, 0.01), "face": [("blush", 0.6)]},
@@ -294,23 +303,26 @@ MOVES = {
     "heart_push": {"hand": "places", "places": (("heart_push", 0.0),), "both": True, "two_hands": True,
                    "face": [("cheerful", 0.8)]},
     "bunny_paws": {"hand": "places", "places": (("bunny", 0.0),), "both": True, "face": [("wink_r", 1.0)]},
+    "bonk": {"hand": "beats", "place": "bonk", "off_place": "bonk_up", "on": (0, 0, 0), "off": (0, 0, 0)},
     "into_lens": {"lean": 14.0},
     "lean_back": {"lean": -11.0, "tilt": 7.0},
     "stank": {"twitch": {"bones": ["head"], "deg": -12.0, "axis": [1, 0, 0], "dur": 0.3}, "face": [("hau", 1.0)]},
+    "blown": {"lean": -16.0, "twitch": {"bones": ["head"], "deg": -14.0, "axis": [1, 0, 0], "dur": 0.4},
+              "face": [("surprised", 1.0)]},
     "face": {},
 }
-KEYS = {"name", "t", "dur", "hand", "morph", "value"}
+KEYS = {"name", "t", "dur", "hand", "morph", "value", "hits"}
 REST_PLACES = ("rest", "dainty", "mic")
 
 
 def compile(entries, marks, beats=(), yaw=0.0, clear=None):
     """The keys of one cast member's moves: {"hands": {side: [key]}, "lean": [[t, deg]], "tilt": [[t, deg]], "twitch":
     [...], "expressions": [{morph, keys}], "places": {side: {place: {moved_mm, wrist_deg}}}}. `entries` are its
-    `[[move]]` tables {name, t, dur = 1, hand = "R", morph, value}, and `{name = "rest", hand, place}` where that hand
+    `[[move]]` tables {name, t, dur = 1, hand = "R", morph, value, hits}, and `{name = "rest", hand, place}` where that hand
     waits (REST_PLACES; default "rest"); `marks` its landmarks (MARKS); `beats` clip seconds (a beat move pats on each
-    inside it); `yaw` the member's (degrees: hand directions are turned into the world); `clear(points)` the smallest
-    distance from points (n, 3) in the character's frame to its body, clothes and hair (None: hands are not kept off
-    them)."""
+    inside it, or on its entry's `hits`: clip seconds inside it); `yaw` the member's (degrees: hand directions are turned
+    into the world); `clear(points)` the smallest distance from points (n, 3) in the character's frame to its body, clothes
+    and hair (None: hands are not kept off them)."""
     rest = {"L": "rest", "R": "rest"}
     for e in entries:
         if isinstance(e, dict) and e.get("name") == "rest":
@@ -330,7 +342,7 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
     for i, e in enumerate(entries):
         what = f"move {i} ({e.get('name')!r})" if isinstance(e, dict) else f"move {i}"
         if not isinstance(e, dict) or set(e) - KEYS or "name" not in e or "t" not in e:
-            raise MoveError(f"{what}: expected {{name, t, dur, hand, morph, value}}")
+            raise MoveError(f"{what}: expected {{name, t, dur, hand, morph, value, hits}}")
         if e["name"] not in MOVES:
             raise MoveError(f"{what}: no such move (have {', '.join(sorted(MOVES))})")
         m, t0, dur = MOVES[e["name"]], float(e["t"]), float(e.get("dur", 1.0))
@@ -345,17 +357,29 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
                 raise MoveError(f"{what}: needs both hands free, and the {held[0]} hand holds the mic")
             if not m.get("mic_ok"):
                 sides = tuple(sd for sd in sides if rest[sd] != "mic")       # the mic hand keeps the mic at the mouth
+        if "hits" in e and m.get("hand") != "beats":
+            raise MoveError(f"{what}: hits are for a move played on beats "
+                            f"({', '.join(k for k, v in MOVES.items() if v.get('hand') == 'beats')})")
         if m.get("hand") == "places":
             for side in sides:
                 plays[side].append((t0, t1, [(t0 + share * dur, p, (0, 0, 0)) for p, share in m["places"]]))
         elif m.get("hand") == "beats":
-            bs = [b for b in beats if t0 - 1e-6 <= b < t1 - 1e-6]
-            if not bs:
-                raise MoveError(f"{what}: no beat between {t0} and {t1} s (the member's timeline gives the beats)")
+            if "hits" in e:
+                hs = e["hits"]
+                if not isinstance(hs, list) or not hs or not all(isinstance(h, (int, float)) for h in hs):
+                    raise MoveError(f"{what}: hits is a list of clip seconds")
+                bs = sorted(float(h) for h in hs)
+                if bs[0] < t0 - 1e-6 or bs[-1] >= t1 - 1e-6:
+                    raise MoveError(f"{what}: its hits must fall inside it ({t0} .. {t1} s)")
+            else:
+                bs = [b for b in beats if t0 - 1e-6 <= b < t1 - 1e-6]
+                if not bs:
+                    raise MoveError(f"{what}: no beat between {t0} and {t1} s (the member's timeline gives the beats)")
+            on, off = m["place"], m.get("off_place", m["place"])
             for side in sides:
-                seq = []
+                seq = [(t0, off, m["off"])] if off != on and bs[0] - t0 > 1e-6 else []     # the wind-up
                 for b, nb in zip(bs, bs[1:] + [t1]):
-                    seq += [(b, m["place"], m["on"]), (0.5 * (b + nb), m["place"], m["off"])]
+                    seq += [(b, on, m["on"]), (0.5 * (b + nb), off, m["off"])]
                 plays[side].append((t0, t1, seq))
         if "lean" in m or "tilt" in m:
             body.append((t0, t1, m.get("lean", 0.0), m.get("tilt", 0.0), what))

@@ -15,7 +15,7 @@ MARKS = {"arm.L": [0.093, -0.02, 1.25], "arm.R": [-0.093, -0.02, 1.25], "chest":
          "hand": 0.146}
 BEATS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 PLACES = ("rest", "dainty", "mic", "mic_lens", "mic_up", "mic_across", "chest", "bounce", "point", "heart", "peace",
-          "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny")
+          "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny", "bonk_up", "bonk")
 
 
 def near(p):
@@ -207,6 +207,29 @@ def test_a_beat_move_on_the_body_pats_from_the_surface_it_was_brought_to():
     pats = [k for k in keys if k["at"] == near(on)]
     offs = [k for k in keys if k["at"] == near(on + np.array(MV.MOVES["chest_pat"]["off"]))]
     assert len(pats) == 2 and len(offs) >= 2                               # on the chest, then lifted off it
+
+
+def test_a_bonk_winds_up_then_strikes_on_its_own_hits_not_the_beats_and_they_are_checked():
+    es = [{"name": "bonk", "t": 0.9, "dur": 0.6, "hand": "R", "hits": [1.1, 1.3]}]
+    keys = MV.compile(es, MARKS, BEATS)["hands"]["R"]
+    up, hit = (near(MV.resolve(p, "R", MARKS)[0]) for p in ("bonk_up", "bonk"))
+    assert [k["t"] for k in keys if k["at"] == hit] == pytest.approx([1.1, 1.3])          # not on the beat at 1.0
+    assert [k["t"] for k in keys if k["at"] == up] == pytest.approx([0.9, 1.2, 1.4, 1.5])  # cocked first, between, after
+    for bad, frag in (([1.1, 1.6], "inside it"), ([], "list of clip seconds"), ("1.1", "list of clip seconds")):
+        with pytest.raises(MV.MoveError, match=frag):
+            MV.compile([dict(es[0], hits=bad)], MARKS, BEATS)
+    with pytest.raises(MV.MoveError, match="hits are for a move played on beats"):
+        MV.compile([{"name": "point", "t": 1.0, "hits": [1.2]}], MARKS, BEATS)
+
+
+@pytest.mark.parametrize("side", ["L", "R"])
+def test_a_bonk_is_cocked_up_over_the_shoulder_and_its_face_comes_forward_and_down(side):
+    up, du, pu, _, _, bend_up = MV.resolve("bonk_up", side, MARKS)
+    pt, d, _, _, _, bend = MV.resolve("bonk", side, MARKS)
+    handle = (1.0 if side == "R" else -1.0) * np.cross(du, pu)    # the fist's hole: where the handle points
+    assert up[2] > MARKS[f"arm.{side}"][2] + 0.1 and handle[1] > 0.3 and handle[2] > 0.3   # raised, the hammer up and back
+    assert d[1] < -0.5 and d[2] < -0.2                     # the hand, so the head's face, points forward and down
+    assert pt[2] < MARKS["chest"][2] and max(bend, bend_up) <= MV.WRIST
 
 
 # ---------------------------------------------------------------- the mic hand

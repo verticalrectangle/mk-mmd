@@ -85,7 +85,7 @@ square crop of a vertical master). Put the plan in comments of `mk.toml` or a lo
   (`bound_morphs` in its report).
   Take the numbers from `mk ref measure` or a timeline, not from taste.
 - **Moves** ([Moves](design.md#moves)): `[[move.<cast>]]` puts named moves on the beats (`chest_pat`, `paws`, `point`, `heart_wink`,
-  `hands_up`, `stank` ...) and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them (a two-hand move then
+  `hands_up`, `stank` ...) or on clip seconds of their own (`hits = [...]`: a `bonk` on the snares), and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them (a two-hand move then
   plays with the free hand only; `place = "dainty"` rests a hand lightly on the front of a skirt, elbows in); they compile to the pose's hand keys (riding the chest) and perform's lean, twitches and faces. The hands
   come in from outside and stop at the body, clothes and hair, and wrists stay within 60 degrees of the forearm: the pose report's
   `moves.places` says how far each place was kept out and how much its wrist bends. Draw a pose sheet of every move, front and 3/4, and look at

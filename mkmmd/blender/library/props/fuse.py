@@ -19,7 +19,6 @@ and a rope that has not grown is two end caps. Numbers, the colour roles and the
 import bpy
 import numpy as np
 
-from ....core import palette as PAL
 from ....core import shell as S
 from .. import shell as SH
 from . import fuse_layout as LAY
@@ -29,14 +28,6 @@ from .cafe_kit import Kit
 END = f"max({LAY.MIN_SCALE}, min(grow, 1.0 - burn))"                      # the share of the cord that shows
 FLICKER = f"max({LAY.MIN_SCALE}, lit * (1.0 + 0.22 * sin(frame * 2.3) + 0.12 * sin(frame * 5.7 + 1.0)))"
 CAP = f"max({LAY.MIN_SCALE}, min(1.0, grow * 12.0))"                       # the socket pops in as the rope starts
-
-
-def _colour(K, role):
-    """A role's colour: the prop's `slots` entry for it (a palette slot or a hex), else the layout's default slot."""
-    v = str(K.slots.get(role, LAY.ROLES[role]))
-    if v.startswith("#"):
-        return (*PAL.linear(v), 1.0)
-    return K.slot(v)
 
 
 def _driver(owner, path, expr, root, index=-1):
@@ -90,9 +81,10 @@ def fuse(name, coll, root, slots=None):
     for k, (_, doc) in LAY.PARAMS.items():
         root[k] = start[k]
         root.id_properties_ui(k).update(description=doc, min=0.0, max=1.0, soft_min=0.0, soft_max=1.0)
-    mats = {"cord": K.simple_mat("cord", _colour(K, "cord"), rough=0.8),
-            "spark": K.simple_mat("spark", _colour(K, "spark"), rough=0.4, emit=_colour(K, "spark"), emit_strength=2.0),
-            "cap": K.simple_mat("cap", _colour(K, "cap"), rough=0.5, metal=0.3)}
+    mats = {"cord": K.simple_mat("cord", K.role("cord", LAY.ROLES), rough=0.8),
+            "spark": K.simple_mat("spark", K.role("spark", LAY.ROLES), rough=0.4, emit=K.role("spark", LAY.ROLES),
+                                  emit_strength=2.0),
+            "cap": K.simple_mat("cap", K.role("cap", LAY.ROLES), rough=0.5, metal=0.3)}
     roles = list(mats)
     mat_of = lambda i: mats[roles[i]]                                                          # noqa: E731
     r, h = LAY.CAP

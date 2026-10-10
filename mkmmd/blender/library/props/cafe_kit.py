@@ -20,6 +20,7 @@ import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
+from ....core import palette as PAL
 from ..mesh import as_collider
 from .cafe_colors import DAWN, Colors, mix, shade  # noqa: F401  (re-exported for the builders)
 
@@ -394,6 +395,12 @@ class Kit:
     # ---- colours
     def slot(self, name, a=1.0):
         return self.colors.slot(name, a)
+
+    def role(self, role, roles):
+        """The colour of a colour role: the prop's `slots` entry for it (a palette slot or a hex), else its default slot in
+        `roles` ({role: slot})."""
+        v = str(self.slots.get(role, roles[role]))
+        return (*PAL.linear(v), 1.0) if v.startswith("#") else self.slot(v)
 
     def blend(self, **kw):
         return self.colors.blend(**kw)

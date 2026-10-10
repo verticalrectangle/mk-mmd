@@ -651,3 +651,33 @@ def test_a_burst_s_pieces_are_where_the_core_puts_them_on_a_moved_scaled_prop_fo
             assert g[3:6] == pytest.approx([2.0 * s] * 3, rel=1e-4)
             if t == 0.9:
                 assert g[6:] == pytest.approx([rx, ry, 0.0], abs=1e-4)    # tumbling a little, spinning in the picture
+
+
+HAMMER = """[[prop]]
+name = "hm"
+card = "library:squeaky_hammer"
+at = [0.3, 0.2, 0.5]
+scale = 2.0
+
+[[key]]
+target = "hm"
+prop = "squash"
+keys = [[0.0, 0.0], [1.0, 1.0]]
+"""
+
+
+def test_a_squeaky_hammer_s_head_squashes_about_its_middle_as_its_squash_is_keyed(make, capsys):
+    from mkmmd.blender.library.props import squeaky_hammer_layout as LAY
+    code, out = make(HAMMER, with_cast=False, until="keys")
+    assert code == 0, out.get("error")
+    assert not warnings(out)
+    expr = "[list(obj('hm_head').matrix.translation), list(obj('hm_head').matrix.to_scale())]"
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "31,61", "--project", str(make.root)],
+                  capsys)                                                 # t 0 (squash 0), 1.0 (squash 1)
+    assert code == 0, q
+    middle = [0.3, 0.2, 0.5 + 2.0 * LAY.HEAD_Z]
+    (at0, s0), (at1, s1) = q["values"]
+    assert at0 == pytest.approx(middle, abs=1e-5) and at1 == pytest.approx(middle, abs=1e-5)   # it stays in place
+    assert s0 == pytest.approx([2.0] * 3, rel=1e-5)
+    along, round_ = LAY.squash(1.0)
+    assert s1 == pytest.approx([2.0 * along, 2.0 * round_, 2.0 * round_], rel=1e-5)          # shorter along X, rounder

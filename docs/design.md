@@ -683,6 +683,7 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `handheld_mic` | a handheld vocal microphone, 162 mm long with a 51 mm ball grille, standing on its tail along +Z, and its cord `<name>_cable`; colour roles `body`, `grille`, `hardware`, `cable` (`slots`: a palette slot or `#hex`); `use.anchor` `jack` (the cord's exit under the tail), `use.look` `grille` and `grip`. Put it in a hand with `attach` and `cable` (see [Posing](#posing)) |
 | `fuse` | a cartoon fuse: a rope (`<name>_cord`, 14 mm thick) that leaves a socket at the root, up and over in a curl, with a spiky spark (`<name>_spark`) that is lit at its tip and burns it down. Root properties for `[[key]]`, 0..1: `grow` (how much of the rope has sprouted, along its length; default 1), `burn` (how much has burned down from the tip; 0), `lit` (the spark's size, flickering; 0). Leave `grow` at 1 in the slots and key it from 0: the props stage measures the form as built. Options `points` (`[[x, y, z], ...]` from the root, the first `[0, 0, 0]`), `radius`; colour roles `cord` (text), `spark` (gold), `cap` (base); `use.look` `base` and `tip`. The spark has no parent (it rides the rope's end on a Follow Path constraint and copies the root's world scale), so `scale` and `parent` carry it too |
 | `burst` | a blast of pieces flung out from the root at a clip second: puffy hearts, five-point stars and cloud puffs (pillows facing -Y: `<name>_heart<i>`, `<name>_star<i>`, `<name>_puff<i>`, the hearts tagged `mk_heart`), each easing out to its own reach while it pops in and spins in the picture's plane, then shrinking away; the directions are flattened toward the picture (x-z), so pieces fly across it more than at the lens. Drivers on the frame (the maths: `mkmmd/core/burst.py`), so a [freeze](#freezes) holds them mid-air. Options `count` (24), `seed` (1), `mix` (`{heart = 0.45, star = 0.35, puff = 0.2}`), colours `heart` ("love"), `star` ("gold"), `puff` ("text"), `glow` (0.3); root properties for `[[key]]`: `start` (the clip second it goes off; 0), `reach` (how far the farthest piece flies; 1.2 m), `life` (1.4 s), `spin` (360 degrees over a life), `size` (the largest piece; 0.16 m), `amount` (1; 0 hides every piece) |
+| `squeaky_hammer` | a squeaky toy hammer, 320 mm long: a pleated bellows head (180 mm, its axis along X) with a cap at each end, on a handle standing along +Z from its end at the origin; colour roles `head` ("love"), `caps` ("gold"), `handle` ("gold"); `use.look` `head` and `grip`. Root property `squash` (0..1) for `[[key]]`: the head 40 % shorter and 18 % rounder about its middle (key it up on each hit and back down). Put it in a fist with `attach`, `offset` and `attach_rot`, and play `bonk` with that hand (see [Moves](#moves)) |
 | `bed_single` | a single bed with a Memphis quilt and pillows, head end at +Y (push it against a wall); options `pattern` ("memphis", "zigzag", "triangles", "plain"), `seed` (7), `quilt_colors`, `quilt_ground`, `pillowcase`, `frame` ("wood" or "tube"), `frame_color`, `headboard` ("slats" or "padded"), `headboard_color` |
 | `rug_80s` | a Memphis wool rug, 1.8 x 1.2 m (`flat`: things stand on it); options `seed` (5), `rug_ground`, `rug_colors` |
 | `poster_80s` | a printed paper poster on a wall (origin `wall_center`, five designs); options `style` ("sunset_grid", "memphis", "trio", "car", "sunburst"), `width`, `height` (0.50 x 0.70), `margin`, `mount` ("pins", "tape", "none"), `folds` ("cross", "thirds", "none"), `torn` ("TR", "TL,BR"), `variant` (0..2), `seed`, `accent`; `use.surface` `print` |
@@ -1017,6 +1018,7 @@ build error); other keys of the same tables stay the project's (a `ride` of the 
 | `dur` | seconds it lasts (default 1) |
 | `hand` | `"R"` (default) or `"L"`: the hand of a one-hand move |
 | `morph`, `value` | a `face` move's morph (semantic or the model's own name) and its value (default 1); on any other move, a face held over it on top of the move's own |
+| `hits` | a beat move's own clip seconds to play on instead of the beats inside it (the snares, say); each must fall inside the move |
 
 `{name = "rest", hand, place}` says where a hand waits when no move plays it: `"rest"` (default: hanging by the hip; over a wide
 skirt the arm swings out until the hand clears it), `"dainty"` (resting lightly on the front of the skirt or the thighs, elbows
@@ -1044,18 +1046,20 @@ too), and `heart_push`, which needs both hands free, is a build error for a memb
 | `ears` | both hands over the ears, elbows wide; `hau` (">_<") face: too loud |
 | `heart_push` | both hands make one heart in front of the chest: the fingertips meet over its two lobes, the thumbs fold down to its point; `cheerful` face. Needs both hands free |
 | `bunny_paws` | both paws up over the head like bunny ears; `wink_r` |
+| `bonk` | a toy hammer (held in the fist, see the library's `squeaky_hammer`) cocked up and back over the shoulder, then brought forward and down on each beat or hit, its head's face meeting what is in front at the height of the chest; it starts cocked (its wind-up), so start it a little before the first hit |
 | `into_lens`, `lean_back` | the upper body leans 14 degrees forward; 11 back and 7 to the left |
 | `stank` | the head flicks back; `hau` face |
+| `blown` | blown back by a blast: the upper body leans 16 degrees back, the head snaps back; `surprised` face (the hands keep what they play) |
 | `face` | only its `morph` |
 
-A beat move needs a beat inside it (the timeline's `beats`, `audio/timeline.json`). The hand places are made from the member's
+A beat move needs a beat inside it (the timeline's `beats`, `audio/timeline.json`) or its own `hits`. The hand places are made from the member's
 rest pose (its arm joints, chest, mouth, eyes, the arm's two lengths and the hand's), so the library fits any body. Places by
 the face and the chest are on the hand's own side, clear of a mic at the mouth and of its cord. Each place is then made
 natural:
 
 - **The wrist.** The elbow the arm IK will give (the default pole, `mkmmd.core.armreach`) fixes the forearm, and a hand that
   would bend more than 60 degrees from it is turned toward it as a whole (the IK's own lands within about 10 degrees of that).
-  A mic move aims the mic instead: its hand continues the forearm as far as a fist round a mic pointing that way allows.
+  A move with something in the fist (a mic, a hammer) aims it instead: its hand continues the forearm as far as a fist round a handle pointing that way allows.
 - **The skin.** The build measures the distance to every face of the member's meshes in the rest pose that belongs to neither
   arm: its body, clothes and hair. The hand (a box the size of the model's hand and of its finger shape) comes in from outside
   and stops where it first comes within its margin: an arm held out swings in round the shoulder (so it stays in reach; a hanging

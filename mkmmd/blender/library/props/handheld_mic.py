@@ -5,21 +5,12 @@ docs/design.md: Posing) and the hidden cylinder `<name>_col_body`. Numbers, role
 import bpy
 import numpy as np
 
-from ....core import palette as PAL
 from ....core import shell as S
 from .. import shell as SH
 from ..mesh import cylinder as _collider_cylinder
 from . import handheld_mic_layout as LAY
 from . import register
 from .cafe_kit import Kit
-
-
-def _colour(K, role):
-    """A role's colour: the prop's `slots` entry for it (a palette slot or a hex), else the layout's default slot."""
-    v = str(K.slots.get(role, LAY.ROLES[role]))
-    if v.startswith("#"):
-        return (*PAL.linear(v), 1.0)
-    return K.slot(v)
 
 
 def _lathe(pts, seg, mat, r=0.0008):
@@ -51,10 +42,10 @@ def _cable(K, mat):
 @register("handheld_mic")
 def handheld_mic(name, coll, root, slots=None):
     K = Kit(name, coll, root, slots)
-    mats = {"body": K.simple_mat("body", _colour(K, "body"), rough=0.45, metal=0.6),
-            "grille": K.simple_mat("grille", _colour(K, "grille"), rough=0.35, metal=1.0),
-            "hardware": K.simple_mat("hardware", _colour(K, "hardware"), rough=0.3, metal=1.0),
-            "cable": K.simple_mat("cable", _colour(K, "cable"), rough=0.55)}
+    mats = {"body": K.simple_mat("body", K.role("body", LAY.ROLES), rough=0.45, metal=0.6),
+            "grille": K.simple_mat("grille", K.role("grille", LAY.ROLES), rough=0.35, metal=1.0),
+            "hardware": K.simple_mat("hardware", K.role("hardware", LAY.ROLES), rough=0.3, metal=1.0),
+            "cable": K.simple_mat("cable", K.role("cable", LAY.ROLES), rough=0.55)}
     roles = list(mats)
     mat_of = lambda i: mats[roles[i]]                                                          # noqa: E731
     SH.mesh_object(f"{name}_connector", _lathe(LAY.connector_profile(), 32, roles.index("hardware")), coll, root, mat_of)
