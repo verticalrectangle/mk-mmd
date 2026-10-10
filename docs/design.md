@@ -1002,10 +1002,11 @@ the chest leans, turns and tilts. A `[[motion]]` plays under the pose: bones the
 ### Moves
 
 `[[move.<cast>]]` places named moves of a small library on the clock (`mkmmd/core/moves.py`); the pose stage compiles them before
-it reads its tables into hand keys (`[pose.<cast>.hands.L/R] keys`), lean and tilt keys, twitches and expressions
-(`[perform.<cast>]`), so a move is keys like any other. A hand a move plays may have no `at`, `keys`, `grip` or `rest` of its own
-in `[pose.<cast>.hands]`, and `lean` / `tilt` cannot be keyed both in `[perform]` and by a move (each is a build error); other
-keys of the same tables stay the project's.
+it reads its tables into hand keys (`[pose.<cast>.hands.L/R] keys`, the goals riding the chest, `ride = "cast:<cast>.upper_body2"`,
+so leans, tilts, sways and the bounce carry the hands: a mic at the mouth stays there), lean and tilt keys, twitches and
+expressions (`[perform.<cast>]`), so a move is keys like any other. A hand a move plays may have no `at`, `keys`, `grip` or
+`rest` of its own in `[pose.<cast>.hands]`, and `lean` / `tilt` cannot be keyed both in `[perform]` and by a move (each is a
+build error); other keys of the same tables stay the project's (a `ride` of the project's own wins).
 
 | Key | Meaning |
 |---|---|
@@ -1018,7 +1019,9 @@ keys of the same tables stay the project's.
 `{name = "rest", hand, place}` says where a hand waits when no move plays it: `"rest"` (default: hanging by the hip) or `"mic"`
 (a fist at the mouth, holding an attached mic). A hand goes from its rest place to a move's first place in 0.12 s, holds its last
 place to the end of the move and goes back in 0.12 s, unless its next move starts within 0.35 s: then it goes straight on. One
-hand cannot play two moves at once.
+hand cannot play two moves at once. A hand that rests at the mic keeps the mic in its fist through every move it plays (the
+mic moves aim it); a two-hand move leaves it at the mic and plays with the other hand only, except `hands_up` (the mic goes up
+too), and `heart_push`, which needs both hands free, is a build error for a member holding a mic.
 
 | Move | What it does |
 |---|---|
@@ -1026,25 +1029,39 @@ hand cannot play two moves at once.
 | `chest_pat` | the flat hand pats the chest on each beat; blush |
 | `paws` | both hands, cat paws under the chin, dipping on the beats; `omega` mouth |
 | `point` | the arm out, the index pointing at the camera |
-| `heart_wink` | a finger heart by the chin; `wink_r`, `mouth_smile` |
+| `heart_wink` | a finger heart by the cheek, its thumb side to the camera; `wink_r`, `mouth_smile` |
 | `peace_eye` | a peace sign by the eye; `wink_l` |
 | `sparkle` | both hands open beside the face; `smile_eyes` |
 | `drip_check` | the hand by the chest turns over halfway; `jito` eyes |
 | `hands_up` | both arms up |
-| `mic_lens` | the (mic) hand held out at the camera |
-| `mic_up` | the (mic) hand raised overhead |
-| `mic_across` | the (mic) hand held out across the body to the other side (a mic offered to a partner on that side) |
+| `mic_lens` | the (mic) hand held out at the camera, the mic upright and leaning to the lens |
+| `mic_up` | the (mic) hand raised overhead, the grille forward |
+| `mic_across` | the (mic) hand held out across the body to the other side, the mic upright (offered to a partner on that side) |
 | `ears` | both hands over the ears, elbows wide; `hau` (">_<") face: too loud |
-| `heart_push` | both hands make one heart pushed out in front of the chest; `cheerful` face |
+| `heart_push` | both hands make one heart in front of the chest: the fingertips meet over its two lobes, the thumbs fold down to its point; `cheerful` face. Needs both hands free |
 | `bunny_paws` | both paws up over the head like bunny ears; `wink_r` |
 | `into_lens`, `lean_back` | the upper body leans 14 degrees forward; 11 back and 7 to the left |
 | `stank` | the head flicks back; `hau` face |
 | `face` | only its `morph` |
 
 A beat move needs a beat inside it (the timeline's `beats`, `audio/timeline.json`). The hand places are made from the member's
-rest pose (its arm joints, chest, mouth, eyes and the arm's length), so the library fits any body: a place with the arm out is a
-direction from the shoulder and a share of the arm's reach, never out of it. Faces of the same morph closer than 0.12 s are held
-through. The pose report has `moves` per member (`moves`, `hand_keys` per side, `expressions`, `twitches`).
+rest pose (its arm joints, chest, mouth, eyes, the arm's two lengths and the hand's), so the library fits any body. Places by
+the face and the chest are on the hand's own side, clear of a mic at the mouth and of its cord. Each place is then made
+natural:
+
+- **The wrist.** The elbow the arm IK will give (the default pole, `mkmmd.core.armreach`) fixes the forearm, and a hand that
+  would bend more than 60 degrees from it is turned toward it as a whole (the IK's own lands within about 10 degrees of that).
+  A mic move aims the mic instead: its hand continues the forearm as far as a fist round a mic pointing that way allows.
+- **The skin.** The build measures the distance to every face of the member's meshes in the rest pose that belongs to neither
+  arm: its body, clothes and hair. The hand (a box the size of the model's hand and of its finger shape) comes in from outside
+  and stops where it first comes within its margin: an arm held out swings in round the shoulder (so it stays in reach; a hanging
+  hand rises off a wide skirt), a hand by the body comes in straight. `chest_pat` and `ears` end on the surface (3 mm), every
+  other place stays where it was written unless that is closer than 12 mm to the body or inside it. Coming from outside, a hand
+  never ends inside clothes or hair.
+
+Faces of the same morph closer than 0.12 s are held through. The pose report has `moves` per member (`moves`, `hand_keys` per
+side, `expressions`, `twitches`, and `places`: per side and place, `moved_mm`, how far the approach kept the hand out, and
+`wrist_deg`, the wrist's bend).
 
 ```toml
 [[move.len]]

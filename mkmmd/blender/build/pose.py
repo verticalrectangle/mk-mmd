@@ -903,7 +903,7 @@ def run(ctx):
             elif gu is not None and gu.get("type") == "neck":      # a fretting elbow hangs under the shoulder
                 pole.location = sh + out_dir * 0.15 + back * 0.08 - up * 0.40
             else:
-                pole.location = sh + out_dir * 0.45 + back * 0.25 - up * 0.30
+                pole.location = sh + out_dir * AR.POLE[0] + back * AR.POLE[1] - up * AR.POLE[2]
             pole_w = pole.location.copy()
             if seat and seat["prop"] is not None:          # IK goals ride with the prop
                 for o in (tgt, pole):

@@ -495,6 +495,52 @@ def test_a_move_holds_its_place_to_its_end_then_the_hand_goes_home_and_a_posed_h
     assert code == 3 and "[pose.mq.hands.L] places that hand and [[move.mq]] moves it" in out["error"]
 
 
+MIC_LEAN = """[pose.mq]
+feet = "floor"
+
+[[move.mq]]
+name = "rest"
+hand = "R"
+place = "mic"
+
+[[move.mq]]
+name = "chest_pat"
+t = 0.3
+dur = 0.4
+hand = "L"
+
+[[move.mq]]
+name = "lean_back"
+t = 1.0
+dur = 0.8
+"""
+
+
+def test_moved_hands_ride_the_chest_through_a_lean_and_come_in_to_the_body_from_outside(make, capsys):
+    (make.root / "audio").mkdir(exist_ok=True)
+    (make.root / "audio" / "timeline.json").write_text(json.dumps({"beats": [0.3, 0.5]}), encoding="utf-8")
+    code, out = make(MIC_LEAN, until="perform")
+    assert code == 0, out.get("error")
+    places = out["stages"]["pose"]["moves"]["mq"]["places"]
+    assert places["L"]["chest"]["moved_mm"] > 0                   # written inside the chest: brought out onto it
+    assert places["L"]["rest"]["moved_mm"] < 30.0                 # a hanging hand is nudged off the hip at most, not
+    #                                                               thrown off as if inside its own arm (excluded)
+    expr = "[list(bone('upper_body2').matrix.inverted() @ bone('wrist.R').head), list(bone('wrist.R').head)]"
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "55,73", "--project", str(make.root)],
+                  capsys)                                         # t 0.8 (before the lean), 1.4 (leaning back)
+    assert code == 0, q
+    import numpy as np
+    (chest0, world0), (chest1, world1) = ([np.array(v) for v in f] for f in q["values"])
+    assert np.linalg.norm(world1 - world0) > 0.02                 # the lean moved the mic hand in the world ...
+    assert np.linalg.norm(chest1 - chest0) < 3e-3                 # ... with the chest: the mic stays at the mouth
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "[list(bone(b).head) for b in ('arm.L', 'elbow.L', 'wrist.L')]",
+                   "--frames", "40", "--project", str(make.root)], capsys)                # t 0.3: on the chest
+    S, E, W = (np.array(v) for v in q["values"][0])
+    from mkmmd.core import armreach as AR
+    predicted = AR.pole_elbow(S, W, np.linalg.norm(E - S), np.linalg.norm(W - E), S + np.array(AR.POLE) * [1, 1, -1])
+    assert np.linalg.norm(predicted - E) < 5e-3                   # the elbow the move library planned the wrist for
+
+
 @pytest.fixture(scope="module")
 def grouped(mannequin):
     """The mannequin with a group morph `口`: half its `あ` and all its `笑い`."""
