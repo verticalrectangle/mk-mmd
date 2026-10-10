@@ -607,3 +607,47 @@ def test_a_fuse_s_spark_rides_the_end_of_its_rope_wherever_the_prop_stands_and_w
     assert np.linalg.norm(fb1[:3] - (np.array([-0.4, 0.1, 0.2]) + 2.0 * tip)) < 4e-3   # the scaled rope's tip
     assert fb1[3] / fa1[3] == pytest.approx(2.0, rel=1e-3)                # the spark grows with the prop
     assert np.linalg.norm(fb2[:3] - np.array([-0.4, 0.1, 0.2])) < 0.03   # burned down to the socket
+
+
+BURST = """[[prop]]
+name = "bz"
+card = "library:burst"
+at = [0.2, 0.5, 1.0]
+scale = 2.0
+slots = { start = 0.6, count = 9, seed = 3, reach = 0.8, life = 1.0 }
+
+[[key]]
+target = "bz"
+prop = "reach"
+keys = [[0.0, 0.5]]
+"""
+
+
+def test_a_burst_s_pieces_are_where_the_core_puts_them_on_a_moved_scaled_prop_following_its_keys(make, capsys):
+    import numpy as np
+    from mkmmd.core import burst as BU
+    code, out = make(BURST, with_cast=False, until="keys")
+    assert code == 0, out.get("error")
+    assert not warnings(out)
+    count, seed, mix, P, _, _ = BU.options({"start": 0.6, "count": 9, "seed": 3, "reach": 0.8, "life": 1.0})
+    P["reach"] = 0.5                                                       # keyed: the root's property is live
+    names, at = [], {k: 0 for k in BU.KINDS}
+    pieces = BU.layout(count, seed, mix)
+    for p in pieces:
+        names.append(f"bz_{p['kind']}{at[p['kind']]}")
+        at[p["kind"]] += 1
+    expr = (f"[[list(m.translation) + list(m.to_scale()) + list(m.to_euler()) for m in "
+            f"(bpy.data.objects[n].matrix_world for n in {names!r})], "
+            f"sorted(o.name for o in bpy.data.objects if o.get('mk_heart'))]")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "46,58,88", "--project", str(make.root)],
+                  capsys)                                                 # t 0.5 (before), 0.9 (flying), 1.9 (gone)
+    assert code == 0, q
+    root = np.array([0.2, 0.5, 1.0])
+    for (got, hearts), t in zip(q["values"], (0.5, 0.9, 1.9)):
+        assert hearts == sorted(n for n in names if "_heart" in n)       # the hearts are tagged as accents
+        for g, p in zip(np.array(got), pieces):
+            pos, rx, ry, s = BU.pose(t, P, p)
+            assert g[:3] == pytest.approx(root + 2.0 * pos, abs=1e-5)     # in the prop's frame, scaled with it
+            assert g[3:6] == pytest.approx([2.0 * s] * 3, rel=1e-4)
+            if t == 0.9:
+                assert g[6:] == pytest.approx([rx, ry, 0.0], abs=1e-4)    # tumbling a little, spinning in the picture

@@ -109,13 +109,21 @@ def _smoothstep(a, b, x):
 
 
 def heart_mesh(puff=PUFF, n=96, rings=20, rounding=ROUNDING):
-    """The heart as a closed pillow (`core.shell.Mesh`, outward normals, smooth shading meant): unit width, thickness `puff`
-    (along y, the front pole at y = -puff / 2 faces -Y), centred on the origin. `n` points round, `rings` (even) steps from
-    pole to pole; the rim is the outline at the equator."""
+    """The heart as a closed pillow (`pillow` of `heart_outline`): unit width, thickness `puff` (along y, the front pole
+    at y = -puff / 2 faces -Y), centred on the origin. `n` points round, `rings` (even) steps from pole to pole."""
+    return pillow(heart_outline(n, rounding), puff, rings)
+
+
+def pillow(O, puff=PUFF, rings=20):
+    """An outline inflated to a closed pillow (`core.shell.Mesh`, outward normals, smooth shading meant): `O` (n, 2) points
+    (x, z) counter-clockwise seen from the front round the origin, which every ray from it crosses once; thickness `puff`
+    along y (the front pole at y = -puff / 2 faces -Y). `rings` (even) steps from pole to pole; the rim, at the equator,
+    is the outline, and near the poles the rings round off into circles."""
     from . import shell as S
     if rings % 2 or rings < 6:
-        raise ValueError(f"heart_mesh: rings must be even and at least 6, got {rings}")
-    O = heart_outline(n, rounding)
+        raise ValueError(f"pillow: rings must be even and at least 6, got {rings}")
+    O = np.asarray(O, float)
+    n = len(O)
     r = np.linalg.norm(O, axis=1)
     U = O / r[:, None]
     rbar = float(r.mean())
@@ -124,7 +132,7 @@ def heart_mesh(puff=PUFF, n=96, rings=20, rounding=ROUNDING):
     for k in range(1, rings):
         phi = math.pi * k / rings
         s = math.sin(phi)
-        w = float(_smoothstep(0.0, 0.6, s))                   # near the poles the rings are circles, not small hearts
+        w = float(_smoothstep(0.0, 0.6, s))                   # near the poles the rings are circles, not small outlines
         P = s * (w * O + (1.0 - w) * rbar * U)
         ring_id[k] = len(V) + np.arange(n)
         V.extend(np.column_stack([P[:, 0], np.full(n, -T * math.cos(phi)), P[:, 1]]))
