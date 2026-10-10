@@ -17,6 +17,7 @@ import bpy
 from mathutils import Vector
 
 from ..core import screentype as SRT
+from . import freeze as FRZ
 from . import scene as S
 from . import styles as ST
 from . import transition as TRN
@@ -73,6 +74,7 @@ def look(args):
     views = args["views"]
     looks = ST.Looks(sc) if args.get("styles", True) else None
     markers = [(m.frame, m.camera) for m in sc.timeline_markers]
+    freezes = FRZ.windows(sc)
     if any(v["kind"] != "shot" for v in views):
         cd = bpy.data.cameras.new("mk_look")
         cd.clip_start = 0.005
@@ -85,7 +87,7 @@ def look(args):
             layers = TRN.Layers(sc, looks, size["name"], os.path.join(args["layers"]["dir"], size["name"]),
                                 args["layers"]["demands"])
             for f in sorted(layers.demands):
-                sc.frame_set(f)
+                FRZ.frame_set(sc, f, freezes)
                 layers.run(f)
         looks.leave()
     out = []
@@ -105,7 +107,10 @@ def look(args):
                 facing = _facing(v.get("facing"))
                 code = compile(v["target"], "<mk look target>", "eval")
         for f in args["frames"]:
-            sc.frame_set(int(f))
+            if v["kind"] == "shot":
+                FRZ.frame_set(sc, int(f), freezes)
+            else:
+                sc.frame_set(int(f))
             if v["kind"] == "orbit":
                 ns["frame"] = f
                 target = Vector(eval(code, ns))  # noqa: S307 - the caller's own expression
@@ -114,7 +119,7 @@ def look(args):
             for size in args["sizes"]:
                 r.resolution_x, r.resolution_y = int(size["w"]), int(size["h"])
                 if v["kind"] == "shot" and S.bind_aspect(size["name"], sc):
-                    sc.frame_set(int(f))                 # the markers switch the camera on frame change
+                    FRZ.frame_set(sc, int(f), freezes)   # the markers switch the camera on frame change
                 elif v["kind"] != "shot":
                     S.show_aspect(size["name"], sc)      # per-output type: only this output's
                 path = os.path.join(args["out"], f"{v['name']}_{size['name']}_{int(f):05d}.jpg")
@@ -133,6 +138,7 @@ def look(args):
                 out.append({"view": v["name"], "size": size["name"], "frame": int(f), "path": path,
                             "camera": sc.camera.name if sc.camera else None,
                             "screen": layer if layer and os.path.exists(layer) else None})
+    FRZ.release()
     if looks is not None:
         looks.close()
     return out

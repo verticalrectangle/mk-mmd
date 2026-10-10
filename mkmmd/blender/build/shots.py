@@ -44,6 +44,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 
+from ...core import freeze as FZ
 from ...core import perform as PF
 from ...core import rings as RG
 from ...core import shotspec as SP
@@ -283,6 +284,13 @@ def run(ctx):
     rings = _rings(ctx, table, outs)
     if rings:
         report["_rings"] = rings
+    try:
+        freezes = FZ.normalize(ctx.data.get("freeze", []), ctx.fps, ctx.frame0)
+    except FZ.FreezeError as e:
+        raise BuildError(str(e)) from None
+    sc["mk_freeze"] = json.dumps(freezes)                        # mk render / mk look hold the world there
+    if freezes:
+        report["_freezes"] = freezes
     return report
 
 

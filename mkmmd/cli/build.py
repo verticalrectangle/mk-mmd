@@ -19,7 +19,7 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   pose      [pose.<cast>]             sitting or standing, feet, arm IK, grips, worn props
   motion    [[motion.<cast>]]         VMD motions on NLA strips
   perform   [perform.<cast>]          gaze, blinks, breathing, sway, lip sync, strumming
-  shots     [[shot]], [[transition]], [[insert]], [vector], [[ring]]   the cameras, the cut, the looks' tables
+  shots     [[shot]], [[transition]], [[insert]], [vector], [[ring]], [[freeze]]   the cameras, the cut, the looks' tables
   lights    [[light]], [look]         lights in palette colours, colour management
   text      [[text]]                  type on surfaces, lyric type, handwriting, screen type
   keys      [[key]]                   keys on set, prop and object properties

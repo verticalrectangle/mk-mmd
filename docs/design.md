@@ -2020,6 +2020,22 @@ center = [0.5, 0.5]
 hold = true                             # the biggest hit: the world stays flipped until the next ring
 ```
 
+### Freezes
+
+`[[freeze]] {from, to}` (clip seconds) holds the world on the frame of `from` until the frame of `to` while the cameras go on
+moving: the hit-stop, the world stopped on a hit and the camera swinging round it. On a frame inside the window `mk render`
+and `mk look` set the scene to the window's first frame (poses, props, cords and the sim hold) and every camera to where its own
+keys put it on the real frame, the timeline markers of the real frame choosing the camera; the looks go on with the clock (a ring
+keeps sweeping, a cut inside the window still cuts). At `to` the world is where the timeline has got to, so moves keyed on the
+beat stay on it: give the keys inside the window to what should be there when it ends. Windows may not overlap; the shots stage
+keeps them in `scene["mk_freeze"]` (`mkmmd.core.freeze`, `mkmmd.blender.freeze`).
+
+```toml
+[[freeze]]                      # the biggest 808: the twins stop mid-move and the camera of the shot orbits them
+from = 7.576
+to = 8.30
+```
+
 ### Transitions and inserts
 
 Effects that need two shots at once are composited by `mk post` from layers `mk render` draws next to the cut's frames. `mk build`,

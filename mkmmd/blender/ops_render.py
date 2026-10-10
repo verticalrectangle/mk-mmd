@@ -13,6 +13,7 @@ import time
 import bpy
 
 from ..core import screentype as SRT
+from . import freeze as FRZ
 from . import scene as S
 from . import styles as ST
 from . import transition as TRN
@@ -46,6 +47,7 @@ def render_frames(args):
     bound = S.bind_aspect(args["aspect"], sc) if args.get("aspect") else False
     looks = ST.Looks(sc) if args.get("styles", True) else None
     layers = TRN.Layers(sc, looks, args.get("aspect"), out_dir, args["demands"]) if looks and args.get("demands") else None
+    freezes = FRZ.windows(sc)
     t0, done, skipped, drawn = time.time(), 0, 0, 0
     kinds = {}
     try:
@@ -56,7 +58,7 @@ def render_frames(args):
             if have and not (layers and layers.pending(f)):
                 skipped += 1
                 continue
-            sc.frame_set(f)
+            FRZ.frame_set(sc, f, freezes)
             if not have:
                 try:
                     os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))      # claim, atomically
@@ -78,6 +80,7 @@ def render_frames(args):
             if layers:
                 drawn += layers.run(f)
     finally:
+        FRZ.release()
         if looks:
             looks.close()
     return {"rendered": done, "skipped": skipped, "seconds": round(time.time() - t0, 1),

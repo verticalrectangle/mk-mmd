@@ -102,6 +102,8 @@ fingertip bone's `.tail` and the prop.
   `mk render` will, `--no-styles` draws the shot as lit. A vector look starts with the model's material names: `mk q BLEND --list materials` lists them with
   the name a `[vector] materials` rule matches, and the shots stage warns about a rule that names none. `[[ring]]` entries flip a vector shot to the look's
   `opposite` palette inside discs and bands that sweep out from a point on a beat.
+- **Freezes**: `[[freeze]] {from, to}` holds the world while the shot's camera goes on moving (a hit-stop orbit); `mk look` and `mk render` show it, `mk q`
+  reads the timeline as it is.
 - **Transitions and inserts**: composited by `mk post` from layers `mk render` draws next to the frames. Windows may not overlap and must lie inside one shot of the
   cut; the build refuses a window that starts before `[scene] start`. Preview a frame inside one with `mk look`.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
