@@ -680,6 +680,7 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `desk_lamp` | a spring-arm desk lamp that owns a warm spot light; options `paint` (slot or `#hex`, "love"), `power`; root properties `power` (60 W) and `on` (0..1: key it to switch the lamp); yaw aims it (0 looks toward -Y) |
 | `cassette_player` | a compact radio-cassette player (a boombox), 0.34 x 0.115 x 0.16 m; option `label` (the cassette's label colour); root property `glow` (0..1); `use.surface` `dial` |
 | `cassette_tape` | a compact cassette lying on the desk; option `label` (a slot or `#hex`; by default picked from the instance name) |
+| `handheld_mic` | a handheld vocal microphone, 162 mm long with a 51 mm ball grille, standing on its tail along +Z, and its cord `<name>_cable`; colour roles `body`, `grille`, `hardware`, `cable` (`slots`: a palette slot or `#hex`); `use.anchor` `jack` (the cord's exit under the tail), `use.look` `grille` and `grip`. Put it in a hand with `attach` and `cable` (see [Posing](#posing)) |
 | `bed_single` | a single bed with a Memphis quilt and pillows, head end at +Y (push it against a wall); options `pattern` ("memphis", "zigzag", "triangles", "plain"), `seed` (7), `quilt_colors`, `quilt_ground`, `pillowcase`, `frame` ("wood" or "tube"), `frame_color`, `headboard` ("slats" or "padded"), `headboard_color` |
 | `rug_80s` | a Memphis wool rug, 1.8 x 1.2 m (`flat`: things stand on it); options `seed` (5), `rug_ground`, `rug_colors` |
 | `poster_80s` | a printed paper poster on a wall (origin `wall_center`, five designs); options `style` ("sunset_grid", "memphis", "trio", "car", "sunburst"), `width`, `height` (0.50 x 0.70), `margin`, `mount` ("pins", "tape", "none"), `folds` ("cross", "thirds", "none"), `torn` ("TR", "TL,BR"), `variant` (0..2), `seed`, `accent`; `use.surface` `print` |
@@ -959,6 +960,7 @@ These keys sit on a `[[prop]]` ([Props](#props)) and are applied by the pose sta
 |---|---|
 | `attach` | `"<cast>:<bone>"` (semantic or Blender bone name): the prop's root is bone-parented, replacing its `at` and `yaw` |
 | `offset`, `attach_rot` | with `attach`: `[x, y, z]` metres and `[x, y, z]` degrees (XYZ Euler) in the bone's head frame (default 0) |
+| `cable` | with `attach`: `true` or `{object, anchor, radius, trail, out, sway, reach, tail_len, follow, sim}` as a worn prop's: the card's cord is hung from its `jack` anchor to the floor under the cast member at the settled pose and swung by the sim (a mic in a hand) |
 | `anchor_to` | `"<cast>"`: the card's `use.anchor` points that name a semantic `bone` and an `object` are bone-parented to that member, keeping their world placement at the settled pose (earbuds in the ears, a cord on the chest) |
 | `wear` | `"<cast>"` or a table `{cast, use, at, pivot, scale, neck_deg, yaw_deg, roll_deg, strap, cable}`: a worn prop on the bone the card names (a guitar on the chest) with its strap and cord, see [Playing a worn guitar](#playing-a-worn-guitar) |
 

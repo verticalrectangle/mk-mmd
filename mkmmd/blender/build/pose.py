@@ -87,6 +87,7 @@ from ...core import fingers as FG
 from ...core import fretting as FR
 from ...core import gripframe as GF
 from ...core import pentrack as PT
+from ...core import wear as WR
 from .. import keys as K
 from .. import scene as S
 from . import BuildError, collection, targets
@@ -1033,13 +1034,17 @@ def attach_to_bone(obj, arm, bone, rel):
 
 def attach_props(ctx):
     """[[prop]] attach = "cast:bone" (semantic or Blender name), offset = [x, y, z] (m), attach_rot = [x, y, z] (deg,
-    XYZ Euler) in the bone's head frame: the prop rides on the bone.
+    XYZ Euler) in the bone's head frame: the prop rides on the bone. With `cable` (true, or a worn cable's table) its
+    card's cord is hung from its jack and swung like a worn prop's (wear.fit_cables, sim.simulate_cables): a mic in a hand.
     [[prop]] anchor_to = "cast": the card's use.anchor entries that name a `bone` (semantic) and an `object` are
     bone-parented to that cast member keeping their world placement at the settled base pose (earbuds in the ears,
     a cord on the chest)."""
     done = {}
     sc = bpy.context.scene
     for spec in ctx.data.get("prop", []):
+        cable = spec.get("cable")
+        if cable is not None and not spec.get("attach"):
+            raise BuildError(f"prop {spec['name']!r}: `cable` goes with `attach` (a worn prop's is `wear.cable`)")
         if spec.get("attach"):
             cast_name, _, bone = spec["attach"].partition(":")
             m = ctx.cast.get(cast_name)
@@ -1050,6 +1055,12 @@ def attach_props(ctx):
                 Euler([math.radians(a) for a in spec.get("attach_rot", (0, 0, 0))]).to_matrix().to_4x4()
             attach_to_bone(ctx.props[spec["name"]].root, m.arm, b, rel)
             done[spec["name"]] = f"{cast_name}:{b}"
+            if cable is not None:
+                cable = {"anchor": "jack"} if cable is True else cable          # truthy: fit_cables and the sim skip {}
+                if not isinstance(cable, dict) or set(cable) - set(WR.TABLES["cable"]):
+                    raise BuildError(f"prop {spec['name']!r}: cable = {spec['cable']!r}: true or a table of "
+                                     f"{', '.join(WR.TABLES['cable'])}")
+                ctx.props[spec["name"]].worn = {"cast": cast_name, "cable": dict(cable)}
         if spec.get("anchor_to"):
             m = ctx.cast.get(spec["anchor_to"])
             if m is None:

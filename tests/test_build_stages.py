@@ -444,3 +444,25 @@ def test_a_scaled_library_prop_grows_its_colliders_and_use_points_and_place_is_r
     assert q["values"][0] == pytest.approx([4 * 0.1145, 1.0 - 4 * 0.06, 4 * 0.0845], abs=1e-4)   # a speaker's centre
     code, out = make(SCALED.format(where='place = { on = "floor" }'), with_cast=False, until="props")
     assert code == 3 and "BuildError" in out["error"] and "give `at` with `scale`" in out["error"]
+
+
+MIC = """[pose.mq]
+feet = "floor"
+
+[[prop]]
+name = "mic"
+card = "library:handheld_mic"
+{attach}
+cable = true
+"""
+
+
+def test_an_attached_mic_hangs_its_cord_from_its_jack_to_the_floor_and_a_cable_needs_attach(make, capsys):
+    code, out = make(MIC.format(attach='attach = "mq:wrist.R"'), until="pose")
+    assert code == 0, out.get("error")
+    cable = out["stages"]["pose"]["cables"]["mic"]
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), 'obj("mic_jack").loc', "--frames", "61"], capsys)
+    assert cable["top"] == pytest.approx(q["values"][0], abs=2e-3)                        # it leaves the mic's tail
+    assert cable["floor_z"] == 0.0 and cable["length_m"] > cable["top"][2]                  # and reaches the floor
+    code, out = make(MIC.format(attach=""), until="pose")
+    assert code == 3 and "`cable` goes with `attach`" in out["error"]
