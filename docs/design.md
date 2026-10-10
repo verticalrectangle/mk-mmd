@@ -1911,6 +1911,7 @@ in a vector shot.
 | `lines` | `{outline, inner}`: line widths in px at 1080 on the frame's short side (default 5 and 2) |
 | `shadow` | the share of the light's full strength below which a two-tone surface takes its `shade` colour (default 0.3); cast shadows always do |
 | `light` | `[x, y, z]` toward the light that casts the shadows, in the world (default `[0.45, -0.35, 0.82]`: above, in front, from the figure's left) |
+| `opposite` | `{colors, tones}`: the palette inside a [ring](#rings), laid over the look's own (`colors` key by key, `inner` kept unless given; `tones` by name). A tone keeps its kind; a drawn tone gives only its `colors`, as many, and keeps the look's bands |
 
 ```toml
 [vector]
@@ -1981,6 +1982,39 @@ to = 9.0
 at = [1.2, -0.55, 1.5]
 look = [-0.91, -0.55, 1.6]                  # the glass, seen from the room; the cast member behind the camera shows in it
 reflection = { object = "cafe_WindowGlass", strength = 0.35, only = ["@Cast"], bend = true }   # the glass of a library cafe_room set named "cafe"
+```
+
+#### Rings
+
+`[[ring]]` entries flip a vector shot to its look's `opposite` palette inside a disc or a band that sweeps out from a point:
+the 808 ring that turns the world inside out for a beat. A pixel inside an odd number of rings is flipped and inside an even
+number it is not, so two rings that overlap cut back into each other; a thin edge runs on each wavefront. Rings are drawn in
+vector shots only: the shots stage warns about a ring live over another shot, and refuses one over a vector shot whose look
+has no `opposite`.
+
+| Key | Meaning |
+|---|---|
+| `at` | clip seconds: the ring starts there, a point (required) |
+| `center` | where it sweeps out from (required): `[x, y]` frame fractions from the top left, `[x, y, z]` a world point, or an expression of the `mk q` language (`'obj("boombox_cone_L").matrix_world.translation'`), seen through the shot's camera on every frame of each output; a point outside the frame sends the ring in from that side, one behind the camera draws none |
+| `dur` | seconds the ring takes to sweep (default 0.6): a band until its inner rim has passed the frame's farthest corner from the centre, a held disc until it covers the frame |
+| `width` | the band's width, frame heights (default 0.25) |
+| `hold` | `true`: a disc whose inside stays flipped once it has covered the frame, until the next ring starts (default false: a band that passes) |
+| `ease` | `out` (default, `1 - (1 - u)²`: fast, then slowing), `linear` or `inout` (smoothstep) |
+| `edge` | `{color, width}`: the wavefront (default white, 3 px at 1080 on the short side); `false`: none |
+
+```toml
+[vector.opposite]                       # inside a ring: the background and the outline swap, the inner lines stay
+colors = { background = "#1B2A6B", line = "#FFD21F", inner = "#1B2A6B" }
+tones = { dark = "#FFD21F" }
+
+[[ring]]
+at = 3.622                              # an 808 (`mk timeline onsets --stem drums --stem bass --lo 30 --hi 120`)
+center = 'obj("boombox_cone_L").matrix_world.translation'
+
+[[ring]]
+at = 7.576
+center = [0.5, 0.5]
+hold = true                             # the biggest hit: the world stays flipped until the next ring
 ```
 
 ### Transitions and inserts

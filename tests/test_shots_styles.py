@@ -535,3 +535,40 @@ def test_without_the_subject_the_vector_frame_is_its_background_at_the_frames_si
     out = SS.compose_vector(_passes(ids), spec, SS.vector_table(["skin"], spec), scale=2, subject=False)
     assert out.shape == (20, 30, 3) and out.dtype == np.float32
     assert np.allclose(out, _rgb("#FFD21F"))
+
+
+OPP = dict(VEC, opposite={"colors": {"background": "#1B2A6B", "line": "#FFD21F"}, "tones": {"dark": "#FFD21F"}})
+
+
+def test_the_opposite_palette_lays_its_colours_over_the_looks_and_keeps_the_rest():
+    v = _vec(project=dict(OPP, opposite=dict(OPP["opposite"], tones={"dark": "#FFD21F",
+                                                                  "eyes": {"colors": ["#FFFFFF", "#000000", "#8FB4F0"]}})))
+    o = v["opposite"]
+    assert np.allclose(o["colors"]["background"], _rgb("#1B2A6B")) and np.allclose(o["colors"]["line"], _rgb("#FFD21F"))
+    assert np.allclose(o["colors"]["inner"], _rgb("#0000FF"))                # not given: the look's own inner
+    assert np.allclose(o["tones"]["dark"]["lit"], _rgb("#FFD21F")) and o["tones"]["white"] == v["tones"]["white"]
+    assert o["tones"]["eyes"]["at"] == v["tones"]["eyes"]["at"] and o["tones"]["eyes"]["grey"] == 0.2
+    assert _vec()["opposite"] is None
+
+
+@pytest.mark.parametrize("opp, frag", [
+    ({"tones": {"nope": "#FFFFFF"}}, "not one of the tones"),
+    ({"tones": {"white": "#FFFFFF"}}, "keeps its kind"),
+    ({"tones": {"eyes": {"colors": ["#000000", "#FFFFFF"]}}}, "keeps its kind"),
+    ({"colours": {}}, "expected {colors, tones}")])
+def test_bad_opposite_palettes_are_refused(opp, frag):
+    with pytest.raises(SS.StyleError, match=frag):
+        _vec(project=dict(VEC, opposite=opp))
+
+
+def test_flipped_pixels_take_the_opposite_palette_and_only_they():
+    ids = np.zeros((40, 80), np.int32)
+    ids[5:35, 5:75] = 1
+    flip = np.zeros(ids.shape, bool)
+    flip[:, 40:] = True
+    spec = _vec(project=OPP)
+    out = SS.compose_vector(_passes(ids), spec, SS.vector_table(["Yellow1"], spec), scale=1, flip=flip)
+    assert np.allclose(out[20, 20], _rgb("#1B2A6B")) and np.allclose(out[20, 60], _rgb("#FFD21F"))    # the dark tone
+    assert np.allclose(out[1, 20], _rgb("#FFD21F")) and np.allclose(out[1, 60], _rgb("#1B2A6B"))      # the background
+    with pytest.raises(ValueError, match="opposite"):
+        SS.compose_vector(_passes(ids), _vec(), SS.vector_table(["Yellow1"], _vec()), scale=1, flip=flip)

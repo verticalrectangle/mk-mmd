@@ -29,6 +29,9 @@
   plate = true                   not in the cut (no `from` / `to` needed): a shot that only a [[transition]] or [[insert]]
                                  takes frames from (docs/design.md: Transitions and inserts); a shot in the cut that
                                  such an effect takes frames from before its `from` is keyed over those frames too
+[[ring]] = {at, center, dur, width, hold, ease, edge}: a disc or band sweeping out from a point of the frame or the scene,
+flipping a vector shot to its look's `opposite` palette inside (mkmmd.core.rings); the stage keeps them in
+scene["mk_rings"] with the clip's fps and frame0 and warns about one live over a shot without a vector look.
 The scene keeps the shot table in scene["mk_shots"] (JSON; per output aspect the normalised style and reflection, colours
 resolved; `keyed`: the frames the cameras are keyed over; `plate`) so `mk look` and `mk render` bind the markers to each
 aspect's cameras and switch the look per frame."""
@@ -42,6 +45,7 @@ import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 
 from ...core import perform as PF
+from ...core import rings as RG
 from ...core import shotspec as SP
 from ...core import shotstyle as SS
 from ...core import transition as TR
@@ -276,4 +280,32 @@ def run(ctx):
     sc.camera = bpy.data.objects[first["cameras"][outs[0]["name"]]]
     if plan["transitions"] or plan["inserts"]:
         report["_cut_effects"] = TR.summary(plan)
+    rings = _rings(ctx, table, outs)
+    if rings:
+        report["_rings"] = rings
     return report
+
+
+def _rings(ctx, table, outs):
+    """[[ring]] normalised into scene["mk_rings"] with the clip's fps and frame0 (mkmmd.blender.styles draws them) and
+    checked against the cut: a ring is drawn in vector shots only (a WARNING names any other shot it is live over), and
+    their look needs an `opposite` palette for the inside of the ring."""
+    try:
+        rings = RG.normalize(ctx.data.get("ring", []), ctx.palette)
+    except RG.RingError as e:
+        raise BuildError(str(e)) from None
+    bpy.context.scene["mk_rings"] = json.dumps({"fps": ctx.fps, "frame0": ctx.frame0, "rings": rings})
+    for r in rings:
+        f0, f1 = ctx.frame0 + r["at"] * ctx.fps, ctx.frame0 + r["until"] * ctx.fps
+        for e in table:
+            if e.get("plate") or e["to"] <= f0 or e["from"] >= f1:
+                continue
+            for out in outs:
+                look = (e.get("styles") or {}).get(out["name"]) or {}
+                if "vector" not in look:
+                    ctx.log(f"WARNING ring {r['index']} at {r['at']} s: shot {e['name']!r} ({out['name']}) has no vector "
+                            f"look, so the ring is not drawn there")
+                elif look["vector"]["opposite"] is None:
+                    raise BuildError(f"ring {r['index']} at {r['at']} s: shot {e['name']!r} ({out['name']}) needs a "
+                                     f"[vector] opposite palette for the inside of the ring")
+    return {"rings": len(rings)} if rings else None

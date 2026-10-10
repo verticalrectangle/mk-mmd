@@ -46,10 +46,14 @@ import tempfile
 
 import bpy
 import numpy as np
+from bpy_extras.object_utils import world_to_camera_view
+from mathutils import Vector
 
+from ..core import rings as RG
 from ..core import screentype as SR
 from ..core import shotstyle as SS
 from . import mirror as MR
+from .ops_core import _namespace
 
 WORKBENCH = "BLENDER_WORKBENCH"
 EEVEE = "BLENDER_EEVEE_NEXT"
@@ -259,6 +263,11 @@ class Looks:
             self.table = json.loads(self.sc.get("mk_shots", "[]"))
         except ValueError:
             self.table = []
+        try:
+            self.rings = json.loads(self.sc.get("mk_rings", "{}"))
+        except ValueError:
+            self.rings = {}
+        self.frame = None
         self.kind = None                  # "silhouette" | "vector" | "reflection" | None
         self.key = None                   # (shot name, aspect, kind) of the look that is entered
         self.spec = None
@@ -294,6 +303,7 @@ class Looks:
         a transition or insert: no screen type). Returns the active kind, "screen" when only screen type is on the frame,
         or None."""
         name, kind, spec = self.spec_at(frame, aspect, shot)
+        self.frame = frame
         key = (name, aspect, kind)
         if key != self.key:
             self.leave()
@@ -619,7 +629,8 @@ class Looks:
         """The finished flat frame (float RGB, display space) from the passes `passes()` made; `subject = False` leaves the
         figure out (the frame round a transition's window)."""
         if self.kind == "vector":
-            img = SS.compose_vector(p, self.spec, self.vtable, subject=subject)
+            flip, edges_on = self._ring_masks(p["id"].shape)
+            img = SS.compose_vector(p, self.spec, self.vtable, subject=subject, flip=flip, edges_on=edges_on)
             if "type" in p:
                 a = np.clip(p["type"][..., 3:4], 0.0, 1.0)
                 img = img * (1.0 - a) + p["type"][..., :3] * a
@@ -627,6 +638,35 @@ class Looks:
         return SS.compose_silhouette(p, self.spec, self.tint_values, hard=bool(self.cl["hard"]), subject=subject)
 
     # ---------------------------------------------------------------- vector
+    def _ring_masks(self, shape):
+        """(flip, edges) of the rings live at the prepared frame, at the size of the vector passes (mkmmd.core.rings);
+        (None, ()) when none is."""
+        rings = self.rings.get("rings") or []
+        if not rings or self.frame is None:
+            return None, ()
+        t = (self.frame - self.rings["frame0"]) / self.rings["fps"]
+        live = RG.live(rings, t)
+        if not live:
+            return None, ()
+        size = (shape[1] / SS.VECTOR_SCALE, shape[0] / SS.VECTOR_SCALE)
+        shapes = RG.shapes(rings, t, {r["index"]: self._ring_centre(r) for r in live}, size)
+        return RG.masks(shapes, size, SS.VECTOR_SCALE)
+
+    def _ring_centre(self, ring):
+        """The ring's centre at the prepared frame as frame fractions from the top left, seen through the scene camera
+        (the shot's, per output); None when the point is behind the camera."""
+        c = ring["center"]
+        if c["mode"] == "frame":
+            return tuple(c["at"])
+        ns = _namespace(None)
+        ns["frame"] = self.frame
+        try:
+            co = Vector(eval(compile(c["expr"], "<mk ring>", "eval"), ns))      # noqa: S307 - the project's own expression
+        except Exception as e:  # noqa: BLE001 - any failure of the user's expression is reported with its ring
+            raise RuntimeError(f"ring {ring['index']}: center {c['expr']!r} failed at frame {self.frame}: {e}") from None
+        p = world_to_camera_view(self.sc, self.sc.camera, co)
+        return None if p.z <= 0 else (p.x, 1.0 - p.y)
+
     def _enter_vector(self, name, spec):
         rs = self.rs
         objs = [o for o in self._objects() if not o.hide_render]

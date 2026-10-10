@@ -27,7 +27,7 @@ REFLECTION_KEYS = {"object", "strength", "dim", "roughness", "tint", "probe", "h
 COLOR_ROLES = ("background", "subject", "accent")
 DEFAULT_COLORS = {"background": "base", "subject": "text", "accent": "surface"}
 SILHOUETTE_ONLY = ("accent", "tint", "knockout", "grow", "samples")     # shot keys no other style reads
-VECTOR_KEYS = ("colors", "tones", "materials", "lines", "shadow", "light")
+VECTOR_KEYS = ("colors", "tones", "materials", "lines", "shadow", "light", "opposite")
 VECTOR_ROLES = ("background", "line", "inner")
 VECTOR_COLORS = {"background": "base", "line": "text"}                  # `inner` defaults to `line`
 VECTOR_TONES = {"fill": {"lit": "text", "shade": "subtle"}}             # a project without [vector] tones
@@ -355,10 +355,41 @@ def normalize_vector(spec, palette, project=None):
         light = []
     if len(light) != 3 or not any(light):
         raise StyleError(f"[vector] light = {project.get('light')!r}: expected [x, y, z] toward the light")
-    return {"colors": {k: _rgb(resolve_colour(colors[k], palette)) for k in VECTOR_ROLES}, "tones": tones,
+    cols = {k: _rgb(resolve_colour(colors[k], palette)) for k in VECTOR_ROLES}
+    return {"colors": cols, "tones": tones, "opposite": _opposite(project.get("opposite"), colors, tones, palette),
             "materials": [_material_rule(i, r, tones) for i, r in enumerate(rules)],
             "default": "fill" if "fill" in tones else next(iter(tones)), "lines": lines, "shadow": shadow,
             "light": light, "hide": _patterns(spec, "hide"), "keep": _patterns(spec, "keep")}
+
+
+def _opposite(opp, colors, tones, palette):
+    """`[vector] opposite = {colors, tones}`: the palette inside a ring, laid over the look's own (`colors` as given,
+    `tones` normalised); None without one. A tone keeps its kind: a drawn tone gives only its `colors`, the same count."""
+    if opp is None:
+        return None
+    if not isinstance(opp, dict) or set(opp) - {"colors", "tones"}:
+        raise StyleError(f"[vector] opposite = {opp!r}: expected {{colors, tones}}")
+    oc = opp.get("colors") or {}
+    if not isinstance(oc, dict) or set(oc) - set(VECTOR_ROLES):
+        raise StyleError(f"[vector] opposite colors = {oc!r}: expected a table with {', '.join(VECTOR_ROLES)}")
+    ot = opp.get("tones") or {}
+    if not isinstance(ot, dict):
+        raise StyleError(f"[vector] opposite tones = {ot!r}: expected a table of tones")
+    out = dict(tones)
+    for name, t in ot.items():
+        if name not in tones:
+            raise StyleError(f"[vector] opposite tone {name!r} is not one of the tones ({', '.join(tones)})")
+        base = tones[name]
+        kept = f"[vector] opposite tone {name!r}: a {base['kind']} tone keeps its kind (and its colours' count)"
+        if base["kind"] == "drawn" and isinstance(t, dict) and set(t) == {"colors"}:
+            if not isinstance(t["colors"], list) or len(t["colors"]) != len(base["colors"]):
+                raise StyleError(kept)
+            t = {"colors": t["colors"], "at": base["at"], "grey": base["grey"]}
+        new = _tone(name, t, palette)
+        if new["kind"] != base["kind"] or len(new.get("colors", ())) != len(base.get("colors", ())):
+            raise StyleError(kept)
+        out[name] = new
+    return {"colors": {k: _rgb(resolve_colour({**colors, **oc}[k], palette)) for k in VECTOR_ROLES}, "tones": out}
 
 
 def normalize(spec, palette, vector=None):
@@ -559,7 +590,69 @@ def depth_breaks(z, cover, step=0.01, rel=0.004):
     return e
 
 
-def compose_vector(p, spec, table, scale=VECTOR_SCALE, subject=True):
+def _vector_slots(p, spec, table, scale, subject):
+    """(slots, keys): every pass pixel's colour as an index into `keys`, the colour roles of the look: "background",
+    "line", "inner" and (tone, "lit" | "shade") or (tone, "band", i). A palette (`_vector_palette`) turns them into colours,
+    so the drawing is worked out once and painted in as many palettes as the frame needs."""
+    import numpy as np
+    tones_of, groups_of = table
+    mid = p["id"]
+    H, W = mid.shape
+    keys = ["background", "line", "inner"]
+    slots = np.zeros((H, W), np.int16)
+    if not subject:
+        return slots, keys
+    cover = mid > 0
+    names = list(spec["tones"])
+    T = np.asarray([-1] + [names.index(t) for t in tones_of[1:]], np.int32)[mid]
+    r = max(1, int(round(scale)))
+    lit = p["shade"] >= spec["shadow"] * LIGHT_FULL
+    lit = dilate_round(~dilate_round(~lit, r), r)                            # opened: no lit slivers
+    lit = ~dilate_round(~dilate_round(lit, r), r)                            # closed: no shadow pinholes
+    tex = p.get("tex")
+    for k, name in enumerate(names):
+        m = cover & (T == k)
+        if not m.any():
+            continue
+        t = spec["tones"][name]
+        if t["kind"] == "flat":
+            slots[m] = len(keys)
+            keys.append((name, "lit"))
+        elif t["kind"] == "lit":
+            slots[m & lit], slots[m & ~lit] = len(keys), len(keys) + 1
+            keys += [(name, "lit"), (name, "shade")]
+        else:
+            if tex is None:
+                raise ValueError(f"vector tone {name!r} is drawn from the textures: the passes need `tex`")
+            c = tex[m][:, :3]
+            band = np.searchsorted(np.asarray(t["at"]), c @ np.asarray([0.299, 0.587, 0.114]), side="right")
+            hi, lo = c.max(1), c.min(1)
+            last = len(t["colors"]) - 1
+            band = np.where((band == last) & ((hi - lo) >= t["grey"] * np.maximum(hi, 1e-6)), last - 1, band)
+            slots[m] = len(keys) + band
+            keys += [(name, "band", i) for i in range(last + 1)]
+    px = min(H, W) / 1080.0                                                # pass pixels per px at 1080 on the short side
+    groups = np.asarray(groups_of, np.int32)[mid]
+    inner = (edges(groups) | depth_breaks(p["depth"], cover)) & cover
+    slots[dilate_round(inner, spec["lines"]["inner"] * px / 2.0) & dilate_round(cover, r)] = 2
+    slots[dilate_round(edges(cover), spec["lines"]["outline"] * px / 2.0)] = 1
+    return slots, keys
+
+
+def _vector_palette(look, keys):
+    """The colours of `keys` in one palette: `look` holds `colors` and `tones` (the look's own, or its `opposite`)."""
+    import numpy as np
+    out = []
+    for k in keys:
+        if isinstance(k, str):
+            out.append(look["colors"][k])
+        else:
+            t = look["tones"][k[0]]
+            out.append(t["colors"][k[2]] if k[1] == "band" else t["shade"] if k[1] == "shade" else t["lit"])
+    return np.asarray(out, np.float32)
+
+
+def compose_vector(p, spec, table, scale=VECTOR_SCALE, subject=True, flip=None, edges_on=()):
     """The finished vector frame, float32 RGB (h, w, 3) in display space, from the passes `p` (numpy arrays at `scale`
     times the frame's size):
       id      (H, W) int material ids (`vector_table`'s; 0 where nothing is)
@@ -569,46 +662,18 @@ def compose_vector(p, spec, table, scale=VECTOR_SCALE, subject=True):
     Every material is filled with its tone: flat, lit or in shadow (`shade` under `spec["shadow"] * LIGHT_FULL`, opened
     and closed so no sliver or pinhole is left), or drawn (the texture's luma picks the colour; the last colour takes only
     texels greyer than `grey`). Then the inner lines (where two line groups meet, where the depth breaks) and the outline
-    round everything, `spec["lines"]` px wide at 1080 on the short side. `subject = False` leaves the figures out."""
+    round everything, `spec["lines"]` px wide at 1080 on the short side. `subject = False` leaves the figures out.
+    `flip` (H, W) bool paints those pixels in the look's `opposite` palette (the inside of the rings); `edges_on` is
+    [(mask (H, W) bool, rgb)] painted last (the rings' wavefronts)."""
     import numpy as np
-    tones_of, groups_of = table
-    mid = p["id"]
-    H, W = mid.shape
-    out = np.empty((H, W, 3), np.float32)
-    out[:] = spec["colors"]["background"]
-    if subject:
-        cover = mid > 0
-        names = list(spec["tones"])
-        T = np.asarray([-1] + [names.index(t) for t in tones_of[1:]], np.int32)[mid]
-        r = max(1, int(round(scale)))
-        lit = p["shade"] >= spec["shadow"] * LIGHT_FULL
-        lit = dilate_round(~dilate_round(~lit, r), r)                        # opened: no lit slivers
-        lit = ~dilate_round(~dilate_round(lit, r), r)                        # closed: no shadow pinholes
-        tex = p.get("tex")
-        for k, name in enumerate(names):
-            m = cover & (T == k)
-            if not m.any():
-                continue
-            t = spec["tones"][name]
-            if t["kind"] == "flat":
-                out[m] = t["lit"]
-            elif t["kind"] == "lit":
-                out[m & lit] = t["lit"]
-                out[m & ~lit] = t["shade"]
-            else:
-                if tex is None:
-                    raise ValueError(f"vector tone {name!r} is drawn from the textures: the passes need `tex`")
-                c = tex[m][:, :3]
-                band = np.searchsorted(np.asarray(t["at"]), c @ np.asarray([0.299, 0.587, 0.114]), side="right")
-                hi, lo = c.max(1), c.min(1)
-                last = len(t["colors"]) - 1
-                band = np.where((band == last) & ((hi - lo) >= t["grey"] * np.maximum(hi, 1e-6)), last - 1, band)
-                out[m] = np.asarray(t["colors"], np.float32)[band]
-        px = min(H, W) / 1080.0                                            # pass pixels per px at 1080 on the short side
-        groups = np.asarray(groups_of, np.int32)[mid]
-        inner = (edges(groups) | depth_breaks(p["depth"], cover)) & cover
-        inner = dilate_round(inner, spec["lines"]["inner"] * px / 2.0) & dilate_round(cover, r)
-        out[inner] = spec["colors"]["inner"]
-        out[dilate_round(edges(cover), spec["lines"]["outline"] * px / 2.0)] = spec["colors"]["line"]
+    slots, keys = _vector_slots(p, spec, table, scale, subject)
+    out = _vector_palette(spec, keys)[slots]
+    if flip is not None and flip.any():
+        if spec.get("opposite") is None:
+            raise ValueError("rings flip the picture to the [vector] opposite palette, and the look has none")
+        out[flip] = _vector_palette(spec["opposite"], keys)[slots[flip]]
+    for mask, rgb in edges_on:
+        out[mask] = rgb
+    H, W = slots.shape
     s = int(scale)
     return out.reshape(H // s, s, W // s, s, 3).mean((1, 3)).astype(np.float32)
