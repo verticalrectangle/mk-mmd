@@ -7,7 +7,8 @@ with one) or the slug of an asset registered as kind prop (its path is a model, 
 [[prop]] keys: name, card, at [x, y, z], yaw (deg), rot [rx, ry, rz] (deg), parent (object), slots {slot: "#hex"}
 (colours; a PMX prop keeps its own materials), card_extra {...} (merged over the card: tables key by key, lists of
 entries with a `name` by name, anything else replaces), place {on, at, facing, align, clear, avoid, distance, bearing,
-seed} (instead of `at`: where it lands on a surface, see mkmmd.core.place), and for PMX props scale and origin. Use points
+seed} (instead of `at`: where it lands on a surface, see mkmmd.core.place), scale (a library or card prop: its root,
+uniformly; not with `place`), and for PMX props scale (the import's) and origin. Use points
 stay in the prop's local frame; `world(prop, point)` maps them with the prop root's current matrix, and IK targets are
 parented to the root so they follow a moving prop.
 
@@ -113,6 +114,8 @@ def _build(ctx, coll, spec, name, ref, extra_slots=None):
     kind, value = resolve(ctx, name, ref)
     slots = {**ctx.palette, **(spec.get("slots") or {}), **(extra_slots or {})}      # builders colour by palette slot
     extras = set(spec) & PMX.KEYS
+    if kind != "pmx":
+        extras -= {"scale"}                                      # a library or card prop's own: the root's (_prop)
     if kind != "pmx" and extras:
         raise BuildError(f"prop {name!r}: {sorted(extras)} only apply to pmx props")
     if kind == "library":
@@ -197,6 +200,13 @@ def _prop(ctx, coll, placer, spec):
     res = None
     if spec.get("place") is None:
         _explicit(ctx, root, spec)
+        if "scale" in spec and resolve(ctx, name, ref)[0] != "pmx":
+            s = float(spec["scale"])
+            if s <= 0:
+                raise BuildError(f"{who}: scale must be positive")
+            root.scale = (s, s, s)              # use points, surfaces and object colliders follow the root; bounds stay local
+    elif "scale" in spec and resolve(ctx, name, ref)[0] != "pmx":
+        raise BuildError(f"{who}: give `at` with `scale`: `place` fits the prop by its unscaled footprint")
     else:
         res = placer.solve(prop, dict(spec["place"]), who, default_yaw=float(spec.get("yaw", 0.0)))
         placer.apply(root, res)

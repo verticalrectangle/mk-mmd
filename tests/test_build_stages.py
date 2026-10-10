@@ -423,3 +423,24 @@ def test_shot_mistakes_are_build_errors_that_list_what_there_is(make):
         code, out = make(SHOTS.format(extra=extra), with_cast=False, until="shots")
         assert code == 3 and "BuildError" in out["error"], (extra, out.get("error"))
         assert all(f in out["error"] for f in frags), (frags, out["error"])
+
+
+# ---------------------------------------------------------------- props
+SCALED = """[[prop]]
+name = "box"
+card = "library:cassette_player"
+{where}
+scale = 4.0
+"""
+
+
+def test_a_scaled_library_prop_grows_its_colliders_and_use_points_and_place_is_refused(make, capsys):
+    code, out = make(SCALED.format(where="at = [0.0, 1.0, 0.0]"), with_cast=False, until="props")
+    assert code == 0, out.get("error")
+    blend = str(make.root / "build" / "t.blend")
+    code, q = cli(["q", blend, 'obj("box_col_body").dims', "--frames", "31"], capsys)
+    assert code == 0 and q["values"][0][2] == pytest.approx(4 * 0.16, rel=0.02)           # the player is 0.16 m tall
+    code, q = cli(["q", blend, 'obj("box").matrix @ Vector((0.1145, -0.06, 0.0845))', "--frames", "31"], capsys)
+    assert q["values"][0] == pytest.approx([4 * 0.1145, 1.0 - 4 * 0.06, 4 * 0.0845], abs=1e-4)   # a speaker's centre
+    code, out = make(SCALED.format(where='place = { on = "floor" }'), with_cast=False, until="props")
+    assert code == 3 and "BuildError" in out["error"] and "give `at` with `scale`" in out["error"]

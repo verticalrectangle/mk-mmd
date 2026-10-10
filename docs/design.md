@@ -654,7 +654,8 @@ out of). The architecture is tagged `mk_form_exempt`. `mk look` orbit views clip
 | `slots` | `{slot: "#hex"}` colour overrides, and the builder's non-colour options (below); ignored, with a warning, for a PMX prop |
 | `card_extra` | a table merged over the card: tables key by key, lists of entries with a `name` by name (a known name replaces, a new one is appended, an empty list clears), anything else replaces |
 | `place` | `{on, at, facing, align, clear, avoid, distance, bearing, seed}` instead of `at` / `rot`: where the prop lands on a surface (see [Placement](#placement)) |
-| `scale`, `origin` | PMX props only (see [PMX props](#pmx-props)) |
+| `scale` | a library or card prop: a uniform scale of its root, so its use points, surfaces and object colliders grow with it (a collider's own numbers, such as a box's rounding, stay as given); give `at`, not `place`, which fits a prop by its unscaled footprint. A PMX prop: the import's scale (see [PMX props](#pmx-props)) |
+| `origin` | PMX props only (see [PMX props](#pmx-props)) |
 | `wear`, `attach`, `offset`, `attach_rot`, `anchor_to` | put the prop on a cast member: applied by the pose stage once the cast exists (see [Posing](#posing) and [Playing a worn guitar](#playing-a-worn-guitar)) |
 
 `[[scatter]]` fills a surface with clutter (see [Placement](#placement)). The stage measures `bounds`, `size` and the height `layers` of
