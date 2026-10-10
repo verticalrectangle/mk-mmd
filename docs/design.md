@@ -1017,8 +1017,10 @@ build error); other keys of the same tables stay the project's (a `ride` of the 
 | `hand` | `"R"` (default) or `"L"`: the hand of a one-hand move |
 | `morph`, `value` | a `face` move's morph (semantic or the model's own name) and its value (default 1); on any other move, a face held over it on top of the move's own |
 
-`{name = "rest", hand, place}` says where a hand waits when no move plays it: `"rest"` (default: hanging by the hip) or `"mic"`
-(a fist at the mouth, holding an attached mic). A hand goes from its rest place to a move's first place in 0.12 s, holds its last
+`{name = "rest", hand, place}` says where a hand waits when no move plays it: `"rest"` (default: hanging by the hip; over a wide
+skirt the arm swings out until the hand clears it), `"dainty"` (resting lightly on the front of the skirt or the thighs, elbows
+in, the two hands together when both rest there: a girl's polite stand) or `"mic"` (a fist at the mouth, holding an attached
+mic). A hand goes from its rest place to a move's first place in 0.12 s, holds its last
 place to the end of the move and goes back in 0.12 s, unless its next move starts within 0.35 s: then it goes straight on. One
 hand cannot play two moves at once. A hand that rests at the mic keeps the mic in its fist through every move it plays (the
 mic moves aim it); a two-hand move leaves it at the mic and plays with the other hand only, except `hands_up` (the mic goes up
@@ -1036,7 +1038,7 @@ too), and `heart_push`, which needs both hands free, is a build error for a memb
 | `drip_check` | the hand by the chest turns over halfway; `jito` eyes |
 | `hands_up` | both arms up |
 | `mic_lens` | the (mic) hand held out at the camera, the mic upright and leaning to the lens |
-| `mic_up` | the (mic) hand raised overhead, the grille forward |
+| `mic_up` | the (mic) hand raised forward and up, the mic upright over it, the palm toward the head (a fist holds a mic across its palm, so a mic pointing forward from an upright forearm would twist the palm outward) |
 | `mic_across` | the (mic) hand held out across the body to the other side, the mic upright (offered to a partner on that side) |
 | `ears` | both hands over the ears, elbows wide; `hau` (">_<") face: too loud |
 | `heart_push` | both hands make one heart in front of the chest: the fingertips meet over its two lobes, the thumbs fold down to its point; `cheerful` face. Needs both hands free |

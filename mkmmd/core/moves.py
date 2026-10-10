@@ -20,8 +20,9 @@ Every place is made natural before it is keyed (`resolve`):
   stays in reach (a hanging hand rises off a wide skirt), a hand by the body comes in straight (TOUCH, else straight out
   from the body's axis); a touching place (a pat on the chest, hands over the ears) ends on the surface, any other one
   where it was asked unless that is too close to, or inside, the body.
-A hand that has played its move goes back to its rest place (`rest`: hanging by the hip; `mic`: holding a mic at the
-mouth) unless its next move starts within HOLD seconds. A hand that rests at the mic keeps its grip in every move: a
+A hand that has played its move goes back to its rest place (`rest`: hanging by the hip; `dainty`: resting lightly on
+the front of the skirt or thighs, the two hands together; `mic`: holding a mic at the mouth) unless its next move starts
+within HOLD seconds. A hand that rests at the mic keeps its grip in every move: a
 two-hand move leaves it at the mic (except one that raises it, `hands_up`), and one that needs both hands free
 (`heart_push`) is refused."""
 import math
@@ -66,7 +67,7 @@ MARKS = ("arm.L", "arm.R", "chest", "mouth", "eye", "reach", "upper", "fore", "h
 OUT = {  # place: (direction from the arm joint for the left hand, x mirrored for the right; share of the reach)
     "rest": ((0.13, 0.03, -1.0), 0.97),
     "mic_lens": ((-0.05, -1.0, 0.05), 0.9),
-    "mic_up": ((0.14, -0.14, 1.0), 0.9),
+    "mic_up": ((0.12, -0.6, 0.8), 0.9),
     "bounce": ((0.26, -0.75, -0.61), 0.85),
     "point": ((-0.14, -1.0, 0.05), 0.95),
     "up": ((0.17, -0.09, 1.0), 0.93),
@@ -75,12 +76,13 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
 AIM = {  # a mic place: where the mic points (its grille), for the left hand, x mirrored for the right. A fist holds a mic
     # across its palm, so a straight wrist keeps the mic square to the forearm: the aims lean from upright, no more
     "mic_lens": (0.0, -0.4, 0.92),                     # held out, leaning to the lens
-    "mic_up": (0.0, -0.9, 0.44),                       # raised, the grille forward over the head
+    "mic_up": (0.0, 0.08, 1.0),                        # raised forward and up, the mic upright over it (the palm in)
     "mic_across": (-0.25, -0.3, 0.92),                 # held out to the other side, upright for a partner there
 }
 TOUCH = {  # a place on the body: the way the hand comes in to it, for the left hand, x mirrored for the right
     "chest": (0.0, -1.0, 0.0),
     "ears": (1.0, 0.0, 0.0),
+    "dainty": (0.0, -1.0, 0.0),
 }
 FIXED = ("mic",)                 # places keyed as written: the mic's grip at the mouth (the mic is fitted to it)
 SHAPED = ("heart_push",)         # two hands that meet in one shape: their orientation is kept as written
@@ -109,6 +111,8 @@ def place(name, side, marks):
 
     P = {
         "rest": (out("rest"), _v(0, 0, -1), _v(-s, 0, 0), "relaxed"),
+        "dainty": (chest + marks["reach"] * _v(s * 0.186, -0.1, -0.461), _v(-s * 0.6, -0.15, -0.78), _v(0, 1, 0),
+                   "relaxed"),                         # written inside: the approach rests it on the skirt or thighs
         "mic": (mouth + _v(s * 0.082, -0.082, -0.078), _v(-s, -0.3, 0), _v(-s * 0.3, 1, 0), "curled"),
         "mic_lens": (out("mic_lens"), _v(0, -1, 0), _v(-s, 0, 0), "curled"),
         "mic_up": (out("mic_up"), _v(0, 0, 1), _v(-s, 0, 0), "curled"),
@@ -296,7 +300,7 @@ MOVES = {
     "face": {},
 }
 KEYS = {"name", "t", "dur", "hand", "morph", "value"}
-REST_PLACES = ("rest", "mic")
+REST_PLACES = ("rest", "dainty", "mic")
 
 
 def compile(entries, marks, beats=(), yaw=0.0, clear=None):

@@ -14,8 +14,8 @@ MARKS = {"arm.L": [0.093, -0.02, 1.25], "arm.R": [-0.093, -0.02, 1.25], "chest":
          "mouth": [0.0, -0.071, 1.35], "eye": [0.0, -0.045, 1.41], "reach": 0.37, "upper": 0.195, "fore": 0.176,
          "hand": 0.146}
 BEATS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
-PLACES = ("rest", "mic", "mic_lens", "mic_up", "mic_across", "chest", "bounce", "point", "heart", "peace", "paw",
-          "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny")
+PLACES = ("rest", "dainty", "mic", "mic_lens", "mic_up", "mic_across", "chest", "bounce", "point", "heart", "peace",
+          "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny")
 
 
 def near(p):
@@ -56,6 +56,23 @@ def test_no_place_bends_a_wrist_past_the_limit(name, scale):
         assert bend <= MV.WRIST + 1e-6
         assert bend == pytest.approx(MV.bend(d, MV.forearm(side, m, pt)), abs=1e-6)
         assert abs(d @ p) < 1e-9 and np.linalg.norm(d) == pytest.approx(1) and np.linalg.norm(p) == pytest.approx(1)
+
+
+@pytest.mark.parametrize("name", PLACES)
+def test_the_right_hand_is_the_left_s_mirror_image_in_every_place(name):
+    clear = ball((0.0, -0.02, 1.0), 0.17)                                # a body to keep off, the same for both
+    for c in (None, clear):
+        (pl, dl, ql, *_), (pr, dr, qr, *_) = (MV.resolve(name, s, MARKS, c) for s in ("L", "R"))
+        M = np.array([-1.0, 1.0, 1.0])
+        assert pl * M == pytest.approx(pr) and dl * M == pytest.approx(dr) and ql * M == pytest.approx(qr)
+
+
+@pytest.mark.parametrize("side, s", [("L", 1.0), ("R", -1.0)])
+@pytest.mark.parametrize("name", sorted(MV.AIM))
+def test_a_hand_holding_a_mic_up_or_out_has_its_palm_toward_the_body_never_twisted_out(name, side, s):
+    for scale in (0.85, 1.0, 1.2):
+        _, _, p, *_ = MV.resolve(name, side, body(scale))
+        assert s * p[0] < -0.3                                             # the palm toward the midline
 
 
 def test_a_hand_bent_too_far_turns_toward_its_forearm_as_a_whole():
@@ -204,6 +221,18 @@ def test_a_two_hand_move_leaves_the_mic_hand_at_the_mic_unless_it_raises_it():
         MV.compile([{"name": "rest", "hand": "R", "place": "mic"}, {"name": "heart_push", "t": 1.0}], MARKS)
     with pytest.raises(MV.MoveError, match="rest"):
         MV.compile([{"name": "rest", "hand": "R", "place": "chest"}], MARKS)
+
+
+def test_a_dainty_hand_waits_lightly_on_the_front_of_the_body_and_goes_back_there():
+    torso = ball((0.0, -0.02, 0.9), 0.15)                                  # a skirt round the hips
+    es = [{"name": "rest", "hand": "L", "place": "dainty"}, {"name": "point", "t": 1.0, "dur": 0.5, "hand": "L"}]
+    keys = MV.compile(es, MARKS, clear=torso)["hands"]["L"]
+    home = MV.resolve("dainty", "L", MARKS, torso)
+    assert keys[0]["at"] == near(home[0]) and keys[-1]["at"] == near(home[0])
+    assert torso(home[0] + MV.hand_box(home[1], home[2], MARKS["hand"], home[3])) == pytest.approx(MV.TOUCH_MARGIN, abs=5e-4)
+    assert home[0][1] < MARKS["chest"][1] and 0 < home[0][0] < MARKS["arm.L"][0] + 0.02   # in front, inside the shoulder
+    waits = MV.compile([{"name": "rest", "hand": "L", "place": "dainty"}], MARKS)["hands"]["L"]
+    assert len(waits) == 1 and waits[0]["t"] == 0.0                         # it waits there from the start
 
 
 def test_the_member_s_yaw_turns_the_hand_directions_into_the_world():
