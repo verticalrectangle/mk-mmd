@@ -520,8 +520,8 @@ member or the camera cannot be used by a stage that runs before them):
 | sets | `[[set]]` | library set builders with their paths, surfaces and lights | [Sets](#sets) |
 | props | `[[prop]]`, `[[scatter]]` | library props (`library:<name>`), card files, MMD accessory models; use points, colliders, `bounds`; placement rules and clutter with a per-prop report | [Props](#props), [Placement](#placement), [PMX props](#pmx-props) |
 | vehicles | `[[vehicle]]` | a prop drives a set path's lane: position and heading per frame, roll and pitch, spinning wheels, a steering wheel that follows the curves | [Vehicles](#vehicles) |
-| cast | `[[cast]]` | models imported without Bullet, named, placed | [Cast](#cast) |
-| pose | `[pose.<cast>]`, `[[prop]] wear / attach / anchor_to` | the base pose: sit on a seat or stand, feet, spine, head, arm IK, finger presets, grips, drape, worn props | [Posing](#posing), [Grips](#grips), [Playing a worn guitar](#playing-a-worn-guitar) |
+| cast | `[[cast]]` | models imported without Bullet, named, placed; morph sliders bound when the model has group, bone or material morphs | [Cast](#cast) |
+| pose | `[pose.<cast>]`, `[[move.<cast>]]`, `[[prop]] wear / attach / anchor_to` | the base pose: sit on a seat or stand, feet, spine, head, arm IK, finger presets, grips, drape, worn props; named moves on the clock | [Posing](#posing), [Moves](#moves), [Grips](#grips), [Playing a worn guitar](#playing-a-worn-guitar) |
 | motion | `[[motion.<cast>]]` | VMD motions on NLA strips | [Motion](#motion) |
 | perform | `[perform.<cast>]` | gaze, blinks, breathing, sway, nods, beat bob, startles, expressions, lip sync, twitches, strumming | [Perform](#perform) |
 | shots | `[[shot]]`, `[[transition]]`, `[[insert]]` | the cut: a camera per shot and output, markers, render-time looks, cut effects | [Shots](#shots) |
@@ -802,9 +802,18 @@ yaw = 90                       # faces +X
 The stage names the root `<Name>` (the name with its first letter upper-cased), the armature `<Name>_arm` or `armature`, the
 meshes `<Name>_mesh<i>`, links everything into the collection `Cast` and hides rigid-body, joint and temporary objects from
 render. Images whose files are missing are looked up by name (any case) under the model's folder and its subfolders. The report
-has, per member, `armature`, `meshes`, `physics`, `rig` (whether a `rig.json` was found), `textures_relinked` and
-`textures_missing` (image names to fix before rendering); the log notes when the `rig.json` was made from another file than the
-model.
+has, per member, `armature`, `meshes`, `physics`, `rig` (whether a `rig.json` was found), `textures_relinked`,
+`textures_missing` (image names to fix before rendering) and `bound_morphs`; the log notes when the `rig.json` was made from
+another file than the model.
+
+Many models build their mouth shapes and some faces from several morphs: a vowel is a group morph (a mouth shape and a tongue
+bone), a blush a material morph. When the model has group, bone, material or UV morphs (`bound_morphs` counts them; 0 leaves the
+model as imported) the stage binds mmd_tools' morph sliders: every morph becomes a shape key of a hidden `.placeholder` under the
+root, whose drivers sum each morph into the meshes' shape keys, the bone morphs' constraints and the material morphs' nodes. The
+perform stage's expressions and lip sync, a motion's facial keys and `mk q`'s `morph()` all use the placeholder then, so a group
+morph is keyed like any other and two morphs sharing a shape add up. Every mk Blender job opens the scene before it enables
+mmd_tools, and drivers that read `mmd_root` fail while the file loads; the job recompiles the drivers Blender marked invalid as
+soon as mmd_tools is on (`mkmmd.blender.runtime.revalidate_drivers`).
 
 The per-member tables of the later stages are checked before their stage runs: `[pose.<name>]`, `[perform.<name>]` and `[sim.<name>]`
 must be named after a cast member, and a key the stage does not read is an error that lists the cast or the known keys
@@ -990,6 +999,62 @@ the chest leans, turns and tilts. A `[[motion]]` plays under the pose: bones the
 `sit` re-places the root, so a target written as `{cast = "rin", point}` is read from where the seat put it. Props that
 [vehicles](#vehicles) drive carry a seated character and its hand goals with them.
 
+### Moves
+
+`[[move.<cast>]]` places named moves of a small library on the clock (`mkmmd/core/moves.py`); the pose stage compiles them before
+it reads its tables into hand keys (`[pose.<cast>.hands.L/R] keys`), lean and tilt keys, twitches and expressions
+(`[perform.<cast>]`), so a move is keys like any other. A hand a move plays may have no `at`, `keys`, `grip` or `rest` of its own
+in `[pose.<cast>.hands]`, and `lean` / `tilt` cannot be keyed both in `[perform]` and by a move (each is a build error); other
+keys of the same tables stay the project's.
+
+| Key | Meaning |
+|---|---|
+| `name` | the move (below, required) |
+| `t` | clip seconds the move starts (required) |
+| `dur` | seconds it lasts (default 1) |
+| `hand` | `"R"` (default) or `"L"`: the hand of a one-hand move |
+| `morph`, `value` | a `face` move's morph (semantic or the model's own name) and its value (default 1); on any other move, a face held over it on top of the move's own |
+
+`{name = "rest", hand, place}` says where a hand waits when no move plays it: `"rest"` (default: hanging by the hip) or `"mic"`
+(a fist at the mouth, holding an attached mic). A hand goes from its rest place to a move's first place in 0.12 s, holds its last
+place to the end of the move and goes back in 0.12 s, unless its next move starts within 0.35 s: then it goes straight on. One
+hand cannot play two moves at once.
+
+| Move | What it does |
+|---|---|
+| `bounce_hand` | the hand out in front at the waist, dipping on each beat inside the move |
+| `chest_pat` | the flat hand pats the chest on each beat; blush |
+| `paws` | both hands, cat paws under the chin, dipping on the beats; `omega` mouth |
+| `point` | the arm out, the index pointing at the camera |
+| `heart_wink` | a finger heart by the chin; `wink_r`, `mouth_smile` |
+| `peace_eye` | a peace sign by the eye; `wink_l` |
+| `sparkle` | both hands open beside the face; `smile_eyes` |
+| `drip_check` | the hand by the chest turns over halfway; `jito` eyes |
+| `hands_up` | both arms up |
+| `mic_lens` | the (mic) hand held out at the camera |
+| `mic_up` | the (mic) hand raised overhead |
+| `into_lens`, `lean_back` | the upper body leans 14 degrees forward; 11 back and 7 to the left |
+| `stank` | the head flicks back; `hau` face |
+| `face` | only its `morph` |
+
+A beat move needs a beat inside it (the timeline's `beats`, `audio/timeline.json`). The hand places are made from the member's
+rest pose (its arm joints, chest, mouth, eyes and the arm's length), so the library fits any body: a place with the arm out is a
+direction from the shoulder and a share of the arm's reach, never out of it. Faces of the same morph closer than 0.12 s are held
+through. The pose report has `moves` per member (`moves`, `hand_keys` per side, `expressions`, `twitches`).
+
+```toml
+[[move.len]]
+name = "rest"                  # Len's right hand holds the mic at his mouth between moves
+hand = "R"
+place = "mic"
+
+[[move.len]]
+name = "chest_pat"             # pats on the beats from 3.6 s to 5.0 s
+t = 3.6
+dur = 1.4
+hand = "L"
+```
+
 ### Motion
 
 `[[motion.<cast>]]` plays VMD motions on NLA strips of the member's armature, retimed to the song's beats if asked and limited
@@ -1083,7 +1148,7 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 |---|---|
 | `blink` | `{per_min = 15, seed = 0, extra = [[t, dur], ...]}`: natural blinks at a mean interval of 60 / `per_min` seconds (±45 %, at least 1.2 s apart, drawn from `seed`), each 0.157 s (no key sets the duration of the natural ones); `extra` adds blinks of the given duration at chosen times |
 | `lids` | 0..1, the lids' base lowering: a floor under the `blink` morph, eased in over the settle and open while a gaze event holds the head away and during a glance (default 0) |
-| `expressions` | `[{morph, keys = [[t, value], ...]}]`: a morph's value over time, Bezier between the keys. `morph` is a semantic name (rig.json `morphs`) or the model's own; the stage raises when the model has no such morph. An expression on the `blink` morph replaces the blinks, and lip sync replaces an expression on a vowel morph |
+| `expressions` | `[{morph, keys = [[t, value], ...]}]`: a morph's value over time, Bezier between the keys. `morph` is a semantic name (rig.json `morphs`) or the model's own, of any kind (a group or material morph through the bound sliders, see [Cast](#cast)); the stage raises when the model has no such morph. An expression on the `blink` morph replaces the blinks, and lip sync replaces an expression on a vowel morph |
 | `sing` | lip sync, below |
 | `twitch` | `[{bones, family, t, deg = 14, axis = [1, 0, 0], dur = 0.22}]`: a quick flick (out to `deg`, back past rest by a quarter of it, home) about an axis in the armature's frame. `bones` lists semantic or Blender names, `family` (`"ears"`, `"tail"`) takes the top bone of every chain of that family by its name; `t` is required |
 

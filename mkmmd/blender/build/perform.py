@@ -514,7 +514,8 @@ def run(ctx):
         lids = float(spec.get("lids", 0.0)) * (1 - w_away) * (1 - np.minimum(G.sum(0), 1.0))
         vals = np.maximum(PF.blink_curve(ts, blinks), lids * settle)
         info["blinks"] = len(blinks)
-        n_blink = K.key_morph(m.meshes, blink_m, frames, vals, interp="LINEAR")
+        holders = S.morph_holders(m.arm)                  # the meshes, or the bound sliders' placeholder
+        n_blink = K.key_morph(holders, blink_m, frames, vals, interp="LINEAR")
         info["blink_morph"] = blink_m if n_blink else None
         if not n_blink:
             ctx.log(f"perform {name}: no blink morph ({blink_m}) on the model")
@@ -522,7 +523,7 @@ def run(ctx):
         for ex in spec.get("expressions", []):
             mn = _morph(m, ex["morph"])
             pts = sorted(ex["keys"])
-            n = K.key_morph(m.meshes, mn, [ctx.frame(t) for t, _ in pts], [v for _, v in pts])
+            n = K.key_morph(holders, mn, [ctx.frame(t) for t, _ in pts], [v for _, v in pts])
             if not n:
                 raise BuildError(f"perform.{name}: morph {ex['morph']!r} ({mn}) is not on the model")
         # ---- lip sync
@@ -534,7 +535,7 @@ def run(ctx):
             done = []
             for v, pts in kf.items():
                 mn = _morph(m, v)
-                if pts and K.key_morph(m.meshes, mn, [ctx.frame(t) for t, _ in pts], [x for _, x in pts]):
+                if pts and K.key_morph(holders, mn, [ctx.frame(t) for t, _ in pts], [x for _, x in pts]):
                     done.append(mn)
             info["sing_morphs"] = len(done)
             info["sing_keys"] = sum(len(p) for p in kf.values())

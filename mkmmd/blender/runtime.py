@@ -38,6 +38,25 @@ def enable_mmd(addon):
         return False
 
 
+def revalidate_drivers():
+    """Recompile the drivers Blender marked invalid. A job Blender loads the scene before it enables mmd_tools, so the
+    drivers of bound morph sliders (mkmmd.blender.build.cast.bind_morphs), which read `mmd_root` (a group morph's member
+    factors), fail on load, and Blender never tries an invalid driver again by itself: the vowels, a blush or a smile
+    of a group morph would stay at 0. Returns how many were recompiled."""
+    import bpy
+    n = 0
+    for coll in (bpy.data.objects, bpy.data.shape_keys, bpy.data.materials, bpy.data.node_groups, bpy.data.meshes,
+                 bpy.data.armatures):
+        for idb in coll:
+            for owner in (idb, getattr(idb, "node_tree", None)):
+                ad = getattr(owner, "animation_data", None)
+                for d in (ad.drivers if ad else ()):
+                    if not d.driver.is_valid:
+                        d.driver.expression = d.driver.expression
+                        n += 1
+    return n
+
+
 def run_job(job):
     t0 = time.time()
     CTX["project"] = job.get("project")
@@ -67,6 +86,8 @@ def main():
         job = json.load(fh)
     cfg = job.get("config") or {}
     CTX["mmd_tools"] = enable_mmd(cfg.get("mmd_addon", "bl_ext.user_default.mmd_tools"))
+    if CTX["mmd_tools"]:
+        revalidate_drivers()
     _load_ops()
     if job["op"] == "__serve__":
         serve(job["args"]["socket"], result_path)

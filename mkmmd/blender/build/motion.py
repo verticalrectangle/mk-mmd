@@ -64,12 +64,14 @@ def import_vmd(member, path, key):
         act.use_fake_user = True
     arm.animation_data.action = prev
     mact = None
-    for mm in member.meshes:
+    holders = S.morph_holders(arm)                 # the bound sliders' placeholder, or the meshes
+    for mm in dict.fromkeys(holders + list(member.meshes)):   # mmd_tools keys the placeholder and every mesh
         sk = mm.data.shape_keys
         if sk and sk.animation_data and sk.animation_data.action:
-            mact = sk.animation_data.action
-            mact.name = f"{key}_morph"
-            mact.use_fake_user = True
+            if mm in holders:
+                mact = sk.animation_data.action
+                mact.name = f"{key}_morph"
+                mact.use_fake_user = True
             sk.animation_data.action = None
     return act, mact
 
@@ -171,7 +173,7 @@ def run(ctx):
                           blend_out=bo)
             info["strip"] = [round(s.frame_start, 2), round(s.frame_end, 2)]
             if mact is not None and it.get("morphs", True):
-                for mm in m.meshes:
+                for mm in S.morph_holders(m.arm):
                     if mm.data.shape_keys:
                         nla_strip(mm.data.shape_keys, mact, start, scale, src_from, src_to, track=f"morph{i}")
                 info["morphs"] = True

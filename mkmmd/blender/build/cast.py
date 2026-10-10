@@ -3,7 +3,11 @@
 [[cast]] keys: name, asset (registry slug) or pmx (path), rig (path; default the registry's), armature (name to give
 the armature; default "<Name>_arm"), at [x, y, z], yaw (deg; 0 = facing -Y), parent (object the model rides on),
 physics: "mk" (default: no Bullet; chains come from rig.json and the sim stage solves them), "bullet" (keep the
-author's rigid bodies), "none" (no secondary motion: no Bullet, and the sim stage leaves the member out)."""
+author's rigid bodies), "none" (no secondary motion: no Bullet, and the sim stage leaves the member out).
+
+A model with group, bone, material or UV morphs (vowels made of a mouth shape and a tongue bone, a blush that is a
+material) has its morph sliders bound (`bind_morphs`), so every morph is keyed the same way, on the root's
+`.placeholder` (mkmmd.blender.scene.morph_holders)."""
 import json
 import math
 import os
@@ -61,6 +65,26 @@ def import_model(path, physics):
         if getattr(o, "mmd_type", "") in SKIP_TYPES:
             o.hide_render = True
     return root, arm, meshes, new
+
+
+def bind_morphs(root, coll):
+    """Bind the model's morph sliders when it has morphs that are not plain shape keys (group, bone, material, UV):
+    mmd_tools makes every morph a shape key of a `.placeholder` under the root, whose drivers sum each morph into the
+    meshes' shape keys, the bone morphs' constraints and the material morphs' nodes. Returns how many such morphs the
+    model has (0: left unbound, its shape keys keyed on the meshes)."""
+    mr = root.mmd_root
+    n = sum(len(getattr(mr, c)) for c in ("group_morphs", "bone_morphs", "material_morphs", "uv_morphs"))
+    if not n:
+        return 0
+    bpy.ops.object.select_all(action="DESELECT")
+    root.select_set(True)
+    bpy.context.view_layer.objects.active = root
+    bpy.ops.mmd_tools.morph_slider_setup(type="BIND")
+    for o in root.children_recursive:
+        if getattr(o, "mmd_type", "") == "PLACEHOLDER":
+            link(o, coll)
+            o.hide_render = True
+    return n
 
 
 def relink_textures(meshes, folder):
@@ -128,7 +152,8 @@ def run(ctx):
                 os.path.abspath(rig["source"]["path"]) != os.path.abspath(pmx):
             ctx.log(f"cast {name}: rig.json was made from {rig['source']['path']}, the model is {pmx}")
         fixed, missing = relink_textures(meshes, os.path.dirname(pmx))
+        bound = bind_morphs(root, coll)
         out[name] = {"armature": arm.name, "meshes": len(meshes), "physics": physics, "rig": bool(rig),
-                     "textures_relinked": fixed, "textures_missing": missing}
+                     "textures_relinked": fixed, "textures_missing": missing, "bound_morphs": bound}
         ctx.log("cast", name, arm.name)
     return out

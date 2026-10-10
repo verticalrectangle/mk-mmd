@@ -80,7 +80,12 @@ square crop of a vertical master). Put the plan in comments of `mk.toml` or a lo
   Look at the pose with `mk build --until pose --out build/pose_test.blend` and `mk look --view front,3q,left,back --frames N --sheet`.
 - **Perform** ([Perform](design.md#perform)): gaze events over an idle target, eye-only glances, breathing, sway, nods, beat bob, blinks,
   expressions, lip sync from the timeline (`sing`), twitches, strumming (`strum`: down strokes on the downbeats, the pick meeting the string at each strike).
+  Group and material morphs (vowels with a tongue bone, a blush) are keyed like any other: the cast stage binds the model's morph sliders
+  (`bound_morphs` in its report).
   Take the numbers from `mk ref measure` or a timeline, not from taste.
+- **Moves** ([Moves](design.md#moves)): `[[move.<cast>]]` puts named moves on the beats (`chest_pat`, `paws`, `point`, `heart_wink`,
+  `hands_up`, `stank` ...) and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them; they compile to the
+  pose's hand keys and perform's lean, twitches and faces, so draw a pose sheet of every move before building the shots.
 - **Sim** ([Sim](design.md#sim)): hair, ears, tails and skirts are solved outside Blender and baked. List the families, give the colliders (the
   seat, the car, the fingers, the floor), and `wind = { carrier = "car", ... }` in a moving vehicle. `mk build --skip sim` is the fast loop for poses
   and performance.

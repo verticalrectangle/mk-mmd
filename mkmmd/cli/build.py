@@ -15,8 +15,8 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   sets      [[set]]                   library sets: sky, roads, rooms
   props     [[prop]], [[scatter]]     library, card-file and PMX props, placement rules, use points, colliders
   vehicles  [[vehicle]]               props driving along a set's path
-  cast      [[cast]]                  models imported (no Bullet), named, placed
-  pose      [pose.<cast>]             sitting or standing, feet, arm IK, grips, worn props
+  cast      [[cast]]                  models imported (no Bullet), named, placed; group/material morphs bound
+  pose      [pose.<cast>], [[move.<cast>]]   sitting or standing, feet, arm IK, grips, worn props, named moves
   motion    [[motion.<cast>]]         VMD motions on NLA strips
   perform   [perform.<cast>]          gaze, blinks, breathing, sway, lip sync, strumming
   shots     [[shot]], [[transition]], [[insert]], [vector], [[ring]], [[freeze]]   the cameras, the cut, the looks' tables

@@ -10,6 +10,7 @@ import pytest
 
 from mkmmd import config as CFG
 from mkmmd.cli import main as MAIN
+from mkmmd.model import pmx_io as X
 
 
 def have_blender():
@@ -466,3 +467,55 @@ def test_an_attached_mic_hangs_its_cord_from_its_jack_to_the_floor_and_a_cable_n
     assert cable["floor_z"] == 0.0 and cable["length_m"] > cable["top"][2]                  # and reaches the floor
     code, out = make(MIC.format(attach=""), until="pose")
     assert code == 3 and "`cable` goes with `attach`" in out["error"]
+
+
+MOVES = """[pose.mq]
+feet = "floor"
+
+[[move.mq]]
+name = "point"
+t = 0.5
+dur = 0.8
+hand = "L"
+{extra}"""
+
+
+def test_a_move_holds_its_place_to_its_end_then_the_hand_goes_home_and_a_posed_hand_is_not_moved(make, capsys):
+    code, out = make(MOVES.format(extra=""), until="pose")
+    assert code == 0, out.get("error")
+    assert not [w for w in warnings(out) if "short of its goal" in w]                     # the arm out is within reach
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "37,58,68,76",
+                   "--project", str(make.root)], capsys)                                  # t 0.2, 0.9, 1.23, 1.5
+    import numpy as np
+    before, mid, end, after = (np.array(v) for v in q["values"])
+    assert np.linalg.norm(mid - before) > 0.15                                           # it pointed
+    assert np.linalg.norm(end - mid) < 3e-3                                              # and held to the end
+    assert np.linalg.norm(after - before) < 0.01                                         # then went home
+    code, out = make(MOVES.format(extra="\n[pose.mq.hands.L]\nat = [0.3, -0.2, 1.0]\n"), until="pose")
+    assert code == 3 and "[pose.mq.hands.L] places that hand and [[move.mq]] moves it" in out["error"]
+
+
+@pytest.fixture(scope="module")
+def grouped(mannequin):
+    """The mannequin with a group morph `口`: half its `あ` and all its `笑い`."""
+    m = X.read(str(mannequin[0]))
+    names = [x.name for x in m.morphs]
+    m.morphs.append(X.PmxMorph("口", "mouth", 3, "group", [(names.index("あ"), 0.5), (names.index("笑い"), 1.0)]))
+    path = mannequin[0].with_name("mq_group.pmx")
+    X.write(m, str(path))
+    return path
+
+
+def test_a_group_morph_is_keyed_through_the_bound_sliders_and_sums_with_its_members(tmp_path, mannequin, grouped, capsys):
+    (tmp_path / "mk.toml").write_text(
+        HEAD + f'\n[[cast]]\nname = "mq"\npmx = "{grouped}"\nrig = "{mannequin[1]}"\n\n[perform.mq]\n'
+        'expressions = [{ morph = "口", keys = [[0.0, 0.0], [1.0, 0.8]] }, { morph = "a", keys = [[0.0, 0.2], [1.0, 0.2]] }]\n',
+        encoding="utf-8")
+    code, out = cli(["build", "--project", str(tmp_path), "--until", "perform"], capsys)
+    assert code == 0, out.get("error")                                    # was: morph '口' is not on the model
+    assert out["stages"]["cast"]["mq"]["bound_morphs"] == 1
+    expr = ('[[round(o.data.shape_keys.key_blocks[k].value, 4) for k in ("あ", "笑い")] for o in arm().parent.'
+            'children_recursive if o.type == "MESH" and o.mmd_type == "NONE" and o.data.shape_keys]')    # not the sliders
+    code, q = cli(["q", str(tmp_path / "build" / "t.blend"), expr, "--frames", "61", "--project", str(tmp_path)], capsys)
+    assert code == 0, q                                                   # a new Blender: the drivers survive the reload
+    assert q["values"][0] == [[pytest.approx(0.2 + 0.5 * 0.8), pytest.approx(0.8)]]

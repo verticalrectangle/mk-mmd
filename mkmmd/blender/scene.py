@@ -169,8 +169,19 @@ def model_meshes(arm):
     return out
 
 
+def morph_holders(arm):
+    """The objects whose shape keys hold `arm`'s morph values: the MMD root's `.placeholder` when the morph sliders are
+    bound (mkmmd.blender.build.cast.bind_morphs: every morph, group, bone and material ones too, is a shape key there and
+    drives the model), else the model's meshes."""
+    root = arm.parent or arm
+    ph = next((o for o in root.children if o.type == "MESH" and getattr(o, "mmd_type", "") == "PLACEHOLDER"), None)
+    if ph is not None and ph.data.shape_keys and not ph.data.shape_keys.key_blocks[0].mute:
+        return [ph]
+    return model_meshes(arm)
+
+
 def morph_value(arm, name):
-    for o in model_meshes(arm):
+    for o in morph_holders(arm):
         sk = o.data.shape_keys
         if sk and name in sk.key_blocks:
             return sk.key_blocks[name].value

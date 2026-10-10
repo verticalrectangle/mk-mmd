@@ -91,6 +91,7 @@ from ...core import wear as WR
 from .. import keys as K
 from .. import scene as S
 from . import BuildError, collection, targets
+from . import moves as MOVES
 from . import wear as WEAR
 
 
@@ -777,8 +778,9 @@ def _pen_goals(ctx, m, wrist, h, grip):
 
 
 def run(ctx):
+    moves = MOVES.apply(ctx)                              # [[move.<cast>]] -> the pose and perform tables
     ctx.check_tables("pose")
-    out = {}
+    out = {"moves": moves} if moves else {}
     f0, f1 = ctx.start, ctx.start + ctx.settle
     probe = np.array([f1])                                # frames the IK misses are measured on (+ a moving track's)
     bpy.context.scene.frame_set(f0)                       # vehicles may have moved the props: one consistent frame
