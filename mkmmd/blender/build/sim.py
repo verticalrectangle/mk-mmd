@@ -197,8 +197,9 @@ CABLE_SETTLE_S = 2.0
 def simulate_cables(ctx):
     """Swing the cord of every worn prop whose wear `cable` has not `sim = false` (docs/design.md: Playing a worn
     guitar) with mkmmd.solvers.cable: from the hung shape (the pose stage's), the plug follows the jack on every frame
-    and the cord falls against the wearer's collision bodies (all but the hair's, ears' and tail's) and the floor
-    under the wearer. The curve gets a control point every few centimetres, keyed on every frame (LINEAR), in place of
+    and the cord falls against the wearer's collision bodies (all but the hair's, ears' and tail's) and the floor it was
+    hung on (the wearer's root at the settled base pose: keys may lift her off it). The curve gets a control point every
+    few centimetres, keyed on every frame (LINEAR), in place of
     the hook that only dragged its top."""
     out = {}
     skip_fams = FAM.HAIR_FAMILIES | {"ears", "tail"}
@@ -224,7 +225,7 @@ def simulate_cables(ctx):
         pos, rot = sample_sources(list(shapes.sources), ctx.frames)
         spec = {"sources": [list(s) for s in shapes.sources], "plug": plug, "dir_src": dsrc,
                 "dir": [float(v) for v in a.get("dir", (0.0, 0.0, -1.0))], "bodies": bodies, "armature": m.arm.name,
-                "floor_z": float(m.root.matrix_world.translation.z), "radius": float(cs.get("radius", 0.0032)),
+                "floor_z": float(worn["floor_z"]), "radius": float(cs.get("radius", 0.0032)),
                 "fps": ctx.fps, "substeps": CABLE_SUBSTEPS, "settle_s": CABLE_SETTLE_S}
         res, rep = ctx.solve("mkmmd.solvers.cable", {"shape": shape, "src_pos": pos, "src_quat": _quats(rot)}, spec,
                              tag=f"cable-{pname}")

@@ -21,9 +21,13 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      reach that leans in and settles back, a head on a shoulder; hand targets still hold,
                                      except hands whose pose `ride` is a chest bone: they go with it)
   head_tilt = [[t, deg], ...]        the head rolls toward the model's left (on top of the gaze), keyed the same way
-  rock = {deg, period = 4.0, phase = 0.0}, head_rock = {...}   a periodic sideways lean of the upper body (like `tilt`) and
-                                     roll of the head (like `head_tilt`) toward the model's left: deg * sin(2 pi t / period +
-                                     phase) of clip time, ADDED to the keyed tilts; unlike them it goes on at any clip time
+  rock = {deg, period = 4.0, phase = 0.0, hips = 0.0}, head_rock = {...}   a periodic sideways lean of the upper body (like
+                                     `tilt`) and roll of the head (like `head_tilt`) toward the model's left: deg * sin(2 pi t /
+                                     period + phase) of clip time, ADDED to the keyed tilts; unlike them it goes on at any clip
+                                     time. `hips` (m) shifts the hips toward the left with the same swing, the feet planted:
+                                     the weight goes from foot to foot
+  crouch = [[t, metres], ...]        the hips drop by that much, the feet planted (the knees bend: a landing, a squat), eased
+                                     between keys like `rise`
   blink = {per_min = 15, seed = 0, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1)
   sing = {timeline = "audio/timeline.json" (the default), lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
@@ -254,26 +258,37 @@ def _window(ts, b, ease=0.15):
 
 
 def _body(ctx, name, m, spec, ts, frames, settle):
-    """bounce, rise and kick: the hips (the `center` bone) and the feet (the leg IK bones) move on top of the offsets the
-    pose stage gave them (eased in over the settle like them). `bounce` dips the hips on the beats while the feet stay
-    planted (the knees bend: a punk's pump); `rise = [[t, metres], ...]` lifts the whole body, feet too (she floats);
-    `kick` flicks one foot up and back on the beats, `hold` of the way lifted between them. Returns report numbers."""
-    bn, rs, kk = spec.get("bounce"), spec.get("rise"), spec.get("kick")
-    if not (bn or rs or kk):
+    """bounce, crouch, rise, kick and the rock's hips: the hips (the `center` bone) and the feet (the leg IK bones) move on
+    top of the offsets the pose stage gave them (eased in over the settle like them). `bounce` dips the hips on the beats
+    while the feet stay planted (the knees bend: a punk's pump); `crouch = [[t, metres], ...]` lowers them so (a landing, a
+    squat); `rock.hips` shifts them toward the model's left with the rock's own swing (the weight goes from foot to foot);
+    `rise = [[t, metres], ...]` lifts the whole body, feet too (she floats); `kick` flicks one foot up and back on the
+    beats, `hold` of the way lifted between them. Returns report numbers."""
+    bn, rs, kk, cr = spec.get("bounce"), spec.get("rise"), spec.get("kick"), spec.get("crouch")
+    rk = spec.get("rock") or {}
+    hips = float(rk.get("hips", 0.0))
+    if not (bn or rs or kk or cr or hips):
         return {}
     arm = m.arm
     smap = S.semantic_map(arm)
     W = arm.matrix_world.to_3x3().normalized()
-    up_w, back_w = W @ Vector((0.0, 0.0, 1.0)), W @ Vector((0.0, 1.0, 0.0))
+    up_w, back_w, left_w = W @ Vector((0.0, 0.0, 1.0)), W @ Vector((0.0, 1.0, 0.0)), W @ Vector((1.0, 0.0, 0.0))
     base = m.base or {}
     centre0 = Vector(base.get("center", (0.0, 0.0, 0.0)))
     feet0 = {s: Vector(v) for s, v in (base.get("feet") or {}).items()}
-    lift, dip, info = np.zeros(len(ts)), np.zeros(len(ts)), {}
+    lift, dip, side, info = np.zeros(len(ts)), np.zeros(len(ts)), np.zeros(len(ts)), {}
     if bn:
         beats, acc = _beat_marks(ctx, bn, f"perform.{name}.bounce")
         dip = float(bn.get("depth", 0.03)) * _window(ts, bn) * PF.beat_pulse(
             ts, beats, float(bn.get("attack", 0.05)), float(bn.get("decay", 0.16)), acc)
         info["bounce_mm"] = round(float(dip.max()) * 1000, 1)
+    if cr:
+        down = PF.eased_keys(ts, cr)
+        dip = dip + down
+        info["crouch_mm"] = round(float(np.abs(down).max()) * 1000, 1)
+    if hips:
+        side = hips * np.sin(2.0 * np.pi * ts / float(rk.get("period", 4.0)) + float(rk.get("phase", 0.0)))
+        info["hips_mm"] = round(abs(hips) * 1000, 1)
     if rs:
         lift = PF.eased_keys(ts, rs)
         info["rise_mm"] = round(float(np.abs(lift).max()) * 1000, 1)
@@ -288,7 +303,8 @@ def _body(ctx, name, m, spec, ts, frames, settle):
         kick = (hold + (1.0 - hold) * pulse) * _window(ts, kk)
         reach = up_w * float(kk.get("height", 0.12)) + back_w * float(kk.get("back", 0.08))
         info["kick"] = {"foot": kick_side, "peak_mm": round(float(kick.max()) * reach.length * 1000, 1)}
-    centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i])) for i, s in enumerate(settle)]
+    centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i]) + left_w * float(side[i]))
+              for i, s in enumerate(settle)]
     K.key_bone_locs(arm, smap["center"], frames, centre, interp="LINEAR")
     if rs or kk:
         for side in ("L", "R"):

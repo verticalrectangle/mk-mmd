@@ -178,6 +178,7 @@ def fit_cables(ctx):
         if trail is None:
             trail = (-lat + back)[:2]                           # behind and to her right: toward the amp she is plugged into
         floor_z = float(m.root.matrix_world.translation.z)
+        worn["floor_z"] = floor_z                                # the sim's floor: the wearer's root may be keyed off it
         radius = float(cs.get("radius", 0.0032))
         try:
             pts = CB.hang(top, d, floor_z, tail=trail, radius=radius,

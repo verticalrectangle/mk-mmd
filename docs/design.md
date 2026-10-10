@@ -1165,9 +1165,10 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `startle` | `[t, ...]`: at each time the upper body jolts backward (4.5 degrees, settling with a 0.35 s time constant) |
 | `lean`, `turn`, `tilt` | `[[t, deg], ...]`: extra upper-body forward lean, turn toward the left and sideways tilt toward the left over time, smoothstep-eased between the keys, held before the first and after the last, on top of the pose's base: a reach that leans in and settles back, a head on a shoulder. Hand targets still hold, except hands whose pose `ride` is a chest bone, which go with it. The first key's value holds from the start of the pre-roll: begin with a `[0, 0]` key to start from the base |
 | `head_tilt` | `[[t, deg], ...]`: the head rolls toward the left on top of the gaze, keyed the same way |
-| `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0, axis = "side"}`: a periodic sway of the upper body and of the head: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed ones; `axis` `"side"` leans the body (like `tilt`) and rolls the head (like `head_tilt`) toward the left, `"front"` leans the body forward (like `lean`) and nods the head, `"turn"` twists the body (like `turn`) and shakes the head. Unlike the keys it goes on at any clip time, so a dreamy sway survives a re-cut; a squirm seen side-on is a fast `turn` (a swing a beat) |
+| `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0, axis = "side", hips = 0}`: a periodic sway of the upper body and of the head: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed ones; `axis` `"side"` leans the body (like `tilt`) and rolls the head (like `head_tilt`) toward the left, `"front"` leans the body forward (like `lean`) and nods the head, `"turn"` twists the body (like `turn`) and shakes the head. Unlike the keys it goes on at any clip time, so a dreamy sway survives a re-cut; a squirm seen side-on is a fast `turn` (a swing a beat). `rock.hips` (metres) shifts the hips toward the left with the same swing, the feet planted, so the weight goes from foot to foot: a groove without steps |
 | `bounce` | `{depth = 0.03, beats = [t, ...], timeline, downbeat_accent = 1.6, from, to, attack = 0.05, decay = 0.16}`: the hips (the `center` bone) dip `depth` m on each beat (downbeats weighted), the feet planted, so the knees pump; `from`, `to` (clip seconds) limit it |
 | `rise` | `[[t, metres], ...]`: the whole body, feet too, lifts by that much (eased between keys): she floats |
+| `crouch` | `[[t, metres], ...]`: the hips drop by that much, the feet planted, so the knees bend (eased between keys, on top of `bounce`): a landing, a squat |
 | `kick` | `{foot = "L", height = 0.12, back = 0.08, hold = 0, beats, timeline, downbeat_accent, from, to, attack = 0.06, decay = 0.18}`: that foot flicks up and back on the beats; `hold` (0..1) keeps it that share of the way up between them (a foot kicked up behind a lovestruck girl) |
 | `drum` | `{hand = "R", fingers = ["little", "ring", "middle", "index"], deg = 25, lift = 0.16, roll = 0.02, beats, timeline, downbeat_accent, from, to}`: the fingers of one hand tap on the beats (a driver drumming on the wheel): each lifts at its base joint by `deg` (the middle joint by a third of it) about its own flexion axis, from wherever its keys hold it (a grip's solved curl), over the first half of the `lift` seconds before the beat and falls, fastest at the end, back onto it on the beat; the little finger leads the index by `roll` s per finger. The palm stays where the grip put it, so a hand wrapped round a rim never moves through it. The report has `drum` (`hand`, `fingers`, `taps`, `deg`, `frames`) |
 
@@ -1793,7 +1794,8 @@ anchor `bottom`, riding the torso at the radius of the chest's collision body (r
 along `trail`: a horizontal direction `[dx, dy]`, default behind the wearer and to the wearer's right. The curve is unparented, so its
 lower end stays, and hooked at the jack with a smooth falloff of `follow` metres, so its top follows the guitar. The sim stage
 then swings it from that shape ([Sim](#sim)): the whole cord answers the guitar's motion, falls against the wearer's legs and
-lies on the floor, keyed on every frame; with `sim = false` (or `mk build --skip sim`) the hooked cord stays.
+lies on the floor it was hung on (a wearer whose root is keyed off it, falling or jumping, leaves the floor where it is), keyed
+on every frame; with `sim = false` (or `mk build --skip sim`) the hooked cord stays.
 
 The `wear` report has `bone`, `entry`, `at_mm` and the strap's numbers (`object`, `points`, `length_m`, `radius_m`), `cables` the
 cord's (`points`, `top`, `floor_z`, `length_m`, `follow_m`). The numbers decide whether both arms reach: the build logs a WARNING
@@ -1983,7 +1985,8 @@ Silhouette. Blender 4.2 ignores `view_layer.material_override` in EEVEE Next and
 composed inside the render call from passes that work (`compose_silhouette`, numpy):
 
 - An object is hidden (`hide` minus `keep`), a knock-out object, type (a modifier whose node group starts with `mk_text_`), an
-  accent, or subject (everything else).
+  accent, or subject (everything else). One whose `hide_render` is keyed is sorted as if shown, so it is drawn in its colour on
+  the frames its keys show it, and one the look hides has those keys muted for the render, so they cannot show it.
 - Workbench with flat light and `Object.color` draws the subject and the hard accents in their flat colours: exact to one level of 255
   (Workbench's colour transform), antialiased by Workbench.
 - An accent whose material contains a Transparent shader is soft: EEVEE with an AOV on the Mix Shader factor of its materials and
@@ -2467,7 +2470,8 @@ measured in it, so the layout fits. The report lists the punch and write words b
 at a time (`recycle`). `flow` (`gap` 0.28 em, times the entry's `word_spacing`): words side by side in reading order, one row per
 lyric line, the block centred on the panel and fitted to it (one cap height for all); `rows = N` sets the words in N rows of nearly
 equal width instead (`"auto"`: the fewest rows that let them be set at `size`, or the number that sets them biggest), rows are
-`leading` cap heights apart and never closer than the tallest strip, and `align` (`left` / `center` / `right`; default the `screen`
+`leading` cap heights apart and never closer than the tallest strip (a row holding a bigger word, a punch word or a `scales` share
+above 1, stands off its neighbours by what that word rises above or hangs below the rest, so rows never overlap), and `align` (`left` / `center` / `right`; default the `screen`
 band's side) sets each row against a margin of the panel. `stack` (`rows`, `pitch` 1.3 em, `dir` `down` | `up`, `align` and `shift`
 cycled by row, `tilt` per row): word k on row `k mod rows`, the first on top (`down`) or at the bottom (`up`). `slots` (`slots =
 [{at, box, align, tilt, size}]`, `assign`): `at = [u, v]` and `box = [w, h]` are shares of the panel (u right, v up from its centre),

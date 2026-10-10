@@ -181,6 +181,28 @@ def object_records(scene=None):
     return [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in sc.objects if o.type in FLAT_TYPES]
 
 
+def _keyed_visibility(ob):
+    """The object's `hide_render` is keyed: hidden on one frame, it may show on another."""
+    ad = ob.animation_data
+    return bool(ad and ad.action and ad.action.fcurves.find("hide_render") is not None)
+
+
+def _renders(ob):
+    """The object may render in a shot: shown now, or hidden now by keys that show it on another frame (a look sorts its
+    objects once, when the shot starts, and must know those too)."""
+    return not ob.hide_render or _keyed_visibility(ob)
+
+
+def _hide(rs, ob):
+    """Hide the object from the render until `rs` runs, keys or not: a keyed `hide_render` would show it again when the
+    frame is evaluated, so its curve is muted meanwhile."""
+    ad = ob.animation_data
+    fc = ad.action.fcurves.find("hide_render") if ad and ad.action else None
+    if fc is not None:
+        rs.attr(fc, "mute", True)
+    rs.attr(ob, "hide_render", True)
+
+
 def _materials(ob):
     """Every material of the object: its slots and the Set Material nodes of its geometry-nodes modifiers."""
     mats = [s.material for s in ob.material_slots if s.material is not None]
@@ -429,7 +451,7 @@ class Looks:
             if o.name in holdout:
                 rs.attr(o, "is_holdout", True)
             else:
-                rs.attr(o, "hide_render", True)
+                _hide(rs, o)
 
     def _film(self, rs, engine, view, samples=None):
         sc, r = self.sc, self.sc.render
@@ -554,7 +576,7 @@ class Looks:
             self._film(rs, EEVEE, "Standard", (self.spec or {}).get("samples"))
             for o in sc.objects:
                 if o.type == "LIGHT" and not o.hide_render:
-                    rs.attr(o, "hide_render", True)
+                    _hide(rs, o)
             world = bpy.data.worlds.new("mk_black")
             world.use_nodes = True
             bg = world.node_tree.nodes["Background"]
@@ -570,7 +592,7 @@ class Looks:
     # ---------------------------------------------------------------- silhouette
     def _enter_silhouette(self, name, spec):
         rs = self.rs
-        objs = [o for o in self._objects() if not o.hide_render]
+        objs = [o for o in self._objects() if _renders(o)]
         recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
         hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
         knock = set(SS.select(recs, spec["knockout"]["objects"])) if spec["knockout"] else set()
@@ -580,7 +602,7 @@ class Looks:
         for o in objs:
             if o.name in hide:
                 cl["hide"].append(o.name)
-                rs.attr(o, "hide_render", True)
+                _hide(rs, o)
             elif o.name in knock:
                 cl["knock"].append(o.name)
             elif is_type(o):
@@ -669,14 +691,14 @@ class Looks:
 
     def _enter_vector(self, name, spec):
         rs = self.rs
-        objs = [o for o in self._objects() if not o.hide_render]
+        objs = [o for o in self._objects() if _renders(o)]
         recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
         hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
         cl = {"hide": [], "subject": [], "type": []}
         for o in objs:
             if o.name in hide:
                 cl["hide"].append(o.name)
-                rs.attr(o, "hide_render", True)
+                _hide(rs, o)
             else:
                 cl["type" if is_type(o) else "subject"].append(o.name)
         mats = []
@@ -795,7 +817,7 @@ class Looks:
         if made:
             probe = MR.make_probe(self.sc, f"mk_reflect_{name}", plane, spec.get("probe") or {})
             rs.call(lambda p=probe: MR.remove_probe(p))
-        objs = [o for o in self._objects() if not o.hide_render]
+        objs = [o for o in self._objects() if _renders(o)]
         recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
         skip = set(SS.select(recs, spec["hide"]))
         if spec["only"]:

@@ -198,6 +198,23 @@ def test_flow_rows_auto_takes_the_fewest_rows_that_reach_the_size_or_the_biggest
         run(tl, lyr={"line": 1, "layout": {"kind": "flow", "rows": 0}})
 
 
+def test_a_row_holding_a_bigger_word_stands_off_its_neighbour_by_the_plain_gap_so_rows_never_overlap():
+    tl = timeline()
+    lyr = {"line": 1, "style": "none", "spread": False, "layout": {"kind": "flow", "rows": 2}}   # words 1-2, then 3-4
+
+    def gap(specs):
+        """The clear space between the rows' ink (fake_measure: every box from -0.2 to 0.7 em), in the common em."""
+        em = min(s["size"] for s in specs) / 0.7
+        ink = [(s["offset"][1] - 0.45 * s["size"] / 0.7, s["offset"][1] + 0.45 * s["size"] / 0.7) for s in specs]
+        return (min(lo for lo, _ in ink[:2]) - max(hi for _, hi in ink[2:])) / em
+    plain, _ = run(tl, lyr=lyr, panel=(2.0, 1.0))
+    assert gap(plain) == pytest.approx(1.5 * 0.7 - 0.9)                     # leading 1.5 caps less the ink's height
+    for k in (1, 3):                                                         # the big word in the top row, then the bottom
+        big, _ = run(tl, lyr=dict(lyr, punch={"words": [k], "scale": 2.0}), panel=(2.0, 1.0))
+        assert big[k - 1]["size"] == pytest.approx(2.0 * big[k]["size"])          # twice its row neighbour's size
+        assert gap(big) == pytest.approx(gap(plain))
+
+
 # ------------------------------------------------------------------------------------------------------ carry
 def test_a_word_that_began_before_from_lands_again_on_from_and_carry_still_skips_the_arrival():
     tl = timeline()

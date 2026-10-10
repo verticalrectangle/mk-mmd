@@ -431,19 +431,26 @@ def _cycle(seq, k, default=None):
     return seq[k % len(seq)]
 
 
-def layout_flow(boxes, rows, panel, fit, size, cap, gap=0.28, leading=1.5, min_pitch=0.0, align="center"):
+def layout_flow(boxes, rows, panel, fit, size, cap, gap=0.28, leading=1.5, min_pitch=0.0, align="center", rel=None):
     """Words side by side along rows (`rows` = row of each word, one row per lyric line), the block centred on the panel.
     `boxes` = per word (w, y0, y1): the ink box in em with the baseline at 0 (widths include the spread headroom); `gap`
-    in em; rows are `leading` cap heights apart, or `min_pitch` em when that is more; `align` sets each row against the
-    panel's left or right margin (the share `fit` of its width) instead of centring it. Returns (em, [(u, v)]): metres from
-    the panel's centre to each word's ink-box centre."""
+    in em; rows are `leading` cap heights apart, or `min_pitch` em when that is more, and a row holding a bigger word
+    (`rel` > 1: its share of the common cap height, a punch word) stands off from its neighbours by what that word rises
+    above, or hangs below, the words at the common size; `align` sets each row against the panel's left or right margin
+    (the share `fit` of its width) instead of centring it. Returns (em, [(u, v)]): metres from the panel's centre to each
+    word's ink-box centre."""
     n_rows = max(rows) + 1
     count = [rows.count(r) for r in range(n_rows)]
     row_w = [sum(b[0] for b, r in zip(boxes, rows) if r == i) + gap * max(count[i] - 1, 0) for i in range(n_rows)]
-    top = max(b[2] for b in boxes)
-    bot = min(b[1] for b in boxes)
+    plain = [b for b, k in zip(boxes, rel or [1.0] * len(boxes)) if k <= 1.0 + 1e-9] or boxes   # the common size
+    top, bot = max(b[2] for b in plain), min(b[1] for b in plain)
+    asc = [max([top] + [b[2] for b, r in zip(boxes, rows) if r == i]) for i in range(n_rows)]
+    dep = [min([bot] + [b[1] for b, r in zip(boxes, rows) if r == i]) for i in range(n_rows)]
     pitch = max(leading * cap, min_pitch)
-    block_h = (top - bot) + (n_rows - 1) * pitch
+    below = [0.0]                                               # each row's baseline below the first's
+    for i in range(1, n_rows):
+        below.append(below[-1] + pitch + (asc[i] - top) + (bot - dep[i - 1]))
+    block_h = asc[0] + below[-1] - dep[-1]
     em = fit_em(max(row_w), block_h, panel, fit, size, cap)
     half = 0.5 * float(panel[0]) * (0.9 if fit is None else float(fit)) / em if panel else 0.5 * max(row_w)
     used = [0.0] * n_rows
@@ -452,7 +459,7 @@ def layout_flow(boxes, rows, panel, fit, size, cap, gap=0.28, leading=1.5, min_p
         left = {"center": -row_w[r] / 2, "left": -half, "right": half - row_w[r]}[align]
         x = left + used[r] + w / 2
         used[r] += w + gap
-        base = 0.5 * block_h - top - r * pitch                  # baseline of row r from the block's centre line
+        base = 0.5 * block_h - asc[0] - below[r]                # baseline of row r from the block's centre line
         out.append((x * em, (base + 0.5 * (y0 + y1)) * em))
     return em, out
 
@@ -572,13 +579,14 @@ def _word_boxes(words, measure, what, fonts=None, rel=None, look=None, pads=None
     return boxes, cap
 
 
-def _auto_rows(boxes, gap, panel, fit, size, cap, leading, min_pitch=0.0, align="center"):
+def _auto_rows(boxes, gap, panel, fit, size, cap, leading, min_pitch=0.0, align="center", rel=None):
     """How many rows a flow takes when it is left to decide: the fewest that let the words be set at `size`, or, without a
     size, the number that sets them biggest (fewer rows on a tie)."""
     widths = [b[0] for b in boxes]
     best = None
     for r in range(1, len(boxes) + 1):
-        em, _ = layout_flow(boxes, TF.wrap_rows(widths, r, gap), panel, fit, size, cap, gap, leading, min_pitch, align)
+        em, _ = layout_flow(boxes, TF.wrap_rows(widths, r, gap), panel, fit, size, cap, gap, leading, min_pitch, align,
+                            rel)
         if size is not None and em >= float(size) / cap - 1e-9:
             return r
         if best is None or em > best[0] * (1.0 + 1e-9):
@@ -624,11 +632,11 @@ def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None):
             rows = [lines.index(w.line) for w in words]
         else:                                               # the words wrapped into that many rows of even width
             if nrows == "auto":
-                nrows = _auto_rows(boxes, gap, panel, fit, sz, cap, leading, floor, row_align)
+                nrows = _auto_rows(boxes, gap, panel, fit, sz, cap, leading, floor, row_align, rel)
             elif isinstance(nrows, bool) or not isinstance(nrows, int) or nrows < 1:
                 raise LyricsError("lyrics: flow rows is a whole number of rows (at least 1) or 'auto'")
             rows = TF.wrap_rows([b[0] for b in boxes], nrows, gap)
-        em, off = layout_flow(boxes, rows, panel, fit, sz, cap, gap, leading, floor, row_align)
+        em, off = layout_flow(boxes, rows, panel, fit, sz, cap, gap, leading, floor, row_align, rel)
         slot_of = list(range(n))
         aligns = ["center"] * n
         tilts = [None] * n

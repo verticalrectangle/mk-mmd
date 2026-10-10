@@ -236,6 +236,21 @@ def test_a_worn_guitars_cord_stays_in_its_jack_and_swings_as_the_player_bounces(
     assert np.ptp(mid[:, 2]) > 0.01                               # 45 cm down the cord, the bounce shows
 
 
+def test_a_worn_cord_lies_on_the_floor_it_was_hung_on_when_the_wearer_drops_onto_it(make, capsys):
+    """The sim took its floor from the wearer's root on whatever frame it ran (the last), so with a player keyed off the
+    floor (falling in from the sky, jumping out at the end) it swung a cord it saw a metre under its floor: stretched,
+    and left high in the air after she landed."""
+    code, out = make(GUITAR + '[[key]]\ntarget = "Mq"\nprop = "location"\nindex = 2\n'
+                              'keys = [[0.0, 1.0], [0.4, 0.0], [1.8, 0.0], [1.95, 1.0]]\n')
+    assert code == 0, out.get("error")
+    assert out["stages"]["sim"]["cables"]["guitar"]["floor_pen_mm_max"] < 5.0  # was 1000: a floor where she stood last
+    expr = 'min(p.co[2] for p in bpy.data.objects["guitar_cable"].data.splines[0].points)'
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "61,76", "--project", str(make.root)],
+                  capsys)                                         # t 1.0, 1.5: she landed at 0.4, jumps at 1.8
+    assert code == 0, q
+    assert max(q["values"]) < 0.02                               # the cord's end lies on the floor, not a metre up
+
+
 BODY = """[pose.mq]
 feet = "floor"
 [perform.mq]
@@ -258,6 +273,30 @@ def test_bounce_dips_the_hips_on_the_beat_with_the_feet_planted_kick_lifts_one_f
     assert beat[1] - still[1] == pytest.approx(0.2, abs=0.01)      # ... the kicking foot goes up
     for k in range(3):
         assert risen[k] - before[k] == pytest.approx(0.1, abs=0.006)    # rise lifts hips and feet alike
+
+
+SWAY = """[pose.mq]
+feet = "floor"
+[perform.mq]
+crouch = [[1.0, 0.0], [1.3, 0.2]]
+rock = { deg = 0.0, period = 1.6, hips = 0.04 }
+rise = [[1.7, 0.0], [1.9, 0.1]]
+"""
+
+
+def test_rock_hips_shift_the_weight_from_foot_to_foot_and_crouch_lowers_the_hips_with_the_feet_planted(make, capsys):
+    import numpy as np
+    code, out = make(SWAY, until="perform")
+    assert code == 0, out.get("error")
+    expr = "[list(bone('center').head), list(bone('ankle.L').head), list(bone('ankle.R').head)]"
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "43,55,79", "--project", str(make.root)],
+                  capsys)                                         # t 0.4 (swung left), 0.8 (centred), 1.6 (crouched)
+    assert code == 0, q
+    left, mid, low = (np.array(v) for v in q["values"])
+    assert left[0] - mid[0] == pytest.approx([0.04, 0.0, 0.0], abs=0.004)    # the hips go to the model's left (+x) ...
+    assert low[0] - mid[0] == pytest.approx([0.0, 0.0, -0.2], abs=0.006)     # ... and down in the crouch
+    for k in (1, 2):
+        assert np.abs(left[k] - mid[k]).max() < 0.002 and np.abs(low[k] - mid[k]).max() < 0.002    # the feet stay put
 
 
 TRAFFIC = """
@@ -681,3 +720,67 @@ def test_a_squeaky_hammer_s_head_squashes_about_its_middle_as_its_squash_is_keye
     assert s0 == pytest.approx([2.0] * 3, rel=1e-5)
     along, round_ = LAY.squash(1.0)
     assert s1 == pytest.approx([2.0 * along, 2.0 * round_, 2.0 * round_], rel=1e-5)          # shorter along X, rounder
+
+
+APPEARS = """[vector]
+colors = { background = "#FFD21F", line = "#1B2A6B" }
+
+[vector.tones]
+dark = "#1B2A6B"
+
+[[vector.materials]]
+match = "*"
+tone = "dark"
+
+[[prop]]
+name = "hm"
+card = "library:squeaky_hammer"
+at = [0.0, 0.0, 0.3]
+
+[[key]]
+target = "hm_head"
+prop = "hide_render"
+interp = "CONSTANT"
+keys = [[0.0, 1.0], [1.0, 0.0]]
+
+[[key]]
+target = "hm_handle"
+prop = "hide_render"
+interp = "CONSTANT"
+keys = [[0.0, 1.0], [1.0, 0.0]]
+
+[[shot]]
+name = "a"
+from = 0.0
+to = 1.2
+at = [0.0, -1.0, 0.45]
+look = [0.0, 0.0, 0.45]
+lens = 35
+style = "vector"
+
+[[shot]]
+name = "b"
+from = 1.2
+to = 2.0
+at = [0.0, -1.0, 0.45]
+look = [0.0, 0.0, 0.45]
+lens = 35
+style = "vector"
+hide = ["hm_*"]
+"""
+
+
+def test_a_flat_look_draws_what_keys_show_after_its_shot_starts_and_hides_what_it_is_told_to_whatever_the_keys(make, capsys,
+                                                                                                            tmp_path):
+    """A look sorts the objects when its shot starts: one hidden there by its keys and shown later must be drawn in its
+    tone (it was drawn with no id, and the look failed), and one the shot hides must stay hidden though its keys show it."""
+    import numpy as np
+    from PIL import Image
+    code, out = make(APPEARS, with_cast=False)
+    assert code == 0, out.get("error")
+    code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", "46,64,76", "--output", "16x9", "--size",
+                      "320", "--out", str(tmp_path / "look"), "--project", str(make.root)], capsys)
+    assert code == 0, look.get("error")                           # t 0.5 keyed hidden, 1.1 keyed shown, 1.5 shot b hides it
+    navy = [int((np.abs(np.asarray(Image.open(p).convert("RGB"), int) - (27, 42, 107)).max(-1) < 40).sum())
+            for p in look["images"]]
+    assert navy[0] == 0 and navy[1] > 500 and navy[2] == 0
