@@ -36,6 +36,8 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
     "bounce": ((0.26, -0.75, -0.61), 0.85),
     "point": ((-0.14, -1.0, 0.05), 0.95),
     "up": ((0.17, -0.09, 1.0), 0.93),
+    "heart_push": ((-0.12, -1.0, -0.2), 0.85),
+    "mic_across": ((-0.6, -0.8, 0.0), 0.85),
 }
 
 
@@ -73,6 +75,10 @@ def place(name, side, marks):
         "up": (out("up"), _v(s * 0.1, 0, 1), _v(0, -1, 0), "flat"),
         "drip_in": (_add(chest, _v(s * 0.12, -0.26, 0.02)), _v(-s * 0.6, -0.2, 0.7), _v(0, 1, 0), "relaxed"),
         "drip_out": (_add(chest, _v(s * 0.12, -0.28, 0.04)), _v(-s * 0.6, -0.2, 0.7), _v(0, -1, 0), "relaxed"),
+        "ears": (_add(eye, _v(s * 0.10, 0.03, -0.07)), _v(-s * 0.15, 0, 1), _v(-s, 0, 0), "flat"),
+        "heart_push": (out("heart_push"), _v(-s * 0.35, -0.2, 0.9), _v(0, -1, 0), "curled"),
+        "bunny": (_add(eye, _v(s * 0.09, 0.01, 0.17)), _v(s * 0.1, -0.2, 1), _v(0, -1, 0), "paw"),
+        "mic_across": (out("mic_across"), _v(-s * 0.6, -0.8, 0), _v(0, 0, 1), "curled"),
     }
     if name not in P:
         raise MoveError(f"no hand place {name!r} (have {', '.join(sorted(P))})")
@@ -94,6 +100,10 @@ MOVES = {
     "hands_up": {"hand": "places", "places": (("up", 0.0),), "both": True},
     "mic_lens": {"hand": "places", "places": (("mic_lens", 0.0),)},
     "mic_up": {"hand": "places", "places": (("mic_up", 0.0),)},
+    "mic_across": {"hand": "places", "places": (("mic_across", 0.0),)},
+    "ears": {"hand": "places", "places": (("ears", 0.0),), "both": True, "face": [("hau", 1.0)]},
+    "heart_push": {"hand": "places", "places": (("heart_push", 0.0),), "both": True, "face": [("cheerful", 0.8)]},
+    "bunny_paws": {"hand": "places", "places": (("bunny", 0.0),), "both": True, "face": [("wink_r", 1.0)]},
     "into_lens": {"lean": 14.0},
     "lean_back": {"lean": -11.0, "tilt": 7.0},
     "stank": {"twitch": {"bones": ["head"], "deg": -12.0, "axis": [1, 0, 0], "dur": 0.3}, "face": [("hau", 1.0)]},

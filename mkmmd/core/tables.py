@@ -32,7 +32,7 @@ PERFORM = {
     "sway": ("deg", "period"), "nod": ("deg", "period"), "bob": ("deg", "timeline", "beats", "downbeat_accent"),
     "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "rock": ("deg", "period", "phase", "axis"),
     "head_rock": ("deg", "period", "phase", "axis"), "blink": ("per_min", "seed", "extra"), "lids": None,
-    "sing": ("timeline", "lines", "mouth", "lead", "voice"), "expressions": ("morph", "keys"),
+    "sing": ("timeline", "lines", "words", "mouth", "lead", "voice"), "expressions": ("morph", "keys"),
     "twitch": ("bones", "family", "t", "deg", "axis", "dur"),
     "bounce": ("depth", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"), "rise": None,
     "kick": ("foot", "height", "back", "hold", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"),

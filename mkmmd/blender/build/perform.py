@@ -530,8 +530,11 @@ def run(ctx):
         if spec.get("sing"):
             sg = spec["sing"]
             tl = ctx.timeline(sg, f"perform.{name}.sing")
-            kf = LS.keyframes(tl, lines=sg.get("lines"), mouth=sg.get("mouth", 0.8), fps=ctx.fps,
-                              voice=sg.get("voice", "en-gb"), offset=sg.get("lead", -0.03))
+            try:
+                kf = LS.keyframes(tl, lines=sg.get("lines"), words=sg.get("words"), mouth=sg.get("mouth", 0.8),
+                                  fps=ctx.fps, voice=sg.get("voice", "en-gb"), offset=sg.get("lead", -0.03))
+            except ValueError as e:
+                raise BuildError(f"perform.{name}.sing: {e}") from None
             done = []
             for v, pts in kf.items():
                 mn = _morph(m, v)

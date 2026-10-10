@@ -89,6 +89,37 @@ def test_lipsync_closes_for_m_and_between_distant_words():
     assert max(t for t, _ in k1["a"]) < 2.0                    # only the first line
 
 
+WORDS = {"fps": 30, "lines": [{"words": [{"text": f"w{i}", "start": 1.0 + i, "voiced_end": 1.5 + i} for i in range(3)]},
+                              {"words": [{"text": f"x{i}", "start": 5.0 + i, "voiced_end": 5.5 + i} for i in range(2)]}]}
+
+
+def test_chosen_words_are_picked_by_line_and_word_from_either_end_in_time_order():
+    pick = LS.select_words(WORDS, words=[[2, -1], [1, 2], [1, -2]])          # [1, 2] and [1, -2] are the same word
+    assert [w["start"] for w in pick] == [2.0, 6.0]
+    assert [w["start"] for w in LS.select_words(WORDS, words=[[1, -1], [2, -1]])] == [3.0, 6.0]   # the line endings
+
+
+@pytest.mark.parametrize("kw, frag", [
+    (dict(words=[[3, 1]]), "no line 3"),
+    (dict(words=[[1, 4]]), "line 1 has 3 words"),
+    (dict(words=[[1, 0]]), "line 1 has 3 words"),
+    (dict(words=[[1, -4]]), "line 1 has 3 words"),
+    (dict(words=[2]), "is not \\[line, word\\]"),
+    (dict(words=[[1, 1]], lines=[1, 1]), "not both"),
+])
+def test_a_word_choice_the_timeline_does_not_have_is_refused(kw, frag):
+    with pytest.raises(ValueError, match=frag):
+        LS.select_words(WORDS, **kw)
+
+
+@pytest.mark.skipif(shutil.which("espeak-ng") is None, reason="espeak-ng not installed")
+def test_lipsync_of_chosen_words_moves_the_mouth_only_around_them():
+    k = LS.keyframes(WORDS, words=[[2, -1]], mouth=0.9)
+    keys = [(t, v) for vs in k.values() for t, v in vs]
+    assert all(5.8 < t < 6.7 for t, _ in keys)                               # the word spans 6.0 to 6.5
+    assert max(v for _, v in keys) > 0.3
+
+
 def test_head_aims_inside_its_range_and_leaves_a_look_in_range_alone():
     f, u = (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)                  # a model facing -Y, Z up
     yaw, elev = PF.yaw_elevation(f, u, (1.0, 0.0, 0.0))        # straight to her left

@@ -66,9 +66,26 @@ def shapes(tok):
     return [DEFAULT_CONS], False
 
 
-def select_words(timeline, lines=None):
-    """Words of the chosen lines (1-based inclusive range [a, b] or list), in order."""
+def select_words(timeline, lines=None, words=None):
+    """Words of the chosen lines (1-based inclusive range [a, b] or list), or the chosen `words`: [[line, word], ...]
+    (1-based; a negative word counts from the end of its line, so [2, -1] is line 2's last word), in time order.
+    Raises ValueError naming a choice the timeline does not have."""
     lns = timeline["lines"]
+    if words is not None:
+        if lines is not None:
+            raise ValueError("give `lines` or `words`, not both")
+        out = []
+        for pick in words:
+            if not (isinstance(pick, (list, tuple)) and len(pick) == 2 and all(isinstance(x, int) for x in pick)):
+                raise ValueError(f"words: {pick!r} is not [line, word]")
+            ln, wd = pick
+            if not 1 <= ln <= len(lns):
+                raise ValueError(f"words: {pick!r}: no line {ln} (the timeline has {len(lns)})")
+            ws = lns[ln - 1]["words"]
+            if wd == 0 or abs(wd) > len(ws):
+                raise ValueError(f"words: {pick!r}: line {ln} has {len(ws)} words")
+            out.append(ws[wd - 1 if wd > 0 else wd])
+        return sorted({id(w): w for w in out}.values(), key=lambda w: w["start"])
     if lines is None:
         idx = range(len(lns))
     elif isinstance(lines, (list, tuple)) and len(lines) == 2 and all(isinstance(x, int) for x in lines):
@@ -79,9 +96,9 @@ def select_words(timeline, lines=None):
 
 
 def keyframes(timeline, lines=None, mouth=0.55, gap_close=0.14, cons_t=0.055, fps=None, voice="en-gb",
-              offset=0.0):
-    """vowel -> [(clip_time, value)] for the chosen lines. mouth: peak weight at full voice (0.5 mouthing, 0.9
-    singing out). offset shifts every key (s; a small negative lead reads better on screen)."""
+              offset=0.0, words=None):
+    """vowel -> [(clip_time, value)] for the chosen lines or words (select_words). mouth: peak weight at full voice
+    (0.5 mouthing, 0.9 singing out). offset shifts every key (s; a small negative lead reads better on screen)."""
     vdb = timeline.get("vocal_db")
     fps = fps or timeline.get("fps", 30)
 
@@ -98,7 +115,7 @@ def keyframes(timeline, lines=None, mouth=0.55, gap_close=0.14, cons_t=0.055, fp
             keys[m].append((t + offset, shape.get(m, 0.0) * amp))
 
     prev_end = -1.0
-    for w in select_words(timeline, lines):
+    for w in select_words(timeline, lines, words):
         t0, t1 = w["start"], max(w["voiced_end"], w["start"] + 0.08)
         if t0 - prev_end > gap_close:
             put(prev_end + 0.06 if prev_end > 0 else t0 - 0.12, {}, 0.0)

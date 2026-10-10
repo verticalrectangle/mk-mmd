@@ -1033,6 +1033,10 @@ hand cannot play two moves at once.
 | `hands_up` | both arms up |
 | `mic_lens` | the (mic) hand held out at the camera |
 | `mic_up` | the (mic) hand raised overhead |
+| `mic_across` | the (mic) hand held out across the body to the other side (a mic offered to a partner on that side) |
+| `ears` | both hands over the ears, elbows wide; `hau` (">_<") face: too loud |
+| `heart_push` | both hands make one heart pushed out in front of the chest; `cheerful` face |
+| `bunny_paws` | both paws up over the head like bunny ears; `wink_r` |
 | `into_lens`, `lean_back` | the upper body leans 14 degrees forward; 11 back and 7 to the left |
 | `stank` | the head flicks back; `hau` face |
 | `face` | only its `morph` |
@@ -1152,12 +1156,14 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `sing` | lip sync, below |
 | `twitch` | `[{bones, family, t, deg = 14, axis = [1, 0, 0], dur = 0.22}]`: a quick flick (out to `deg`, back past rest by a quarter of it, home) about an axis in the armature's frame. `bones` lists semantic or Blender names, `family` (`"ears"`, `"tail"`) takes the top bone of every chain of that family by its name; `t` is required |
 
-`sing` is `{timeline, lines, mouth = 0.8, lead = -0.03, voice = "en-gb"}`. The words of the timeline (`lines[].words[]` with
+`sing` is `{timeline, lines, words, mouth = 0.8, lead = -0.03, voice = "en-gb"}`. The words of the timeline (`lines[].words[]` with
 `text`, `start` and `voiced_end` in clip seconds; the text is read and never printed) become IPA phonemes with `espeak-ng` and
 then the five vowel morphs `a i u e o`: vowels share the word's sung span (the last one takes the held note), consonants take a
 short slice, the mouth closes for m, b, p and rests between words further than 0.14 s apart, and its size follows the vocal
 loudness when the timeline has `vocal_db`. `timeline` defaults to `audio/timeline.json` (a missing file stops the build naming `perform.<cast>.sing`). `lines` is `[a, b]`, lines a to b (1-based, inclusive), or
-any other list of line numbers (default all lines). `mouth` is the peak weight at full voice, `lead` shifts every key (a small
+any other list of line numbers (default all lines); `words` instead picks single words, `[[line, word], ...]` (1-based; a negative
+word counts from the end of its line, so `[[1, -1], [2, -1]]` are the line endings: a hype partner shouting them), and a choice the
+timeline does not have is a build error. `mouth` is the peak weight at full voice, `lead` shifts every key (a small
 negative lead reads better on screen), `voice` is the `espeak-ng` voice, the language of the words. `espeak-ng` must be
 installed: `mk doctor` reports whether it is found, and without it the stage raises.
 

@@ -79,7 +79,8 @@ square crop of a vertical master). Put the plan in comments of `mk.toml` or a lo
   (below). The pose stage reports each arm IK's miss in mm and warns past 5 mm: lean the character (`lean`), move the seat (`sit_offset`) or bring the prop closer.
   Look at the pose with `mk build --until pose --out build/pose_test.blend` and `mk look --view front,3q,left,back --frames N --sheet`.
 - **Perform** ([Perform](design.md#perform)): gaze events over an idle target, eye-only glances, breathing, sway, nods, beat bob, blinks,
-  expressions, lip sync from the timeline (`sing`), twitches, strumming (`strum`: down strokes on the downbeats, the pick meeting the string at each strike).
+  expressions, lip sync from the timeline (`sing`; `words = [[2, -1]]` mouths only chosen words, a partner shouting the line endings), twitches,
+  strumming (`strum`: down strokes on the downbeats, the pick meeting the string at each strike).
   Group and material morphs (vowels with a tongue bone, a blush) are keyed like any other: the cast stage binds the model's morph sliders
   (`bound_morphs` in its report).
   Take the numbers from `mk ref measure` or a timeline, not from taste.
