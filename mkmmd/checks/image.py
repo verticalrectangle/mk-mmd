@@ -62,8 +62,14 @@ class Flicker(Metric):
         d = np.abs(B[1:-1] - 0.5 * (B[:-2] + B[2:]))
         per = np.percentile(d.reshape(len(d), -1), 99, axis=1)
         k = int(np.argmax(per))
-        return float(per[k]), {"frames": len(files), "worst": files[k + 1].name,
+        return float(per[k]), {"frames": len(files), "worst": files[k + 1].name, "at_frame": _frame_of(files[k + 1].name),
                                "median_frame_p99": round(float(np.median(per)), 4)}
+
+
+def _frame_of(name):
+    """The frame a rendered image is of (mk render names them by frame), or None."""
+    stem = name.rsplit(".", 1)[0]
+    return int(stem) if stem.isdigit() else None
 
 
 @metric
@@ -93,7 +99,7 @@ class Palette(Metric):
             rows.append((f.name, black, float(np.median(d)), float(np.percentile(d, 90))))
         key = 2 if args.get("measure", "black") == "distance" else 1
         k = int(np.argmax([r[key] for r in rows]))
-        return rows[k][key], {"images": len(rows), "worst": rows[k][0],
+        return rows[k][key], {"images": len(rows), "worst": rows[k][0], "at_frame": _frame_of(rows[k][0]),
                               "near_black_max": round(max(r[1] for r in rows), 4),
                               "near_black_median": round(float(np.median([r[1] for r in rows])), 4),
                               "distance_median": round(float(np.median([r[2] for r in rows])), 2),

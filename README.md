@@ -222,7 +222,7 @@ max = 8.0
 | `mk build` | builds the scene from `mk.toml`, stage by stage (`--until`, `--skip`), and bakes it for the site's scene viewer (`--bake` bakes a saved scene again) |
 | `mk q`, `mk serve` | ask a scene anything, frame by frame (`mk serve` keeps a big scene loaded for `q`, `check` and `grip`) |
 | `mk grip` | solves a hand grip (pen, wheel, pinch, rest, neck) on a model's hand |
-| `mk check` | runs the project's checks: jitter, contact, penetration, foot slide, joint limits, framing, occlusion, camera inside, flicker, palette, form (prop boxiness), strum, prop in body |
+| `mk check` | runs the project's checks: jitter, contact, penetration, foot slide, joint limits, framing, occlusion, camera inside, flicker, palette, form (prop boxiness), strum, prop in body, and the hand rules of the moves (wrist bend, mirrored two-hand moves, a mic's palm turned in, hands' room); each names its worst frame, and the project's last results feed the site's Checks tab (`mk site --tab checks`) |
 | `mk look` | renders views without touching the file: the cut per output, cameras, orbit views of any target, sheets, A/B, reference photos side by side (`--ref`) |
 | `mk render` | renders the cut of every output to frames (presets draft / preview / final, parallel, resumable) |
 | `mk post` | composites the cut effects and screen type, grades the frames (contrast, split tone, halation, vignette, grain) and encodes MP4s with the song |

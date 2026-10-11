@@ -328,7 +328,7 @@ def test_the_prop_frame_is_used_for_positions(blender):
     R[:3, 3] = [10, 20, 0]
     blender.roots = {"car": R}
     plain = _run([{"name": "x", "metric": "form", "args": {"prop": "car"}}])[0]
-    assert plain["detail"]["space"] == "prop" and plain["detail"]["frame"] == 7
+    assert plain["detail"]["space"] == "prop" and plain["detail"]["at_frame"] == 7
     blender.roots = {}
     world = _run([{"name": "x", "metric": "form", "args": {"prop": ["car", "wheel"]}}])[0]
     assert world["detail"]["space"] == "world"

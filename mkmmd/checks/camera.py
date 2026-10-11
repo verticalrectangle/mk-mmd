@@ -81,7 +81,7 @@ class Framing(Metric):
             labels += [p] * v.shape[1]
         P = np.concatenate(cols, 1)
         cam = data.camera(frames)
-        worst, detail = np.inf, {}
+        worst, detail, at = np.inf, {}, None
         for name, size in sizes.items():
             margins = np.zeros(len(frames))
             where = []
@@ -99,7 +99,9 @@ class Framing(Metric):
             detail[name] = {"min_margin": round(float(margins[k]), 4), "at_frame": int(frames[k]),
                             "point": where[k], "camera": cam["names"][k], "frames_outside": int(len(bad)),
                             "first_outside": [int(f) for f in bad[:10]]}
-            worst = min(worst, float(margins[k]))
+            if float(margins[k]) < worst:
+                worst, at = float(margins[k]), int(frames[k])
+        detail["at_frame"] = at
         return worst, detail
 
 
@@ -147,5 +149,5 @@ class CameraInside(Metric):
         rows = bridge.run("visibility", {"frames": frames, "points": [], "ignore": args.get("ignore", [])},
                           blend=ctx.scene, project=ctx.project, timeout=3600)
         bad = [r for r in rows if r["inside"]]
-        return float(len(bad)), {"frames": [r["frame"] for r in bad[:20]],
+        return float(len(bad)), {"at_frame": bad[0]["frame"] if bad else None, "frames": [r["frame"] for r in bad[:20]],
                                  "inside": sorted({r["inside"] for r in bad})}

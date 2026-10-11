@@ -105,7 +105,7 @@ SKIP = {"build", "renders", "out", "node_modules", "__pycache__"}
 
 def project(site, query, body):
     """A project's page: its name, root, review files (each with its title, answers and whether it was sent) and whether
-    it has music (an [audio] file or a timeline) and a baked scene."""
+    it has music (an [audio] file or a timeline), a baked scene and checks."""
     root = Path(query.get("path") or "").expanduser().resolve()
     if not (root / "mk.toml").is_file():
         raise HttpError(422, f"{root} has no mk.toml")
@@ -127,7 +127,7 @@ def project(site, query, body):
         reviews.append(item)
     has_music = bool((proj.data.get("audio") or {}).get("file")) or (root / MU.TIMELINE).is_file()
     return 200, {"name": proj.name, "root": str(root), "reviews": reviews, "music": has_music,
-                 "scene": bool(proj.blend) and (bake_dir(proj) / "bake.json").is_file()}
+                 "scene": bool(proj.blend) and (bake_dir(proj) / "bake.json").is_file(), "checks": bool(proj.checks)}
 
 
 def bake_dir(proj):
@@ -185,9 +185,11 @@ def music(site, query, body):
     if not (root / "mk.toml").is_file():
         raise HttpError(422, f"{root} has no mk.toml")
     site.allowed(root / "mk.toml")
-    from ..project import ProjectError
+    from ..project import Project, ProjectError
     try:
         out = MU.music(root, cache())
+        out["checks"] = [{"name": r["name"], "ok": r["ok"], "t": r["t"]} for r in _checks_of(Project.load(root))["results"]
+                         if r.get("t") is not None and "ok" in r]
     except ProjectError as e:
         raise HttpError(422, str(e))
     a = out["audio"]
@@ -195,6 +197,42 @@ def music(site, query, body):
         site.allow(Path(a["path"]).parent)               # the [audio] file itself when ffmpeg cannot cut the clip
         a["url"] = file_url(a["path"])
     return 200, out
+
+
+# ---------------------------------------------------------------------------------------------------------- checks
+def _checks_of(proj):
+    """The project's checks with their last results (mkmmd.checks.last_results), each with its metric's words (`doc`)
+    and its worst moment in clip seconds (`t`, from the detail's at_frame)."""
+    from .. import checks as CH
+    CH.load()
+    doc = CH.last_results(proj)
+    for r in doc["results"]:
+        m = CH.METRICS.get(r.get("metric"))
+        r["doc"] = m.doc if m else ""
+        at = r["detail"].get("at_frame") if isinstance(r.get("detail"), dict) else None
+        r["t"] = None if at is None else round(proj.time(at), 4)
+    return doc
+
+
+def checks(site, query, body):
+    """The project's checks with their last results, and whether a run is going (POST checks starts one)."""
+    proj = _project(site, query)
+    run = site.state.setdefault("check_runs", {}).get(str(proj.root))
+    running = run is not None and run.poll() is None
+    return 200, {**_checks_of(proj), "running": running, "exit": None if run is None or running else run.returncode}
+
+
+def run_checks(site, query, body):
+    """Run the project's checks (`mk check`, in the background: it keeps the results in .mk/checks.json)."""
+    proj = _project(site, query)
+    runs = site.state.setdefault("check_runs", {})
+    run = runs.get(str(proj.root))
+    if run is None or run.poll() is not None:
+        with open(cache() / "check-run.log", "w", encoding="utf-8") as log:
+            runs[str(proj.root)] = subprocess.Popen([sys.executable, "-m", "mkmmd.cli.main", "check", "--project",
+                                                     str(proj.root)], stdout=log, stderr=subprocess.STDOUT,
+                                                    cwd=str(proj.root))
+    return 200, {"running": True}
 
 
 def review(site, query, body):
@@ -393,4 +431,5 @@ def routes():
     return {("GET", "ping"): ping, ("POST", "stop"): stop, ("POST", "open"): open_page, ("GET", "project"): project,
             ("GET", "review"): review, ("PUT", "answers"): answers, ("POST", "send"): send, ("PUT", "marks"): marks,
             ("GET", "model"): model, ("POST", "section"): section, ("GET", "measures"): measures,
-            ("POST", "snapshot"): snapshot, ("GET", "music"): music, ("GET", "scene"): scene, ("GET", "draft"): draft}
+            ("POST", "snapshot"): snapshot, ("GET", "music"): music, ("GET", "scene"): scene, ("GET", "draft"): draft,
+            ("GET", "checks"): checks, ("POST", "checks"): run_checks}

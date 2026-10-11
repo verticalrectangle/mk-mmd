@@ -25,7 +25,22 @@ export function cameraProjection(lens, sensor, fit, sx, sy, W, H) {
 
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 
-export function sceneView(root) {
+// The cut's shot at clip second `t` for an output, and its camera on bake frame `k` as a view-projection with a key
+// light from over the camera's shoulder: {shot, VP, key}, or null where the cut has no shot.
+export function shotView(bake, blob, output, t, k) {
+  const cut = bake.cut[output] || [];
+  const shot = cut.find((c) => t >= c.from && t < c.to) || (cut.length && t >= cut[cut.length - 1].to ? cut[cut.length - 1] : cut[0]);
+  const c = shot && bake.cameras.find((x) => x.name === shot.camera);
+  if (!c) return null;
+  const out = bake.outputs.find((o) => o.name === output) || bake.outputs[0], o = c.offset + 15 * k;
+  const VP = mul(cameraProjection(blob[o + 12], c.sensor, c.fit, blob[o + 13], blob[o + 14], out.size[0], out.size[1]),
+    mul(UNAXES, invert(mat4of(blob, o))));
+  const back = [blob[o + 6], blob[o + 7], blob[o + 8]], up = [blob[o + 3], blob[o + 4], blob[o + 5]];   // the camera's +Z, +Y
+  return { shot, VP, key: norm3([back[0] * 0.6 + up[0] * 0.7, back[1] * 0.6 + up[1] * 0.7, back[2] * 0.6 + up[2] * 0.7]) };
+}
+
+// `at`: open on that clip second (a check card's worst moment).
+export function sceneView(root, { at = null } = {}) {
   const el = h("div", { class: "scene", tabindex: "0" });
   const S = { gl: null, scene: null, bake: null, blob: null, drafts: [], players: new Map(), output: null, view: "3d",
     mode: "shaded", cam: "shot", orbit: new Orbit(), raf: 0, last: "", drag: null };
@@ -118,12 +133,9 @@ export function sceneView(root) {
     gl.clearColor(0.93, 0.92, 0.9, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     let VP, keyL, fillL = [-0.6, 0.2, 0.4];
-    if (S.cam === "shot" && shot) {
-      const c = b.cameras.find((x) => x.name === shot.camera), o = c.offset + 15 * k, bl = S.blob;
-      VP = mul(cameraProjection(bl[o + 12], c.sensor, c.fit, bl[o + 13], bl[o + 14], out.size[0], out.size[1]),
-        mul(UNAXES, invert(mat4of(bl, o))));
-      const back = [bl[o + 6], bl[o + 7], bl[o + 8]], up = [bl[o + 3], bl[o + 4], bl[o + 5]];      // the camera's +Z and +Y
-      keyL = norm3([back[0] * 0.6 + up[0] * 0.7, back[1] * 0.6 + up[1] * 0.7, back[2] * 0.6 + up[2] * 0.7]);
+    const sv = S.cam === "shot" ? shotView(b, S.blob, S.output, t, k) : null;
+    if (sv) {
+      VP = sv.VP; keyL = sv.key;
     } else {
       const f = S.orbit.frame(canvas.width / canvas.height);
       VP = f.VP; keyL = f.key; fillL = f.fill;
@@ -177,6 +189,7 @@ export function sceneView(root) {
       refresh();
       size();
       frame();
+      if (at !== null && timeline.ready) timeline.ready.then(() => timeline.player.seek(at));
     } catch (e) {
       note.textContent = "The scene cannot be shown: " + e.message;
       note.classList.add("bad");

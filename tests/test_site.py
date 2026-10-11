@@ -2,8 +2,9 @@
 folders a page was opened for (with byte ranges, which audio and video seek with), a review goes through it the way
 the page uses it (opened, answers checked and kept, sent), a project's music comes back in clip seconds (the clip's
 audio cut from the song where [audio] starts, the hits lanes the project names, the shots and effects, and the words by
-number, never their text), its baked scene is found beside [project] blend with the drafts mk post made, and a draft's
-samples point at its H.264 frames."""
+number, never their text), its baked scene is found beside [project] blend with the drafts mk post made, a draft's
+samples point at its H.264 frames, and the project's checks keep their last results for the Checks tab (merged by name,
+never overwritten by an ad-hoc run) with each worst moment in clip seconds."""
 import base64
 import http.client
 import json
@@ -19,6 +20,7 @@ import wave
 import pytest
 
 from mkmmd import review as RV
+from mkmmd.cli import main as MAIN
 from mkmmd.site import api as API
 from mkmmd.site import draft as DR
 from mkmmd.site import music as MU
@@ -232,3 +234,71 @@ def test_a_drafts_index_sets_up_its_decoder_and_points_at_each_frame_in_decode_o
             nal_types.append(data[i + 4] & 0x1F)
             i += 4 + n
         assert i == off + size and (5 in nal_types) == key                       # an IDR picture in the keyframes only
+
+
+def check_project(root):
+    """A project (frame0 101, 30 fps) with two Blender-free checks on a rendered frame named for its frame number."""
+    from PIL import Image
+    (root / "renders").mkdir(parents=True)
+    Image.new("RGB", (16, 16), (240, 240, 240)).save(root / "renders" / "0130.png")
+    (root / "mk.toml").write_text("""[project]
+fps = 30
+frame0 = 101
+duration = 4.0
+[[check]]
+name = "bright"
+metric = "palette"
+args = { images = "renders/*.png" }
+max = 0.5
+[[check]]
+name = "dark"
+metric = "palette"
+args = { images = "renders/*.png" }
+min = 0.5
+""", encoding="utf-8")
+
+
+def mk(argv, capsys):
+    with pytest.raises(SystemExit):
+        MAIN.main(argv)
+    return json.loads(capsys.readouterr().out)
+
+
+def test_the_projects_checks_keep_their_last_results_and_an_ad_hoc_run_leaves_them(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("MK_CACHE", str(tmp_path / "cache"))
+    root = tmp_path / "proj"
+    check_project(root)
+    kept = root / ".mk" / "checks.json"
+    mk(["check", "--project", str(root), "--only", "dark"], capsys)
+    first = json.loads(kept.read_text(encoding="utf-8"))["results"]
+    assert [r["name"] for r in first] == ["dark"] and first[0]["ok"] is False
+    mk(["check", "--project", str(root)], capsys)
+    both = json.loads(kept.read_text(encoding="utf-8"))["results"]
+    assert [(r["name"], r["ok"]) for r in both] == [("bright", True), ("dark", False)]             # mk.toml's order
+    assert both[0]["detail"]["at_frame"] == 130
+    before = kept.read_text(encoding="utf-8")
+    from PIL import Image
+    Image.new("RGB", (16, 16), (0, 0, 0)).save(root / "renders" / "0131.png")      # results change from here on
+    mk(["check", "palette", "--args", '{"images": "renders/*.png"}', "--project", str(root)], capsys)
+    mk(["check", "--project", str(root), "--frames", "101:110"], capsys)
+    assert kept.read_text(encoding="utf-8") == before                    # ad hoc, or over other frames: not the record
+    mk(["check", "--project", str(root), "--only", "bright"], capsys)
+    again = json.loads(kept.read_text(encoding="utf-8"))["results"]
+    assert [r["name"] for r in again] == ["bright", "dark"] and again[1] == both[1]   # an --only run keeps the others
+
+
+def test_the_checks_tab_and_the_timeline_get_each_worst_moment_in_clip_seconds(site, tmp_path, capsys):
+    root = tmp_path / "proj"
+    check_project(root)
+    with open(root / "mk.toml", "a", encoding="utf-8") as f:
+        f.write('[[check]]\nname = "never run"\nmetric = "palette"\nargs = { images = "renders/*.png" }\n')
+    mk(["check", "--project", str(root), "--only", "bright", "--only", "dark"], capsys)
+    assert ask(site, "POST", "api/open", {"project": str(root)})[0] == 200
+    q = "?path=" + urllib.parse.quote(str(root))
+    got = json.loads(ask(site, "GET", "api/checks" + q)[1])
+    rows = {r["name"]: r for r in got["results"]}
+    assert set(rows) == {"bright", "dark", "never run"} and "ran" not in rows["never run"]
+    assert rows["dark"]["t"] == pytest.approx(0.9667, abs=1e-4)            # frame 130, frame0 101, 30 fps
+    assert rows["dark"]["doc"].startswith("Colour discipline") and got["running"] is False
+    marks = json.loads(ask(site, "GET", "api/music" + q)[1])["checks"]
+    assert sorted((c["name"], c["ok"], round(c["t"], 3)) for c in marks) == [("bright", True, 0.967), ("dark", False, 0.967)]

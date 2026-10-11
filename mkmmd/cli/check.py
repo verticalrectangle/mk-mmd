@@ -13,8 +13,9 @@ ad hoc. All sampled metrics share one Blender pass over the union of their frame
 
 A [[check]] entry is  name, metric, args = {...} (the metric's arguments, below), frames (a frame spec, default the
 whole clip), min and max. It passes when min <= value <= max; a metric with a default limit (form 0.25, prop_body 8,
-strum 10) uses it when the entry gives neither. A check that cannot be computed fails with an `error`. Exit 1 when any
-check fails, 0 when all pass.
+strum 10, wrist_bend 60, hand_mirror 5, mic_palm at least 0.3, hand_room at least 0) uses it when the entry gives
+neither. A check that cannot be computed fails with an `error`. Exit 1 when any check fails, 0 when all pass. The
+project's checks keep their last results in .mk/checks.json (the site's Checks tab reads them; not with --frames).
 
 Metrics (mk check --list for their arguments):
   jitter         shake of hair / ears / tails relative to the head (ratio; calm < 0.5)
@@ -30,6 +31,10 @@ Metrics (mk check --list for their arguments):
   form           how blocky a prop's modelled shapes are (0 smooth .. 1 boxes; hero props stay under 0.25)
   strum          the pick against the strings at every stroke of a strum spec: distance at the strike (mm), timing in detail
   prop_body      a prop's geometry inside the character's collision bodies (mm; a guitar resting on the body)
+  wrist_bend     a hand's bend from its forearm while its moves hold it (degrees; the moves library keeps it under 60)
+  hand_mirror    a two-hand move's hands, each against the other's mirror image across the body (mm)
+  mic_palm       a fist round a mic or a hammer, its palm's share toward the body (the library keeps it over 0.3)
+  hand_room      a hand at a place that does not touch the body, its room to the collision bodies (mm)
 
 Examples:
   mk check                                         # the project's checks
@@ -61,7 +66,8 @@ def add(sub):
 def run(args):
     CH.load()
     if args.list:
-        emit({name: {"doc": m.doc, "args": m.args, **({"default_max": m.default_max} if m.default_max is not None else {})}
+        emit({name: {"doc": m.doc, "args": m.args, **({"default_max": m.default_max} if m.default_max is not None else {}),
+                     **({"default_min": m.default_min} if m.default_min is not None else {})}
               for name, m in sorted(CH.METRICS.items())})
         return 0
     proj = get_project(args)
@@ -94,6 +100,8 @@ def run(args):
     t0 = time.time()
     results = CH.run(checks, ctx, frames_override=args.frames, keep_sample=args.keep_sample)
     ok = all(r["ok"] for r in results)
+    if not pos and not args.frames:
+        CH.keep_results(proj, results, str(blend) if blend else None)
     emit({"ok": ok, "passed": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results),
           "seconds": round(time.time() - t0, 2), "scene": str(blend) if blend else None, "results": results})
     return 0 if ok else CHECK_FAILED

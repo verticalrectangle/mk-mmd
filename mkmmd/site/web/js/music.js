@@ -64,6 +64,7 @@ function layout(M) {
   M.lanes.forEach((lane, k) => L.push({ id: "hits", h: ROW.hits, label: lane.name, lane, k }));
   if (M.words.length) L.push({ id: "words", h: ROW.words, label: "words" });
   if (M.shots.length) L.push({ id: "shots", h: ROW.shots, label: "shots" });
+  if ((M.checks || []).length) L.push({ id: "checks", h: ROW.hits, label: "checks" });
   const ends = [];
   for (const e of [...M.effects].sort((a, b) => a.from - b.from)) {
     let r = ends.findIndex((end) => end <= e.from + 1e-6);
@@ -226,6 +227,13 @@ export function musicView(root, { from = null, to = null } = {}) {
           const a0 = Math.max(a, x0());
           g.fillStyle = C.fg; label(s.name, a0 + 4, mid, Math.min(b, x1()) - a0 - 8);
         });
+      } else if (l.id === "checks") {
+        for (const c of M.checks) {                         // failing checks red at their worst moment, passing ones faint
+          if (!visible(c.t, c.t)) continue;
+          const x = tx(c.t);
+          g.fillStyle = c.ok ? C.faint : C.bad;
+          g.beginPath(); g.moveTo(x, l.y + 3); g.lineTo(x + 4.5, l.y + l.h - 3); g.lineTo(x - 4.5, l.y + l.h - 3); g.fill();
+        }
       } else if (l.id === "fx") {
         g.font = font(9.5, 600); g.textAlign = "left";
         for (const e of M.effects) {
@@ -311,6 +319,11 @@ export function musicView(root, { from = null, to = null } = {}) {
     if (l.id === "shots") {
       const s = M.shots.find((s) => t >= s.from && t < s.to);
       return s && { t: s.from, text: `shot ${s.name} · ${s.from.toFixed(3)}–${s.to.toFixed(3)} s · ${Math.round((s.to - s.from) * M.fps)} frames` };
+    }
+    if (l.id === "checks") {
+      let best = null;
+      for (const c of M.checks) if (near(c.t) && (!best || Math.abs(c.t - t) < Math.abs(best.t - t))) best = c;
+      return best && { t: best.t, text: `check ${best.name} · ${best.ok ? "passes" : "fails"} · worst at ${best.t.toFixed(2)} s` };
     }
     if (l.id === "fx") {
       const e = M.effects.find((e) => e.row === l.row && t >= e.from && t <= e.to);
@@ -411,7 +424,7 @@ export function musicView(root, { from = null, to = null } = {}) {
   el.player = { now: () => now(), playing: () => !!S.src, play, pause, seek, toggle: () => (S.src ? pause() : play()) };
 
   // ---------------------------------------------------------------------------------------------------- loading
-  (async () => {
+  el.ready = (async () => {
     try {
       const M = await api("GET", "music", { query: { path: root } });
       S.M = M;

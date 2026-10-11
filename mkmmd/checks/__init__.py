@@ -38,6 +38,7 @@ class Metric:
     sampled = True          # needs the Blender sample op
     uses_frames = True      # evaluated over scene frames (image metrics read files instead)
     default_max = None      # the limit when a check gives neither min nor max
+    default_min = None      # ... or the lower one
 
     def needs(self, args, ctx, need):
         return None
@@ -328,7 +329,7 @@ def judge(check, value):
 
 def load():
     """Import the metric modules (they register themselves in METRICS)."""
-    from . import camera, form, image, motion, props  # noqa: F401
+    from . import camera, form, hands, image, motion, props  # noqa: F401
 
 
 def run(checks, ctx, frames_override=None, keep_sample=False):
@@ -365,15 +366,15 @@ def run(checks, ctx, frames_override=None, keep_sample=False):
         else:
             out.unlink(missing_ok=True)
     for i, c, m, frames, state in plan:
-        base = {"name": c.get("name") or m.name, "metric": m.name}
+        base = {"name": c.get("name") or m.name, "metric": m.name, "args": c.get("args", {})}
         try:
             value, detail = m.compute(c.get("args", {}), ctx, data, frames, state)
         except (CheckError, KeyError, ValueError, IndexError) as e:
             results[i] = {**base, "ok": False, "error": f"{type(e).__name__}: {e}"}
             continue
         lim = {k: c.get(k) for k in ("min", "max")}
-        if lim["min"] is None and lim["max"] is None and m.default_max is not None:
-            lim["max"] = m.default_max
+        if lim["min"] is None and lim["max"] is None:
+            lim = {"min": m.default_min, "max": m.default_max}
         res = {**base, "value": None if value is None else round(float(value), 4)}
         for k in ("min", "max"):
             if lim[k] is not None:
@@ -382,3 +383,35 @@ def run(checks, ctx, frames_override=None, keep_sample=False):
         res["detail"] = detail
         results[i] = res
     return results
+
+
+# ---------------------------------------------------------------- the last results
+def results_path(project):
+    return Path(project.mk_dir) / "checks.json"
+
+
+def keep_results(project, results, scene):
+    """Keep a run of the project's checks in .mk/checks.json, merged by name into the last runs' (an --only run updates
+    its checks and keeps the others' results), in mk.toml's order: {"scene", "results": [{..., "ran"}]}."""
+    path = results_path(project)
+    try:
+        old = {r["name"]: r for r in json.loads(path.read_text(encoding="utf-8")).get("results", [])}
+    except (OSError, ValueError, KeyError, TypeError):
+        old = {}
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    old.update({r["name"]: dict(r, ran=now) for r in results})
+    order = [c.get("name") for c in project.checks]
+    merged = [old[n] for n in order if n in old] + [r for n, r in old.items() if n not in order]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"scene": scene, "results": merged}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def last_results(project):
+    """The project's [[check]] entries, each with its last result ({"scene", "results"}; one never run has no `ran`)."""
+    try:
+        doc = json.loads(results_path(project).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = {"scene": None, "results": []}
+    by = {r.get("name"): r for r in doc.get("results", [])}
+    return {"scene": doc.get("scene"),
+            "results": [by.get(c.get("name")) or {"name": c.get("name"), "metric": c.get("metric")} for c in project.checks]}

@@ -202,3 +202,20 @@ code { font: 0.92em var(--mono); background: var(--sunk); padding: 0 4px; border
 .scene-note { font-size: 11.5px; color: var(--muted); min-height: 16px; margin: 4px 0 2px; }
 .scene-note.bad { color: var(--bad); }
 .scene-bar .seg button { flex: none; }
+
+/* ---------------------------------------------------------------------------------------------- checks */
+.checks-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.checks-list { display: flex; flex-direction: column; gap: 8px; }
+.check-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); padding: 8px 10px; }
+.check-card.s-fail, .check-card.s-error { border-color: var(--bad); }
+.check-card.s-unrun { opacity: 0.75; }
+.check-top { display: flex; align-items: center; gap: 6px; }
+.check-name { font-weight: 650; flex: 1 1 auto; min-width: 0; }
+.check-doc { font-size: 11.5px; color: var(--muted); margin: 2px 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.check-body { display: flex; gap: 10px; align-items: flex-start; }
+.check-facts { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.check-facts .btn { align-self: flex-start; }
+.check-value strong { font-size: 15px; }
+.check-worst { font-size: 12px; }
+.check-error { font: 11px var(--mono); color: var(--bad); white-space: pre-wrap; overflow-wrap: anywhere; }
+.check-thumb { flex: none; border-radius: 8px; background: var(--sunk); }

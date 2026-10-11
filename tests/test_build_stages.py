@@ -962,3 +962,42 @@ def test_the_bake_puts_the_mannequin_and_the_camera_where_blender_has_them_movin
         truth = np.array(q["values"][0]).reshape(-1, 3)[:, [0, 2, 1]] * [1, 1, -1]
         dist, _ = cKDTree(truth).query(posed(d, name, frame))
         assert dist.max() < 5e-5, (frame, dist.max())
+
+
+HANDS = """[pose.mq]
+feet = "floor"
+[[move.mq]]
+name = "hands_up"
+t = 0.1
+dur = 0.6
+[[move.mq]]
+name = "lean_back"
+t = 0.1
+dur = 0.7
+[[move.mq]]
+name = "point"
+hand = "R"
+t = 0.75
+dur = 0.3
+[[move.mq]]
+name = "mic_up"
+hand = "L"
+t = 1.3
+dur = 0.5
+"""
+
+
+def test_the_hand_checks_measure_the_moves_holds_in_the_frame_of_the_body_they_ride(make, capsys):
+    """hands_up under lean_back's sideways tilt is mirrored only in the upper body's frame (the hands ride it); the right
+    hand leaves it early for the point, a move the mirror check must not count; mic_up keeps the palm in."""
+    code, out = make(HANDS)
+    assert code == 0, out.get("error")
+    checks = {m: {"cast": "mq"} for m in ("hand_mirror", "wrist_bend", "mic_palm", "hand_room")}
+    got = {}
+    for m, a in checks.items():
+        code, res = cli(["check", m, "--args", json.dumps(a), "--project", str(make.root)], capsys)
+        got[m] = res["results"][0]
+    assert all(r["ok"] for r in got.values()), {m: (r.get("value"), r.get("error")) for m, r in got.items()}
+    mirror = got["hand_mirror"]
+    assert mirror["value"] < 2.0 and mirror["detail"]["move"] == "hands_up"
+    assert got["mic_palm"]["detail"]["side"] == "L" and got["mic_palm"]["value"] > 0.5

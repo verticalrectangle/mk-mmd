@@ -117,5 +117,5 @@ class Form(Metric):
         r = FM.analyse(V, mesh["triangles"], mesh["object"], names, exempt=exempt,
                        exempt_weight=float(args.get("exempt_weight", FM.EXEMPT_WEIGHT)),
                        hard_deg=float(args.get("hard_edge_deg", FM.HARD_DEG)), worst=worst)
-        detail = {"frame": mesh["frame"], "space": space, **report(r, worst)}
+        detail = {"at_frame": mesh["frame"], "space": space, **report(r, worst)}
         return r["score"], detail

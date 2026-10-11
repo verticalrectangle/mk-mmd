@@ -132,7 +132,8 @@ class Strum(Metric):
         vals = [(r["dist_mm"] if r["error_ms"] is not None else max(r["dist_mm"], 50.0)) for r in want]
         k = int(np.argmax(vals))
         worst = sorted(want, key=lambda r: -r["dist_mm"])[:5]
-        return float(vals[k]), {"strokes": len(rows), "down": sum(1 for r in rows if r["dir"] > 0), "missed": len(miss),
+        return float(vals[k]), {"at_frame": int(round(ctx.project.frame(want[k]["t"]))), "strokes": len(rows),
+                                "down": sum(1 for r in rows if r["dir"] > 0), "missed": len(miss),
                                 "timing": stats, "sigma_mm": round(sigma * 1000.0, 1),
                                 "tip_range_mm": {"u": [round(float(u.min()) * 1000, 1), round(float(u.max()) * 1000, 1)],
                                                  "h": [round(float(h.min()) * 1000, 1), round(float(h.max()) * 1000, 1)]},

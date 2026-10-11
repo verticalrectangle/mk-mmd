@@ -388,12 +388,18 @@ max = 0.5                # min and max: the check passes when min <= value <= ma
 ```
 
 ```jsonc
-{"name": "back hair is calm", "metric": "jitter", "value": 0.38, "max": 0.5, "ok": true, "detail": {...}}
+{"name": "back hair is calm", "metric": "jitter", "args": {"family": "back_hair"}, "value": 0.38, "max": 0.5, "ok": true,
+ "detail": {"at_frame": 412, ...}}
 ```
 
+Every metric that measures over frames names its worst moment in `detail.at_frame` (the Blender frame of the value; an
+image metric, the frame its worst image is named for). A run of the project's checks (not an ad-hoc one, and not one
+with `--frames`) keeps its results in `.mk/checks.json`, merged by name into the last runs' (an `--only` run keeps the
+others): the site's Checks tab and the music timeline's marks read it.
+
 `mk check --only NAME`, `--frames SPEC` and `mk check [SCENE.blend] METRIC --args JSON --max X` (an ad-hoc check) are the other
-ways in; `mk check --list` prints every metric's arguments. Metrics that read a character take `cast` (a `[[cast]]` name; the
-only member by default), or `armature` and `rig` (a rig.json path) outside a project.
+ways in; `mk check --list` prints every metric's arguments and default limits. Metrics that read a character take `cast` (a
+`[[cast]]` name; the only member by default), or `armature` and `rig` (a rig.json path) outside a project.
 
 | Metric | Value | Notes |
 |---|---|---|
@@ -410,6 +416,16 @@ only member by default), or `armature` and `rig` (a rig.json path) outside a pro
 | `form` | boxiness 0..1 of a prop's evaluated geometry: area-weighted over loose parts, `1 - (1 - cuboid)(1 - flat_sharp)` | what a render shows at one frame, in the prop's frame; hero props stay under the default `max` 0.25; `detail.worst_parts` names the objects to fix (see [Form](#form)) |
 | `strum` | largest distance (mm) of the pick tip from the nearest string at the strike of a down stroke | replays the project's `[perform.<cast>] strum` on its timeline and measures the scene: the pick object rides the wrist, so the arm's reach is in the numbers; `detail.timing` has the mean, median, p95 and max of when the tip really crosses the first string against the planned strike time (ms), `detail.missed` the strokes it never reached; default `max` 10 (see [Playing a worn guitar](#playing-a-worn-guitar)) |
 | `prop_body` | deepest vertex (mm) of a prop's geometry inside the character's collision bodies | the torso, hips, legs, neck and head bodies of rig.json (not the arms that hold it), over the frames; the bodies are capsules a little fatter than the skin, so a few millimetres is a prop resting on the body; default `max` 8 |
+| `wrist_bend` | largest bend (deg) of a hand from its forearm (elbow to wrist against wrist to the middle knuckle) while a move holds it | the moves library's rule (`MV.WRIST`, default `max` 60); detail: `side`, `move` |
+| `hand_mirror` | largest mismatch (mm) between a two-hand move's hands, each wrist and middle knuckle against the other's mirror image | default `max` 5; detail: `move`, `deg` (the hands' directions, mirrored) |
+| `mic_palm` | smallest share of a fist's palm toward the body while it holds a mic or a hammer (the library's aimed places) | default `min` 0.3; detail: `side`, `move` |
+| `hand_room` | smallest distance (mm) from a hand's wrist and finger joints to the character's collision bodies at places that do not touch the body | the trunk bodies of rig.json, a little fatter than the skin; default `min` 0; detail: `side`, `move`, `nearest` |
+
+The four hand metrics read the cast member's `[[move.<cast>]]` (see [Moves](#moves)): a move holds a hand from its `t` to
+`t + dur`, and a frame counts while the hand holds still at its place there (under 1.5 mm a frame), so a hand setting off
+early for its next move is travelling, which the rules do not cover. The hands ride the upper body (the pose stage keys
+their places on it), so mirror and palm are measured in its frame: the world with the upper body's motion undone, in the
+armature's axes.
 
 Arguments:
 
@@ -428,6 +444,8 @@ Arguments:
 | `form` | `prop` (a prop root name or a list), `objects`, `exclude`, `exempt`, `exempt_weight`, `frame`, `hard_edge_deg` (65), `worst` (6): see [Form](#form) |
 | `strum` | `cast`, `hand` (`R`), `pick` (the pick object, default `<prop>_pick`), `tip` (metres from the pick object's origin to its tip along x; default the card's `pick.tip`, 0.008), `strokes` (`down`: the worst down stroke, or `all`) |
 | `prop_body` | `cast`, `prop`, `bones` (semantic bones whose bodies count; default `upper_body upper_body2 lower_body neck head leg.L leg.R knee.L knee.R`), `exclude` (a cable, a pick), `samples` (4000 vertices), `frame` |
+| `wrist_bend`, `mic_palm`, `hand_room` | `cast`, `sides` (`L R`) |
+| `hand_mirror` | `cast` |
 
 Read results before acting: `penetration` is measured on the baked bones with body capsules fatter than the mesh, so a few
 millimetres rarely show: look before fixing. A check passes or fails a number; whether a shot looks right is a question for
@@ -3046,11 +3064,11 @@ folder and the folders of its pictures and models, a project's root), the page's
 (`<cache>/site/`), with byte ranges for media. One server serves every page; `server.json` in the site cache (pid, port,
 token) lets the next command find it, and it stops after three hours without a request (`mk site --stop` stops it).
 `api.py` holds the routes (`open`, `review`, `answers`, `marks`, `send`, `model`, `section`, `measures`, `snapshot`,
-`project`, `music`, `scene`, `draft`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser block
-docked beside the agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab
-reviews|music|scene] [--where ...] [--url] [--stop]` opens the project's page: its reviews (each with its title, how many
-questions are answered and whether it was sent), its music when it has an [audio] file or a timeline, and its scene
-when `mk build` has baked it.
+`project`, `music`, `scene`, `draft`, `checks`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser
+block docked beside the agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab
+reviews|music|scene|checks] [--where ...] [--url] [--stop]` opens the project's page: its reviews (each with its title,
+how many questions are answered and whether it was sent), its music when it has an [audio] file or a timeline, its
+scene when `mk build` has baked it, and its checks when it has `[[check]]` entries.
 
 The music timeline (`mkmmd/site/music.py` builds it, `web/js/music.js` draws it) puts a project's clip on one canvas, in
 clip seconds: the clip's audio (the [audio] file cut from `start` for `duration` by ffmpeg, a WAV in the site cache;
@@ -3074,6 +3092,14 @@ the server's `draft` route (`mkmmd/site/draft.py`) gives the decoder its avcC re
 time and keyframe flag in decode order (ffprobe), and the page decodes from the keyframe before a jump. The label names
 the shot, the Blender frame and, in a freeze, the frame the world holds; the page says when the .blend is newer than the
 bake (`mk build --bake` bakes a saved scene again).
+
+The checks (`web/js/checks.js`) are cards, failing ones first: the check's name, its metric with what it measures in
+plain words, its value against its rule, and its worst moment (who, what, when: the cast member, the side, the move or
+the bone the detail names, the frame and the clip second) with a picture of that moment drawn from the bake through the
+cut's camera of the first output; Look opens the scene there. They read the last results `mk check` keeps in
+`.mk/checks.json` (a check never run says so); Run checks runs `mk check` in the background (`POST checks`) and the
+page follows it until it ends. The music timeline marks each check's worst moment on a lane of its own, red when it
+fails.
 
 The page (`web/`) is plain JavaScript modules and one stylesheet, no build step and no library, laid out for a narrow
 pane (about 560 px) and following the host's light or dark theme. Its 3D viewer (`web/js/viewer/`) is a WebGL2 renderer

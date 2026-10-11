@@ -4,6 +4,7 @@ import { api } from "./api.js";
 import { h, clear } from "./ui.js";
 import { musicView } from "./music.js";
 import { sceneView } from "./scene/scene.js";
+import { checksView } from "./checks.js";
 
 export async function openProject(root, frame, tab = null) {
   const P = await api("GET", "project", { query: { path: root } });
@@ -11,6 +12,7 @@ export async function openProject(root, frame, tab = null) {
   const tabs = [["reviews", "Reviews", showReviews]];
   if (P.music) tabs.push(["music", "Music", showMusic]);
   if (P.scene) tabs.push(["scene", "Scene", showScene]);
+  if (P.checks) tabs.push(["checks", "Checks", showChecks]);
   const bar = h("div", { class: "tabs" });
   const buttons = tabs.map(([id, label, fn]) => h("button", { text: label, "data-tab": id, onclick: () => go(id) }));
   bar.append(...buttons);
@@ -18,13 +20,14 @@ export async function openProject(root, frame, tab = null) {
   frame.dock.hidden = true;
   let shown = null;                       // the open tab's view, disposed of when another opens
 
-  async function go(id) {
+  // open a tab; `opts` go to its view (the scene's `at`, from a check card)
+  async function go(id, opts = {}) {
     buttons.forEach((b) => b.classList.toggle("on", b.dataset.tab === id));
     const [, , fn] = tabs.find((t) => t[0] === id);
     if (shown && shown.dispose) shown.dispose();
     shown = null;
     clear(frame.main);
-    await fn();
+    await fn(opts);
   }
 
   function showMusic() {
@@ -33,10 +36,15 @@ export async function openProject(root, frame, tab = null) {
     shown.focus({ preventScroll: true });
   }
 
-  function showScene() {
-    shown = sceneView(P.root);
+  function showScene(opts = {}) {
+    shown = sceneView(P.root, opts);
     frame.main.append(shown);
     shown.focus({ preventScroll: true });
+  }
+
+  function showChecks() {
+    shown = checksView(P.root, { onLook: P.scene ? (t) => go("scene", { at: t }) : null });
+    frame.main.append(shown);
   }
 
   async function showReviews() {

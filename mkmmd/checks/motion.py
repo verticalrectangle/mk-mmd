@@ -70,6 +70,7 @@ class Jitter(Metric):
         worst = [names[i] for i in np.argsort(-np.percentile(jerk, 95, axis=0))[:3]]
         detail = {"bones": len(names), "jerk_median_mm": round(jm, 4), "speed_median_mm": round(sm, 4),
                   "jerk_p95_mm": round(float(np.percentile(jerk, 95)), 2), "jerk_max_mm": round(float(jerk.max()), 1),
+                  "at_frame": int(np.asarray(frames)[1:-1][int(np.argmax(jerk.max(1)))]),
                   "peak_frames": _peaks(jerk.max(1), frames[1:-1]), "worst_bones": worst,
                   "jerk_p99_per_second_mm": per_s}
         if sm < STATIC_MM:
@@ -132,7 +133,8 @@ class Contact(Metric):
         a = np.abs(vm)
         return float(a.max()), {"frames": int(mask.sum()), "median": round(float(np.median(vm)), 3),
                                 "p95": round(float(np.percentile(a, 95)), 3), "max": round(float(a.max()), 3),
-                                "worst_frames": _peaks(a, f), "unit": args.get("unit", "mm")}
+                                "at_frame": int(f[int(np.argmax(a))]), "worst_frames": _peaks(a, f),
+                                "unit": args.get("unit", "mm")}
 
 
 # ---------------------------------------------------------------- penetration
@@ -250,7 +252,7 @@ class FootSlide(Metric):
         floor = float(args.get("floor", 0.0))
         tol = float(args.get("tolerance", 0.015))
         hz = rest_w[:, 2] - floor
-        out, worst = {}, 0.0
+        out, worst, at = {}, 0.0, None
         for j, n in enumerate(names):
             z = pos[:, j, 2] - floor
             vz = np.abs(np.gradient(z)) * 1000.0
@@ -261,10 +263,12 @@ class FootSlide(Metric):
                 out[n] = {"planted_frames": int(pl.sum())}
                 continue
             p95 = float(np.percentile(h[pl], 95))
-            worst = max(worst, p95)
+            if p95 >= worst:
+                worst, at = p95, int(np.asarray(frames)[1:][int(np.argmax(np.where(pl, h, 0.0)))])
             out[n] = {"planted_frames": int(pl.sum()), "p95_mm_per_frame": round(p95, 3),
                       "max_mm_per_frame": round(float(h[pl].max()), 3),
                       "worst_frames": _peaks(np.where(pl, h, 0.0), frames[1:])}
+        out["at_frame"] = at
         return worst, out
 
 
@@ -367,7 +371,7 @@ class JointLimits(Metric):
         series["neck_swing"], series["neck_twist"] = _swing_twist(rel, up)
         rel = np.einsum("fji,fjk->fik", d_low, d_ub)
         series["spine_swing"], series["spine_twist"] = _swing_twist(rel, up)
-        worst, detail = 0.0, {}
+        worst, detail, at = 0.0, {}, None
         for key, v in series.items():
             lo, hi = lim[key.split(".")[0]]
             over = np.maximum(v - hi, 0) + np.maximum(lo - v, 0)
@@ -375,6 +379,9 @@ class JointLimits(Metric):
             if over.max() > 0:
                 entry["over_deg"] = round(float(over.max()), 1)
                 entry["frames"] = [int(f) for f in np.asarray(frames)[over > 0][:10]]
-                worst = max(worst, float(over.max()))
+                if float(over.max()) > worst:
+                    worst, at = float(over.max()), (key, int(np.asarray(frames)[int(np.argmax(over))]))
             detail[key] = entry
+        detail["at_frame"] = at[1] if at else None
+        detail["worst"] = at[0] if at else None
         return worst, detail

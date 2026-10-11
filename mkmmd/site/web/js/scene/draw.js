@@ -140,13 +140,14 @@ export class SceneGL {
       }
       this.nodes.push(N);
     }
+    this.ready = Promise.all([...this.textures.values()].map((holder) => holder.loaded));   // every texture uploaded
   }
 
   texture(blob) {
     if (this.textures.has(blob)) return;
-    const holder = { tex: null };
+    const holder = { tex: null, loaded: null };
     this.textures.set(blob, holder);
-    createImageBitmap(blob).then((bmp) => {
+    holder.loaded = createImageBitmap(blob).then((bmp) => {
       const gl = this.gl, t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
@@ -155,7 +156,7 @@ export class SceneGL {
       holder.tex = t;
       this.frame = -1;
       if (this.onChange) this.onChange();
-    }).catch(() => {});
+    }).catch(() => {});                              // a texture that cannot be read leaves its parts untextured
   }
 
   // Bring every mesh to bake frame `k` (0 .. frames - 1): node matrices, visibility, joints, morphs.
