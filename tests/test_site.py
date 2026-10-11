@@ -26,6 +26,7 @@ from mkmmd.site import api as API
 from mkmmd.site import draft as DR
 from mkmmd.site import music as MU
 from mkmmd.site import server as S
+from mkmmd.site import show as SHOW
 
 
 @pytest.fixture
@@ -111,6 +112,34 @@ def test_a_review_in_a_project_opens_on_the_project_s_page_under_its_tabs(site, 
     assert status == 200 and page == {"project": [str(root)], "review": [str(f)]}
     status, data, _ = ask(site, "GET", "api/project?path=" + urllib.parse.quote(str(root)))     # the tabs load with it
     assert status == 200 and [r["path"] for r in json.loads(data)["reviews"]] == [str(f)]
+
+
+def test_a_sent_review_gets_to_the_agent_that_opened_its_page(site, tmp_path, monkeypatch):
+    """Send reaches the agent: a waiting `mk review open --wait` has it, else the answers are typed into the Tern pane
+    of the agent that opened the page (a line, then Enter); a page a person opened only saves them, and says so."""
+    log = tmp_path / "tern.log"
+    (tmp_path / "bin").mkdir()
+    tern = tmp_path / "bin" / "tern"                                         # records what it is asked to do
+    tern.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\n', encoding="utf-8")
+    tern.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    f = (tmp_path / "pick.review.toml").resolve()
+    f.write_text('[review]\ntitle = "Pick"\n[[question]]\nid = "eyes"\nask = "Eyes?"\n'
+                 '[[question.option]]\nid = "A"\nlabel = "Rin\'s"\n', encoding="utf-8")
+    q = "?path=" + urllib.parse.quote(str(f))
+    send = lambda: json.loads(ask(site, "POST", "api/send" + q)[1])         # noqa: E731
+    assert ask(site, "POST", "api/open", {"review": str(f), "agent": None})[0] == 200
+    assert ask(site, "PUT", "api/answers" + q, {"answers": {"eyes": {"choice": "A"}}})[0] == 200
+    assert send()["delivered"] is None and not log.exists()                  # a person's page: saved, nobody told
+    assert ask(site, "POST", "api/open", {"review": str(f), "agent": {"pane": "77", "window": "w1"}})[0] == 200
+    assert send()["delivered"] == "pane"
+    typed, enter = log.read_text(encoding="utf-8").splitlines()
+    assert typed.startswith("send --window w1 77 paste Review answered: Pick") and "Eyes? → A: Rin's" in typed
+    assert enter == "send --window w1 77 keys Enter"
+    log.unlink()
+    with SHOW.waiting(f):                                                    # `mk review open --wait` is waiting
+        assert send()["delivered"] == "waiting"
+    assert not log.exists()
 
 
 def song(path, seconds=6.0, tone_from=1.0, rate=8000):

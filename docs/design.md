@@ -3085,7 +3085,11 @@ own pixels (`NAME.marks.json`: line and arrow by their ends, box and ellipse by 
 its words) and draws each marked picture for the agent (`.NAME.marks/`). On a lab sheet (its `.json` beside it) `mk
 review answers` turns them into model space with the lab's `trace_points`: a line's or a stroke's length and how far
 inside or outside the outline it runs, a box's size in mm. **Send** writes the message the agent reads into the answers
-file (with the time); `--wait` returns it, and an agent that did not wait reads it with `mk review answers`.
+file (with the time) and gets it to the agent: a waiting `mk review open --wait` returns it (it tells the server it
+waits, `mkmmd/site/show.py`); else, in Tern, the server types the message into the pane of the agent that opened the
+page, as one line and Enter, as if the person had written it there. The agent is the last one to open the review's page
+or its project's, known by its shell's environment (`AGENT`, `CLAUDECODE` or `OMPCODE`); a page a person opened from
+their own shell has none, and there Send only saves and says so (`mk review answers` reads the answers).
 
 ## The site (`mk site`, `mkmmd/site`)
 

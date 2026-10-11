@@ -54,10 +54,17 @@ export async function openReview(path, frame) {
       await save();
       const got = await api("POST", "send", { query: { path: R.path } });
       S.sent = got.sent;
-      const at = new Date(got.sent);
-      status.textContent = `Sent at ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: the agent has it`;
-      status.className = "status grow ok";
-      toast("Sent to the agent");
+      const at = new Date(got.sent).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      if (got.delivered) {                       // a waiting `mk review open --wait`, or typed into the agent's pane
+        status.textContent = got.delivered === "pane" ? `Sent at ${at} to the agent's pane` : `Sent at ${at}: the agent has it`;
+        status.className = "status grow ok";
+        toast("Sent to the agent");
+      } else {                                   // no agent opened this page: the answers wait in the review's folder
+        status.textContent = `Saved at ${at}, but no agent is waiting for it: tell yours to read the answers` +
+          (got.why ? ` (${got.why})` : "");
+        status.className = "status grow bad";
+        toast("Saved: no agent is waiting", "bad");
+      }
     } catch (e) {
       status.textContent = "Not sent: " + e.message;
       status.className = "status grow bad";

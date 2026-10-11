@@ -10,7 +10,8 @@ from .common import UsageError, emit
 HELP = """Put decisions to a person: a review file lists questions, each with pictures, options to choose from and
 models to turn in 3D. It opens as a page mk serves on this machine: in Tern beside the agent's pane, elsewhere in the
 browser. The person picks, writes notes, draws on the pictures and turns the models, and presses Send, which writes the
-answers and the message for the agent; `--wait` holds `open` until then and prints them (run it as a background job).
+answers and the message for the agent and gets them to it: `--wait` holds `open` until then and prints them (run it as
+a background job); without it, in Tern, they are typed into the pane of the agent that opened the page, as a message.
 The file format is in mkmmd/review.py and docs/design.md (Reviews).
 
 Examples:
@@ -67,27 +68,32 @@ def run_open(args):
     path = os.path.abspath(os.path.expanduser(args.review))
     answers_file = _load(RV.prepare, path)
     sent_before = _load(RV.show, path)["sent"]
+    if not args.wait:
+        emit(_open(args, path, answers_file))
+        return 0
+    with SHOW.waiting(path):                        # a Send returns here instead of being typed into this pane
+        out = _open(args, path, answers_file)
+        t0 = time.monotonic()
+        while True:
+            r = _load(RV.show, path)
+            if r["sent"] and r["sent"] != sent_before:
+                break
+            if args.timeout is not None and time.monotonic() - t0 > args.timeout:
+                emit({**out, "error": f"not sent within {args.timeout:g} s"})
+                return 1
+            time.sleep(0.5)
+    rec = RV._read_json(answers_file) or {}
+    emit({**out, "message": rec.get("message"), **_load(RV.answers, path)})
+    return 0
+
+
+def _open(args, path, answers_file):
     try:
         url = SHOW.page(review=path)
         how = SHOW.show(url, args.where, args.replace)
     except (RuntimeError, OSError, ValueError) as e:
         raise UsageError(f"cannot open the review page: {e}")
-    out = {"review": path, "answers_file": str(answers_file), "url": url, **how}
-    if not args.wait:
-        emit(out)
-        return 0
-    t0 = time.monotonic()
-    while True:
-        r = _load(RV.show, path)
-        if r["sent"] and r["sent"] != sent_before:
-            break
-        if args.timeout is not None and time.monotonic() - t0 > args.timeout:
-            emit({**out, "error": f"not sent within {args.timeout:g} s"})
-            return 1
-        time.sleep(0.5)
-    rec = RV._read_json(answers_file) or {}
-    emit({**out, "message": rec.get("message"), **_load(RV.answers, path)})
-    return 0
+    return {"review": path, "answers_file": str(answers_file), "url": url, **how}
 
 
 def run_answers(args):

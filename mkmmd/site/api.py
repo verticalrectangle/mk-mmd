@@ -16,7 +16,10 @@ from .. import __version__
 from .. import review as RV
 from . import draft as DR
 from . import music as MU
+from . import show as SHOW
 from .server import HttpError, body_json, cache
+
+TELL_MAX = 1500                                    # the longest line a sent review types into the agent's pane
 
 
 def file_url(path):
@@ -81,6 +84,17 @@ def _allow_review(site, r):
             site.allow(q["music"]["project"])
 
 
+def _remember_agent(site, b, *paths):
+    """The agent that opened a page ({pane, window} from show.opener), kept for the review or project folder it shows:
+    a review sent there is typed into its pane. The last agent to open a page wins; a person opening it changes none."""
+    agent = b.get("agent")
+    if isinstance(agent, dict) and str(agent.get("pane", "")).isdigit():
+        with site.lock:
+            for p in paths:
+                site.state.setdefault("agents", {})[str(p)] = {"pane": str(agent["pane"]),
+                                                               "window": str(agent.get("window") or "")}
+
+
 def open_page(site, query, body):
     """Serve a review (its folder and the folders of the files it names) or a project (its root); answers the page's
     query string. A review inside a project (an mk.toml above it that loads) opens on the project's page, in its
@@ -95,8 +109,10 @@ def open_page(site, query, body):
         except (ProjectError, ValueError, KeyError, TypeError):
             proj = None                          # a review in a project whose mk.toml does not load still opens, alone
         if proj is None:
+            _remember_agent(site, b, r["path"])
             return 200, {"page": "?review=" + urllib.parse.quote(r["path"])}
         site.allow(proj.root)
+        _remember_agent(site, b, r["path"], proj.root)
         return 200, {"page": "?project=" + urllib.parse.quote(str(proj.root)) + "&review=" + urllib.parse.quote(r["path"])}
     if b.get("project"):
         root = Path(b["project"]).expanduser().resolve()
@@ -104,6 +120,7 @@ def open_page(site, query, body):
         if not (root / "mk.toml").is_file():
             raise HttpError(422, f"{root} has no mk.toml")
         site.allow(root)
+        _remember_agent(site, b, root)
         return 200, {"page": "?project=" + urllib.parse.quote(str(root))}
     raise HttpError(400, "open a review or a project")
 
@@ -271,10 +288,34 @@ def answers(site, query, body):
     return 200, {"answers": _call(RV.write_answers, path, (body_json(body) or {}).get("answers"))}
 
 
+def _agent_of(site, path):
+    """The agent that opened this review's page, or its project's (the nearest folder above it with one)."""
+    agents = site.state.get("agents", {})
+    for p in (Path(path), *Path(path).parents):
+        if str(p) in agents:
+            return agents[str(p)]
+    return None
+
+
 def send(site, query, body):
+    """Send the review (RV.send) and get it to the agent: a waiting `mk review open --wait` has it; else the answers
+    are typed into the pane of the agent that opened the page. `delivered` says which ("waiting", "pane"), or None
+    (no agent: they are saved for `mk review answers`; `why` when telling the pane failed)."""
     path = _review_path(site, query)
     text = _call(RV.send, path)
-    return 200, {"sent": _call(RV.show, path)["sent"], "message": text}
+    out = {"sent": _call(RV.show, path)["sent"], "message": text, "delivered": None}
+    if SHOW.is_waiting(path):
+        out["delivered"] = "waiting"
+    elif (agent := _agent_of(site, path)) is not None:
+        line = " | ".join(s.strip() for s in text.splitlines() if s.strip())
+        if len(line) > TELL_MAX:
+            line = line[:TELL_MAX - 60].rstrip() + f" ... (all of it: mk review answers {path})"
+        try:
+            SHOW.tell(agent, line)
+            out["delivered"] = "pane"
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            out["why"] = str(e)
+    return 200, out
 
 
 # ----------------------------------------------------------------------------------------------------------- models
