@@ -7,21 +7,12 @@ import { api, bytes } from "../api.js";
 import { h } from "../ui.js";
 import { musicView } from "../music.js";
 import { Orbit } from "../viewer/camera.js";
-import { invert, mul } from "../viewer/math.js";
-import { SceneGL, mat4of } from "./draw.js";
+import { mul } from "../viewer/math.js";
+import { SceneGL } from "./draw.js";
 import { DraftPlayer } from "./draft.js";
+import { cameraProjection, cameraView } from "./shotcam.js";
 
-// glTF's axes back to Blender's camera axes (it looks down its -Z with +Y up): the bake's matrices are A M A^T
-const UNAXES = new Float32Array([1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1]);
 const NEAR = 0.05, FAR = 400;
-
-// Blender's projection of a camera with `lens` (mm) on a `sensor` (mm) fitted to `fit` (AUTO: the larger side), its
-// shift in fractions of that side, for a W x H picture.
-export function cameraProjection(lens, sensor, fit, sx, sy, W, H) {
-  const S = fit === "VERTICAL" ? H : fit === "HORIZONTAL" ? W : Math.max(W, H), f = lens / sensor;
-  return new Float32Array([2 * S * f / W, 0, 0, 0, 0, 2 * S * f / H, 0, 0, 2 * S * sx / W, 2 * S * sy / H,
-    -(FAR + NEAR) / (FAR - NEAR), -1, 0, 0, -2 * FAR * NEAR / (FAR - NEAR), 0]);
-}
 
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 
@@ -33,8 +24,8 @@ export function shotView(bake, blob, output, t, k) {
   const c = shot && bake.cameras.find((x) => x.name === shot.camera);
   if (!c) return null;
   const out = bake.outputs.find((o) => o.name === output) || bake.outputs[0], o = c.offset + 15 * k;
-  const VP = mul(cameraProjection(blob[o + 12], c.sensor, c.fit, blob[o + 13], blob[o + 14], out.size[0], out.size[1]),
-    mul(UNAXES, invert(mat4of(blob, o))));
+  const VP = mul(cameraProjection(blob[o + 12], c, blob[o + 13], blob[o + 14], out.size[0], out.size[1], NEAR, FAR),
+    cameraView(blob, o));
   const back = [blob[o + 6], blob[o + 7], blob[o + 8]], up = [blob[o + 3], blob[o + 4], blob[o + 5]];   // the camera's +Z, +Y
   return { shot, VP, key: norm3([back[0] * 0.6 + up[0] * 0.7, back[1] * 0.6 + up[1] * 0.7, back[2] * 0.6 + up[2] * 0.7]) };
 }

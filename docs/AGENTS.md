@@ -172,7 +172,9 @@ The expression language is listed under [Expressions](design.md#expressions).
 ## 9. Render and post
 
 `mk render --preset draft --jobs 2` renders every output (frames are claimed, so a stopped render resumes and `--jobs` share the work); `--output 9x16 --frames t=0:5` renders a
-part. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song. Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
+part. A project whose shots are vector looks renders several times faster with `[render] engine = "mk"` (or `--engine mk` for one run): mk draws those shots on the GPU
+from the bake (`mk build --bake` after saving the .blend by hand), as Blender would to a few pixels in a thousand, and Blender the rest; the report's `shots` says which
+engine drew each and why. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song. Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
 layer or frame is an error unless `--allow-gaps`; after changing text, delete the preset's frames. `mk post --to DIR` copies the videos. The grade is `[post]`
 ([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black.
 

@@ -1,9 +1,13 @@
 """Freezes at render time (mkmmd.core.freeze, docs/design.md: Shots: Freezes): `frame_set(scene, f)` sets the world to the
 frame a freeze holds on `f` and every camera to where its own keys put it on `f`, with the camera the timeline markers bind
-on `f` as the scene camera; outside a freeze it is `scene.frame_set(f)`. A render evaluates the animation again, so a
-held camera's action is set aside (its values written by hand) until the next `frame_set` or `release()`, which a render
-loop calls when it ends."""
+on `f` as the scene camera; outside a freeze it is `scene.frame_set(f)`. A render evaluates the animation again and binds
+the camera of the markers on the world's frame, so a held camera's action and the markers are set aside (the camera's
+values written by hand) until the next `frame_set` or `release()`, which a render loop calls when it ends (and
+mkmmd.blender.scene.bind_aspect before it binds the markers). The scene is updated after the cameras move, so what reads
+them next (a camera's matrix_world: the bake, a ring's centre seen through the camera) sees them where the render will."""
 import json
+
+import bpy
 
 from ..core import freeze as FZ
 
@@ -26,13 +30,18 @@ def camera_at(sc, f):
 
 
 _HELD = []                    # (owner, action): camera actions set aside while a freeze holds the world
+_MARKS = []                   # (scene, [(name, frame, camera)]): the timeline markers set aside meanwhile
 
 
 def release():
-    """Give the held cameras their actions back."""
+    """Give the held cameras their actions back, and the scene its markers."""
     while _HELD:
         owner, action = _HELD.pop()
         owner.animation_data.action = action
+    while _MARKS:
+        sc, marks = _MARKS.pop()
+        for name, frame, cam in marks:
+            sc.timeline_markers.new(name, frame=frame).camera = cam
 
 
 def _hold_at(owner, f):
@@ -67,6 +76,12 @@ def frame_set(sc, f, wins=None):
             _hold_at(cam, f)
             _hold_at(cam.data, f)
         cam = camera_at(sc, f)
+        marks = [(m.name, m.frame, m.camera) for m in sc.timeline_markers]
+        if marks:                                         # else they bind the camera of the world's frame
+            for m in list(sc.timeline_markers):
+                sc.timeline_markers.remove(m)
+            _MARKS.append((sc, marks))
         if cam is not None:
             sc.camera = cam
+        bpy.context.view_layer.update()
     return src

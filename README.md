@@ -224,7 +224,7 @@ max = 8.0
 | `mk grip` | solves a hand grip (pen, wheel, pinch, rest, neck) on a model's hand |
 | `mk check` | runs the project's checks: jitter, contact, penetration, foot slide, joint limits, framing, occlusion, camera inside, flicker, palette, form (prop boxiness), strum, prop in body, and the hand rules of the moves (wrist bend, mirrored two-hand moves, a mic's palm turned in, hands' room); each names its worst frame, and the project's last results feed the site's Checks tab (`mk site --tab checks`) |
 | `mk look` | renders views without touching the file: the cut per output, cameras, orbit views of any target, sheets, A/B, reference photos side by side (`--ref`) |
-| `mk render` | renders the cut of every output to frames (presets draft / preview / final, parallel, resumable) |
+| `mk render` | renders the cut of every output to frames (presets draft / preview / final, parallel, resumable); `engine = "mk"` draws the vector look itself on the GPU in headless Chromium from the scene's bake, as Blender would, and leaves Blender the rest |
 | `mk post` | composites the cut effects and screen type, grades the frames (contrast, split tone, halation, vignette, grain) and encodes MP4s with the song |
 | `mk play` | opens the encoded cut in the player of your choice (the `player` setting; e.g. Tern's video block, every output side by side), the shots as chapters and the project's frame numbers |
 

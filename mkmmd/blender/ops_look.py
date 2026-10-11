@@ -92,6 +92,7 @@ def look(args):
         looks.leave()
     out = []
     for v in views:
+        FRZ.release()                                    # a freeze's held markers back before they are looked at
         if v["kind"] == "shot":                          # restore the cut
             if not sc.timeline_markers and markers:
                 for f, cam in markers:

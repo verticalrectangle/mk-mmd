@@ -49,12 +49,14 @@ def cache():
 
 
 class Site:
-    """What one server knows: its token, the folders it may serve, the routes of its API, when it was last asked."""
+    """What one server knows: its token, the folders it may serve, the routes of its API, when it was last asked, and
+    the largest body it takes (mk render's own server takes a frame's passes)."""
 
-    def __init__(self, token=None, idle=IDLE_S, routes=None):
+    def __init__(self, token=None, idle=IDLE_S, routes=None, max_body=MAX_BODY):
         self.token = token or secrets.token_urlsafe(18)
         self.idle = idle
         self.routes = routes or {}
+        self.max_body = max_body
         self.roots = set()
         self.lock = threading.Lock()
         self.last = time.monotonic()
@@ -120,6 +122,8 @@ class Handler(BaseHTTPRequestHandler):
             if method in ("GET", "HEAD"):
                 if rest in ("", "index.html"):
                     return self._file(WEB / "index.html", head=method == "HEAD")
+                if rest == "render":                                  # mk's own renderer (mkmmd/render)
+                    return self._file(WEB / "render.html", head=method == "HEAD")
                 if rest.startswith("app/"):
                     return self._file(self._web(rest[4:]), head=method == "HEAD")
                 if rest == "file":
@@ -146,9 +150,9 @@ class Handler(BaseHTTPRequestHandler):
         return p
 
     def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
-            raise HttpError(413, f"a body is at most {MAX_BODY >> 20} MB")
+        n, cap = int(self.headers.get("Content-Length") or 0), self.server.site.max_body
+        if n > cap:
+            raise HttpError(413, f"a body is at most {cap >> 20} MB")
         return self.rfile.read(n) if n else b""
 
     def _json(self, status, payload):

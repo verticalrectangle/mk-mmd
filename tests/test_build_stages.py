@@ -868,6 +868,7 @@ to = 2.0
 at = [0.0, -2.6, 0.9]
 look = [0.0, 0.0, 0.9]
 lens = 35
+keys = [{ t = 0.0 }, { t = 2.0, at = [0.6, -2.6, 0.9] }]
 [[freeze]]
 from = 1.5
 to = 1.8
@@ -937,9 +938,9 @@ def posed(bake_dir, name, frame):
 
 
 def test_the_bake_puts_the_mannequin_and_the_camera_where_blender_has_them_moving_and_in_a_freeze(make, capsys):
-    """The scene viewer draws a frame from build/<name>.bake alone: the skinned mannequin rebuilt from it lands on
-    Blender's own evaluation of that frame (in the freeze, of the frame it holds), and the shot's camera is where its
-    shot puts it."""
+    """The scene viewer and mk's renderer draw a frame from build/<name>.bake alone: the skinned mannequin rebuilt from it
+    lands on Blender's own evaluation of that frame (in the freeze, of the frame it holds), and the shot's camera is where
+    its keys put it on that frame, in the freeze too (it goes on moving over the held world)."""
     import numpy as np
     from scipy.spatial import cKDTree
     code, out = make(BAKED, cast="at = [0.5, 0.3, 0.0]\nyaw = 30")       # off the origin, turned: her vertices move with her
@@ -949,8 +950,15 @@ def test_the_bake_puts_the_mannequin_and_the_camera_where_blender_has_them_movin
     assert (bake["frames"], bake["freezes"]) == (60, [[76, 85]])
     assert {o: [c["shot"] for c in cut] for o, cut in bake["cut"].items()} == {"16x9": ["a"], "9x16": ["a"]}
     cam = next(c for c in bake["cameras"] if c["name"] == bake["cut"]["16x9"][0]["camera"])
-    first = np.fromfile(d / "bake.bin", "<f4")[cam["offset"]:cam["offset"] + 15]
+    blob = np.fromfile(d / "bake.bin", "<f4")
+    first = blob[cam["offset"]:cam["offset"] + 15]
     assert np.allclose(first[9:12], [0.0, 0.9, 2.6], atol=1e-4) and first[12] == 35.0      # at = [0, -2.6, 0.9], +Y up
+    for frame in (50, 80):                                                       # moving; in the freeze, still moving
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), f"obj({cam['name']!r}).loc", "--frames", str(frame),
+                       "--project", str(make.root)], capsys)
+        x, y, z = q["values"][0]
+        o = cam["offset"] + 15 * (frame - bake["frame0"])
+        assert np.allclose(blob[o + 9:o + 12], [x, z, -y], atol=1e-4) and x > 0.1, (frame, blob[o + 9:o + 12], (x, y, z))
     name = next(n["name"] for n in bake["nodes"] if n["armature"])
     expr = ("(lambda o, dg: np.array([(o.matrix_world @ v.co)[:] for v in o.evaluated_get(dg).data.vertices]).ravel()"
             f".tolist())(bpy.data.objects[{name!r}], bpy.context.evaluated_depsgraph_get())")
@@ -962,6 +970,53 @@ def test_the_bake_puts_the_mannequin_and_the_camera_where_blender_has_them_movin
         truth = np.array(q["values"][0]).reshape(-1, 3)[:, [0, 2, 1]] * [1, 1, -1]
         dist, _ = cKDTree(truth).query(posed(d, name, frame))
         assert dist.max() < 5e-5, (frame, dist.max())
+
+
+FROZEN_CUT = """[vector]
+colors = { background = "#FFD21F", line = "#1B2A6B" }
+[vector.tones]
+dark = "#1B2A6B"
+[[vector.materials]]
+match = "*"
+tone = "dark"
+[pose.mq]
+feet = "floor"
+[[shot]]
+name = "a"
+from = 0.0
+to = 1.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+style = "vector"
+[[shot]]
+name = "b"
+from = 1.0
+to = 2.0
+at = [2.0, -1.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+style = "vector"
+[[freeze]]
+from = 0.8
+to = 1.4
+"""
+
+
+def test_a_cut_inside_a_freeze_shows_the_next_shot_through_its_own_camera(make, capsys):
+    """In a freeze the world holds on its first frame but the cut goes on: after a cut inside it the frame is the next
+    shot's, through its camera, as after the freeze (Blender's render bound the camera of the world's frame instead,
+    the shot before the cut)."""
+    import numpy as np
+    from PIL import Image
+    code, out = make(FROZEN_CUT)
+    assert code == 0, out.get("error")
+    code, rep = cli(["render", "--project", str(make.root), "--output", "16x9", "--frames", "49,67,82"], capsys)
+    assert code == 0, rep.get("error")
+    d = make.root / "renders" / "draft" / "16x9"
+    a, frozen, b = (np.asarray(Image.open(d / f"{f:05d}.png").convert("RGB"), int) for f in (49, 67, 82))
+    off = lambda x, y: float((np.abs(x - y).max(-1) > 8).mean())   # noqa: E731
+    assert off(frozen, b) < 0.01 and off(frozen, a) > 0.02, (off(frozen, b), off(frozen, a))
 
 
 HANDS = """[pose.mq]
@@ -1001,3 +1056,104 @@ def test_the_hand_checks_measure_the_moves_holds_in_the_frame_of_the_body_they_r
     mirror = got["hand_mirror"]
     assert mirror["value"] < 2.0 and mirror["detail"]["move"] == "hands_up"
     assert got["mic_palm"]["detail"]["side"] == "L" and got["mic_palm"]["value"] > 0.5
+
+
+DRAWN = """[vector]
+colors = { background = "#FFD21F", line = "#1B2A6B" }
+shadow = 0.3
+
+[vector.opposite]
+colors = { background = "#1B2A6B", line = "#FFD21F", inner = "#1B2A6B" }
+
+[vector.tones]
+white = { lit = "#FFFFFF", shade = "#8FB4F0" }
+
+[[vector.materials]]
+match = "*"
+tone = "white"
+
+[pose.mq]
+feet = "floor"
+
+[[move.mq]]
+name = "hands_up"
+t = 0.2
+dur = 1.2
+
+[[prop]]
+name = "mic"
+card = "library:handheld_mic"
+attach = "mq:wrist.R"
+cable = true
+
+[[prop]]
+name = "bb"
+card = "library:cassette_player"
+at = [0.0, 0.45, 0.0]
+scale = 5.0
+
+[[prop]]
+name = "fz"
+card = "library:fuse"
+at = [0.45, 0.1, 0.0]
+slots = { lit = 1.0 }
+
+[[key]]
+target = "fz"
+prop = "burn"
+keys = [[0.0, 0.0], [1.2, 0.9]]
+
+[[shot]]
+name = "a"
+from = 0.0
+to = 1.3
+at = [0.9, -2.2, 1.3]
+look = [0.1, 0.0, 0.8]
+lens = 35
+style = "vector"
+
+[[shot]]
+name = "b"
+from = 1.3
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+
+[[ring]]
+at = 0.3
+center = [0.3, 0.6]
+dur = 0.6
+"""
+
+
+def test_mk_s_own_renderer_draws_the_vector_look_as_blender_does_and_leaves_blender_the_rest(make, capsys):
+    """engine = "mk" draws shot a from the bake (the skinned mannequin with the shadow she casts on the boombox behind her,
+    the mic's swinging cable and the burning fuse's rope baked frame by frame, a ring flipping the palette) as Blender
+    draws it, but for slivers where light turns to shadow; shot b, lit by the scene, is Blender's, and the report says so."""
+    import shutil
+    import numpy as np
+    from PIL import Image
+    from mkmmd.render import engine as EN
+    if EN.browser() is None:
+        pytest.skip("Chromium not available")
+    code, out = make(DRAWN)
+    assert code == 0, out.get("error")
+    d = make.root / "renders" / "draft" / "16x9"
+
+    def render(*extra):
+        code, rep = cli(["render", "--project", str(make.root), "--output", "16x9", "--frames", "36,46,52,70", *extra],
+                        capsys)
+        assert code == 0, rep.get("error")
+        return rep
+    rep = render("--engine", "mk")                               # the ring is up from frame 40 to 58
+    got = rep["outputs"]["16x9"]
+    assert got["shots"] == {"a": {"engine": "mk", "frames": 3},
+                            "b": {"engine": "blender", "frames": 1, "why": "lit by the scene (no flat look)"}}
+    assert got["engines"] == {"mk": 3, "blender": 1} and rep["mk"]["frames"] == 3 and got["frames_on_disk"] == 4
+    mine = {f: np.asarray(Image.open(d / f"{f:05d}.png").convert("RGB"), int) for f in (36, 46, 52)}
+    shutil.rmtree(d)
+    render()
+    for f, img in mine.items():                                  # measured: 0.05 to 0.11 % off by more than 8 levels
+        off = np.abs(img - np.asarray(Image.open(d / f"{f:05d}.png").convert("RGB"), int)).max(-1) > 8
+        assert off.mean() < 0.003, (f, off.mean())

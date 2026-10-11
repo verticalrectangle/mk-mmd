@@ -532,6 +532,29 @@ def vector_name(name):
     return _SUFFIX.sub("", name)
 
 
+def vector_sort(objects, spec, types=()):
+    """The vector look's objects (Obj records of every object that may render, in the scene's order): {"hide": hidden by
+    the shot's `hide` and not kept by `keep`, "type": the text stage's objects among the rest (`types`, by name), drawn
+    over the picture, "subject": everything else, drawn}, each a list of names in the records' order."""
+    hide = set(select(objects, spec["hide"])) - set(select(objects, spec["keep"]))
+    out = {"hide": [], "subject": [], "type": []}
+    for ob in objects:
+        out["hide" if ob.name in hide else "type" if ob.name in types else "subject"].append(ob.name)
+    return out
+
+
+def vector_materials(lists):
+    """The materials of a vector look's subject, every name once in the order first met: `lists` holds each subject
+    object's material names (its slots, then the Set Material nodes of its geometry nodes). `vector_table` numbers them."""
+    out, seen = [], set()
+    for names in lists:
+        for n in names:
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+    return out
+
+
 def vector_table(materials, spec):
     """(tones, groups) per material id for `compose_vector`: id i + 1 is `materials[i]` (Blender material names, matched
     by `vector_name`), id 0 is the background (tone None, group 0). A material takes the first rule whose patterns match

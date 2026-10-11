@@ -550,7 +550,7 @@ member or the camera cannot be used by a stage that runs before them):
 | keys | `[[key]]` | keys on set, prop and object properties | [Keys](#keys) |
 | sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys | [Sim](#sim) |
 | save | | the `.blend` | |
-| bake | | `<blend>.bake/`: the clip for the site's scene viewer, every frame's bones, morphs, objects, visibility and shot cameras, and the meshes (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite) |
+| bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras, the meshes, what the glb cannot carry as Blender evaluates it on each frame, and what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
 
 The text stage runs after `lights` and before `keys`, so a `[[key]]` can toggle a text's `hide_render` or move it. A stage
 that has nothing to read for a cast member (no `[pose.rin]`, no `[perform.rin]`) leaves it alone, and a `[pose.x]`, `[perform.x]` or `[sim.x]` named after no cast member is ignored
@@ -2150,10 +2150,11 @@ hold = true                             # the biggest hit: the world stays flipp
 `[[freeze]] {from, to}` (clip seconds) holds the world on the frame of `from` until the frame of `to` while the cameras go on
 moving: the hit-stop, the world stopped on a hit and the camera swinging round it. On a frame inside the window `mk render`
 and `mk look` set the scene to the window's first frame (poses, props, cords and the sim hold) and every camera to where its own
-keys put it on the real frame, the timeline markers of the real frame choosing the camera; the looks go on with the clock (a ring
-keeps sweeping, a cut inside the window still cuts). At `to` the world is where the timeline has got to, so moves keyed on the
-beat stay on it: give the keys inside the window to what should be there when it ends. Windows may not overlap; the shots stage
-keeps them in `scene["mk_freeze"]` (`mkmmd.core.freeze`, `mkmmd.blender.freeze`).
+keys put it on the real frame, the timeline markers of the real frame choosing the camera (they are set aside while the frame
+renders, else the render would bind the camera of the world's frame); the looks go on with the clock (a ring keeps sweeping, a
+cut inside the window still cuts). At `to` the world is where the timeline has got to, so moves keyed on the beat stay on it:
+give the keys inside the window to what should be there when it ends. Windows may not overlap; the shots stage keeps them in
+`scene["mk_freeze"]` (`mkmmd.core.freeze`, `mkmmd.blender.freeze`).
 
 ```toml
 [[freeze]]                      # the biggest 808: the twins stop mid-move and the camera of the shot orbits them
@@ -2788,13 +2789,42 @@ slots = { gold = "#f2c46d" }        # one slot overridden for this project
 | `final` | 100 % | 64 | on |
 
 `[render]` (all optional) overrides the preset: `samples`, `shutter` (the motion blur shutter, 0.35) and `engine` (`eevee`, the
-default (EEVEE Next), `cycles` or `workbench`). `--samples` and `--percent` override both for one run; `--output NAME` renders some
+default (EEVEE Next), `cycles`, `workbench` or `mk`, below). `--samples`, `--percent` and `--engine` override both for one run; `--output NAME` renders some
 outputs, `--frames SPEC` some frames (default the whole clip), `--jobs N` runs N Blender processes per output that share the frames.
 Frames are claimed with an empty file first, so a stopped render resumes; a disk check refuses to start when the frames would not fit
 (it keeps 1.5 GB spare). Shots with a render-time look ([Shots](#looks-silhouette-and-reflection): silhouette, reflection) are finished
 flat frames on disk, composed inside the render job; `--no-styles` renders them as lit, and leaves out the cut effects and the screen type too (they are part of the looks). `[[transition]]` and `[[insert]]`
 ([Shots](#transitions-and-inserts)) add the layers they need next to the frames (`plate/`, `matte/`, `back/`, `point/`; `--no-transitions`
 leaves them out). Screen type ([Text](#screen-type)) is `screen/<frame>.png`, straight RGBA, for the frames that have any.
+
+#### mk's own renderer
+
+`engine = "mk"` draws the vector look ([Looks](#looks-silhouette-and-reflection)) without Blender: headless Chromium
+(`chromium` on the PATH, or `$MK_CHROMIUM`; it reports the GPU it ran on, and SwiftShader means none was found) draws the
+passes the look is composed from on the GPU, from the scene's bake (the bake stage of [Building](#building): `mk build`
+bakes it, `mk build --bake` again after the .blend was saved by hand), and worker processes finish them with the same
+`compose_vector` and rings as Blender's frames, while the page draws the next (`mkmmd/render`, the page in
+`mkmmd/site/web/js/render/`). The passes follow Workbench's own rules, read from its shaders: the material ids without
+antialiasing (a material under half opaque only hides what is behind it; of two surfaces at one depth the one drawn first
+stays) and the depth of the same draw; the studio light of the scene's shading on white, times Workbench's shadow factor,
+and nothing inside the stencil shadow volumes the look's `light` casts, extruded from every mesh's outline; the texture
+colour where a tone is drawn; Workbench's 16 jittered samples, spread with its Blackman-Harris filter and summed in log2,
+on the light and texture passes.
+
+A shot it cannot draw renders in Blender, whole, with the scene's own engine: another look (silhouette, reflection, lit by
+the scene), type over the picture (the text stage's in-scene type), an object the bake cannot hold (a curves or point-cloud
+object, particles, a collection instance, a volume, a mesh too big to bake frame by frame), a drawn tone whose texture the
+bake lacks, a ring whose centre failed. Blender also draws every frame's layers beside mk's (screen type, the cut effects'
+plates and mattes), all outputs at once. The report adds per output `engines` (frames per engine), `shots` (each shot's
+engine and, for Blender's, why) and `screen_layers`, and `mk` (`frames`, `seconds`, `gpu_seconds`, `renderer`). A page that
+sends no frame for a minute (five while it loads the bake) has stopped: the render fails naming the frame.
+
+What still differs from Blender's frames: an MMD model's custom normals ride its bones where Blender recomputes them on the
+deformed mesh, so on a bent limb the line where light turns to shadow can move a pixel or two. On Hello Brooklyn's draft
+(690 frames of two characters, a boombox, a cable, rings, a freeze) 0.2 % of the pixels of a 9:16 frame differ by more than
+8 levels on average (1.2 % at worst, a square frame), and the screen layers are the same files. That draft took 2 min 31 s
+with `mk` (its own frames in under two of them, about 0.1 s of GPU each; Blender's share, the lit orbit, the screen type and
+the effects' layers, alongside) against 14 min 7 s in Blender, one job per output.
 
 ### Post
 
@@ -3063,6 +3093,8 @@ server in its Host header (no DNS rebinding), and files come only from the folde
 folder and the folders of its pictures and models, a project's root), the page's own files (`web/`) and the site cache
 (`<cache>/site/`), with byte ranges for media. One server serves every page; `server.json` in the site cache (pid, port,
 token) lets the next command find it, and it stops after three hours without a request (`mk site --stop` stops it).
+`mk render` with `engine = "mk"` runs a server of its own on the same code for its page (`render`: the bake, the frames,
+the passes coming back; [mk's own renderer](#mks-own-renderer)).
 `api.py` holds the routes (`open`, `review`, `answers`, `marks`, `send`, `model`, `section`, `measures`, `snapshot`,
 `project`, `music`, `scene`, `draft`, `checks`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser
 block docked beside the agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab
@@ -3084,9 +3116,10 @@ wrong (a timeline that is missing, a cut that does not plan) is listed under it 
 The scene (`web/js/scene/`) plays the bake `mk build` writes beside the .blend (`<name>.bake/`, the bake stage in
 [Building](#building); `mkmmd/blender/build/bake.py` has its format) to the music timeline under it, which is its clock.
 3D draws it with WebGL2: each mesh placed by its node matrix on the frame, skinned on the GPU from a texture of its
-joints' matrices, its morph targets added on the CPU when their weights change, shaded (base colour and texture) or
-grey; Shot looks through the cut's camera for the chosen output as Blender frames it (the picture's aspect, the lens on
-a 36 mm sensor across the larger side, the shift), Free orbits. Draft shows mk post's draft of that output
+joints' matrices, its morph targets added on the CPU when their weights change, and what the glb cannot carry (curves
+such as a mic's cable, meshes with modifiers besides the armature) as Blender evaluated it on that frame; shaded (base
+colour and texture) or grey; Shot looks through the cut's camera for the chosen output as Blender frames it (the
+picture's aspect, the lens on the sensor fitted as the camera says, the shift), Free orbits. Draft shows mk post's draft of that output
 (`out/<name>_<output>_draft.mp4`) on the same clock, decoded with WebCodecs (Tern's browser block plays no `<video>`):
 the server's `draft` route (`mkmmd/site/draft.py`) gives the decoder its avcC record and every sample's offset, size,
 time and keyframe flag in decode order (ffprobe), and the page decodes from the keyframe before a jump. The label names

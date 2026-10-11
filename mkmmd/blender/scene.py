@@ -5,6 +5,7 @@ import bpy
 from mathutils import Vector
 
 from ..core import bonemap
+from . import freeze as FRZ
 
 
 def depsgraph():
@@ -212,8 +213,9 @@ def show_aspect(aspect, sc=None):
 def bind_aspect(aspect, sc=None):
     """Point every shot marker at the given output aspect's camera and show the objects made for that output only
     (`show_aspect`). Returns False when the scene has no shot table or no cameras for that aspect (its markers are left
-    alone)."""
+    alone). A freeze's held markers (mkmmd.blender.freeze) come back first: those are the ones to bind."""
     sc = sc or bpy.context.scene
+    FRZ.release()
     show_aspect(aspect, sc)
     by = {s["name"]: s["cameras"].get(aspect) for s in shot_table(sc)}
     if not any(by.values()):

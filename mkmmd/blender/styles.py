@@ -175,10 +175,15 @@ def _collections(ob):
     return tuple(out)
 
 
+def record(ob):
+    """What the object patterns match (mkmmd.core.shotstyle.Obj) for one object."""
+    return SS.Obj(ob.name, _collections(ob), _truthy_props(ob))
+
+
 def object_records(scene=None):
     """What the object patterns match (mkmmd.core.shotstyle.Obj) for every renderable object of the scene."""
     sc = scene or bpy.context.scene
-    return [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in sc.objects if o.type in FLAT_TYPES]
+    return [record(o) for o in sc.objects if o.type in FLAT_TYPES]
 
 
 def _keyed_visibility(ob):
@@ -187,10 +192,15 @@ def _keyed_visibility(ob):
     return bool(ad and ad.action and ad.action.fcurves.find("hide_render") is not None)
 
 
-def _renders(ob):
+def renders(ob):
     """The object may render in a shot: shown now, or hidden now by keys that show it on another frame (a look sorts its
     objects once, when the shot starts, and must know those too)."""
     return not ob.hide_render or _keyed_visibility(ob)
+
+
+def look_objects(scene):
+    """The objects a look sorts, in the scene's order: the flat types that may render (`renders`)."""
+    return [o for o in scene.objects if o.type in FLAT_TYPES and renders(o)]
 
 
 def _hide(rs, ob):
@@ -227,6 +237,12 @@ def _materials(ob):
     return out
 
 
+def look_materials(ob):
+    """The names of the materials a vector look numbers for the object (mkmmd.core.shotstyle.vector_materials): its
+    slots, then its node materials (`_materials`), repeats left in."""
+    return [s.material.name for s in ob.material_slots if s.material is not None] + [m.name for m in _materials(ob)]
+
+
 def is_soft(ob):
     """An object whose material lets the scene through (a Transparent shader in it): a lightning bolt, a glow shell."""
     return any(n.bl_idname == "ShaderNodeBsdfTransparent" for m in _materials(ob) for n in m.node_tree.nodes)
@@ -235,6 +251,18 @@ def is_soft(ob):
 def is_type(ob):
     return any(m.type == "NODES" and m.node_group is not None and m.node_group.name.startswith(TEXT_GROUP)
                for m in ob.modifiers)
+
+
+def ring_point(ring, frame):
+    """The world point (Vector) a `[[ring]]` with a point centre sweeps out from on `frame`: its expression evaluated
+    in mk's namespace on the scene as it stands (mkmmd.core.rings). A failing expression is a RuntimeError naming it."""
+    c = ring["center"]
+    ns = _namespace(None)
+    ns["frame"] = frame
+    try:
+        return Vector(eval(compile(c["expr"], "<mk ring>", "eval"), ns))      # noqa: S307 - the project's own expression
+    except Exception as e:  # noqa: BLE001 - any failure of the user's expression is reported with its ring
+        raise RuntimeError(f"ring {ring['index']}: center {c['expr']!r} failed at frame {frame}: {e}") from None
 
 
 def add_weight_aov(mat, aov):
@@ -335,7 +363,7 @@ class Looks:
                 getattr(self, "_enter_" + kind)(name, spec)
         if self.kind == "silhouette":
             self._update_silhouette()
-        self.screen = self._screen_live(frame, aspect) if shot is None and self.screen_names else ([], [])
+        self.screen = self.screen_live(frame, aspect) if shot is None and self.screen_names else ([], [])
         if self.kind != "silhouette":              # nothing to reverse out of: all of it goes over the frame
             self.screen = (self.screen[0] + self.screen[1], [])
         return self.kind or ("screen" if self.screen[0] else None)
@@ -361,10 +389,11 @@ class Looks:
         `mk post` can lay it over whatever the cut effects make of the frame; with no `layer` it is laid over the picture
         here. A silhouette's `knockout` type belongs to its figure and is always in the picture."""
         over = self.screen[0]
-        rgba = self._screen_pass(over, "screen") if over else None
-        if rgba is not None and layer is not None:
-            _save_rgba(layer, rgba)
-            rgba = None
+        rgba = None
+        if over and layer is not None:
+            self.screen_layer(layer)
+        elif over:
+            rgba = self._screen_pass(over, "screen")
         if self.kind in ("silhouette", "vector"):
             img = self.compose(self.passes())
         elif rgba is not None:
@@ -378,7 +407,15 @@ class Looks:
         _save(path, img)
 
     # ---------------------------------------------------------------- screen type
-    def _screen_live(self, frame, aspect):
+    def screen_layer(self, layer):
+        """Write the screen type of the prepared frame into its RGBA `layer` file, as `render` does beside the frame (mk's
+        own renderer draws the frame itself); False when none is on screen."""
+        if not self.screen[0]:
+            return False
+        _save_rgba(layer, self._screen_pass(self.screen[0], "screen"))
+        return True
+
+    def screen_live(self, frame, aspect):
         """(names of the screen type on screen at `frame` in an output, those of them to reverse out of a silhouette): the
         objects made for that output (`mk_aspect`) whose `mk_show` frames [on, off) hold the frame."""
         over, knock = [], []
@@ -592,8 +629,8 @@ class Looks:
     # ---------------------------------------------------------------- silhouette
     def _enter_silhouette(self, name, spec):
         rs = self.rs
-        objs = [o for o in self._objects() if _renders(o)]
-        recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
+        objs = look_objects(self.sc)
+        recs = [record(o) for o in objs]
         hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
         knock = set(SS.select(recs, spec["knockout"]["objects"])) if spec["knockout"] else set()
         accent = set(SS.select(recs, spec["accent"]))
@@ -680,33 +717,16 @@ class Looks:
         c = ring["center"]
         if c["mode"] == "frame":
             return tuple(c["at"])
-        ns = _namespace(None)
-        ns["frame"] = self.frame
-        try:
-            co = Vector(eval(compile(c["expr"], "<mk ring>", "eval"), ns))      # noqa: S307 - the project's own expression
-        except Exception as e:  # noqa: BLE001 - any failure of the user's expression is reported with its ring
-            raise RuntimeError(f"ring {ring['index']}: center {c['expr']!r} failed at frame {self.frame}: {e}") from None
-        p = world_to_camera_view(self.sc, self.sc.camera, co)
+        p = world_to_camera_view(self.sc, self.sc.camera, ring_point(ring, self.frame))
         return None if p.z <= 0 else (p.x, 1.0 - p.y)
 
     def _enter_vector(self, name, spec):
         rs = self.rs
-        objs = [o for o in self._objects() if _renders(o)]
-        recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
-        hide = set(SS.select(recs, spec["hide"])) - set(SS.select(recs, spec["keep"]))
-        cl = {"hide": [], "subject": [], "type": []}
-        for o in objs:
-            if o.name in hide:
-                cl["hide"].append(o.name)
-                _hide(rs, o)
-            else:
-                cl["type" if is_type(o) else "subject"].append(o.name)
-        mats = []
-        for n in cl["subject"]:
-            ob = bpy.data.objects[n]
-            for m in [s.material for s in ob.material_slots if s.material is not None] + _materials(ob):
-                if m.name not in mats:
-                    mats.append(m.name)
+        objs = look_objects(self.sc)
+        cl = SS.vector_sort([record(o) for o in objs], spec, {o.name for o in objs if is_type(o)})
+        for n in cl["hide"]:
+            _hide(rs, bpy.data.objects[n])
+        mats = SS.vector_materials(look_materials(bpy.data.objects[n]) for n in cl["subject"])
         self.cl, self.vmats = cl, mats
         self.vtable = SS.vector_table(mats, spec)
         self.info = {**{k: len(v) for k, v in cl.items()}, "materials": len(mats)}
@@ -817,8 +837,8 @@ class Looks:
         if made:
             probe = MR.make_probe(self.sc, f"mk_reflect_{name}", plane, spec.get("probe") or {})
             rs.call(lambda p=probe: MR.remove_probe(p))
-        objs = [o for o in self._objects() if _renders(o)]
-        recs = [SS.Obj(o.name, _collections(o), _truthy_props(o)) for o in objs]
+        objs = look_objects(self.sc)
+        recs = [record(o) for o in objs]
         skip = set(SS.select(recs, spec["hide"]))
         if spec["only"]:
             skip |= {r.name for r in recs} - set(SS.select(recs, spec["only"]))

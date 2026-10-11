@@ -6,7 +6,8 @@ args["styles"] = false renders every shot as it is lit. args["demands"] ({frame:
 mkmmd.core.transition.demands) are the layers the transitions and inserts of the project need next to those frames
 (plates, mattes, projected points: see mkmmd.blender.transition), drawn on the same terms. Screen type (docs/design.md:
 Text, Screen type) is kept off the frame: `screen/<frame>.png` (RGBA, written before the frame) holds it, for `mk post`
-to lay over the cut's frame and its effects."""
+to lay over the cut's frame and its effects. args["mk"] lists frames mk's own renderer draws (mkmmd.render): this job
+leaves them alone and draws only the layers of those in args["mk_layers"] (its share), the screen type first."""
 import os
 import time
 
@@ -48,12 +49,26 @@ def render_frames(args):
     looks = ST.Looks(sc) if args.get("styles", True) else None
     layers = TRN.Layers(sc, looks, args.get("aspect"), out_dir, args["demands"]) if looks and args.get("demands") else None
     freezes = FRZ.windows(sc)
-    t0, done, skipped, drawn = time.time(), 0, 0, 0
+    others, mine = {int(f) for f in args.get("mk") or ()}, {int(f) for f in args.get("mk_layers") or ()}
+    t0, done, skipped, drawn, screens = time.time(), 0, 0, 0, 0
     kinds = {}
     try:
         for f in args["frames"]:
             f = int(f)
             path = os.path.join(out_dir, f"{f:05d}.png")
+            if f in others:                               # mk's renderer draws the frame: its screen type and layers here
+                if f not in mine:
+                    continue
+                layer = os.path.join(out_dir, SRT.layer_rel(f))
+                screen = looks is not None and any(looks.screen_live(f, args.get("aspect"))) and not os.path.exists(layer)
+                if screen or (layers and layers.pending(f)):
+                    FRZ.frame_set(sc, f, freezes)
+                    if screen:
+                        looks.prepare(f, args.get("aspect"))
+                        screens += looks.screen_layer(layer)
+                    if layers:
+                        drawn += layers.run(f)
+                continue
             have = os.path.exists(path)
             if have and not (layers and layers.pending(f)):
                 skipped += 1
@@ -86,4 +101,4 @@ def render_frames(args):
     return {"rendered": done, "skipped": skipped, "seconds": round(time.time() - t0, 1),
             "s_per_frame": round((time.time() - t0) / max(done, 1), 2), "aspect_bound": bound,
             "engine": r.engine, "samples": sc.eevee.taa_render_samples if r.engine == "BLENDER_EEVEE_NEXT" else None,
-            "looks": kinds, "layers": drawn}
+            "looks": kinds, "layers": drawn, "screen_layers": screens}

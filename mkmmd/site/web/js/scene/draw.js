@@ -1,7 +1,8 @@
 // The scene viewer's GPU half (docs/design.md: The site): a bake's meshes (build/<name>.bake, mkmmd/blender/build/bake.py)
 // as vertex buffers, placed by their node matrix on each frame and skinned in the vertex shader from a texture of their
-// joints' matrices; morph targets are added on the CPU when their weights change. Shaded draws the base colour and
-// texture under a key and a fill light, Grey the shapes alone. Blended materials come after the opaque ones, in order.
+// joints' matrices; morph targets are added on the CPU when their weights change. The meshes the bake keeps frame by
+// frame (curves, meshes with modifiers) are uploaded in the world on each frame they change. Shaded draws the base colour
+// and texture under a key and a fill light, Grey the shapes alone. Blended materials come after the opaque ones, in order.
 import { openGLB } from "../viewer/glb.js";
 
 const VS = `#version 300 es
@@ -48,7 +49,9 @@ void main() {
   frag = uMode == 1 ? vec4(vec3(0.8) * l, 1.0) : vec4(c.rgb * l, c.a);
 }`;
 
-function program(gl) {
+// A program from vertex and fragment sources, its attributes bound to the locations SceneGL's vertex arrays use;
+// `feedback` names transform-feedback outputs (separate buffers). Returns {p, u: uniform locations by name}.
+export function program(gl, vs, fs, uniforms, feedback = null) {
   const sh = (type, src) => {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
@@ -57,13 +60,14 @@ function program(gl) {
     return s;
   };
   const p = gl.createProgram();
-  gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
-  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
   ["aPos", "aNor", "aUv", "aJoint", "aWeight"].forEach((name, i) => gl.bindAttribLocation(p, i, name));
+  if (feedback) gl.transformFeedbackVaryings(p, feedback, gl.SEPARATE_ATTRIBS);
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
   const u = {};
-  for (const n of ["uViewProj", "uNode", "uSkinned", "uJoints", "uColor", "uTex", "uImage", "uCutoff", "uMode", "uKey", "uFill"]) u[n] = gl.getUniformLocation(p, n);
+  for (const n of uniforms) u[n] = gl.getUniformLocation(p, n);
   return { p, u };
 }
 
@@ -71,27 +75,32 @@ function program(gl) {
 export const mat4of = (b, o) => new Float32Array([b[o], b[o + 1], b[o + 2], 0, b[o + 3], b[o + 4], b[o + 5], 0, b[o + 6], b[o + 7], b[o + 8], 0,
   b[o + 9], b[o + 10], b[o + 11], 1]);
 
+const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
 export class SceneGL {
   // `glb` the scene.glb bytes, `bake` bake.json, `blob` bake.bin as a Float32Array.
   constructor(gl, glb, bake, blob) {
     this.gl = gl;
     this.bake = bake;
     this.blob = blob;
-    this.prog = program(gl);
+    this.prog = program(gl, VS, FS, ["uViewProj", "uNode", "uSkinned", "uJoints", "uColor", "uTex", "uImage", "uCutoff", "uMode", "uKey", "uFill"]);
     this.frame = -1;
     const { doc, read, deltas, materials } = openGLB(glb);
-    const byName = new Map(doc.nodes.map((n, i) => [n.name, i]));
+    const byName = new Map((doc.nodes || []).map((n, i) => [n.name, i]));
     const arms = new Map(bake.armatures.map((a) => [a.name, a]));
     const shown = new Map(bake.shown.map((s) => [s.name, s]));
     const morphs = new Map(bake.morphs.map((m) => [m.name, m]));
     this.textures = new Map();
     this.nodes = [];
     this.bounds = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+    const grow = (p) => {
+      for (let r = 0; r < 3; r++) { this.bounds.min[r] = Math.min(this.bounds.min[r], p[r]); this.bounds.max[r] = Math.max(this.bounds.max[r], p[r]); }
+    };
     for (const entry of bake.nodes) {
       const ni = byName.get(entry.name);
       if (ni === undefined || doc.nodes[ni].mesh === undefined) continue;
       const node = doc.nodes[ni], skin = node.skin !== undefined ? doc.skins[node.skin] : null;
-      const N = { entry, shown: shown.get(entry.name) || null, morph: morphs.get(entry.name) || null, items: [], skin: null };
+      const N = { name: entry.name, entry, shown: shown.get(entry.name) || null, morph: morphs.get(entry.name) || null, items: [], skin: null };
       if (skin && entry.armature && arms.has(entry.armature)) {
         const arm = arms.get(entry.armature), at = new Map(arm.bones.map((b, i) => [b, i]));
         const joints = Int32Array.from(skin.joints, (j) => at.get(doc.nodes[j].name) ?? -1);
@@ -107,10 +116,7 @@ export class SceneGL {
         const A = prim.attributes, pos = read(A.POSITION), count = pos.length / 3;
         const acc = doc.accessors[A.POSITION];
         if (acc.min && acc.max) {
-          for (const c of [acc.min, acc.max]) {
-            const w = [0, 1, 2].map((r) => M[r] * c[0] + M[4 + r] * c[1] + M[8 + r] * c[2] + M[12 + r]);
-            for (let r = 0; r < 3; r++) { this.bounds.min[r] = Math.min(this.bounds.min[r], w[r]); this.bounds.max[r] = Math.max(this.bounds.max[r], w[r]); }
-          }
+          for (const c of [acc.min, acc.max]) grow([0, 1, 2].map((r) => M[r] * c[0] + M[4 + r] * c[1] + M[8 + r] * c[2] + M[12 + r]));
         }
         const vao = gl.createVertexArray();
         gl.bindVertexArray(vao);
@@ -124,7 +130,7 @@ export class SceneGL {
         };
         const posBuf = attr(0, pos, 3);
         attr(1, A.NORMAL !== undefined ? read(A.NORMAL) : new Float32Array(count * 3).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3);
-        attr(2, A.TEXCOORD_0 !== undefined ? read(A.TEXCOORD_0) : new Float32Array(count * 2), 2);
+        const uvBuf = attr(2, A.TEXCOORD_0 !== undefined ? read(A.TEXCOORD_0) : new Float32Array(count * 2), 2);
         if (N.skin && A.JOINTS_0 !== undefined) { attr(3, read(A.JOINTS_0), 4); attr(4, read(A.WEIGHTS_0), 4); }
         else { gl.disableVertexAttribArray(3); gl.disableVertexAttribArray(4); gl.vertexAttrib4f(3, 0, 0, 0, 0); gl.vertexAttrib4f(4, 1, 0, 0, 0); }
         const idx = prim.indices !== undefined ? read(prim.indices, true) : Uint32Array.from({ length: count }, (_, k) => k);
@@ -132,13 +138,35 @@ export class SceneGL {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
         gl.bindVertexArray(null);
-        const mat = materials[prim.material] || { color: [0.8, 0.8, 0.8, 1], image: null, blend: false, cutoff: 0 };
-        N.items.push({ vao, count: idx.length, mat, posBuf, base: N.morph ? pos : null,
-          targets: N.morph && prim.targets ? prim.targets.map((t) => deltas(t.POSITION)) : null,
+        const mat = materials[prim.material] || { name: null, color: [0.8, 0.8, 0.8, 1], image: null, blend: false, cutoff: 0 };
+        N.items.push({ vao, first: 0, count: idx.length, mat, posBuf, uvBuf, ib, index: idx, vertices: count, rest: pos,
+          base: N.morph ? pos : null, targets: N.morph && prim.targets ? prim.targets.map((t) => deltas(t.POSITION)) : null,
           skinned: !!(N.skin && A.JOINTS_0 !== undefined) });
         if (mat.image) this.texture(mat.image);
       }
       this.nodes.push(N);
+    }
+    for (const entry of bake.by_frame || []) {                // meshes baked frame by frame, in the world
+      const vao = gl.createVertexArray(), vb = gl.createBuffer(), ib = gl.createBuffer();
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+      for (const loc of [2, 3, 4]) gl.disableVertexAttribArray(loc);
+      gl.vertexAttrib2f(2, 0, 0); gl.vertexAttrib4f(3, 0, 0, 0, 0); gl.vertexAttrib4f(4, 1, 0, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+      gl.bindVertexArray(null);
+      const mats = entry.materials.map((name) => {
+        const m = name && bake.materials ? bake.materials[name] : null;
+        return { name, color: m ? [...m.color, 1] : [0.8, 0.8, 0.8, 1], image: null, blend: false, cutoff: 0 };
+      });
+      for (const g of entry.geoms) {
+        const v = blob.subarray(g[0], g[0] + 6 * g[1]);
+        for (let i = 0; i < g[1]; i += Math.max(1, g[1] >> 6)) grow([v[i * 6], v[i * 6 + 1], v[i * 6 + 2]]);
+      }
+      this.nodes.push({ name: entry.name, flex: entry, vao, vb, ib, mats, geom: -1, items: [], M: IDENTITY, visible: false });
     }
     this.ready = Promise.all([...this.textures.values()].map((holder) => holder.loaded));   // every texture uploaded
   }
@@ -159,12 +187,40 @@ export class SceneGL {
     }).catch(() => {});                              // a texture that cannot be read leaves its parts untextured
   }
 
-  // Bring every mesh to bake frame `k` (0 .. frames - 1): node matrices, visibility, joints, morphs.
+  // A frame-by-frame mesh's geometry `g` ([vertices offset, count, triangles offset, count]) into its buffers: the
+  // triangles sorted by material slot, an item per slot. Returns the triangles (vertex indices) in that order.
+  uploadFlex(N, g) {
+    const gl = this.gl, b = this.blob, [vo, nv, to, nt] = g;
+    gl.bindBuffer(gl.ARRAY_BUFFER, N.vb);
+    gl.bufferData(gl.ARRAY_BUFFER, b.subarray(vo, vo + 6 * nv), gl.DYNAMIC_DRAW);
+    const t = b.subarray(to, to + 4 * nt), order = Array.from({ length: nt }, (_, i) => i).sort((x, y) => t[x * 4 + 3] - t[y * 4 + 3]);
+    const idx = new Uint32Array(nt * 3);
+    N.items = [];
+    order.forEach((ti, j) => {
+      idx[j * 3] = t[ti * 4]; idx[j * 3 + 1] = t[ti * 4 + 1]; idx[j * 3 + 2] = t[ti * 4 + 2];
+      const slot = t[ti * 4 + 3], last = N.items[N.items.length - 1];
+      if (last && last.slot === slot) last.count += 3;
+      else N.items.push({ vao: N.vao, slot, first: j * 3, count: 3, mat: N.mats[slot] || { name: null, color: [0.8, 0.8, 0.8, 1], image: null, blend: false, cutoff: 0 }, skinned: false });
+    });
+    gl.bindVertexArray(N.vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, N.ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(null);
+    return idx;
+  }
+
+  // Bring every mesh to bake frame `k` (0 .. frames - 1): node matrices, visibility, joints, morphs, frame meshes.
   setFrame(k) {
     if (k === this.frame) return;
     this.frame = k;
     const gl = this.gl, b = this.blob;
     for (const N of this.nodes) {
+      if (N.flex) {
+        const gi = N.flex.frames[k];
+        N.visible = gi >= 0;
+        if (N.visible && gi !== N.geom) { N.geom = gi; N.tris = this.uploadFlex(N, N.flex.geoms[gi]); N.changed = true; }
+        continue;
+      }
       const e = N.entry;
       N.M = mat4of(b, e.offset + 12 * (e.frames > 1 ? k : 0));
       N.visible = !N.shown || b[N.shown.offset + k] > 0.5;
@@ -231,7 +287,7 @@ export class SceneGL {
           if (holder && holder.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, holder.tex); }
           gl.uniform1f(u.uCutoff, mode === "grey" ? 0.5 : (it.mat.cutoff || (it.mat.blend ? 0.02 : 0)));
           gl.bindVertexArray(it.vao);
-          gl.drawElements(gl.TRIANGLES, it.count, gl.UNSIGNED_INT, 0);
+          gl.drawElements(gl.TRIANGLES, it.count, gl.UNSIGNED_INT, it.first * 4);
         }
       }
     }
