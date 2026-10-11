@@ -37,7 +37,8 @@ degrees (see [Conventions](#conventions)).
 - [Timeline](#timeline)
 - [Cache](#cache)
 - [Characters (mk model)](#characters-mk-model)
-- [Reviews (mk review, the Tern plugin)](#reviews-mk-review-the-tern-plugin)
+- [Reviews (mk review)](#reviews-mk-review)
+- [The site (mk site, mkmmd/site)](#the-site-mk-site-mkmmdsite)
 
 
 ## Layers
@@ -52,7 +53,8 @@ degrees (see [Conventions](#conventions)).
 | ref | `mkmmd.ref` (`mk ref`) | the CLI only | numpy, opencv, Pillow; MediaPipe with the `ref` extra |
 | timeline | `mkmmd.timeline` (`mk timeline`) | the CLI only | numpy; torch, torchaudio, demucs, faster-whisper with the `timeline` extra |
 | post | `mkmmd.post`, `mkmmd.cutfx`, `mkmmd.matte` (`mk post`, the cut effects) | the CLI only | numpy, opencv, Pillow, `mkmmd.core` |
-| review | `mkmmd.review` (`mk review`) | the CLI only | stdlib, numpy, Pillow, `mkmmd.model.lab` |
+| review | `mkmmd.review` (`mk review`) | the CLI and the site's server | stdlib, numpy, Pillow, `mkmmd.model.lab` |
+| site | `mkmmd.site` (`mk site`, the review page): the server, its API, `web/` (plain JavaScript) | its own process on 127.0.0.1, the page in a browser or Tern's browser block | stdlib, numpy, `mkmmd.review`, `mk model glb` and Blender (model files) as subprocesses |
 | tern | `tern/` (the Tern plugin: Luau, `plugin.toml`) | Tern's session daemon and windows | Tern's `tern` API; runs `mk` |
 
 Rules:
@@ -3009,34 +3011,60 @@ touches add-ons) can delete mmd_tools' bundled opencc wheel, and every PMX impor
 import_model could not be found"; use another config folder (`BLENDER_USER_CONFIG`) for such scripts. `mk doctor --fix`
 restores the wheel and `mk model build` repairs and retries on its own.
 
-## Reviews (`mk review`, the Tern plugin)
+## Reviews (`mk review`)
 
 A review puts decisions to a person with pictures, choices and models, and gets the answers back to the agent that asked.
 `NAME.review.toml` (`mkmmd/review.py` has the format): `[review]` title and text (Markdown); `[[question]]` id, ask, text,
 images, models, recommended; `[[question.option]]` id, label, text, images, models. Images are paths beside the review
-(PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a file Tern's 3D block opens, or a .pmx) or
-`{label, spec, parts, set}`, with pose (default tpose), morph and region applied by `mk model glb`. `mk review check`
-names every problem at once; `mk review open NAME.review.toml` checks it, starts `NAME.answers.json` with the pane it
-runs in (`$TERN_PANE`, or `--reply-to`) and opens it beside that pane; `mk review answers` prints the answers with their
-options' labels, what is still open, and the marks.
+(PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a .glb, a model file Blender imports, or a
+.pmx) or `{label, spec, parts, set}`, with pose (default tpose), morph and region applied by `mk model glb`. `mk review
+check` names every problem at once; `mk review open NAME.review.toml [--where right|down|tab] [--wait [--timeout S]]`
+checks it, starts (or keeps) `NAME.answers.json` and opens it as a page of the site (below), with `--wait` returning
+when the person presses Send, with the answers; `mk review answers` prints the answers with their options' labels, what
+is still open, the marks and the views kept from the 3D viewer.
 
-In Tern, the mk plugin (`tern/` in this repository: `tern plugin link tern/`, or `tern plugin install
-github.com/verticalrectangle/mk-mmd/tern`) shows the review as a block: each question a card with its pictures (a click
-zooms; the viewer steps through them), its models (a button poses one with `mk model glb`, cached in the plugin's data
-folder, and shows it in the tab's 3D preview), its options as cards with a radio, and a notes field (click, type, Esc
-leaves). Choices and notes go to `NAME.answers.json` as they change. **Mark up** puts a picture on a whiteboard beside the
-block; **Read marks** reads back what was drawn: lines and arrows by their ends, boxes, ellipses and ink by their boxes,
-text with its words, each in the picture's own pixels (`NAME.marks.json`). On a lab sheet (its `.json` beside it) `mk
-review answers` turns them into model space with the lab's `trace_points`: a line's length and how far inside or
-outside the outline it runs, a box's size in mm. **Send** writes the message into the answers file and pastes it into the
-agent's chat (`cx.agents:ask`); the dock says whether it went. The plugin also opens any `.pmx` as a PMX block: its
-names and numbers, chips for the poses its bones allow and for its morphs by panel, the model posed in the 3D preview
-(T-pose first), and a lab sheet of the pose.
+The page shows each question as a card: its text, its pictures (one fits the width; several share a height in a strip
+that scrolls sideways), its models (a button opens the viewer), its options with a radio and a notes field. Keys: j/k
+move between questions, 1-9 choose, n writes a note, Esc leaves a field, ? shows them. Choices and notes are saved as
+they change (`PUT answers`, checked: an answer that does not fit the review is refused whole). A picture's pen button
+opens it to draw on, filling the pane: pen, arrow, ellipse, box, text and eraser in eight colours, undo and redo, zoom
+(wheel, pinch, + and -, 0 fits) and pan (space-drag, right-drag, two fingers). **Done** saves the marks in the picture's
+own pixels (`NAME.marks.json`: line and arrow by their ends, box and ellipse by their box, ink by its points, text with
+its words) and draws each marked picture for the agent (`.NAME.marks/`). On a lab sheet (its `.json` beside it) `mk
+review answers` turns them into model space with the lab's `trace_points`: a line's or a stroke's length and how far
+inside or outside the outline it runs, a box's size in mm. **Send** writes the message the agent reads into the answers
+file (with the time); `--wait` returns it, and an agent that did not wait reads it with `mk review answers`.
 
-How the plugin is built (`tern/README.md`): the host half (`review.luau`, `pmx.luau`) runs `mk` with `tern.process.run`
-(`uv run --project` the checkout it sits in, else `mk` on PATH); window-only work (the 3D preview, posting to an agent,
-whiteboards) goes through `mk://` links that the block opens with `cx:open` and the window half claims in
-`tern.route.link`. Window calls have a 50 ms budget, so that half reads and writes no files: a link carries what it
-needs, each whiteboard is read in a timer tick of its own, and results come back to the block as actions on its dock
-(`cx.session:event`), whose 2 s host budget writes the files.
+## The site (`mk site`, `mkmmd/site`)
+
+One page mk serves on this machine for reviews and a project's page. `mkmmd/site/server.py` is Python's standard
+library on 127.0.0.1 at a free port; every URL starts with a random token (`/<token>/...`), a request must name the
+server in its Host header (no DNS rebinding), and files come only from the folders a page was opened for (a review's
+folder and the folders of its pictures and models, a project's root), the page's own files (`web/`) and the site cache
+(`<cache>/site/`), with byte ranges for media. One server serves every page; `server.json` in the site cache (pid, port,
+token) lets the next command find it, and it stops after three hours without a request (`mk site --stop` stops it).
+`api.py` holds the routes (`open`, `review`, `answers`, `marks`, `send`, `model`, `section`, `measures`, `snapshot`,
+`project`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser block docked beside the agent's pane
+(`--where right|down|tab`), else in the system's browser. `mk site [--where ...] [--url] [--stop]` opens the project's
+page (its reviews, each with its title, how many questions are answered and whether it was sent).
+
+The page (`web/`) is plain JavaScript modules and one stylesheet, no build step and no library, laid out for a narrow
+pane (about 560 px) and following the host's light or dark theme. Its 3D viewer (`web/js/viewer/`) is a WebGL2 renderer
+of the .glb files `mk model glb` writes: a model file that is not a .glb is turned into one by Blender
+(`mkmmd/blender/ops_site.py`), a .pmx or a spec is posed by `mk model glb`, each cached in the site cache by its command
+and its sources (a spec's .toml files and those of the bases it includes). Views: Shaded (its textures), Grey, Lines
+(edges over grey; open edges and flipped faces in colour), Silhouette, X-ray and Parts (a colour per material; tap one to
+hide or solo it). The camera turns, pans and zooms (double-click zooms to a spot), with front, side, back and top
+buttons and Blender's numpad keys (1, 3, 7, Ctrl for the opposite side, 5 ortho); f fits, r turns it on a turntable, v
+steps through the views. **Cut** drags a plane through the model and reads each loop's girth (the lab's
+`sections`; on .pmx and spec models it also jumps to the lab's named girths); **Measure** reads the distance between two
+points in mm; **Compare** shows a second model of the review beside the first, or over it (Tab), in the same pose and
+cut; **Pose** switches a .pmx or spec model between T-pose, rest, arms down and sit; **Mark** keeps the view as a picture
+to draw on (`.NAME.views/`, with its model and camera) under its question.
+
+In Tern, the mk plugin (`tern/`: `tern plugin link tern/`) opens a `NAME.review.toml` from Tern's Files pane as the
+page, in place of the pane, and opens any `.pmx` as a PMX block: its names and numbers, chips for the poses its bones
+allow and for its morphs by panel, the model posed in Tern's 3D preview (T-pose first), and a lab sheet of the pose. A
+page in Tern's browser block cannot reach the plugin (its title and URL changes raise no event, and `mk://` links do not
+navigate), so Send goes through the server.
 

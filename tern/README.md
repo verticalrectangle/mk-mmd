@@ -1,11 +1,11 @@
 # mk in Tern
 
-The [Tern](https://stencil.so/tern) plugin of mk-mmd: two blocks that put mk's pictures and models beside your work.
+The [Tern](https://stencil.so/tern) plugin of mk-mmd: mk's reviews and PMX models beside your work.
 
-- **Review** (`*.review.toml`): decisions put to a person by an agent. Each question is a card with its pictures (a
-  click zooms), its models (shown in Tern's 3D block beside it), its options with a radio each and a notes field.
-  **Mark up** puts a picture on a whiteboard to draw on and **Read marks** reads back what was drawn; **Send** posts the
-  answers into the chat of the agent that opened the review.
+- **Review** (`*.review.toml`): decisions put to a person by an agent. Opened from Tern's Files pane (or `tern open`),
+  the file becomes the review page mk serves (docs/design.md: Reviews, The site) in place of the pane: each question
+  with its pictures to draw on, its models to turn in mk's 3D viewer, its options and a notes field; **Send** hands the
+  answers to the agent.
 - **PMX model** (`*.pmx`): any MMD model with its names and numbers, chips for the poses its bones allow (T-pose, rest,
   arms down, sit, hands) and for its morphs by panel, the model posed in the 3D block beside it, and a lab sheet of the
   pose (toon views, numbers in mm).
@@ -27,24 +27,16 @@ tern plugin install github.com/verticalrectangle/mk-mmd/tern
 ## Reviews
 
 An agent writes `NAME.review.toml` beside its pictures (the format is in `mkmmd/review.py` and docs/design.md: Reviews)
-and opens it beside its own pane:
+and opens it beside its own pane; the page is a browser block docked to it:
 
 ```sh
 mk review check looks.review.toml         # every problem at once
-mk review open looks.review.toml          # beside this pane; Send posts the answers here
-mk review answers looks.review.toml       # the answers, and the marks (in mm on lab sheets)
+mk review open looks.review.toml --wait   # beside this pane; returns the answers when Send is pressed
+mk review answers looks.review.toml       # the answers, the marks (in mm on lab sheets) and the views kept in 3D
 ```
 
-Choices and notes are written to `NAME.answers.json` as they change, so nothing is lost before Send. Marks are kept in
-`NAME.marks.json` in each picture's own pixels: lines and arrows by their two ends, boxes, ellipses and ink by their
-boxes, text with its words. On a lab sheet (`mk model lab`, its `.json` beside it) `mk review answers` turns them into
-model space: how long a line is, how far inside or outside the outline it runs, a box's size in mm.
-
-| Key | |
-|---|---|
-| `j` `k`, ↑ ↓ | the question the keys answer |
-| `1`–`9` | choose that option |
-| `n` | type in the notes (Esc leaves) |
+The page saves choices and notes to `NAME.answers.json` as they change, so nothing is lost before Send, and the marks
+in `NAME.marks.json`.
 
 ## PMX models
 
@@ -60,14 +52,12 @@ beside it (`mk model glb`, no Blender, about a second for a 50,000-vertex model)
 
 ## How it works
 
-- `window.luau` routes `*.review.toml` and `*.pmx` opens to the blocks, and claims the `mk://` links the blocks open with
-  `cx:open` (`tern.route.link` sees every one): `preview` (a .glb in the tab's 3D preview), `send` (`cx.agents:ask`),
-  `markup` (a whiteboard with the picture, locked) and `marks` (reads the whiteboards). Window calls have a 50 ms
-  budget, so this half reads and writes no files: a link carries what it needs, each whiteboard is read in a timer tick
-  of its own, and results come back to the block as actions on its dock (`cx.session:event`).
-- `review.luau` and `pmx.luau` (the host half) run `mk` with `tern.process.run` (`mk review show`, `mk model glb`, `mk
-  model lab`), send pictures with `cx:blob`, and write the answers and marks files. Models are cached in the plugin's data
-  folder (`tern plugin dir`, `plugin-data/mk/`).
+- `window.luau` routes `*.review.toml` and `*.pmx` opens to the blocks, and claims the one `mk://` link a block opens
+  with `cx:open` (`tern.route.link` sees every one): `preview`, a .glb in the tab's 3D preview.
+- `review.luau` (the host half) is a launcher: it runs `mk review open --replace PANE`, so the review page takes the
+  block's place, and says why when it cannot. `pmx.luau` runs `mk` with `tern.process.run` (`mk model glb`, `mk model
+  lab`) and sends pictures with `cx:blob`. Models are cached in the plugin's data folder (`tern plugin dir`,
+  `plugin-data/mk/`).
 
 ## Development
 

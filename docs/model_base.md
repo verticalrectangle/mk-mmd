@@ -104,8 +104,8 @@ the base's size.
    `[spec] WARNING hair.back.lenght: never read by any part ...` names keys of yours that no part reads: misspelt, in the
    wrong table, or for a feature that is switched off. Keys that come from the base are left out.
 5. When a choice is the person's (a look, a route), ask with pictures: write a `NAME.review.toml` (questions, options,
-   images, models) and `mk review open` it beside your chat; their Send posts the answers back to you, and `mk review
-   answers` reads them, with lines drawn on lab sheets in mm (docs/design.md: Reviews).
+   images, models) and `mk review open --wait` it beside your chat; it returns the answers when they press Send, and
+   `mk review answers` reads them, with lines drawn on lab sheets in mm (docs/design.md: Reviews).
 6. Repeat.
 
 ## Rules

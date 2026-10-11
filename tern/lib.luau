@@ -1,6 +1,6 @@
 --!strict
 -- Shared by both halves of the mk plugin: how to run mk, the mk:// links a block uses to reach the window half (every
--- `cx:open` a block makes goes through `tern.route.link`), JSON files, small text helpers.
+-- `cx:open` a block makes goes through `tern.route.link`), mk's reports, small node helpers.
 
 local M = {}
 
@@ -61,20 +61,6 @@ function M.parse(url: string): (string?, { [string]: string })
 	return action, params
 end
 
-function M.read_json(path: string): any
-	if not tern.fs.exists(path) then
-		return nil
-	end
-	local ok, value = pcall(function()
-		return tern.json.decode(tern.fs.read(path))
-	end)
-	return if ok then value else nil
-end
-
-function M.write_json(path: string, value: any)
-	tern.fs.write(path, tern.json.encode(value, true))
-end
-
 -- What mk printed: its JSON report, or nil and why it failed (its `error`, else stderr).
 function M.report(r: ProcessResult): (any, string?)
 	if r.timed_out then
@@ -108,22 +94,6 @@ function M.hash(parts: { string }): string
 	return string.format("%08x%08x", h1, h2)
 end
 
-function M.mime(path: string): string
-	local ext = string.lower(string.match(path, "%.(%w+)$") or "")
-	if ext == "jpg" or ext == "jpeg" then
-		return "image/jpeg"
-	elseif ext == "webp" then
-		return "image/webp"
-	elseif ext == "gif" then
-		return "image/gif"
-	end
-	return "image/png"
-end
-
-function M.now(): string
-	return os.date("!%Y-%m-%dT%H:%M:%SZ") :: string
-end
-
 -- A clickable chip: `act` (with `=value`) reaches the block's `event` as an action. `key` keeps its node id among its
 -- siblings (default the action, which must then be unique among them).
 function M.button(label: string, act: string, tone: string?, key: string?): Node
@@ -152,24 +122,6 @@ function M.has(list: { any }, value: any): boolean
 		end
 	end
 	return false
-end
-
--- UTF-8 text edited by character: the byte where character `chars` + 1 starts, and the UTF-16 offset Tern's fields
--- take for a caret after `chars` characters.
-function M.byte_at(s: string, chars: number): number
-	return utf8.offset(s, chars + 1) or (#s + 1)
-end
-
-function M.utf16(s: string, chars: number): number
-	local units, n = 0, 0
-	for _, c in utf8.codes(s) do
-		if n >= chars then
-			break
-		end
-		units += if c > 0xFFFF then 2 else 1
-		n += 1
-	end
-	return units
 end
 
 return M

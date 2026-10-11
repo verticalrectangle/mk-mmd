@@ -1,7 +1,9 @@
-"""Review files (mkmmd.review): a review is checked before the block shows it (every problem named at once), answers
-come back with their options' labels and what is still open, reopening keeps them, model entries become commands mk
-accepts, and what was drawn over a lab sheet comes back in millimetres on the model."""
+"""Review files (mkmmd.review): a review is checked before the page shows it (every problem named at once), the answers
+the page gives are checked (a bad one keeps nothing) and come back with their options' labels and what is still open,
+reopening keeps them, model entries become commands mk accepts, and marks drawn over a lab sheet come back in
+millimetres on the model."""
 import json
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -40,13 +42,6 @@ label = "Fix it"
 """)
 
 
-def answer(path, answers):
-    p = RV.answers_path(path)
-    rec = json.loads(p.read_text(encoding="utf-8"))
-    rec["answers"] = answers
-    p.write_text(json.dumps(rec), encoding="utf-8")
-
-
 def test_a_review_names_every_problem_at_once(tmp_path):
     Image.new("RGB", (8, 8)).save(tmp_path / "ok.png")
     (tmp_path / "notes.txt").write_text("not a model", encoding="utf-8")
@@ -78,21 +73,31 @@ models = [{ label = "m", file = "notes.txt" }, { label = "p", spec = "base:girl"
 
 def test_answers_name_the_chosen_option_and_what_is_left(tmp_path):
     f = two_questions(tmp_path)
-    RV.prepare(f, reply_to=7)
-    answer(f, {"eyes": {"choice": "B", "notes": "a small wing"}})
+    RV.prepare(f)
+    RV.write_answers(f, {"eyes": {"choice": "B", "notes": "a small wing"}})
     got = RV.answers(f)
     assert not got["complete"] and got["unanswered"] == ["body"]
     eyes = got["answers"][0]
     assert (eyes["choice"], eyes["label"], eyes["notes"], eyes["recommended"]) == ("B", "Soft", "a small wing", "B")
 
 
-def test_reopening_keeps_the_answers_and_names_the_new_agent_pane(tmp_path):
+def test_answers_that_do_not_fit_the_review_are_refused_and_nothing_is_kept(tmp_path):
     f = two_questions(tmp_path)
-    RV.prepare(f, reply_to=7)
-    answer(f, {"eyes": {"choice": "A", "notes": ""}})
-    RV.prepare(f, reply_to=12)
-    shown = RV.show(f)
-    assert shown["reply_to"] == 12 and shown["answers"]["eyes"]["choice"] == "A"
+    RV.prepare(f)
+    RV.write_answers(f, {"eyes": {"choice": "A", "notes": ""}})
+    with pytest.raises(RV.ReviewError) as e:
+        RV.write_answers(f, {"eyes": {"choice": "B"}, "body": {"choice": "Z"}, "hair": {"choice": None}})
+    problems = str(e.value).splitlines()
+    assert len(problems) == 2 and "'Z' is not one of its options" in problems[0] and "'hair'" in problems[1]
+    assert RV.show(f)["answers"] == {"eyes": {"choice": "A", "notes": ""}}
+
+
+def test_reopening_keeps_the_answers(tmp_path):
+    f = two_questions(tmp_path)
+    RV.prepare(f)
+    RV.write_answers(f, {"eyes": {"choice": "A", "notes": "keep"}})
+    RV.prepare(f)
+    assert RV.show(f)["answers"]["eyes"] == {"choice": "A", "notes": "keep"}
 
 
 def test_model_entries_become_commands_mk_accepts(tmp_path):
@@ -109,7 +114,7 @@ models = [{ label = "pmx", file = "m.pmx", pose = "arms_down", morph = ["笑い=
           { label = "spec", spec = "base:girl", parts = ["head"], set = ["head.lash.width=0.007"], pose = "rest", region = "head" }]
 """)
     pmx, ready, spec = RV.load(f)["questions"][0]["models"]
-    assert ready == {"label": "glb", "open": str((tmp_path / "ready.glb").resolve())}     # the 3D block opens it as is
+    assert ready == {"label": "glb", "open": str((tmp_path / "ready.glb").resolve())}     # the viewer opens it as is
     parser = build_parser()
     a = parser.parse_args(pmx["glb"])
     assert (a.func.__name__, a.pose, a.morph) == ("run_glb", "arms_down", ["笑い=0.5"])
@@ -135,13 +140,31 @@ def test_marks_drawn_over_a_lab_sheet_come_back_in_millimetres(tmp_path):
     sheet = lab_sheet(tmp_path)
     f = write(tmp_path / "m.review.toml", '[review]\ntitle = "Marks"\n[[question]]\nid = "q"\nask = "?"\n'
                                          'images = ["sheet.png"]\n')
-    RV.marks_path(f).write_text(json.dumps({"images": [{"path": str(sheet), "w": 400, "h": 300, "marks": [
-        {"kind": "line", "from": [50.0, 180.0], "to": [250.0, 180.0], "text": "too wide"},
-        {"kind": "box", "shape": "rect", "box": [120.0, 110.0, 60.0, 30.0], "text": ""},
-        {"kind": "text", "box": [200.0, 200.0, 40.0, 10.0], "text": "here"}]}]}), encoding="utf-8")
-    line, box, note = (m["model_space"] for m in RV.answers(f)["marks"])
+    RV.write_marks(f, [{"path": str(sheet), "marks": [
+        {"kind": "line", "color": "#E5383B", "from": [50.0, 180.0], "to": [250.0, 180.0], "text": "too wide"},
+        {"kind": "box", "box": [180.0, 140.0, -60.0, -30.0]},            # dragged up and left from (180, 140)
+        {"kind": "ink", "points": [[150.0, 50.0], [150.0, 150.0]]},
+        {"kind": "text", "box": [200.0, 200.0, 40.0, 10.0], "text": "here"}]}])
+    got = RV.answers(f)["marks"]
+    assert Path(got[0]["marked"]).is_file() and got[0]["color"] == "#e5383b"
+    line, box, ink, note = (m["model_space"] for m in got)
     assert line["cell"] == "front" and line["length_mm"] == pytest.approx(200.0, abs=2.0)
     assert line["inset_mm"]["min"] < -40.0 and line["inset_mm"]["max"] > 40.0   # starts 50 mm outside, runs inside
     assert (box["width_mm"], box["height_mm"]) == (60.0, 30.0)
     assert box["region_mm"] == pytest.approx(1035.0, abs=0.5)                 # 35 mm above the cell's centre at 1 m
+    assert ink["length_mm"] == pytest.approx(100.0, abs=2.0)
     assert note["cell"] == "front" and note["text"] == "here"
+
+
+def test_a_mark_the_page_could_not_have_drawn_is_refused(tmp_path):
+    sheet = lab_sheet(tmp_path)
+    f = write(tmp_path / "m.review.toml", '[review]\ntitle = "Marks"\n[[question]]\nid = "q"\nask = "?"\n'
+                                         'images = ["sheet.png"]\n')
+    for marks, needle in (([{"kind": "ink", "points": [[1, 2]]}], "at least two points"),
+                          ([{"kind": "box", "color": "red", "box": [0, 0, 1, 1]}], "not #rrggbb"),
+                          ([{"kind": "star"}], "kind is one of")):
+        with pytest.raises(RV.ReviewError, match=needle):
+            RV.write_marks(f, [{"path": str(sheet), "marks": marks}])
+    with pytest.raises(RV.ReviewError, match="not a picture of this review"):
+        RV.write_marks(f, [{"path": str(tmp_path / "sheet.mask.png"), "marks": [{"kind": "text", "box": [0, 0, 1, 1]}]}])
+    assert not RV.marks_path(f).exists()

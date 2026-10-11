@@ -18,8 +18,8 @@ writes) or a .pmx file. Model space throughout: metres, Z up, -Y forward, +X her
   sheet(models, region, ...)             one scale for every model; the layout records each cell's camera
   trace(marked, sheet_png, layout)       place a marked image on the sheet (ORB features, else multi-scale template
                                          matching), then the red stroke in model space and its distance to the outline
-  trace_points(pts, sheet_png, layout)   the same for a stroke already in sheet pixels (a line drawn over the sheet in
-                                         a Tern whiteboard; mkmmd.review reads those)
+  trace_points(pts, sheet_png, layout)   the same for a stroke already in sheet pixels (a line drawn over the sheet on
+                                         a review page; mkmmd.review reads those)
 """
 import math
 import shutil
@@ -664,11 +664,12 @@ def _extent(pts, axis):
     return float(s.max() - s.min()) if len(s) else 0.0
 
 
-def measure(model, region="body", side="L", V=None):
+def measure(model, region="body", side="L", V=None, cuts=None):
     """{name: value}: lengths, widths, depths and girths in mm (ratios are named *_ratio) of the region at `V`
     (default the rest pose). Measures whose bones the model lacks are left out. Cross-sections cut every triangle,
     hidden ones too (skin a dress always covers is often moved to an invisible material), and measure the innermost
-    loop around the point: the skin, not the clothes over it."""
+    loop around the point: the skin, not the clothes over it. `cuts` (a dict) gets each girth's plane: {name girth:
+    {"p", "d", "target"}} in model space."""
     V = model.V if V is None else V
     T = model.T
     weld = _welded(V)
@@ -685,6 +686,8 @@ def measure(model, region="body", side="L", V=None):
         if lp is None:
             return
         out[f"{name} girth"] = round(lp["perimeter"] * mm, 1)
+        if cuts is not None:
+            cuts[f"{name} girth"] = {"p": np.asarray(p, float), "d": unit(d), "target": np.asarray(target, float)}
         if wide is not None:
             out[f"{name} width"] = round(_extent(lp["points"], wide) * mm, 1)
         if deep is not None:
@@ -752,6 +755,8 @@ def measure(model, region="body", side="L", V=None):
             lp = _nearest(sections(V, T, pt, ax, weld), pt, ax)
             if lp is not None:
                 out[f"girth at {int(t * 100)} %"] = round(lp["perimeter"] * mm, 1)
+                if cuts is not None:
+                    cuts[f"girth at {int(t * 100)} %"] = {"p": pt, "d": unit(ax), "target": pt}
     return out
 
 
@@ -973,7 +978,7 @@ def cell_world(cell, layout, pts):
 
 def trace_points(pts, sheet_png, layout, mask_png=None, step_mm=2.0, sheet=None):
     """A stroke given as sheet pixels `pts` (k, 2), in any order (the red pixels `trace` found, or a line drawn over the
-    sheet in a whiteboard), in model space: what `trace` returns, without the registration. `sheet` is the sheet
+    sheet on a review page), in model space: what `trace` returns, without the registration. `sheet` is the sheet
     image already read (BGR), else it is read from `sheet_png`."""
     cv2 = _cv()
     S = sheet if sheet is not None else cv2.imread(str(sheet_png), cv2.IMREAD_COLOR)

@@ -24,9 +24,10 @@ mk doctor
 `mk doctor` tells you what is missing (and `mk doctor --fix` repairs mmd_tools' bundled wheels). Point mk at your Blender with
 `MK_BLENDER=/path/to/blender` or `~/.config/mk/config.toml` ([Configuration](docs/design.md#configuration)).
 
-In [Tern](https://stencil.so/tern), `tern plugin link tern/` (from the checkout) adds mk's blocks: reviews (`mk review open`:
-pictures, choices, notes and models to turn in 3D, answered back into the agent's chat) and any `.pmx` opened as a model
-with its numbers, posed in Tern's 3D block (see [tern/README.md](tern/README.md)).
+Reviews (`mk review open`: pictures to draw on, choices, notes and models to turn in 3D) open as a page mk serves on
+this machine, in Tern beside the agent's pane or in the browser. In [Tern](https://stencil.so/tern), `tern plugin link
+tern/` (from the checkout) also opens any `.pmx` as a model with its numbers, posed in Tern's 3D block (see
+[tern/README.md](tern/README.md)).
 
 ## A small project
 
@@ -214,7 +215,8 @@ max = 8.0
 | `mk inspect` | describes a model (rig.json: semantic bones, chains, bodies, expressions, quirks) or a motion (tempo, energy, travel) |
 | `mk assets` | the local asset registry: `add`, `scan`, `list`, `show` (terms of use), `set` (licence and credit fields), `rm`, `credits` for a project |
 | `mk model` | builds an original MMD character from a spec in code and exports a PMX: `new` (a character on a model base), `build`, `info`, `studio`; `lab` (views, pose sheets and side-by-side numbers of specs and PMX files, no Blender), `trace` (a red line drawn on a lab sheet, in millimetres) and `glb` (a model posed, T-pose by default, as one .glb with its textures, for Tern's 3D block) (see Characters in design.md) |
-| `mk review` | puts decisions to a person: a review file of questions with pictures, choices, notes and models, answered in Tern's review block (the mk plugin in `tern/`), whose Send posts the answers back into the agent's chat; `check`, `open`, `answers` (marks drawn on lab sheets come back in mm) |
+| `mk review` | puts decisions to a person: a review file of questions with pictures, choices, notes and models, answered on a page mk serves (pictures to draw on, a 3D viewer with cuts and measures); `check`, `open` (`--wait` returns the answers when Send is pressed), `answers` (marks drawn on lab sheets come back in mm) |
+| `mk site` | opens the project's page (its reviews), served on this machine; `--stop` stops the server |
 | `mk timeline` | analyses a song span: `analyze` (tempo, beats, bars, loudness, note onsets, sung words by `(line, word)`), `show`, `onsets` |
 | `mk ref` | measures blinks, gaze, nods, sway and mouth in reference clips of real people (`search`, `add`, `track`, `measure`, `sheet`, `clean`; Pexels + MediaPipe); `mk ref photos` fetches licensed Wikimedia photos to model props from |
 | `mk build` | builds the scene from `mk.toml`, stage by stage (`--until`, `--skip`) |
