@@ -14,6 +14,7 @@ import numpy as np
 
 from .. import __version__
 from .. import review as RV
+from . import draft as DR
 from . import music as MU
 from .server import HttpError, body_json, cache
 
@@ -104,7 +105,7 @@ SKIP = {"build", "renders", "out", "node_modules", "__pycache__"}
 
 def project(site, query, body):
     """A project's page: its name, root, review files (each with its title, answers and whether it was sent) and whether
-    it has music (an [audio] file or a timeline)."""
+    it has music (an [audio] file or a timeline) and a baked scene."""
     root = Path(query.get("path") or "").expanduser().resolve()
     if not (root / "mk.toml").is_file():
         raise HttpError(422, f"{root} has no mk.toml")
@@ -125,7 +126,56 @@ def project(site, query, body):
             item["error"] = str(e)
         reviews.append(item)
     has_music = bool((proj.data.get("audio") or {}).get("file")) or (root / MU.TIMELINE).is_file()
-    return 200, {"name": proj.name, "root": str(root), "reviews": reviews, "music": has_music}
+    return 200, {"name": proj.name, "root": str(root), "reviews": reviews, "music": has_music,
+                 "scene": bool(proj.blend) and (bake_dir(proj) / "bake.json").is_file()}
+
+
+def bake_dir(proj):
+    """Where `mk build` bakes the project's scene: beside [project] blend, as <name>.bake (mkmmd/blender/build/bake.py)."""
+    return Path(proj.blend).with_suffix(".bake")
+
+
+def _project(site, query):
+    """The project at ?path= (its root), which the page must have been opened for."""
+    root = Path(query.get("path") or "").expanduser().resolve()
+    if not (root / "mk.toml").is_file():
+        raise HttpError(422, f"{root} has no mk.toml")
+    site.allowed(root / "mk.toml")
+    from ..project import Project, ProjectError
+    try:
+        return Project.load(root)
+    except ProjectError as e:
+        raise HttpError(422, str(e))
+
+
+def scene(site, query, body):
+    """A project's baked scene as file URLs (bake.json, bake.bin, scene.glb), whether the .blend is newer than it, and
+    the outputs mk post has a draft of."""
+    proj = _project(site, query)
+    if not proj.blend:
+        raise HttpError(422, "the project has no [project] blend, so `mk build` bakes no scene")
+    d = bake_dir(proj)
+    if not (d / "bake.json").is_file():
+        raise HttpError(404, f"no baked scene in {d}: `mk build` bakes it (`mk build --bake` a saved scene)")
+    site.allow(d)
+    blend = Path(proj.blend)
+    return 200, {"json": file_url(d / "bake.json"), "bin": file_url(d / "bake.bin"), "glb": file_url(d / "scene.glb"),
+                 "stale": blend.is_file() and blend.stat().st_mtime > (d / "bake.json").stat().st_mtime,
+                 "drafts": [o.name for o in proj.outputs if DR.path(proj, o.name).is_file()]}
+
+
+def draft(site, query, body):
+    """mk post's draft of ?output= as the scene viewer decodes it (mkmmd.site.draft): its URL and sample table."""
+    proj = _project(site, query)
+    f = DR.path(proj, query.get("output") or "")
+    if not f.is_file():
+        raise HttpError(404, f"no draft {f.name}: `mk post --preset draft` makes it")
+    try:
+        doc = DR.index(f, cache())
+    except ValueError as e:
+        raise HttpError(422, str(e))
+    site.allow(f.parent)
+    return 200, {"url": file_url(f), **doc}
 
 
 def music(site, query, body):
@@ -343,4 +393,4 @@ def routes():
     return {("GET", "ping"): ping, ("POST", "stop"): stop, ("POST", "open"): open_page, ("GET", "project"): project,
             ("GET", "review"): review, ("PUT", "answers"): answers, ("POST", "send"): send, ("PUT", "marks"): marks,
             ("GET", "model"): model, ("POST", "section"): section, ("GET", "measures"): measures,
-            ("POST", "snapshot"): snapshot, ("GET", "music"): music}
+            ("POST", "snapshot"): snapshot, ("GET", "music"): music, ("GET", "scene"): scene, ("GET", "draft"): draft}

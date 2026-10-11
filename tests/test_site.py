@@ -1,13 +1,17 @@
 """The site's server (mkmmd.site): it answers only with its token and to its own address, serves files only from the
 folders a page was opened for (with byte ranges, which audio and video seek with), a review goes through it the way
-the page uses it (opened, answers checked and kept, sent), and a project's music comes back in clip seconds: the clip's
+the page uses it (opened, answers checked and kept, sent), a project's music comes back in clip seconds (the clip's
 audio cut from the song where [audio] starts, the hits lanes the project names, the shots and effects, and the words by
-number, never their text."""
+number, never their text), its baked scene is found beside [project] blend with the drafts mk post made, and a draft's
+samples point at its H.264 frames."""
+import base64
 import http.client
 import json
 import math
+import os
 import shutil
 import struct
+import subprocess
 import threading
 import urllib.parse
 import wave
@@ -16,6 +20,7 @@ import pytest
 
 from mkmmd import review as RV
 from mkmmd.site import api as API
+from mkmmd.site import draft as DR
 from mkmmd.site import music as MU
 from mkmmd.site import server as S
 
@@ -179,3 +184,51 @@ def test_music_is_served_for_the_projects_its_pages_were_opened_for(site, tmp_pa
     assert status == 200 and [s["name"] for s in m["shots"]] == ["a", "b"]
     status, wav, _ = ask(site, "GET", m["audio"]["url"])
     assert status == 200 and wav[:4] == b"RIFF"
+
+
+def test_the_scene_is_the_bake_beside_the_blend_with_the_drafts_mk_post_made(site, tmp_path):
+    root = tmp_path / "proj"
+    (root / "build").mkdir(parents=True)
+    (root / "mk.toml").write_text('[project]\nname = "p"\nfps = 30\nframe0 = 1\nduration = 2.0\nblend = "build/p.blend"\n'
+                                  '[[output]]\nname = "9x16"\nsize = [540, 960]\n[[output]]\nname = "1x1"\nsize = [540, 540]\n',
+                                  encoding="utf-8")
+    (root / "build" / "p.blend").write_bytes(b"blend")
+    q = "api/scene?path=" + urllib.parse.quote(str(root))
+    assert ask(site, "GET", q)[0] == 403                                           # the page was not opened for it
+    assert ask(site, "POST", "api/open", {"project": str(root)})[0] == 200
+    status, data, _ = ask(site, "GET", q)
+    assert status == 404 and "mk build" in json.loads(data)["error"]
+    bake = root / "build" / "p.bake"
+    bake.mkdir()
+    for name in ("bake.json", "bake.bin", "scene.glb"):
+        (bake / name).write_bytes(b"{}")
+    (root / "out").mkdir()
+    (root / "out" / "p_9x16_draft.mp4").write_bytes(b"")
+    os.utime(root / "build" / "p.blend", (1_000_000, 1_000_000))
+    got = json.loads(ask(site, "GET", q)[1])
+    assert (got["stale"], got["drafts"]) == (False, ["9x16"])
+    assert ask(site, "GET", got["json"])[1] == b"{}"
+    os.utime(root / "build" / "p.blend")                                         # saved again after the bake
+    assert json.loads(ask(site, "GET", q)[1])["stale"] is True
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="no ffmpeg")
+def test_a_drafts_index_sets_up_its_decoder_and_points_at_each_frame_in_decode_order(tmp_path):
+    mp4 = tmp_path / "d.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=30", "-frames:v", "12",
+                    "-c:v", "libx264", "-bf", "2", "-g", "6", "-pix_fmt", "yuv420p", str(mp4)], check=True)
+    d = DR.index(mp4, tmp_path / "cache")
+    record = base64.b64decode(d["description"])
+    assert record[0] == 1 and d["codec"] == "avc1." + record[1:4].hex() and (d["width"], d["height"]) == (64, 48)
+    samples, data = d["samples"], mp4.read_bytes()
+    assert sorted(s[2] for s in samples) == [round(k * 1e6 / 30) for k in range(12)]
+    assert [s[2] for s in samples] != sorted(s[2] for s in samples)               # B-frames: decode order is not display order
+    keys = [s for s in samples if s[3]]
+    assert len(keys) == 2 and keys[0] is samples[0]
+    for off, size, _, key in samples:                                             # each sample: length-prefixed NAL units
+        nal_types, i = [], off
+        while i < off + size:
+            n = int.from_bytes(data[i:i + 4], "big")
+            nal_types.append(data[i + 4] & 0x1F)
+            i += 4 + n
+        assert i == off + size and (5 in nal_types) == key                       # an IDR picture in the keyframes only

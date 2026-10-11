@@ -853,3 +853,112 @@ def test_a_glitch_breaks_up_the_objects_it_names_and_they_stay_gone_after_it(mak
     plain, glitched = navy("--no-transitions"), navy()
     assert min(plain[:3]) > 500 and plain[3] == 0                 # in the scene up to the window's end, hidden after it
     assert glitched[0] == plain[0] and glitched[2] == 0           # before the window as it is; gone on its last frame
+
+
+BAKED = """[pose.mq]
+feet = "floor"
+[[move.mq]]
+name = "hands_up"
+t = 0.2
+dur = 1.2
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+[[freeze]]
+from = 1.5
+to = 1.8
+"""
+
+
+def read_glb(path):
+    """(document, accessor(i) -> float array) of a .glb, sparse accessors filled in."""
+    import struct
+    import numpy as np
+    data = Path(path).read_bytes()
+    n = struct.unpack_from("<I", data, 12)[0]
+    doc, binary = json.loads(data[20:20 + n]), data[20 + n + 8:]
+    comp = {5121: np.uint8, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
+    size = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+
+    def view(bv_i, offset, count, dt, k):
+        bv = doc["bufferViews"][bv_i]
+        return np.ndarray((count, k), dt, binary, bv.get("byteOffset", 0) + offset,
+                          (bv.get("byteStride") or dt.itemsize * k, dt.itemsize))
+
+    def accessor(i):
+        a = doc["accessors"][i]
+        dt, k = np.dtype(comp[a["componentType"]]), size[a["type"]]
+        out = view(a["bufferView"], a.get("byteOffset", 0), a["count"], dt, k).astype(float) if "bufferView" in a \
+            else np.zeros((a["count"], k))
+        if "sparse" in a:
+            s = a["sparse"]
+            idx = view(s["indices"]["bufferView"], s["indices"].get("byteOffset", 0), s["count"],
+                       np.dtype(comp[s["indices"]["componentType"]]), 1)[:, 0]
+            out[idx] = view(s["values"]["bufferView"], s["values"].get("byteOffset", 0), s["count"], dt, k)
+        return out / np.iinfo(dt).max if a.get("normalized") else out
+    return doc, accessor
+
+
+def posed(bake_dir, name, frame):
+    """The mesh `name` on Blender frame `frame` from scene.glb and the bake alone, as mkmmd/blender/build/bake.py says a
+    viewer places it (morphs, node matrix, skin), in the world in glTF's axes."""
+    import numpy as np
+    doc, acc = read_glb(bake_dir / "scene.glb")
+    bake = json.loads((bake_dir / "bake.json").read_text(encoding="utf-8"))
+    blob = np.fromfile(bake_dir / "bake.bin", "<f4")
+    k = frame - bake["frame0"]
+    node = next(n for n in doc["nodes"] if n.get("name") == name)
+    entry = next(e for e in bake["nodes"] if e["name"] == name)
+    o = entry["offset"] + 12 * (k if entry["frames"] > 1 else 0)
+    N = blob[o:o + 12].reshape(4, 3).T
+    morph = next((e for e in bake["morphs"] if e["name"] == name), None)
+    weights = blob[morph["offset"] + morph["count"] * k:][:morph["count"]] if morph else []
+    J = None
+    if "skin" in node:
+        arm = next(a for a in bake["armatures"] if a["name"] == entry["armature"])
+        nb, at = len(arm["bones"]), {b: i for i, b in enumerate(arm["bones"])}
+        every = blob[arm["offset"] + nb * 12 * k:][:nb * 12].reshape(nb, 4, 3).transpose(0, 2, 1)
+        J = every[[at[doc["nodes"][j]["name"]] for j in doc["skins"][node["skin"]]["joints"]]]
+    out = []
+    for p in doc["meshes"][node["mesh"]]["primitives"]:
+        v = acc(p["attributes"]["POSITION"])
+        for w, t in zip(weights, p.get("targets", [])):
+            v = v + w * acc(t["POSITION"])
+        v = v @ N[:, :3].T + N[:, 3]
+        if J is not None:
+            v = np.einsum("vk,vkij,vj->vi", acc(p["attributes"]["WEIGHTS_0"]),
+                          J[acc(p["attributes"]["JOINTS_0"]).astype(int)], np.c_[v, np.ones(len(v))])
+        out.append(v)
+    return np.concatenate(out)
+
+
+def test_the_bake_puts_the_mannequin_and_the_camera_where_blender_has_them_moving_and_in_a_freeze(make, capsys):
+    """The scene viewer draws a frame from build/<name>.bake alone: the skinned mannequin rebuilt from it lands on
+    Blender's own evaluation of that frame (in the freeze, of the frame it holds), and the shot's camera is where its
+    shot puts it."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+    code, out = make(BAKED, cast="at = [0.5, 0.3, 0.0]\nyaw = 30")       # off the origin, turned: her vertices move with her
+    assert code == 0, out.get("error")
+    d = make.root / "build" / "t.bake"
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    assert (bake["frames"], bake["freezes"]) == (60, [[76, 85]])
+    assert {o: [c["shot"] for c in cut] for o, cut in bake["cut"].items()} == {"16x9": ["a"], "9x16": ["a"]}
+    cam = next(c for c in bake["cameras"] if c["name"] == bake["cut"]["16x9"][0]["camera"])
+    first = np.fromfile(d / "bake.bin", "<f4")[cam["offset"]:cam["offset"] + 15]
+    assert np.allclose(first[9:12], [0.0, 0.9, 2.6], atol=1e-4) and first[12] == 35.0      # at = [0, -2.6, 0.9], +Y up
+    name = next(n["name"] for n in bake["nodes"] if n["armature"])
+    expr = ("(lambda o, dg: np.array([(o.matrix_world @ v.co)[:] for v in o.evaluated_get(dg).data.vertices]).ravel()"
+            f".tolist())(bpy.data.objects[{name!r}], bpy.context.evaluated_depsgraph_get())")
+    assert np.abs(posed(d, name, 34) - posed(d, name, 40)).max() > 0.05          # the hands on their way up, and up
+    for frame, world in ((34, 34), (80, 76)):                                    # moving; in the freeze, held on 76
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", str(world), "--project",
+                       str(make.root)], capsys)
+        assert code == 0, q.get("error")
+        truth = np.array(q["values"][0]).reshape(-1, 3)[:, [0, 2, 1]] * [1, 1, -1]
+        dist, _ = cKDTree(truth).query(posed(d, name, frame))
+        assert dist.max() < 5e-5, (frame, dist.max())

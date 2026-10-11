@@ -532,6 +532,7 @@ member or the camera cannot be used by a stage that runs before them):
 | keys | `[[key]]` | keys on set, prop and object properties | [Keys](#keys) |
 | sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys | [Sim](#sim) |
 | save | | the `.blend` | |
+| bake | | `<blend>.bake/`: the clip for the site's scene viewer, every frame's bones, morphs, objects, visibility and shot cameras, and the meshes (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite) |
 
 The text stage runs after `lights` and before `keys`, so a `[[key]]` can toggle a text's `hide_render` or move it. A stage
 that has nothing to read for a cast member (no `[pose.rin]`, no `[perform.rin]`) leaves it alone, and a `[pose.x]`, `[perform.x]` or `[sim.x]` named after no cast member is ignored
@@ -3045,10 +3046,11 @@ folder and the folders of its pictures and models, a project's root), the page's
 (`<cache>/site/`), with byte ranges for media. One server serves every page; `server.json` in the site cache (pid, port,
 token) lets the next command find it, and it stops after three hours without a request (`mk site --stop` stops it).
 `api.py` holds the routes (`open`, `review`, `answers`, `marks`, `send`, `model`, `section`, `measures`, `snapshot`,
-`project`, `music`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser block docked beside the
-agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab reviews|music] [--where ...]
-[--url] [--stop]` opens the project's page: its reviews (each with its title, how many questions are answered and whether
-it was sent) and, when it has an [audio] file or a timeline, its music.
+`project`, `music`, `scene`, `draft`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser block
+docked beside the agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab
+reviews|music|scene] [--where ...] [--url] [--stop]` opens the project's page: its reviews (each with its title, how many
+questions are answered and whether it was sent), its music when it has an [audio] file or a timeline, and its scene
+when `mk build` has baked it.
 
 The music timeline (`mkmmd/site/music.py` builds it, `web/js/music.js` draws it) puts a project's clip on one canvas, in
 clip seconds: the clip's audio (the [audio] file cut from `start` for `duration` by ffmpeg, a WAV in the site cache;
@@ -3060,6 +3062,18 @@ playhead (a click on a hit, word, shot or effect jumps to its start and names it
 the ruler loops that span, Ctrl+wheel or a pinch zooms, a sideways wheel pans, a double-click fits; ← and → step a beat,
 l loops, f fits, Home goes back. The clock reads clip seconds, the Blender frame and bar.beat. What the project gets
 wrong (a timeline that is missing, a cut that does not plan) is listed under it and the rest is still drawn.
+
+The scene (`web/js/scene/`) plays the bake `mk build` writes beside the .blend (`<name>.bake/`, the bake stage in
+[Building](#building); `mkmmd/blender/build/bake.py` has its format) to the music timeline under it, which is its clock.
+3D draws it with WebGL2: each mesh placed by its node matrix on the frame, skinned on the GPU from a texture of its
+joints' matrices, its morph targets added on the CPU when their weights change, shaded (base colour and texture) or
+grey; Shot looks through the cut's camera for the chosen output as Blender frames it (the picture's aspect, the lens on
+a 36 mm sensor across the larger side, the shift), Free orbits. Draft shows mk post's draft of that output
+(`out/<name>_<output>_draft.mp4`) on the same clock, decoded with WebCodecs (Tern's browser block plays no `<video>`):
+the server's `draft` route (`mkmmd/site/draft.py`) gives the decoder its avcC record and every sample's offset, size,
+time and keyframe flag in decode order (ffprobe), and the page decodes from the keyframe before a jump. The label names
+the shot, the Blender frame and, in a freeze, the frame the world holds; the page says when the .blend is newer than the
+bake (`mk build --bake` bakes a saved scene again).
 
 The page (`web/`) is plain JavaScript modules and one stylesheet, no build step and no library, laid out for a narrow
 pane (about 560 px) and following the host's light or dark theme. Its 3D viewer (`web/js/viewer/`) is a WebGL2 renderer

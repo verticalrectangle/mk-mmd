@@ -1,6 +1,8 @@
 // A .glb (binary glTF 2.0) as what the viewer draws: geometries in world space (node transforms applied, +Y up) and
 // parts (a triangle range of a geometry with its material). Primitives that share vertex accessors under one node
-// share one geometry (mk model glb writes one vertex buffer and a primitive per material); triangles only.
+// share one geometry (mk model glb writes one vertex buffer and a primitive per material); triangles only. openGLB
+// is the file itself (its document, accessors read as arrays, sparse ones filled in, and its materials), which the
+// scene viewer reads skins and morph targets from.
 import { mul, fromTRS, normalMatrix, det3, IDENTITY } from "./math.js";
 
 const COMP = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
@@ -8,28 +10,54 @@ const SIZE = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
 const MAX = { 5120: 127, 5121: 255, 5122: 32767, 5123: 65535 };
 const GET = { 5120: "getInt8", 5121: "getUint8", 5122: "getInt16", 5123: "getUint16", 5125: "getUint32", 5126: "getFloat32" };
 
-export function parseGLB(buf) {
+export function openGLB(buf) {
   const dv = new DataView(buf);
   if (dv.getUint32(0, true) !== 0x46546c67) throw new Error("not a .glb file");
   const jsonLen = dv.getUint32(12, true);
   const doc = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jsonLen)));
-  const binAt = 20 + jsonLen + 8, binLen = binAt - 8 < buf.byteLength ? dv.getUint32(binAt - 8, true) : 0;
+  const binAt = 20 + jsonLen + 8;
 
+  // `count` x `k` values of component type `ct` from buffer view `bvi` at `offset`, into `out` (scaled)
+  const fill = (out, bvi, offset, count, ct, k, scale, at = null) => {
+    const bv = doc.bufferViews[bvi], T = COMP[ct], es = T.BYTES_PER_ELEMENT, stride = bv.byteStride || es * k;
+    const start = binAt + (bv.byteOffset || 0) + offset;
+    if (at === null && stride === es * k && start % es === 0) {
+      const src = new T(buf, start, count * k);
+      if (scale === 1) out.set(src); else for (let j = 0; j < src.length; j++) out[j] = src[j] * scale;
+      return;
+    }
+    const get = GET[ct];
+    for (let v = 0; v < count; v++) {
+      const row = at ? at[v] : v;
+      for (let c = 0; c < k; c++) out[row * k + c] = dv[get](start + v * stride + c * es, true) * scale;
+    }
+  };
   const read = (i, asIndex) => {
-    const a = doc.accessors[i], bv = doc.bufferViews[a.bufferView], T = COMP[a.componentType], k = SIZE[a.type];
-    const es = T.BYTES_PER_ELEMENT, stride = bv.byteStride || es * k, start = binAt + (bv.byteOffset || 0) + (a.byteOffset || 0);
-    const n = a.count * k, out = asIndex ? new Uint32Array(n) : new Float32Array(n);
+    const a = doc.accessors[i], k = SIZE[a.type], n = a.count * k, out = asIndex ? new Uint32Array(n) : new Float32Array(n);
     const scale = !asIndex && a.normalized && MAX[a.componentType] ? 1 / MAX[a.componentType] : 1;
-    if (stride === es * k && start % es === 0) {
-      const src = new T(buf, start, n);
-      if (scale === 1) out.set(src); else for (let j = 0; j < n; j++) out[j] = src[j] * scale;
-    } else {
-      const get = GET[a.componentType];
-      for (let v = 0; v < a.count; v++) for (let c = 0; c < k; c++) out[v * k + c] = dv[get](start + v * stride + c * es, true) * scale;
+    if (a.bufferView !== undefined) fill(out, a.bufferView, a.byteOffset || 0, a.count, a.componentType, k, scale);
+    if (a.sparse) {
+      const s = a.sparse, idx = new Uint32Array(s.count);
+      fill(idx, s.indices.bufferView, s.indices.byteOffset || 0, s.count, s.indices.componentType, 1, 1);
+      fill(out, s.values.bufferView, s.values.byteOffset || 0, s.count, a.componentType, k, scale, idx);
     }
     return out;
   };
-
+  // a morph target's nonzero deltas: {index (vertices), delta (3 per vertex)}, straight from a sparse accessor
+  const deltas = (i) => {
+    const a = doc.accessors[i];
+    if (a.sparse && a.bufferView === undefined) {
+      const s = a.sparse, index = new Uint32Array(s.count), delta = new Float32Array(s.count * 3);
+      fill(index, s.indices.bufferView, s.indices.byteOffset || 0, s.count, s.indices.componentType, 1, 1);
+      fill(delta, s.values.bufferView, s.values.byteOffset || 0, s.count, a.componentType, 3, 1);
+      return { index, delta };
+    }
+    const all = read(i), keep = [];
+    for (let v = 0; v < a.count; v++) if (all[v * 3] || all[v * 3 + 1] || all[v * 3 + 2]) keep.push(v);
+    const index = Uint32Array.from(keep), delta = new Float32Array(keep.length * 3);
+    keep.forEach((v, j) => delta.set(all.subarray(v * 3, v * 3 + 3), j * 3));
+    return { index, delta };
+  };
   const images = (doc.images || []).map((im) => {
     if (im.bufferView === undefined) return null;
     const bv = doc.bufferViews[im.bufferView];
@@ -44,6 +72,11 @@ export function parseGLB(buf) {
       blend: m.alphaMode === "BLEND", cutoff: m.alphaMode === "MASK" ? (m.alphaCutoff ?? 0.5) : 0, double: !!m.doubleSided,
     };
   });
+  return { doc, read, deltas, materials };
+}
+
+export function parseGLB(buf) {
+  const { doc, read, materials } = openGLB(buf);
 
   const geos = [], parts = [], groups = new Map();
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];

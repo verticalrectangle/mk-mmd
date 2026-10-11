@@ -30,7 +30,7 @@ from ..runtime import CTX, op
 
 TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
-          "sim", "save"]
+          "sim", "save", "bake"]
 
 
 class BuildError(RuntimeError):

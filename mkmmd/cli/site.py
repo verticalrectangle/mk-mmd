@@ -11,6 +11,7 @@ elsewhere in the browser. One server serves every page mk opens; it stops by its
 Examples:
   mk site                       # this project's page
   mk site --tab music           # its music: the audio, beats, hits, words, shots and effects
+  mk site --tab scene           # the built scene played to the music, through the shot cameras
   mk site --where tab           # in a new Tern tab
   mk site --stop                # stop the server
 """
@@ -21,7 +22,7 @@ def add(sub):
                        formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--where", default="right", choices=["right", "down", "tab"], help="where it opens in Tern (default: "
                                                                                        "right of this pane)")
-    p.add_argument("--tab", choices=["reviews", "music"], help="the tab it opens on (default: reviews)")
+    p.add_argument("--tab", choices=["reviews", "music", "scene"], help="the tab it opens on (default: reviews)")
     p.add_argument("--url", action="store_true", help="print the page's URL, open nothing")
     p.add_argument("--stop", action="store_true", help="stop the server")
     add_project_arg(p)

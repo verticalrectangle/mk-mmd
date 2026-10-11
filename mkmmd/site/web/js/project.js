@@ -3,12 +3,14 @@
 import { api } from "./api.js";
 import { h, clear } from "./ui.js";
 import { musicView } from "./music.js";
+import { sceneView } from "./scene/scene.js";
 
 export async function openProject(root, frame, tab = null) {
   const P = await api("GET", "project", { query: { path: root } });
   document.title = P.name;
   const tabs = [["reviews", "Reviews", showReviews]];
   if (P.music) tabs.push(["music", "Music", showMusic]);
+  if (P.scene) tabs.push(["scene", "Scene", showScene]);
   const bar = h("div", { class: "tabs" });
   const buttons = tabs.map(([id, label, fn]) => h("button", { text: label, "data-tab": id, onclick: () => go(id) }));
   bar.append(...buttons);
@@ -27,6 +29,12 @@ export async function openProject(root, frame, tab = null) {
 
   function showMusic() {
     shown = musicView(P.root);
+    frame.main.append(shown);
+    shown.focus({ preventScroll: true });
+  }
+
+  function showScene() {
+    shown = sceneView(P.root);
     frame.main.append(shown);
     shown.focus({ preventScroll: true });
   }
