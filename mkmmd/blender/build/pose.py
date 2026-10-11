@@ -248,11 +248,22 @@ def _drape(ctx, m, name, specs, f0, f1):
     return n
 
 
+def _chain_points(arm, smap, side, sems):
+    """World rest points of a finger chain: the heads of its bones, then its tip (the tip bone's head, else the last
+    bone's tail)."""
+    bones = [smap[f"{s}.{side}"] for s in sems if f"{s}.{side}" in smap]
+    pts = [np.array(_world_head(arm, b)) for b in bones]
+    if bones and f"{sems[-1]}.{side}" not in smap:
+        pts.append(np.array(arm.matrix_world @ arm.data.bones[bones[-1]].tail_local))
+    return pts
+
+
 def _finger_quats(arm, smap, side, preset):
     """Bone -> local quaternion curling each finger toward the palm about its own flexion axis (finger direction x
     palm normal, from the rest pose), its base joint first turned about the palm normal by its spread (away from the
     middle finger; the thumb away from the index). `preset`: a name of mkmmd.core.fingers.PRESETS or a table
-    {finger: [a, b, c], spread}."""
+    {finger: [a, b, c], spread}. A tucked thumb (`point`, or "tuck" in a table) gets the spread and curls that fold it
+    over this hand's curled middle finger (mkmmd.core.fingers.tuck_thumb)."""
     from ...core import bonemap
     try:
         angles, spread = FG.curls(preset), FG.spreads(preset)
@@ -261,6 +272,11 @@ def _finger_quats(arm, smap, side, preset):
     if not all(f"{k}.{side}" in smap for k in ("wrist", "index1", "little1")):
         return {}
     palm = palm_normal(arm, smap, side)
+    if FG.tucked(preset):
+        pts = {f: _chain_points(arm, smap, side, bonemap.FINGERS[f]) for f in ("thumb", "index", "middle")}
+        if all(len(p) >= 3 for p in pts.values()):
+            spread["thumb"], angles["thumb"] = FG.tuck_thumb(pts["thumb"], pts["index"], pts["middle"], np.array(palm),
+                                                             angles["index"], angles["middle"])
     base = {f: _world_head(arm, smap[f"{sems[0]}.{side}"]) for f, sems in bonemap.FINGERS.items()
             if f"{sems[0]}.{side}" in smap}
     out = {}

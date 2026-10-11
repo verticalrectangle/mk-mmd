@@ -877,11 +877,15 @@ and positive `head.roll` tips the head toward its left shoulder.
 | `fingers` | `{L = preset, R = preset}`: finger curls (below) for a hand without arm IK. It is applied after the arms and replaces the finger keys of a `hands` table of the same side, a grip's included; a hand table has its own `fingers` |
 | `drape` | `[[pose.<cast>.drape]]`: bone chains pointed along chosen directions, below |
 
-Finger curls are a preset: `flat`, `relaxed`, `curled`, `fist`, or `point` (the index stays straight, the rest as `fist`); or a
-table `{index = [8, 10, 0], middle = [10, 12], thumb = [0, 8]}` of degrees toward the palm for each finger's first three joints
-(`thumb0`, `thumb1`, `thumb2` for the thumb; a number alone is the first joint; a finger or joint left out stays straight).
-The presets bend (fingers / thumb, degrees per joint) `relaxed` 14, 22, 14 / 8, 10, 8; `curled` 35, 50, 35 / 14, 18, 14; `fist`
-and `point` 80, 95, 65 / 25, 35, 40 (`mkmmd/core/fingers.py`). The rotations turn about each finger's own flexion axis.
+Finger curls are a preset: `flat`, `relaxed`, `curled`, `fist`, or `point` (the index stays straight, the others as `fist`, the
+thumb tucked); or a table `{index = [8, 10, 0], middle = [10, 12], thumb = [0, 8]}` of degrees toward the palm for each finger's
+first three joints (`thumb0`, `thumb1`, `thumb2` for the thumb; a number alone is the first joint; a finger or joint left out
+stays straight; `thumb = "tuck"` tucks it). The presets bend (fingers / thumb, degrees per joint) `relaxed` 14, 22, 14 / 8, 10,
+8; `curled` 35, 50, 35 / 14, 18, 14; `fist` 80, 95, 65 / 25, 35, 40, and `point` its three curled fingers as `fist`
+(`mkmmd/core/fingers.py`). The rotations turn about each finger's own flexion axis. A tucked thumb is solved per hand from its
+rest bones (`tuck_thumb`): it folds across the curled middle finger, its tip resting on that finger's middle and end segments
+(22 % of the finger's length off its bones) on the middle finger's side of the index, never standing up beside it, the rest of
+it clear of both fingers, with the least turning (its base joint costing most).
 
 #### Hands
 
