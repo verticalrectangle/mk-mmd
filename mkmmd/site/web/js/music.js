@@ -401,7 +401,7 @@ export function musicView(root, { from = null, to = null } = {}) {
     seek(next === undefined ? (dir > 0 ? S.span[1] : S.span[0]) : next);
   }
   el.addEventListener("keydown", (e) => {
-    if (!S.M || e.ctrlKey || e.metaKey || e.altKey || (e.target !== el && e.target.closest("button, input, select, textarea"))) return;
+    if (!S.M || e.ctrlKey || e.metaKey || e.altKey || (e.target !== el && e.target.closest("button, input, textarea"))) return;
     if (e.key === " ") S.src ? pause() : play();
     else if (e.key === "ArrowRight") stepBeat(1);
     else if (e.key === "ArrowLeft") stepBeat(-1);

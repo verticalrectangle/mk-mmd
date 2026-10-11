@@ -1,10 +1,11 @@
 """The site's server (mkmmd.site): it answers only with its token and to its own address, serves files only from the
 folders a page was opened for (with byte ranges, which audio and video seek with), a review goes through it the way
-the page uses it (opened, answers checked and kept, sent), a project's music comes back in clip seconds (the clip's
-audio cut from the song where [audio] starts, the hits lanes the project names, the shots and effects, and the words by
-number, never their text), its baked scene is found beside [project] blend with the drafts mk post made, a draft's
-samples point at its H.264 frames, and the project's checks keep their last results for the Checks tab (merged by name,
-never overwritten by an ad-hoc run) with each worst moment in clip seconds."""
+the page uses it (opened, answers checked and kept, sent) and one in a project opens on the project's page, a
+project's music comes back in clip seconds (the clip's audio cut from the song where [audio] starts, the hits lanes the
+project names, the shots and effects, and the words by number, never their text), its baked scene is found beside
+[project] blend with the drafts mk post made, a draft's samples point at its H.264 frames, and the project's checks
+keep their last results for the Checks tab (merged by name, never overwritten by an ad-hoc run) with each worst moment
+in clip seconds."""
 import base64
 import http.client
 import json
@@ -96,6 +97,20 @@ def test_a_review_goes_through_the_server_as_the_page_uses_it(site, tmp_path):
     sent = json.loads(data)
     assert status == 200 and sent["sent"] and "A: Rin's" in sent["message"]
     assert RV.show(f)["sent"] == sent["sent"] and RV.answers(f)["answers"][0]["notes"] == "yes"
+
+
+def test_a_review_in_a_project_opens_on_the_project_s_page_under_its_tabs(site, tmp_path):
+    root = (tmp_path / "proj").resolve()
+    f = root / "review" / "pick.review.toml"
+    f.parent.mkdir(parents=True)
+    (root / "mk.toml").write_text('[project]\nfps = 30\nframe0 = 1\nduration = 2.0\n', encoding="utf-8")
+    f.write_text('[review]\ntitle = "Pick"\n[[question]]\nid = "eyes"\nask = "Eyes?"\n'
+                 '[[question.option]]\nid = "A"\nlabel = "Rin\'s"\n', encoding="utf-8")
+    status, data, _ = ask(site, "POST", "api/open", {"review": str(f)})
+    page = urllib.parse.parse_qs(json.loads(data)["page"][1:])
+    assert status == 200 and page == {"project": [str(root)], "review": [str(f)]}
+    status, data, _ = ask(site, "GET", "api/project?path=" + urllib.parse.quote(str(root)))     # the tabs load with it
+    assert status == 200 and [r["path"] for r in json.loads(data)["reviews"]] == [str(f)]
 
 
 def song(path, seconds=6.0, tone_from=1.0, rate=8000):

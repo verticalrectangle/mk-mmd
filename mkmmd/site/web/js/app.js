@@ -1,5 +1,5 @@
-// The site's entry: ?review=PATH opens a review, ?project=DIR a project's page (?tab= one of its tabs). An open page
-// pings the server so it stays up while anyone looks.
+// The site's entry: ?project=DIR opens a project's page (?tab= one of its tabs, ?review=PATH that review in its Reviews
+// tab), ?review=PATH alone a review that is in no project. An open page pings the server so it stays up while anyone looks.
 import { api } from "./api.js";
 import { h, clear } from "./ui.js";
 import { openReview } from "./review.js";
@@ -18,10 +18,10 @@ setInterval(() => { api("GET", "ping").catch(() => {}); }, 30000);
 
 (async () => {
   try {
-    if (params.get("review")) await openReview(params.get("review"), frame);
-    else if (params.get("project")) await openProject(params.get("project"), frame, params.get("tab"));
+    if (params.get("project")) await openProject(params.get("project"), frame, params.get("tab"), params.get("review"));
+    else if (params.get("review")) await openReview(params.get("review"), frame);
     else fail("Nothing to show", "Open a page with `mk review open FILE` or `mk site`.");
   } catch (e) {
-    fail(params.get("review") ? "This review cannot be shown" : "This page cannot be shown", e);
+    fail(params.get("project") || !params.get("review") ? "This page cannot be shown" : "This review cannot be shown", e);
   }
 })();

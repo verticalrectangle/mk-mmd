@@ -4,7 +4,7 @@
 // (two points, mm), Compare (another model of the question, side by side or laid over: Tab), Pose (a .pmx or a spec)
 // and Mark (the view as a picture to draw on, kept with its camera).
 import { api, bytes } from "../api.js";
-import { h, layer, toast, topLayer, clear } from "../ui.js";
+import { h, layer, toast, topLayer, clear, dropdown } from "../ui.js";
 import { parseGLB } from "./glb.js";
 import { Renderer, partColor } from "./render.js";
 import { Orbit } from "./camera.js";
@@ -43,11 +43,12 @@ export function openViewer({ review, model, family = [], question = null, onMark
   const camCol = h("div", { class: "camcol" });
   const stage = h("div", { class: "stage" }, canvas, labels, hud, camCol, panel, spinner);
   const title = h("span", { class: "title", text: model.label });
-  const poseSel = h("select", { class: "select", title: "Pose", hidden: true, onchange: () => setPose(poseSel.value) },
-    POSES.map(([v, l]) => h("option", { value: v, text: l })));
+  const poseSel = dropdown({ title: "Pose", options: POSES, value: POSES[0][0], onChange: (v) => setPose(v) });
+  poseSel.hidden = true;
   const others = family.filter((m) => m.id !== model.id);
-  const cmpSel = h("select", { class: "select", title: "Compare with", hidden: !others.length, onchange: () => compare(cmpSel.value) },
-    h("option", { value: "", text: "Compare…" }), others.map((m) => h("option", { value: m.id, text: m.label })));
+  const cmpSel = dropdown({ title: "Compare with", placeholder: "Compare…", options: [["", "None"], ...others.map((m) => [m.id, m.label])],
+    onChange: (v) => compare(v) });
+  cmpSel.hidden = !others.length;
   el.append(h("div", { class: "bar top" }, title, poseSel, cmpSel), stage);
   const viewBtns = VIEWS.map(([id, label]) => h("button", { text: label, "data-v": id, onclick: () => setMode(id) }));
   const tool = (id, label, title) => h("button", { class: "btn small", text: label, title, "data-t": id, onclick: () => setTool(id) });
@@ -419,7 +420,7 @@ export function openViewer({ review, model, family = [], question = null, onMark
   new ResizeObserver(() => invalidate()).observe(stage);
 
   function key(e) {
-    if (topLayer() !== el || e.target instanceof HTMLSelectElement || e.target instanceof HTMLInputElement && e.target.type !== "range") return;
+    if (topLayer() !== el || e.target instanceof HTMLInputElement && e.target.type !== "range") return;
     const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
     if (k === "1") preset(ctrl ? "back" : "front");
     else if (k === "3") preset(ctrl ? "other side" : "side");

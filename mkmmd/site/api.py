@@ -83,12 +83,21 @@ def _allow_review(site, r):
 
 def open_page(site, query, body):
     """Serve a review (its folder and the folders of the files it names) or a project (its root); answers the page's
-    query string."""
+    query string. A review inside a project (an mk.toml above it that loads) opens on the project's page, in its
+    Reviews tab, so the page's tabs stay over it."""
     b = body_json(body) or {}
     if b.get("review"):
         r = _call(RV.load, b["review"])
         _allow_review(site, r)
-        return 200, {"page": "?review=" + urllib.parse.quote(r["path"])}
+        from ..project import Project, ProjectError
+        try:
+            proj = Project.find(Path(r["path"]).parent)
+        except (ProjectError, ValueError, KeyError, TypeError):
+            proj = None                          # a review in a project whose mk.toml does not load still opens, alone
+        if proj is None:
+            return 200, {"page": "?review=" + urllib.parse.quote(r["path"])}
+        site.allow(proj.root)
+        return 200, {"page": "?project=" + urllib.parse.quote(str(proj.root)) + "&review=" + urllib.parse.quote(r["path"])}
     if b.get("project"):
         root = Path(b["project"]).expanduser().resolve()
         root = root.parent if root.is_file() else root

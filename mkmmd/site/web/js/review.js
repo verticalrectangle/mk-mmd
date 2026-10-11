@@ -8,6 +8,8 @@ import { musicView } from "./music.js";
 
 const CUBE = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>';
 
+// `frame` {top, main, dock}: the review's title and answer count go in `top`, its questions in `main`, Send in `dock`.
+// Returns {dispose}, which takes its keys, music and dock away (saving answers still in flight) when it closes.
 export async function openReview(path, frame) {
   const R = await api("GET", "review", { query: { path } });
   const S = { answers: {}, current: 0, marks: R.marks || { images: [] }, sent: R.sent, timer: 0, pending: null, keyhelp: null };
@@ -15,7 +17,7 @@ export async function openReview(path, frame) {
   const answer = (qid) => (S.answers[qid] ||= { choice: null, notes: "" });
   const withOptions = R.questions.filter((q) => q.options.length);
   const answered = () => withOptions.filter((q) => S.answers[q.id] && S.answers[q.id].choice).length;
-  const cards = [], thumbs = [];
+  const cards = [], thumbs = [], musics = [];
 
   // ---------------------------------------------------------------------------------------------- header and dock
   const pill = h("span", { class: "pill" });
@@ -152,10 +154,12 @@ export async function openReview(path, frame) {
     requestAnimationFrame(grow);
     const viewBox = h("div", { class: "views" });
     viewBoxes.set(q.id, viewBox);
+    const music = q.music ? musicView(q.music.project, { from: q.music.from ?? null, to: q.music.to ?? null }) : null;
+    if (music) musics.push(music);
     const el = h("section", { class: "q", id: "q-" + q.id, onpointerdown: () => setCurrent(i, false) },
       h("div", { class: "q-head" }, h("span", { class: "q-num", text: String(i + 1) }), h("span", { class: "q-ask", text: q.ask }), chosen),
       q.text ? h("div", { class: "q-text" }, markdown(q.text)) : null,
-      q.music ? musicView(q.music.project, { from: q.music.from ?? null, to: q.music.to ?? null }) : null,
+      music,
       pictures(q.images), models(q.models, family, q), viewBox,
       q.options.length ? h("div", { class: "opts" + (q.options.length <= 3 ? " few" : "") }, opts) : null,
       notes);
@@ -215,7 +219,7 @@ export async function openReview(path, frame) {
     S.keyhelp = h("div", { class: "keyhelp", onclick: () => toggleHelp() }, h("table", {}, KEYS.map(([k, v]) => h("tr", {}, h("td", { text: k }), h("td", { text: v })))));
     document.body.append(S.keyhelp);
   }
-  document.addEventListener("keydown", (e) => {
+  const onKey = (e) => {
     if (topLayer() || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement && e.target.type !== "radio") return;
     const c = cards[S.current];
@@ -227,6 +231,19 @@ export async function openReview(path, frame) {
     else if (e.key === "Escape" && S.keyhelp) toggleHelp();
     else return;
     e.preventDefault();
-  });
-  addEventListener("beforeunload", () => { if (S.timer) save().catch(() => {}); });
+  };
+  const onUnload = () => { if (S.timer) save().catch(() => {}); };
+  document.addEventListener("keydown", onKey);
+  addEventListener("beforeunload", onUnload);
+  return {
+    dispose() {
+      document.removeEventListener("keydown", onKey);
+      removeEventListener("beforeunload", onUnload);
+      onUnload();
+      if (S.keyhelp) toggleHelp();
+      for (const m of musics) m.dispose();
+      frame.dock.hidden = true;
+      clear(frame.dock);
+    },
+  };
 }

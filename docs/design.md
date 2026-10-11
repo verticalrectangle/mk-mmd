@@ -3100,7 +3100,9 @@ the passes coming back; [mk's own renderer](#mks-own-renderer)).
 block docked beside the agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab
 reviews|music|scene|checks] [--where ...] [--url] [--stop]` opens the project's page: its reviews (each with its title,
 how many questions are answered and whether it was sent), its music when it has an [audio] file or a timeline, its
-scene when `mk build` has baked it, and its checks when it has `[[check]]` entries.
+scene when `mk build` has baked it, and its checks when it has `[[check]]` entries. A review opens inside that page,
+under its tabs (‹ Reviews or the Reviews tab goes back to the list, any other tab leaves it, its answers saved), and so
+does a review `mk review open` opens when it lies in a project (an mk.toml above it); one in no project opens alone.
 
 The music timeline (`mkmmd/site/music.py` builds it, `web/js/music.js` draws it) puts a project's clip on one canvas, in
 clip seconds: the clip's audio (the [audio] file cut from `start` for `duration` by ffmpeg, a WAV in the site cache;
@@ -3135,10 +3137,11 @@ page follows it until it ends. The music timeline marks each check's worst momen
 fails.
 
 The page (`web/`) is plain JavaScript modules and one stylesheet, no build step and no library, laid out for a narrow
-pane (about 560 px) and following the host's light or dark theme. Its 3D viewer (`web/js/viewer/`) is a WebGL2 renderer
-of the .glb files `mk model glb` writes: a model file that is not a .glb is turned into one by Blender
-(`mkmmd/blender/ops_site.py`), a .pmx or a spec is posed by `mk model glb`, each cached in the site cache by its command
-and its sources (a spec's .toml files and those of the bases it includes). Views: Shaded (its textures), Grey, Lines
+pane (about 560 px) and following the host's light or dark theme. Its dropdowns are its own (`dropdown` in `ui.js`):
+Tern's browser block shows no native popup, so a `<select>`'s list never opens there. Its 3D viewer (`web/js/viewer/`)
+is a WebGL2 renderer of the .glb files `mk model glb` writes: a model file that is not a .glb is turned into one by
+Blender (`mkmmd/blender/ops_site.py`), a .pmx or a spec is posed by `mk model glb`, each cached in the site cache by its
+command and its sources (a spec's .toml files and those of the bases it includes). Views: Shaded (its textures), Grey, Lines
 (edges over grey; open edges and flipped faces in colour), Silhouette, X-ray and Parts (a colour per material; tap one to
 hide or solo it). The camera turns, pans and zooms (double-click zooms to a spot), with front, side, back and top
 buttons and Blender's numpad keys (1, 3, 7, Ctrl for the opposite side, 5 ortho); f fits, r turns it on a turntable, v

@@ -4,7 +4,7 @@
 // of that output on the same clock (WebCodecs). The music timeline under it is the clock (space plays); the label names
 // the shot, the Blender frame and, in a freeze, the frame it holds.
 import { api, bytes } from "../api.js";
-import { h } from "../ui.js";
+import { h, dropdown } from "../ui.js";
 import { musicView } from "../music.js";
 import { Orbit } from "../viewer/camera.js";
 import { mul } from "../viewer/math.js";
@@ -35,7 +35,7 @@ export function sceneView(root, { at = null } = {}) {
   const el = h("div", { class: "scene", tabindex: "0" });
   const S = { gl: null, scene: null, bake: null, blob: null, drafts: [], players: new Map(), output: null, view: "3d",
     mode: "shaded", cam: "shot", orbit: new Orbit(), raf: 0, last: "", drag: null };
-  const outputSel = h("select", { class: "select", title: "Output" });
+  const outputSel = dropdown({ title: "Output", onChange: (v) => { S.output = v; refresh(); } });
   const seg = (name, items) => h("div", { class: "seg small" }, items.map(([v, label]) =>
     h("button", { text: label, "data-v": v, onclick: () => { S[name] = v; refresh(); } })));
   const viewSeg = seg("view", [["3d", "3D"], ["draft", "Draft"]]);
@@ -150,11 +150,10 @@ export function sceneView(root, { at = null } = {}) {
   canvas.addEventListener("wheel", (e) => { if (S.cam !== "free") return; e.preventDefault(); S.orbit.zoom(Math.exp(e.deltaY * 0.0015)); }, { passive: false });
   canvas.addEventListener("dblclick", () => { if (S.scene) { S.orbit.fit(S.scene.bounds); S.last = ""; } });
   el.addEventListener("keydown", (e) => {
-    if (e.key !== " " || e.target.closest("button, select, input, textarea") || !timeline.player) return;
+    if (e.key !== " " || e.target.closest("button, input, textarea") || !timeline.player) return;
     e.preventDefault();
     timeline.player.toggle();
   });
-  outputSel.addEventListener("change", () => { S.output = outputSel.value; refresh(); });
   el.dispose = () => {
     cancelAnimationFrame(S.raf);
     for (const p of S.players.values()) if (p) p.close();
@@ -170,7 +169,8 @@ export function sceneView(root, { at = null } = {}) {
       S.blob = new Float32Array(bin);
       S.drafts = R.drafts || [];
       S.output = S.bake.outputs[0].name;
-      outputSel.append(...S.bake.outputs.map((o) => h("option", { value: o.name, text: `${o.name} · ${o.size[0]}×${o.size[1]}` })));
+      outputSel.setOptions(S.bake.outputs.map((o) => [o.name, `${o.name} · ${o.size[0]}×${o.size[1]}`]));
+      outputSel.value = S.output;
       S.gl = canvas.getContext("webgl2", { antialias: true });
       if (!S.gl) throw new Error("this browser has no WebGL2");
       S.scene = new SceneGL(S.gl, glb, S.bake, S.blob);
