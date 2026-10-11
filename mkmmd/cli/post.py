@@ -18,11 +18,11 @@ H.264 (yuv420p, even size) and AAC with a 60 ms fade-out at the end. Missing fra
 (then the previous frame repeats). The report has each video's path, frames, size and the darkest luma after the grade
 (`min_luma`: above 0 when the floor keeps shadows off black).
 
-[[transition]] and [[insert]] entries (docs/design.md: Shots: Transitions and inserts) are composited from the layers mk
-render drew next to the frames, before the grade: the grade, grain and vignette cover the whole frame. A missing layer is
-an error unless --allow-gaps (then the plain cut shows there); --no-transitions leaves the effects out. Lens streaks
-([post] streaks) are drawn from the result's brightest lights; then screen type ([[text]] with `screen`, docs/design.md:
-Text) is laid over it: <frames>/screen/<frame>.png, drawn by mk render.
+[[transition]], [[insert]] and [[glitch]] entries (docs/design.md: Shots: Transitions and inserts, Glitches) are
+composited from the layers mk render drew next to the frames, before the grade: the grade, grain and vignette cover the
+whole frame. A missing layer is an error unless --allow-gaps (then the plain cut shows there); --no-transitions leaves the
+effects out. Lens streaks ([post] streaks) are drawn from the result's brightest lights; then screen type ([[text]] with
+`screen`, docs/design.md: Text) is laid over it: <frames>/screen/<frame>.png, drawn by mk render.
 
 Examples:
   mk post --preset draft
@@ -40,7 +40,8 @@ def add(sub):
     p.add_argument("--no-audio", action="store_true", help="encode without the song")
     p.add_argument("--allow-gaps", action="store_true", help="repeat the previous frame for a missing frame and show "
                    "the plain cut where an effect's layer is missing")
-    p.add_argument("--no-transitions", action="store_true", help="composite no [[transition]] / [[insert]]: plain cuts")
+    p.add_argument("--no-transitions", action="store_true",
+                   help="composite no [[transition]] / [[insert]] / [[glitch]]: plain cuts")
     p.add_argument("--crf", type=int, default=15, help="x264 quality, lower is better (default 15)")
     add_project_arg(p)
     p.set_defaults(func=run)
@@ -93,7 +94,7 @@ def run(args):
             streaks = P.Streaks({} if st_spec is True else dict(st_spec), pal, size) if st_spec else None
         except (ValueError, KeyError) as e:
             raise UsageError(str(e).strip('"')) from None
-        fx = CF.CutFx(plan, src, size, o.name) if plan and (plan["transitions"] or plan["inserts"]) else None
+        fx = CF.CutFx(plan, src, size, o.name) if TR.has_effects(plan) else None
         if fx:
             lacking = fx.missing(frames)
             if lacking and not args.allow_gaps:
@@ -133,7 +134,8 @@ def run(args):
                           "min_luma": round(lmin, 4), "screen_type_frames": typed}
         if fx:
             report[o.name]["effects"] = {"transitions": len(plan["transitions"]), "inserts": len(plan["inserts"]),
-                                         "frames_without_layers": bare, "matte_scale": fx.notes}
+                                         "glitches": len(plan["glitches"]), "frames_without_layers": bare,
+                                         "matte_scale": fx.notes}
         if args.to:
             dest = Path(args.to).expanduser() / out.name
             dest.write_bytes(out.read_bytes())

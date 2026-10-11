@@ -35,8 +35,8 @@ def get_project(args, required=False):
 
 
 def cut_plan(proj):
-    """The project's [[transition]] and [[insert]] entries checked against its shots (mkmmd.core.transition.plan); a
-    UsageError says what is wrong with one that does not fit."""
+    """The project's [[transition]], [[insert]] and [[glitch]] entries checked against its shots
+    (mkmmd.core.transition.plan); a UsageError says what is wrong with one that does not fit."""
     look = proj.data.get("look", {})
     try:
         return TR.plan(proj.data, proj.fps, proj.frame0, PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots")))

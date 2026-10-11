@@ -21,7 +21,7 @@ For agents (and people) driving `mk`. Every command prints JSON; exit codes are 
 | 3. Storyboard | shots on downbeats, the effect at each cut, what each output shows | |
 | 4. Cast, sets, props | register and clear assets, model what is missing, place everything | `mk assets`, `mk inspect`, `mk ref photos`, `mk build --until props` |
 | 5. Pose, perform, sim | seats, grips, gaze, blinks, lip sync, hair in the wind | `mk build`, `mk grip`, `mk ref measure` |
-| 6. Shots, effects, type | cameras per output, looks, transitions, inserts, lyrics and signs | `mk build --until text` |
+| 6. Shots, effects, type | cameras per output, looks, transitions, inserts, glitches, lyrics and signs | `mk build --until text` |
 | 7. Checks | numbers that define done | `mk check` |
 | 8. Look sheets | the cut in every output, details from all sides | `mk look` |
 | 9. Render and post | draft, preview, final; grade and encode; review | `mk render`, `mk post`, `mk play` |
@@ -117,6 +117,8 @@ fingertip bone's `.tail` and the prop.
   reads the timeline as it is.
 - **Transitions and inserts**: composited by `mk post` from layers `mk render` draws next to the frames. Windows may not overlap and must lie inside one shot of the
   cut; the build refuses a window that starts before `[scene] start`. Preview a frame inside one with `mk look`.
+- **Glitches** ([Glitches](design.md#glitches)): `[[glitch]] {from, to, objects}` makes a character (its meshes, `"Rin_*"`, and what it holds) break up in
+  jumping slices and colour ghosts and vanish by `to`; the build keeps it hidden after that. Start it on a hit; `seed` gives another take.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
   nib, and screen type laid over the picture. Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
   Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to.
@@ -153,7 +155,7 @@ Reading results:
 
 Numbers miss things. `mk look --frames 200,400,600 --sheet` shows the cut in every output; `mk look --view front,left,back --target 'bone("wrist.R").head' --dist 0.4 --frames 300 --sheet`
 inspects a detail from all sides; `--ab OTHER.blend` pairs two scenes; `--ref` puts reference photos beside the render. Look at the images before claiming anything about how a shot
-looks: silhouettes and proportions first, surface detail second. Frames inside a transition or an insert and frames with screen type are previewed composited; `--no-transitions` and `--no-styles` leave effects and looks out.
+looks: silhouettes and proportions first, surface detail second. Frames inside a transition, an insert or a glitch and frames with screen type are previewed composited; `--no-transitions` and `--no-styles` leave effects and looks out.
 
 ### Asking questions of a scene
 

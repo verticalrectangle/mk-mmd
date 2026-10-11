@@ -28,7 +28,7 @@ Views:
                      or yaw:elev pairs such as 20:15 (degrees; yaw 0 = in front, 90 = the model's left)
   Shots of the cut with a render-time look (`style = "silhouette"` or `"vector"`, `reflection = {...}` in [[shot]]) are
   drawn in it, as `mk render` draws them; --no-styles draws every shot as it is lit. Frames inside a [[transition]] /
-  [[insert]] and frames with screen type are previewed composited, as `mk post` makes them.
+  [[insert]] / [[glitch]] and frames with screen type are previewed composited, as `mk post` makes them.
 
 Layout: one image per frame, view and output, written to --out as <view>_<output>_<frame>.jpg (the cut is view `cut`,
 orbit views are named after their preset or yaw_elev, orbits without --output are the square output `sq`); --sheet adds
@@ -70,7 +70,8 @@ def add(sub):
     p.add_argument("--no-styles", action="store_true", help="draw every shot as it is lit, ignoring its silhouette / "
                    "reflection look (the cut shows them by default, as `mk render` draws them)")
     p.add_argument("--no-transitions", action="store_true", help="show the cut's frames without the [[transition]] / "
-                   "[[insert]] effects (by default a frame inside one is previewed composited, as `mk post` makes it)")
+                   "[[insert]] / [[glitch]] effects (by default a frame inside one is previewed composited, as `mk post` "
+                   "makes it)")
     p.add_argument("--sheet", action="store_true", help="also write a contact sheet")
     p.add_argument("--strip", action="store_true", help="also write one strip per view")
     p.add_argument("--ab", metavar="OTHER.blend", help="render the same views on another scene and pair them")
@@ -216,10 +217,10 @@ def run(args):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = Path(args.out).expanduser() if args.out else (
         (proj.mk_dir / "look" / stamp) if proj else CFG.cache_dir() / "look" / stamp)
-    layers = None                                   # what the cut's transitions and inserts need for these frames
+    layers = None                                   # what the cut's transitions, inserts and glitches need for these frames
     plan = cut_plan(proj) if proj and not args.no_styles and not args.no_transitions and any(
         v["kind"] == "shot" for v in views) else None
-    if plan and (plan["transitions"] or plan["inserts"]):
+    if TR.has_effects(plan):
         want = {int(f) for f in frames}
         for tr in plan["transitions"]:               # an expand / collapse also needs the frame where it fills the frame
             if tr["kind"] != "slash" and any(f in want for f in range(tr["first"], tr["last"] + 1)):

@@ -1,7 +1,8 @@
-"""Cut effects between and over shots, bpy-free (docs/design.md: Shots: Transitions and inserts): the `[[transition]]` and
-`[[insert]]` specs, the plan that checks them against the cut, the frames each one needs rendered and the files those
-frames are stored in. `mk build` (keys the cameras the effects need), `mk render` (renders the missing layers), `mk post`
-and `mk look` (composite them, mkmmd.cutfx) all read the one plan, `plan()`, made from mk.toml alone.
+"""Cut effects between and over shots, bpy-free (docs/design.md: Shots: Transitions and inserts, Glitches): the
+`[[transition]]`, `[[insert]]` and `[[glitch]]` specs, the plan that checks them against the cut, the frames each one needs
+rendered and the files those frames are stored in. `mk build` (keys the cameras the effects need), `mk render` (renders the
+missing layers), `mk post` and `mk look` (composite them, mkmmd.cutfx) all read the one plan, `plan()`, made from mk.toml
+alone.
 
     [[transition]]  at, kind = "expand" | "collapse" | "slash", dur, ease
         expand / collapse: scale = [1, "fill"], turn = [0, 90], center = "subject" | [x, y] | [x, y, z] | "<expression>",
@@ -9,12 +10,14 @@ and `mk look` (composite them, mkmmd.cutfx) all read the one plan, `plan()`, mad
         slash:             angle = -20, width = 0.3, color = "love", second = {color, width, offset}, dir = "right"
     [[insert]]      from, to, shot, shape = "thought", anchor, radius, size, offset, ratio, outline = {color, width},
                     pop = {dur, overshoot}, out = "pop" | "expand", expand = {dur, turn, ease}, aspect.<output>
+    [[glitch]]      from, to, objects, seed = 1, shift = 0.06, split = 6, colors = ["love", "foam"]
 
 A window is a run of frames over which an effect changes the picture: the `dur` seconds that END at the cut (`at`) for a
-transition, the whole `from`..`to` for an insert. Frames of the other shot inside a window are *plates*, rendered next to
-the cut's frames (`plate/<shot>/<frame>.png`); the silhouette whose figure is the matte of an expand / collapse is rendered
-as `matte/` (its coverage) and `back/` (its frame without the figure); anchors and centres that need Blender (a bone seen
-through a camera) are `point/<key>/<frame>.json`: {"p": [x, y] frame fractions, "depth", "m": frame heights per metre there}."""
+transition, the whole `from`..`to` for an insert or a glitch. Frames of the other shot inside a window are *plates*,
+rendered next to the cut's frames (`plate/<shot>/<frame>.png`); the silhouette whose figure is the matte of an expand /
+collapse is rendered as `matte/` (its coverage) and `back/` (its frame without the figure); a glitch's shot with its
+objects hidden is `bare/<key>/<frame>.png`; anchors and centres that need Blender (a bone seen through a camera) are
+`point/<key>/<frame>.json`: {"p": [x, y] frame fractions, "depth", "m": frame heights per metre there}."""
 import json
 import math
 from pathlib import Path
@@ -26,7 +29,7 @@ KINDS = ("expand", "collapse", "slash")
 SHAPES = ("thought",)
 SLASH_DIRS = ("right", "left")
 MIN_WINDOW = 2                          # frames
-LAYER_DIRS = ("plate", "matte", "back", "point")      # folders of an output's frame folder that hold layers
+LAYER_DIRS = ("plate", "matte", "back", "bare", "point")      # folders of an output's frame folder that hold layers
 _GEOMETRY = {"size", "offset", "ratio"}  # the insert keys an `aspect.<output>` table may override
 
 _COMMON = {"at", "kind", "dur", "ease"}
@@ -35,10 +38,11 @@ TRANSITION_KEYS = {"expand": _COMMON | {"scale", "turn", "center", "edge"},
                    "slash": _COMMON | {"angle", "width", "color", "second", "dir"}}
 INSERT_KEYS = {"from", "to", "shot", "shape", "anchor", "radius", "size", "offset", "ratio", "outline", "pop", "out", "expand",
                "aspect"}
+GLITCH_KEYS = {"from", "to", "objects", "seed", "shift", "split", "colors"}
 
 
 class TransitionError(ValueError):
-    """A bad [[transition]] / [[insert]] key, or one that does not fit the cut."""
+    """A bad [[transition]] / [[insert]] / [[glitch]] key, or one that does not fit the cut."""
 
 
 def frame_of(t, fps, frame0):
@@ -204,6 +208,34 @@ def insert_for(ins, output):
     return g
 
 
+def normalize_glitch(spec, palette):
+    """One `[[glitch]]` with its defaults, the ghosts' colours resolved."""
+    if not isinstance(spec, dict):
+        raise TransitionError(f"glitch {spec!r}: expected a table")
+    what = f"glitch {spec.get('from')}-{spec.get('to')}"
+    _unknown(spec, GLITCH_KEYS, what)
+    for k in ("from", "to", "objects"):
+        if k not in spec:
+            raise TransitionError(f"{what}: needs `{k}`")
+    objects = [spec["objects"]] if isinstance(spec["objects"], str) else spec["objects"]
+    if not isinstance(objects, list) or not objects or not all(isinstance(p, str) and p for p in objects):
+        raise TransitionError(f"{what}: objects = {spec['objects']!r}: expected object patterns (`name*`, `@collection`, "
+                              f"`prop:key`), a list or one")
+    out = {"from": float(spec["from"]), "to": float(spec["to"]), "objects": list(objects), "seed": int(spec.get("seed", 1)),
+           "shift": float(spec.get("shift", 0.06)), "split": float(spec.get("split", 6.0))}
+    if out["to"] <= out["from"]:
+        raise TransitionError(f"{what}: `to` must come after `from`")
+    if not 0.0 <= out["shift"] <= 0.5:
+        raise TransitionError(f"{what}: shift = {out['shift']}: expected a share of the frame width in 0..0.5")
+    if out["split"] < 0:
+        raise TransitionError(f"{what}: split = {out['split']}: expected pixels at 1080 on the short side, not negative")
+    colors = spec.get("colors", ["love", "foam"])
+    if not isinstance(colors, list) or len(colors) != 2:
+        raise TransitionError(f"{what}: colors = {colors!r}: expected the two ghosts' colours, [a, b]")
+    out["colors"] = [_colour(c, palette, f"{what}: colors") for c in colors]
+    return out
+
+
 # ================================================================================================= the plan
 def has_figure(shot, output):
     """Whether the `[[shot]]` table (raw mk.toml) has a flat look in the output aspect (`style = "silhouette"` or
@@ -224,22 +256,25 @@ def _window_overlap(a, b):
 
 
 def plan(data, fps, frame0, palette):
-    """The transitions and inserts of a project (mk.toml `data`) checked against its shots:
+    """The transitions, inserts and glitches of a project (mk.toml `data`) checked against its shots:
 
         {"fps", "frame0", "cuts": [{name, from, to}] (the cut, in frames), "plates": [shots that are not in the cut],
-         "transitions": [...], "inserts": [...]}
+         "transitions": [...], "inserts": [...], "glitches": [...]}
 
     Every transition carries its `cut` frame, window (`n` frames, `first`..`last`), the outgoing and incoming shots
     (`out`, `in`) and which of them gives the figure (`matte`) and which plays inside it (`plate`); every insert its
-    `f0`..`f1` (the window is f0 .. f1 - 1), `host` shot and the frame counts of its pop and exit. [] entries when the
-    project has none."""
+    `f0`..`f1` (the window is f0 .. f1 - 1), `host` shot and the frame counts of its pop and exit; every glitch its `f0`..`f1`
+    and `host` shot. [] entries when the project has none."""
     shots = data.get("shot") or []
     specs = data.get("transition") or []
     inserts = data.get("insert") or []
+    glitches = data.get("glitch") or []
     if isinstance(specs, dict):
         specs = [specs]
     if isinstance(inserts, dict):
         inserts = [inserts]
+    if isinstance(glitches, dict):
+        glitches = [glitches]
     outputs = [o["name"] for o in data.get("output") or []] or ["main"]
     cuts, plates, by_name = [], [], {}
     for s in shots:
@@ -252,7 +287,8 @@ def plan(data, fps, frame0, palette):
             raise TransitionError(f"shot {name!r}: needs from and to (or plate = true)")
         cuts.append({"name": name, "from": frame_of(s["from"], fps, frame0), "to": frame_of(s["to"], fps, frame0)})
     cuts.sort(key=lambda c: c["from"])
-    out = {"fps": float(fps), "frame0": int(frame0), "cuts": cuts, "plates": plates, "transitions": [], "inserts": []}
+    out = {"fps": float(fps), "frame0": int(frame0), "cuts": cuts, "plates": plates, "transitions": [], "inserts": [],
+           "glitches": []}
     windows = []                                                  # (first, last, label) of every effect
 
     for i, raw in enumerate(specs):
@@ -314,6 +350,19 @@ def plan(data, fps, frame0, palette):
         windows.append((f0, f1 - 1, what))
         out["inserts"].append(ins)
 
+    for g_i, raw in enumerate(glitches):
+        g = normalize_glitch(raw, palette)
+        what = f"glitch {g_i} ({g['from']}-{g['to']} s)"
+        f0, f1 = frame_of(g["from"], fps, frame0), frame_of(g["to"], fps, frame0)
+        host = SS.shot_at(cuts, f0)
+        if host is None or any(f0 < c["from"] < f1 for c in cuts) or f0 < host["from"]:
+            raise TransitionError(f"{what}: it must lie inside one shot of the cut (no cut between {f0} and {f1 - 1})")
+        if f1 - f0 < MIN_WINDOW:
+            raise TransitionError(f"{what}: {f1 - f0} frames are too few (at least {MIN_WINDOW})")
+        g.update(index=g_i, f0=f0, f1=f1, host=host["name"])
+        windows.append((f0, f1 - 1, what))
+        out["glitches"].append(g)
+
     for a in range(len(windows)):
         for b in range(a + 1, len(windows)):
             if _window_overlap(windows[a], windows[b]):
@@ -323,6 +372,11 @@ def plan(data, fps, frame0, palette):
 
 
 # ================================================================================================= what a frame needs
+def has_effects(pl):
+    """Whether the plan has any effect to render layers for and composite."""
+    return bool(pl and (pl["transitions"] or pl["inserts"] or pl["glitches"]))
+
+
 def in_force(pl, shot, frame):
     """Whether `shot` is the shot of the cut at `frame` (then the cut's own frame is its plate)."""
     return cut_shot(pl["cuts"], frame) == shot
@@ -333,6 +387,8 @@ def demands(pl, frames=None):
 
         {"kind": "plate", "shot": S}               S seen through its own camera and look, when S is not in the cut there
         {"kind": "matte", "shot": S}               S's figure alone (matte/) and S's frame without it (back/)
+        {"kind": "bare", "shot": S, "key", "hide"} S with the objects `hide` matches hidden (bare/<key>/): a glitch's
+                                                    shot, its figure gone
         {"kind": "point", "key", "expr", "shot"}   the world point `expr` (the `mk q` expression language) seen through
                                                     S's camera, as fractions of the frame (point/<key>/)"""
     want = None if frames is None else set(int(f) for f in frames)
@@ -362,15 +418,19 @@ def demands(pl, frames=None):
         for f in range(ins["f0"], ins["f1"]):
             plate(f, ins["shot"])
             add(f, {"kind": "point", "key": f"i{ins['index']}", "expr": ins["anchor"], "shot": ins["host"]})
+    for g in pl["glitches"]:
+        for f in range(g["f0"], g["f1"]):
+            add(f, {"kind": "bare", "shot": g["host"], "key": f"g{g['index']}", "hide": g["objects"]})
     return dict(sorted(out.items()))
 
 
 def needs(pl):
-    """{shot: [first frame, last frame]} a shot's camera must be keyed over for the plates and mattes taken from it."""
+    """{shot: [first frame, last frame]} a shot's camera must be keyed over for the plates, mattes and bare frames taken
+    from it."""
     out = {}
     for f, items in demands(pl).items():
         for it in items:
-            if it["kind"] in ("plate", "matte"):
+            if it["kind"] in ("plate", "matte", "bare"):
                 lo, hi = out.get(it["shot"], (f, f))
                 out[it["shot"]] = [min(lo, f), max(hi, f)]
     return out
@@ -387,6 +447,8 @@ def rel_paths(item, frame):
         return [f"back/{item['shot']}/{f}.png", f"matte/{item['shot']}/{f}.png"]
     if item["kind"] == "point":
         return [f"point/{item['key']}/{f}.json"]
+    if item["kind"] == "bare":
+        return [f"bare/{item['key']}/{f}.png"]
     raise ValueError(f"unknown item {item!r}")
 
 
@@ -400,6 +462,10 @@ def matte_rel(shot, frame):
 
 def back_rel(shot, frame):
     return rel_paths({"kind": "matte", "shot": shot}, frame)[0]
+
+
+def bare_rel(key, frame):
+    return rel_paths({"kind": "bare", "key": key}, frame)[0]
 
 
 def point_rel(key, frame):
@@ -504,4 +570,6 @@ def summary(pl):
     return {"transitions": [{"index": t["index"], "kind": t["kind"], "at": t["at"], "frames": [t["first"], t["last"]],
                              "out": t["out"], "in": t["in"]} for t in pl["transitions"]],
             "inserts": [{"index": s["index"], "frames": [s["f0"], s["f1"] - 1], "host": s["host"], "shot": s["shot"],
-                         "out": s["out"]} for s in pl["inserts"]]}
+                         "out": s["out"]} for s in pl["inserts"]],
+            "glitches": [{"index": g["index"], "frames": [g["f0"], g["f1"] - 1], "host": g["host"], "objects": g["objects"]}
+                         for g in pl["glitches"]]}

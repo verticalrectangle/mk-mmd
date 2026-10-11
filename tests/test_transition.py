@@ -238,6 +238,44 @@ def test_inserts_that_do_not_fit_are_refused(patch, frag):
         plan(insert=[{**INSERT, "from": 0.2, "to": 1.0, **patch}])
 
 
+# ---------------------------------------------------------------- glitches in the plan
+GLITCH = {"from": 2.5, "to": 2.9, "objects": ["Rin*", "mic*"]}
+
+
+def test_a_glitch_gets_its_defaults_sits_in_its_host_and_needs_its_bare_frames():
+    g = plan(glitch=[GLITCH])["glitches"][0]
+    assert (g["host"], g["f0"], g["f1"]) == ("l1", F0 + 75, F0 + 87) and g["objects"] == ["Rin*", "mic*"]
+    assert (g["seed"], g["shift"], g["split"]) == (1, 0.06, 6.0) and len(g["colors"]) == 2
+    d = TR.demands(plan(glitch=[GLITCH]))
+    assert sorted(d) == list(range(F0 + 75, F0 + 87))                   # the window, its last frame included
+    assert d[F0 + 80] == [{"kind": "bare", "shot": "l1", "key": "g0", "hide": ["Rin*", "mic*"]}]
+    assert TR.rel_paths(d[F0 + 80][0], F0 + 80) == [f"bare/g0/{F0 + 80:05d}.png"]
+    assert TR.has_effects(plan(glitch=[GLITCH])) and not TR.has_effects(plan())
+    assert TR.normalize_glitch({**GLITCH, "objects": "Rin*"}, MOON)["objects"] == ["Rin*"]   # one pattern alone
+
+
+@pytest.mark.parametrize("patch, frag", [
+    ({"objects": None}, "needs `objects`"), ({"objects": []}, "object patterns"), ({"to": 2.4}, "`to` must come after"),
+    ({"shift": 0.8}, "shift = 0.8"), ({"split": -1}, "not negative"), ({"colors": ["love"]}, "the two ghosts' colours"),
+    ({"colors": ["love", "nope"]}, "colors"), ({"wobble": 1}, "unknown keys"),
+    ({"from": 1.8, "to": 2.2}, "inside one shot"),                      # a cut at 2.0
+    ({"from": 2.5, "to": 2.52}, "too few")])
+def test_glitches_that_do_not_fit_are_refused(patch, frag):
+    spec = dict(GLITCH)
+    for k, v in patch.items():
+        if v is None:
+            spec.pop(k)
+        else:
+            spec[k] = v
+    with pytest.raises(TR.TransitionError, match=frag):
+        plan(glitch=[spec])
+
+
+def test_a_glitch_may_not_overlap_another_effect():
+    with pytest.raises(TR.TransitionError, match="overlap"):
+        plan(glitch=[{**GLITCH, "from": 3.5, "to": 3.95}], transition=[{"at": 4.0, "kind": "collapse", "dur": 0.4}])
+
+
 # ---------------------------------------------------------------- what a frame needs
 def items(d, f):
     return sorted((i["kind"], i["shot"]) for i in d.get(f, []))

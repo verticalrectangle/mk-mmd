@@ -10,10 +10,16 @@
   relative = false          true: the values are offsets added to what the property already does at each key (a
                             value another stage solved or animated, e.g. a hand's grip target), and the existing
                             animation outside the keys' time span is kept
+
+The objects a [[glitch]] names (docs/design.md: Shots: Glitches) are hidden from its `to` on (a CONSTANT `hide_render` key
+added to what they already have), so they stay gone once it has broken them up.
 """
 import bpy
 
+from ...core import shotstyle as SS
+from ...core import transition as TR
 from .. import keys as K
+from ..styles import object_records
 from . import BuildError
 
 
@@ -69,4 +75,28 @@ def run(ctx):
         out[f"{spec['target']}.{prop}"] = len(pts)
     if out:
         ctx.log("keys", len(out))
+    hidden = _glitched(ctx)
+    if hidden:
+        out["_glitch_hidden"] = hidden
+    return out
+
+
+def _glitched(ctx):
+    """{glitch index: objects hidden}: every object a [[glitch]] names hidden from the frame its window ends on."""
+    specs = ctx.data.get("glitch") or []
+    specs = [specs] if isinstance(specs, dict) else specs
+    recs = object_records(bpy.context.scene) if specs else []
+    out = {}
+    for i, g in enumerate(specs):
+        pats = [g["objects"]] if isinstance(g["objects"], str) else list(g["objects"])
+        names = SS.select(recs, pats)
+        if not names:
+            ctx.log("WARNING", f"glitch {i}: no object matches {pats}, so nothing is hidden after it")
+            continue
+        f1 = TR.frame_of(g["to"], ctx.fps, ctx.frame0)
+        for n in names:
+            ob = bpy.data.objects[n]
+            before = _base_values(ob, "hide_render", 0, [f1 - 1])[0]          # as it was on the window's last frame
+            K.key_prop(ob, "hide_render", [f1 - 1, f1], [before, 1.0], interp="CONSTANT", replace=False)
+        out[i] = len(names)
     return out

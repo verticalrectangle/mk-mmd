@@ -1,4 +1,4 @@
-"""Layers of the cut effects, rendered next to the cut's frames (docs/design.md: Shots: Transitions and inserts).
+"""Layers of the cut effects, rendered next to the cut's frames (docs/design.md: Shots: Transitions and inserts, Glitches).
 
     layers = Layers(scene, looks, aspect, frames_dir, demands)   # demands: mkmmd.core.transition.demands for this render
     for f in frames:
@@ -6,12 +6,13 @@
         layers.run(f)                       # writes what frame f's effects need and is not on disk yet
 
 An item is one of the plan's demands: a `plate` (a shot seen through its own camera and look, as the cut would show it),
-a `matte` (a silhouette shot's figure alone as coverage, and its frame without the figure), a `point` (a world point, an
-expression of the `mk q` language, seen through a shot's camera: its place in the frame, `p`, and `m`, how many frame heights a
-metre spans at its depth, which turns a size in metres into pixels). Each is claimed with an empty file before it is drawn,
-so a stopped render resumes and several Blender processes share the frames; the file that marks an item finished is
-written last. Cameras: the shot table's camera of the shot for the output aspect, which `mk build` keyed over the frames
-the plan needs (`keyed` in the table)."""
+a `matte` (a silhouette shot's figure alone as coverage, and its frame without the figure), a `bare` frame (a glitch's shot
+with the glitch's objects hidden: what is left when its figure has gone), a `point` (a world point, an expression of the
+`mk q` language, seen through a shot's camera: its place in the frame, `p`, and `m`, how many frame heights a metre spans
+at its depth, which turns a size in metres into pixels). Each is claimed with an empty file before it is drawn, so a
+stopped render resumes and several Blender processes share the frames; the file that marks an item finished is written
+last. Cameras: the shot table's camera of the shot for the output aspect, which `mk build` keyed over the frames the plan
+needs (`keyed` in the table)."""
 import contextlib
 import json
 import math
@@ -22,6 +23,7 @@ import numpy as np
 from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
+from ..core import shotstyle as SS
 from ..core import transition as TR
 from . import styles as ST
 from .ops_core import _namespace
@@ -130,6 +132,18 @@ class Layers:
         if float(a.max()) <= 0.0:
             print(f"WARNING shot {item['shot']!r} frame {self.frame}: no figure in the matte (is the subject out of frame, or "
                   f"hidden by `hide`?)", flush=True)
+
+    def _bare(self, item, paths):
+        rs = ST.Restore()
+        try:
+            names = SS.select(ST.object_records(self.sc), item["hide"])
+            if not names:
+                print(f"WARNING glitch {item['key']} frame {self.frame}: no object matches {item['hide']}", flush=True)
+            for n in names:
+                ST._hide(rs, bpy.data.objects[n])
+            self._plate(item, paths)
+        finally:
+            rs.run()
 
     def _point(self, item, paths):
         sc = self.sc

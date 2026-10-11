@@ -806,3 +806,50 @@ def test_a_flat_look_draws_what_keys_show_after_its_shot_starts_and_hides_what_i
     navy = [int((np.abs(np.asarray(Image.open(p).convert("RGB"), int) - (27, 42, 107)).max(-1) < 40).sum())
             for p in look["images"]]
     assert navy[0] == 0 and navy[1] > 500 and navy[2] == 0
+
+
+GLITCHED = """[vector]
+colors = { background = "#FFD21F", line = "#1B2A6B" }
+[vector.tones]
+dark = "#1B2A6B"
+[[vector.materials]]
+match = "*"
+tone = "dark"
+[pose.mq]
+feet = "floor"
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+style = "vector"
+[[glitch]]
+from = 0.5
+to = 1.0
+objects = ["Mq_*"]
+"""
+
+
+def test_a_glitch_breaks_up_the_objects_it_names_and_they_stay_gone_after_it(make, capsys, tmp_path):
+    """`mk render` / `mk look` draw the shot without the glitch's objects (its bare frames); the composite breaks the
+    figure up over the window and leaves the bare frame on its last frame, where the scene itself still shows it; from
+    the frame the window ends on the build has them hidden."""
+    import numpy as np
+    from PIL import Image
+    code, out = make(GLITCHED)
+    assert code == 0, out.get("error")
+    assert out["stages"]["shots"]["_cut_effects"]["glitches"][0]["frames"] == [46, 60]
+    assert out["stages"]["keys"]["_glitch_hidden"] == {"0": 1}         # the mannequin's one mesh
+
+    def navy(*extra):
+        code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", "40,53,60,70", "--output", "16x9",
+                          "--size", "320", "--out", str(tmp_path / ("look" + "".join(extra))), "--project", str(make.root),
+                          *extra], capsys)
+        assert code == 0, look.get("error")
+        return [int((np.abs(np.asarray(Image.open(p).convert("RGB"), int) - (27, 42, 107)).max(-1) < 40).sum())
+                for p in look["images"]]
+    plain, glitched = navy("--no-transitions"), navy()
+    assert min(plain[:3]) > 500 and plain[3] == 0                 # in the scene up to the window's end, hidden after it
+    assert glitched[0] == plain[0] and glitched[2] == 0           # before the window as it is; gone on its last frame

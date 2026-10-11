@@ -1,7 +1,7 @@
-"""Cut effects composited over the cut's frames, before the grade (docs/design.md: Shots: Transitions and inserts): the post
-layer (numpy, OpenCV, Pillow). `mk post` and `mk look` hand each frame of the cut to `CutFx.frame`; frames outside every
-window come back untouched. The layers an effect needs were rendered next to the cut's frames (`mk render`,
-mkmmd.blender.transition); the plan (mkmmd.core.transition) says which.
+"""Cut effects composited over the cut's frames, before the grade (docs/design.md: Shots: Transitions and inserts,
+Glitches): the post layer (numpy, OpenCV, Pillow). `mk post` and `mk look` hand each frame of the cut to `CutFx.frame`;
+frames outside every window come back untouched. The layers an effect needs were rendered next to the cut's frames
+(`mk render`, mkmmd.blender.transition); the plan (mkmmd.core.transition) says which.
 
     expand / collapse   the figure of a silhouette shot (`matte/`, its coverage as a distance field, mkmmd.matte) is turned
                         and scaled about its centre; inside it plays the other shot, outside is the silhouette shot's frame
@@ -9,7 +9,10 @@ mkmmd.blender.transition); the plan (mkmmd.core.transition) says which.
                         fills the frame at the last frame of an expand / the first of a collapse, whatever its size.
     slash               a band sweeps across; behind it the incoming shot, ahead of it the outgoing one, the switch under it.
     insert              a thought bubble over the host frame holds the other shot at reduced size (picture in picture),
-                        popping in and out, or growing until its picture is the whole frame."""
+                        popping in and out, or growing until its picture is the whole frame.
+    glitch              the figure (the frame against its `bare/` layer, the same frame without the glitch's objects)
+                        breaks up in jumping slices and colour ghosts and drops out until the bare frame is left
+                        (mkmmd.core.glitch)."""
 import json
 from pathlib import Path
 
@@ -18,6 +21,7 @@ from PIL import Image
 
 from . import matte as M
 from . import post as P
+from .core import glitch as GL
 from .core import transition as TR
 from .core import tween as TW
 
@@ -41,6 +45,9 @@ class CutFx:
         for ins in plan["inserts"]:
             for f in range(ins["f0"], ins["f1"]):
                 self.at[f] = ("insert", ins)
+        for g in plan["glitches"]:
+            for f in range(g["f0"], g["f1"]):
+                self.at[f] = ("glitch", g)
         self._top, self._grown = {}, {}
         self.notes = []
 
@@ -75,6 +82,10 @@ class CutFx:
         kind, spec = hit
         if kind == "insert":
             return self._insert(spec, frame, main)
+        if kind == "glitch":
+            return GL.frame(main, self._rgb(TR.bare_rel(f"g{spec['index']}", frame)), frame - spec["f0"],
+                            spec["f1"] - spec["f0"], seed=spec["seed"], shift=spec["shift"], split=spec["split"] * self.px,
+                            colors=spec["colors"])
         if spec["kind"] == "slash":
             return self._slash(spec, frame, main)
         return self._matte(spec, frame, main)

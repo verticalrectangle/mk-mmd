@@ -279,7 +279,7 @@ def run(ctx):
     sc["mk_shots"] = json.dumps(table)
     first = min((e for e in table if not e.get("plate")) or table, key=lambda s: s["from"])
     sc.camera = bpy.data.objects[first["cameras"][outs[0]["name"]]]
-    if plan["transitions"] or plan["inserts"]:
+    if TR.has_effects(plan):
         report["_cut_effects"] = TR.summary(plan)
     rings = _rings(ctx, table, outs)
     if rings:

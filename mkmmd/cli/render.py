@@ -29,10 +29,11 @@ Shots with a render-time look (`style = "silhouette"` or `"vector"`, `reflection
 Shots) are rendered in it, inside the same Blender job: the frame on disk is the finished flat frame, not a pass.
 --no-styles renders every shot as it is lit.
 
-[[transition]] and [[insert]] entries (docs/design.md: Shots: Transitions and inserts) need more than the cut's frames: the
-other shot's frames (plates), a silhouette's figure (mattes) and projected anchors. They are rendered next to the frames
-in <output>/{plate,matte,back,point}/ on the same terms (claimed, resumable, counted in the disk check); mk post
-composites them. --no-transitions leaves them out (and --no-styles does too: a figure needs its silhouette look).
+[[transition]], [[insert]] and [[glitch]] entries (docs/design.md: Shots: Transitions and inserts, Glitches) need more than
+the cut's frames: the other shot's frames (plates), a silhouette's figure (mattes), a glitch's shot without its objects
+(bare frames) and projected anchors. They are rendered next to the frames in <output>/{plate,matte,back,bare,point}/ on the
+same terms (claimed, resumable, counted in the disk check); mk post composites them. --no-transitions leaves them out (and
+--no-styles does too: a figure needs its silhouette look).
 
 Screen type ([[text]] with `screen`, docs/design.md: Text: Screen type) is kept off the frames, in <output>/screen/<frame>.png
 (RGBA, only for the frames that have any); mk post lays it over the cut and its effects. --no-styles leaves it out.
@@ -54,7 +55,8 @@ def add(sub):
     p.add_argument("--samples", type=int, help="render samples (default: the preset's, or [render] samples)")
     p.add_argument("--percent", type=int, help="resolution percentage (default: the preset's, 50 or 100)")
     p.add_argument("--no-styles", action="store_true", help="ignore the shots' silhouette / reflection looks")
-    p.add_argument("--no-transitions", action="store_true", help="do not render the layers of [[transition]] / [[insert]]")
+    p.add_argument("--no-transitions", action="store_true",
+                   help="do not render the layers of [[transition]] / [[insert]] / [[glitch]]")
     add_project_arg(p)
     p.set_defaults(func=run)
 
@@ -78,7 +80,7 @@ def run(args):
     if args.percent:
         cfg["percent"] = args.percent
     plan = None if args.no_styles or args.no_transitions else cut_plan(proj)
-    demands = TR.demands(plan, frames) if plan and (plan["transitions"] or plan["inserts"]) else {}
+    demands = TR.demands(plan, frames) if TR.has_effects(plan) else {}
     need_mb = 0.0
     for o in outs:
         d = frames_dir(proj, args.preset, o.name)
@@ -87,8 +89,8 @@ def run(args):
         scale = (max(o.size) / 1920.0) ** 2
         mb = EST_MB[100 if cfg["percent"] > 50 else 50]
         need_mb += len(todo) * mb * scale
-        for _, item in TR.pending_items(d, demands):             # a plate is a frame; a matte and its back are mostly flat colour
-            need_mb += (mb if item["kind"] == "plate" else 0.3 if item["kind"] == "matte" else 0.0) * scale
+        for _, item in TR.pending_items(d, demands):             # plates and bare frames are frames; a matte is flat
+            need_mb += (mb if item["kind"] in ("plate", "bare") else 0.3 if item["kind"] == "matte" else 0.0) * scale
     free_mb = shutil.disk_usage(proj.root).free / 1e6
     if need_mb > free_mb - 1500:
         raise UsageError(f"not enough disk: about {need_mb:.0f} MB of frames, {free_mb:.0f} MB free (keeping 1.5 GB "

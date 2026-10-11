@@ -160,7 +160,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
 | `[colliders]` | sim, checks | named lists of collision shapes: see [Colliders](#colliders) |
 | `[[check]]` | `mk check` | `name`, `metric`, `args`, `frames`, `min`, `max`: see [Checks](#checks) |
-| `[[set]]`, `[[prop]]`, `[[scatter]]`, `[[vehicle]]`, `[[cast]]`, `[pose.<cast>]`, `[[motion.<cast>]]`, `[perform.<cast>]`, `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[light]]`, `[[text]]`, `[[key]]`, `[sim.<cast>]` | `mk build` | one build stage each: see [Building](#building) |
+| `[[set]]`, `[[prop]]`, `[[scatter]]`, `[[vehicle]]`, `[[cast]]`, `[pose.<cast>]`, `[[motion.<cast>]]`, `[perform.<cast>]`, `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[[light]]`, `[[text]]`, `[[key]]`, `[sim.<cast>]` | `mk build` | one build stage each: see [Building](#building) |
 
 ```toml
 [project]
@@ -2283,6 +2283,42 @@ subject=False)`). `mk post` lays the effects over the cut's frames before the sc
 unless `--allow-gaps` (the plain cut shows there). `mk look` previews a frame inside a window composited, from layers it draws into
 its own folder. `--no-transitions` leaves the effects out of `mk render`, `mk post` and `mk look` (`--no-styles` leaves them out of
 `mk render` and `mk look` too: a figure needs its silhouette look).
+
+### Glitches
+
+`[[glitch]]` makes objects vanish in a digital glitch over a window inside one shot: the figure they make breaks up in slices
+that jump sideways, two ghosts of its shape in their own colours trail it to either side, a block or two of ghost colour cuts
+through it, and more and more of its slices drop out, with a frame now and then where it blinks out whole or holds still,
+until on the window's last frame it is gone. From the frame the window ends on, the build keeps the objects hidden (a CONSTANT
+`hide_render` key added to what they already have), so they stay gone.
+
+| Key | Meaning |
+|---|---|
+| `from`, `to` | clip seconds (required, `to` after `from`): the window, `from` .. `to` - 1 in frames (at least 2). It must lie inside one shot of the cut and overlap no other effect |
+| `objects` | the objects that vanish (required): a pattern or a list of them, as a look's `hide` takes (`name*`, `@collection*`, `prop:key`): a character is its meshes, `"Rin_*"`; add what it holds, `"mic*"` |
+| `seed` | the random stream's seed (default 1): another seed, another glitch; the same, the same frames |
+| `shift` | the farthest a slice jumps, as a share of the frame width, in 0..0.5 (default 0.06); it jumps a third as far on the first frame and the whole way from the middle on |
+| `split` | the ghosts' offset in px at 1080 on the short side (default 6), more as the window goes on |
+| `colors` | the two ghosts' colours, `[left, right]`: palette slots, `#hex`, `"a:b:t"` or `[r, g, b]` (default `["love", "foam"]`) |
+
+```toml
+[[glitch]]                   # the twins glitch out on the snare and are gone on the next one
+from = 10.803
+to = 11.163
+objects = ["Len_*", "Rin_*", "mic*"]
+colors = ["#FFFFFF", "#8FB4F0"]
+```
+
+`mk render` draws the shot again with the objects hidden on every window frame (`bare/g<i>/<frame>.png`, a full frame, counted in
+the disk check) and `mk post` and `mk look` composite (`mkmmd/core/glitch.py`, numpy only): the figure is where the frame
+differs from that bare frame (by more than 0.03 in any channel, fully from 0.12), its outline, its own colours and the shadows
+it casts included, so any look works. The window is cut into slices 1.2 to 7 % of the frame high; on a glitching frame 45 % of
+them jump, and the share dropped out grows as `u^1.3` over the window (`u` 0 on its first frame, 1 on its last); a frame after
+the first blinks out with a chance of 12 % rising to 42 %, and an early one holds still with a chance of 15 % falling to 0.
+Every frame draws from its own stream (the seed and the frame's place in the window), so a render is repeatable and a frame
+does not depend on the ones before it. Away from the figure, rows it does not reach and columns beyond its farthest jump and
+ghost, the picture is never touched. The plan, `mk build`'s shots report (`_cut_effects.glitches`) and its keys report
+(`_glitch_hidden`: how many objects each glitch hides after it) list it; a pattern that matches no object is a WARNING.
 
 ## Text
 

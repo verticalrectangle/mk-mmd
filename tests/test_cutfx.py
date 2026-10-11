@@ -1,6 +1,7 @@
 """Cut effects composited (mkmmd.cutfx) from synthetic layers on disk: flat colours, a cross as the figure, tiny frames. Checks
 which shot shows inside the matte and which outside, the rim, that an expand fills the frame on its last frame (and a collapse
-on its first) whatever scale the spec asks, the slash band and the thought bubble through their pop, hold and exit."""
+on its first) whatever scale the spec asks, the slash band, the thought bubble through their pop, hold and exit, and a glitch
+breaking the figure up until its bare frame is left."""
 import json
 
 import cv2
@@ -72,7 +73,8 @@ def project(**extra):
             "insert": [{"from": 6.4, "to": 8.0, "shot": "s3", "anchor": "x", "size": 0.5, "offset": [0.0, -0.55],
                         "out": "expand", "outline": {"color": "text", "width": 80}},
                        {"from": 8.2, "to": 9.6, "shot": "pl", "anchor": "x", "size": 0.5, "offset": [0.0, -0.55],
-                        "out": "pop", "outline": {"color": "text", "width": 80}}]}
+                        "out": "pop", "outline": {"color": "text", "width": 80}}],
+            "glitch": [{"from": 0.3, "to": 0.7, "objects": ["x*"]}]}
     data.update(extra)
     return data
 
@@ -89,6 +91,8 @@ def build(root, data, anchor=(0.5, 0.95), per_metre=0.5):
             elif it["kind"] == "matte":
                 save_gray(root / TR.matte_rel(it["shot"], f), cross())
                 save_rgb(root / TR.back_rel(it["shot"], f), flat(COL[it["shot"]]))
+            elif it["kind"] == "bare":
+                save_rgb(root / TR.bare_rel(it["key"], f), flat(COL[it["shot"]]))     # the shot without its figure
             else:
                 (root / TR.point_rel(it["key"], f)).parent.mkdir(parents=True, exist_ok=True)
                 (root / TR.point_rel(it["key"], f)).write_text(json.dumps({"p": list(anchor), "depth": 5.0, "m": per_metre}))
@@ -129,6 +133,21 @@ def test_nothing_is_missing_and_a_deleted_layer_is_found(world, tmp_path):
     assert fx2.missing(range(F0, F0 + 300)) == [TR.plate_rel("l1", plan2["transitions"][0]["first"])]
     (tmp_path / TR.matte_rel("s1", plan2["transitions"][0]["first"] + 1)).write_bytes(b"")
     assert TR.matte_rel("s1", plan2["transitions"][0]["first"] + 1) in fx2.missing(range(F0, F0 + 300))
+
+
+# ---------------------------------------------------------------- glitch
+def test_a_glitch_breaks_the_figure_up_over_its_window_and_leaves_its_bare_frame_on_the_last(world, tmp_path):
+    root, plan, fx = world
+    g = plan["glitches"][0]
+    assert g["host"] == "s1" and fx.active(g["f0"]) and fx.active(g["f1"] - 1) and not fx.active(g["f1"])
+    assert frame(world, g["f1"] - 1) == pytest.approx(flat(COL["s1"]), abs=0.01)          # the cross gone, nothing left
+    broken = [f for f in range(g["f0"], g["f1"] - 1)
+              if not np.allclose(frame(world, f), silhouette("s1"), atol=0.01)
+              and not np.allclose(frame(world, f), flat(COL["s1"]), atol=0.01)]
+    assert len(broken) >= (g["f1"] - g["f0"]) // 2
+    plan2, fx2 = build(tmp_path, project())
+    (tmp_path / TR.bare_rel("g0", g["f0"] + 2)).unlink()
+    assert fx2.missing(range(F0, F0 + 300)) == [TR.bare_rel("g0", g["f0"] + 2)]
 
 
 # ---------------------------------------------------------------- expand
