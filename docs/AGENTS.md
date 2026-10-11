@@ -181,7 +181,9 @@ part. A project whose shots are vector looks renders several times faster with `
 from the bake (`mk build --bake` after saving the .blend by hand), as Blender would to a few pixels in a thousand, and Blender the rest; the report's `shots` says which
 engine drew each and why. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song. Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
 layer or frame is an error unless `--allow-gaps`; after changing text, delete the preset's frames. `mk post --to DIR` copies the videos. The grade is `[post]`
-([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black.
+([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black. A video watched on phones
+wants `[audio.master]` when its beat lives in the bass (808s, kicks: a phone's speakers play little below 250 Hz): it gives the
+booms of a hits lane overtones a phone can play, and the report's `boom_phone_db` says how far they stand out there, before and after.
 
 ## 10. Credits
 

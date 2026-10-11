@@ -154,7 +154,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 |---|---|---|
 | `[project]` | everything | `name` (default: the folder's name), `fps`, `frame0`, `duration`, `blend` (where `mk build` saves the scene) |
 | `[[output]]` | build, look, render, post, framing | `name` (`"16x9"`), `size = [width, height]`; one per delivered aspect: every shot gets a camera per output, the first sets the scene's default render size |
-| `[audio]` | post, timeline, the site | `file`, `start` (song seconds at clip time 0), `hits` (a JSON file of named lists of hit times, clip seconds, each a number or `{t, db}`: the site's timeline shows them as lanes), `lanes` (which of those lists, in order; default all but `beats` and `downbeats`) |
+| `[audio]` | post, timeline, the site | `file`, `start` (song seconds at clip time 0), `hits` (a JSON file of named lists of hit times, clip seconds, each a number or `{t, db}`: the site's timeline shows them as lanes), `lanes` (which of those lists, in order; default all but `beats` and `downbeats`), `master` (mastering for small speakers: see [Post](#post)) |
 | `[scene]` | scene stage | `start`, `end` (frame range; default: 3 s of pre-roll before `frame0` to the last frame of the clip), `settle_frames` (24: the frames the rest pose takes to ease into the base pose) |
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
@@ -2846,6 +2846,32 @@ seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 32
 unless `--allow-gaps` (the previous frame repeats; the plain cut shows where a layer is missing); `--to DIR` also copies the videos;
 `mk look` composes the same way for the images it shows. The report has each video's frames, size, `screen_type_frames`, and the darkest luma
 after the grade (`min_luma`).
+
+`[audio.master]` (or `master = true` in `[audio]` for the defaults) masters the clip's audio for small speakers before it is
+encoded (`mkmmd/master.py`, numpy only). A phone's speakers play little below about 250 Hz, so a mix whose kick or 808 lives
+at 50-150 Hz loses its booms there (Hello Brooklyn's 808s: 94 % of their energy under 150 Hz) while big speakers thump. The
+booms are a lane of `[audio] hits` (clip seconds), and everything happens on them: the low band under `split` around each
+boom is saturated into overtones a phone can play (the ear hears the missing fundamental from its harmonics) and mixed in,
+the boom's attack (1.5-5 kHz) is lifted, and the rest of the mix ducks under it; then the sub is cut and the whole is
+brought to a loudness under a look-ahead limiter. The mastered clip is a WAV in `.mk/cache/post/`; the song file is never
+touched. The report's `audio_master` has the loudness in and out (ITU-R BS.1770-4, LUFS), the peaks, how far the limiter
+turned down, and `boom_phone_db`: how far the booms stand out through a phone's speakers (the level just after each against
+just before it), before and after.
+
+| Key | Meaning |
+|---|---|
+| `lane` | the hits lane of the booms (default `"808"`) |
+| `split` | Hz: the booms' low band (160) |
+| `harmonics`, `drive` | dB of the overtones against that band (-3) and how hard it is saturated (4) |
+| `tail` | s: how long after each hit the overtones last (0.4) |
+| `knock` | dB: the attack's lift on each boom, fading over 25 ms (6) |
+| `duck`, `release` | dB the rest of the mix dips on each boom (4), held 40 ms and back over `release` s (0.15) |
+| `highpass` | Hz: everything under it is cut (35) |
+| `loudness`, `ceiling` | the integrated loudness in LUFS (-12) and the limiter's ceiling in dBFS (-1) |
+
+Hits with a `db` weigh the attack and the duck by it. The defaults are a punchy master (Hello Brooklyn's booms: 0.4 dB over
+their surroundings on a phone, 7.7 after); `harmonics = 0, drive = 6, knock = 9, duck = 7, release = 0.18, loudness = -10` a
+hard one (10.1).
 
 `streaks = {strength 0.35, threshold 0.88, length 0.15, core 0.02, tint "foam", mix 0.75, cap 1.0}` (or `true` for those; off
 without it) is the flare of an anamorphic lens: luminance above `threshold` (eased in over the rest of the range: lamp cores,

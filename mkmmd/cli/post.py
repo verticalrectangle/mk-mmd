@@ -1,10 +1,14 @@
 """mk post: grade rendered frames and encode each output to MP4 with the song."""
 import argparse
+import json
 import subprocess
 import time
 from pathlib import Path
 
+import numpy as np
+
 from .. import cutfx as CF
+from .. import master as MS
 from .. import post as P
 from ..core import palette as PAL
 from ..core import screentype as SRT
@@ -14,9 +18,12 @@ from .common import add_project_arg, cut_plan, emit, get_project, UsageError
 HELP = """Grade the rendered frames of each output ([post] in mk.toml: contrast, split tone, the palette floor that keeps
 shadows off black, halation, vignette, grain) and encode them to <project>/out/<name>_<output>[_<preset>].mp4 (the
 preset is left out of the name for `final`) with the audio of [audio] (file, start = song seconds at clip time 0), as
-H.264 (yuv420p, even size) and AAC with a 60 ms fade-out at the end. Missing frames are an error unless --allow-gaps
-(then the previous frame repeats). The report has each video's path, frames, size and the darkest luma after the grade
-(`min_luma`: above 0 when the floor keeps shadows off black).
+H.264 (yuv420p, even size) and AAC with a 60 ms fade-out at the end. With [audio.master] the clip's audio is mastered for
+small speakers first (mkmmd.master: the booms of a lane of [audio] hits get overtones a phone can play, a lifted attack
+and the rest of the mix ducked under them; the sub is cut; the loudness is set under a limiter), and the report's
+`audio_master` says how far the booms stand out through a phone's speakers before and after. Missing frames are an error
+unless --allow-gaps (then the previous frame repeats). The report has each video's path, frames, size and the darkest luma
+after the grade (`min_luma`: above 0 when the floor keeps shadows off black).
 
 [[transition]], [[insert]] and [[glitch]] entries (docs/design.md: Shots: Transitions and inserts, Glitches) are
 composited from the layers mk render drew next to the frames, before the grade: the grade, grain and vignette cover the
@@ -59,18 +66,42 @@ def encode(frames, size, fps, out, audio=None, crf=15):
     return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
 
+def mastered(proj, au, f, start, duration):
+    """The clip's audio mastered by [audio.master] into a WAV in the project's cache: (path, report)."""
+    if not au.get("hits"):
+        raise UsageError("[audio.master] needs [audio] hits, the file whose lane names the booms")
+    hp = proj.root / Path(au["hits"]).expanduser()
+    if not hp.is_file():
+        raise UsageError(f"[audio] hits {hp} not found")
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{start:.6f}", "-t", f"{duration:.6f}", "-i", str(f), "-ac", "2",
+                          "-ar", str(MS.SR), "-f", "f32le", "-"], capture_output=True, check=True).stdout
+    x = np.frombuffer(raw, np.float32).astype(float).reshape(-1, 2)
+    try:
+        y, rep = MS.master(x, MS.SR, json.loads(hp.read_text(encoding="utf-8")), au["master"])
+    except MS.MasterError as e:
+        raise UsageError(str(e)) from None
+    out = proj.mk_dir / "cache" / "post" / "master.wav"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "f32le", "-ar", str(MS.SR), "-ac", "2", "-i", "-", "-c:a",
+                    "pcm_f32le", str(out)], input=y.astype(np.float32).tobytes(), check=True)
+    return out, rep
+
+
 def run(args):
     proj = get_project(args, required=True)
     outs = [proj.output(n) for n in args.output] if args.output else proj.outputs
     look = proj.data.get("look", {})
     pal = PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots"))
     au = proj.data.get("audio", {})
-    audio = None
+    audio, mastering = None, None
     if not args.no_audio and au.get("file"):
         f = Path(au["file"]).expanduser()
         if not f.exists():
             raise UsageError(f"[audio] file {f} not found")
         audio = {"file": str(f), "start": float(au.get("start", 0.0)), "duration": proj.duration}
+        if au.get("master") is not None:
+            wav, mastering = mastered(proj, au, f, audio["start"], proj.duration)
+            audio = {"file": str(wav), "start": 0.0, "duration": proj.duration}
     frames = list(range(proj.frame0, proj.last_frame + 1))
     plan = None if args.no_transitions else cut_plan(proj)
     od = proj.root / "out"
@@ -140,5 +171,6 @@ def run(args):
             dest = Path(args.to).expanduser() / out.name
             dest.write_bytes(out.read_bytes())
             report[o.name]["copied"] = str(dest)
-    emit({"preset": args.preset, "seconds": round(time.time() - t0, 1), "audio": bool(audio), "outputs": report})
+    emit({"preset": args.preset, "seconds": round(time.time() - t0, 1), "audio": bool(audio), "audio_master": mastering,
+          "outputs": report})
     return 0
