@@ -83,7 +83,9 @@ def test_every_family_has_defaults_and_overrides_merge():
 
 
 @pytest.mark.parametrize("params", [{"back_hair": {"dragg": 1.0}}, {"backhair": {"drag": 1.0}},
-                                    {"back_hair": {"zeta": -1.0}}, {"back_hair": {"radius": 0.0}}])
+                                    {"back_hair": {"zeta": -1.0}}, {"back_hair": {"radius": 0.0}},
+                                    {"back_hair": {"inertia": 1.5}}, {"back_hair": {"bend_max": 0.0}},
+                                    {"back_hair": {"bend_max": 180.0}}])
 def test_misspelt_or_impossible_parameters_fail_loudly(params):
     with pytest.raises(ValueError):
         strands.resolve_params(["back_hair"], params)
@@ -731,3 +733,78 @@ def test_numba_engine_reproduces_the_numpy_engine_with_lateral_links(monkeypatch
     assert np.array_equal(b.x, c.x) and np.array_equal(b.pen, c.pen)
     assert np.abs(a.x - b.x).max() < 1e-7 and np.abs(a.D - b.D).max() < 1e-6 and np.abs(a.pen - b.pen).max() < 1e-7
     assert a.pen[:, 0].max() > 1e-4                                          # the skirt does touch the shapes
+
+
+# ---------------------------------------------------------------- inertia and the bend limit
+def spin(F, deg=150.0, start=4, frames=4):
+    """Quaternions (F,4) of a turn about z: still, then `deg` over `frames` frames from `start` (a dancer's whip turn),
+    then held."""
+    a = np.clip((np.arange(F) - start) / frames, 0.0, 1.0) * deg
+    return np.array([rot_z(x) for x in a])
+
+
+def in_anchor_frame(res, k):
+    """The particles of frame k in their anchors' frames (anchors turned about their own origins)."""
+    return np.einsum("nji,nj->ni", res.anchor_rot[k], res.x[k] - res.anchor_pos[k])
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_a_spinning_skirt_feels_only_its_inertia_share_of_the_turn(engine):
+    """A skirt whose hips whip round 150 deg in four frames: with inertia 0 it is carried round as one piece (its shape
+    on the hips never changes), with 0.5 it flares, but less than with all of it."""
+    F = 16
+    sc = ring_scene(ring_rig(n=8, nb=3), F, poses={"hips": (np.zeros((F, 3)), spin(F))})
+    flare = {}
+    for inertia in (0.0, 0.5, 1.0):
+        res = run(sc, {"skirt": {"inertia": inertia}}, engine=engine)
+        rest = in_anchor_frame(res, 0)
+        flare[inertia] = max(np.linalg.norm(in_anchor_frame(res, k) - rest, axis=1).max() for k in range(F))
+    assert flare[0.0] < 1e-6
+    assert 0.01 < flare[0.5] < 0.75 * flare[1.0]
+
+
+def turn_on_parent(res, parent):
+    """(F, N) how far (deg) every segment has turned from its rest shape on its parent (a root: on its anchor)."""
+    Da = res.anchor_rot @ np.transpose(res.anchor_rest_rot, (0, 2, 1))[None]
+    par = np.asarray(parent, int)
+    Dp = np.where((par < 0)[None, :, None, None], Da, res.D[:, np.maximum(par, 0)])
+    rel = np.swapaxes(Dp, -1, -2) @ res.D
+    return np.degrees(np.arccos(np.clip((np.trace(rel, axis1=-2, axis2=-1) - 1.0) / 2.0, -1.0, 1.0)))
+
+
+def flip_scene(F, chains=1):
+    """Strands whose anchor turns upside down about their roots in two frames, from frame 3."""
+    half = np.radians(np.clip((np.arange(F) - 3) / 2, 0, 1) * 90.0)          # half the angle of a turn about x
+    q = np.stack([np.cos(half), np.sin(half), 0 * half, 0 * half], 1)
+    root = np.array([0.0, 0.0, TOP])
+    pos = root - np.einsum("fij,j->fi", geom.quat_to_mat(q), root)
+    return scene(straight_rig(chains=chains), F, poses={0: (pos, q)})
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_bend_max_keeps_every_segment_within_its_cone_when_the_anchor_flips(engine):
+    """A strand whose anchor turns upside down in two frames whips round and folds over itself; with bend_max 25 no
+    segment ever turns further than 25 deg from its rest shape on its parent, and its lengths stay exact."""
+    sc = flip_scene(14)
+    parent = sc["chains"].parent
+    assert turn_on_parent(run(sc, engine=engine), parent).max() > 60.0          # the whip does fold the free strand
+    held = run(sc, {"hair": {"bend_max": 25.0}}, engine=engine)
+    assert turn_on_parent(held, parent).max() < 25.0 + 1e-6
+    assert np.abs(np.linalg.norm(np.diff(held.x, axis=1), axis=2) - 0.1).max() < 1e-9
+
+
+@needs_numba
+@pytest.mark.parametrize("block_bytes", [strands.BLOCK_BYTES, 1.0])
+def test_numba_engine_reproduces_the_numpy_engine_with_inertia_and_a_bend_limit(monkeypatch, block_bytes):
+    """Without contacts to amplify rounding, the engines agree to rounding on a carried skirt and on strands held in
+    their cones (a contact pressing a strand against its cone parts them as chaos does), in one block of frames or one
+    block per frame (the carry goes on from where the last block left the anchors)."""
+    monkeypatch.setattr(strands, "BLOCK_BYTES", block_bytes)
+    F = 16
+    spinning = ring_scene(ring_rig(n=8, nb=3), F, poses={"hips": (np.zeros((F, 3)), spin(F))})
+    for sc, family in ((spinning, "skirt"), (flip_scene(F, chains=3), "hair")):
+        params = {family: {"inertia": 0.5, "bend_max": 20.0}}
+        a = run(sc, params, engine="numpy")
+        b = run(sc, params, engine="numba", threads=2)
+        assert np.abs(a.x - b.x).max() < 1e-9 and np.abs(a.D - b.D).max() < 1e-8
+        assert np.abs(a.x - run(sc, engine="numpy").x).max() > 1e-2             # the settings changed the motion

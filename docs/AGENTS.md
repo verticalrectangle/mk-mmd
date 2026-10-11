@@ -93,8 +93,9 @@ square crop of a vertical master). Put the plan in comments of `mk.toml` or a lo
   than one on every word. Draw a pose sheet of every move, front and 3/4, and look at it closely before building the shots, then
   watch the moves in motion: a sheet does not show how a hand gets from one place to the next.
 - **Sim** ([Sim](design.md#sim)): hair, ears, tails and skirts are solved outside Blender and baked. List the families, give the colliders (the
-  seat, the car, the fingers, the floor), and `wind = { carrier = "car", ... }` in a moving vehicle. `mk build --skip sim` is the fast loop for poses
-  and performance.
+  seat, the car, the fingers, the floor), and `wind = { carrier = "car", ... }` in a moving vehicle. A simulated skirt with a hand resting on
+  it (`place = "dainty"`) wants `bend_max = 30`, and one on a dancer who whips round faster than cloth could follow wants `inertia = 0.5`
+  (`[sim.<cast>.params.skirt]`). `mk build --skip sim` is the fast loop for poses and performance.
 - **Worn props** (a guitar on its strap, [Playing a worn guitar](design.md#playing-a-worn-guitar)): `wear = "rin"` on the prop, `grip = "guitar:neck"` and
   `grip = "guitar:strum"` on the hands, `strum = {...}` in `perform`; check `strum`, `prop_body` and the arm `contact`.
 

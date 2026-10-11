@@ -1432,6 +1432,8 @@ too, except those of the simulated bones (they move with the hair), and a chain 
 | `lateral` | 0..1, the tie stiffness of neighbouring chains of a sheet-like family (default 0.5 for `skirt`, 0 elsewhere): a skirt's chains are tied to their neighbours in a ring found from their roots' rest positions (a slit breaks the ring), the cloth between them is kept out of seats and thighs; 0 = independent chains |
 | `lateral_collide` | 0 or 1: push the cloth between tied chains out of the shapes (default 1) |
 | `anchor_free` | metres: the family's own zone near the roots (default the stage's; 0 for a tied sheet, which then also collides with the body it hangs from) |
+| `inertia` | 0..1, the share of its anchor's motion the strand feels (default 1, all of it): each substep first carries the strand along by the rest, as a game engine's inertia scale does. For moves faster than cloth could follow: a 145 degree spin in four frames flares a skirt over her waist at 1, half as far at 0.5; 0 carries the strand rigidly and only gravity, the air and contacts move it |
+| `bend_max` | degrees: the most a segment turns from its rest shape on its parent, a joint's limit (default none). A skirt pinched between a resting hand (`place = "dainty"` rests one on it) and a thigh drapes around the hand instead of folding over on itself; 30 suits a skirt |
 
 Defaults per family (`sag` root / tip in degrees, `radius_max` in millimetres). `ears`, `bangs`, `side_hair` and `back_hair` are
 calibrated on a seated close-up; the other rows are plausible starting points to tune:

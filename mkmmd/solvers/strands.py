@@ -40,6 +40,17 @@ Model (position-based strands)
              global zone, unless set per family). A midpoint skips what either chain skips and what it overlaps at
              rest. Linked chains advance together (one thread per ring); with lateral 0 chains stay independent and
              results are those of the uncoupled solver. Penetration (pen, worst) includes the cloth midpoints.
+  inertia    `inertia` (0..1, default 1) is the share of its anchor's motion a strand feels. Each substep first carries
+             the particles, their velocities and their rest-shape targets along by the rest of the anchor's move since
+             the last substep (1 - inertia of its turn about the chain's root, and of the root's shift), so the strand
+             swings only with the share left: a game engine's inertia scale. A character who spins faster than cloth
+             could follow (145 deg in four frames) flares a skirt half as far at 0.5; 0 carries the strand rigidly, and
+             only gravity, the air and contacts move it.
+  bend_max   most a segment turns (deg) away from its rest shape on its parent, a joint's limit as a PMX joint sets
+             one: the last shape pass of each substep turns a segment back into that cone about its rest direction
+             (lengths kept). A sheet pinched between a resting hand and a thigh then drapes around the hand instead of
+             folding over on itself, where a segment near a half turn leaves its frame, and so its children's targets,
+             undefined.
   output     world rotation deltas D (bone world = D @ rest), keyed bone-locally by `local_quats`.
   engines    numpy: whole chains at once, level by level (the reference; minutes for 160 bones x 900 frames x 10
              substeps). numba (pip install 'mk-mmd[fast]', used when present): one chain at a time in compiled loops,
@@ -64,6 +75,8 @@ Model (position-based strands)
     lateral     0..1 (skirt 0.5)     tie stiffness of neighbouring chains (above); 0 = independent chains
     lateral_collide  0 | 1           push the cloth between tied chains out of the shapes (default 1)
     anchor_free m (default global)   zone near the roots where the anchor's body is skipped; 0 for tied sheets
+    inertia     0..1 (default 1)     the share of the anchor's motion the strand feels (above); 1 = all of it
+    bend_max    deg (default none)   most a segment turns from its rest shape on its parent (above)
 Wind (`Wind`)
   The air velocity at a point is: constant wind + carrier_vel * (1 - exposure) + gust + turbulence. `carrier_vel` is the
   world velocity of the vehicle the characters ride in; exposure is the share of its motion the air does NOT follow (0:
@@ -125,9 +138,10 @@ REACH = 25.0 * SMOOTH                               # a shape whose surface is t
                                                     # weighs < e^-25 in the soft union: skipped by the numba kernels
 RING_GAP = 2.5                                       # neighbouring chains: roots at most this x the median gap apart
 RING_MAX_GAP = 2.2                                   # ... and at most this many radians (126 deg) apart
+BLOCK_BYTES = 48e6                                   # kinematics precomputed per block of frames: about this much memory
 
 PARAM_KEYS = ("sag", "drag", "zeta", "radius", "radius_max", "friction", "wind_drag", "lateral", "lateral_collide",
-              "anchor_free")
+              "anchor_free", "inertia", "bend_max")
 FAMILY_DEFAULTS = {
     # tuned on a seated close-up: calm back hair (jitter ratio 0.38), lively side locks (0.68), stiff bangs and ears
     "ears":       dict(sag=(0.6, 1.2), drag=5.0, zeta=1.0, radius=0.45, radius_max=0.020, friction=10.0),
@@ -167,6 +181,8 @@ def resolve_params(families, params=None):
         p.update(user)
         p.setdefault("lateral", 0.0)
         p.setdefault("lateral_collide", 1.0)
+        p.setdefault("inertia", 1.0)
+        p.setdefault("bend_max", None)
         if p.get("anchor_free") is None:                # a coupled sheet also collides with the body it hangs from
             p["anchor_free"] = 0.0 if p.get("lateral", 0.0) > 0 else None
         sag = np.broadcast_to(np.asarray(p["sag"], float), (2,))
@@ -177,9 +193,11 @@ def resolve_params(families, params=None):
                 p[key] = float(p[key])
         if min(p["sag"]) < 0 or min(p["drag"], p["zeta"], p["friction"], p["wind_drag"]) < 0 or \
                 min(p["radius"], p["radius_max"]) <= 0 or not 0.0 <= p["lateral"] <= 1.0 or \
-                p["lateral_collide"] not in (0.0, 1.0) or (p["anchor_free"] is not None and p["anchor_free"] < 0):
+                p["lateral_collide"] not in (0.0, 1.0) or (p["anchor_free"] is not None and p["anchor_free"] < 0) or \
+                not 0.0 <= p["inertia"] <= 1.0 or (p["bend_max"] is not None and not 0.0 < p["bend_max"] < 180.0):
             raise ValueError(f"strands: {fam}: sag, drag, zeta, friction, wind_drag must be >= 0, radius, radius_max "
-                             f"> 0, lateral within 0..1 and lateral_collide 0 or 1, got {p}")
+                             f"> 0, lateral and inertia within 0..1, lateral_collide 0 or 1 and bend_max between 0 and "
+                             f"180 deg, got {p}")
         out[fam] = p
     return out
 
@@ -399,6 +417,33 @@ def _world_row(Wb, r):
     return {kind: tuple(tuple(a[r] for a in x) if isinstance(x, tuple) else x[r] for x in w) for kind, w in Wb.items()}
 
 
+def _turn_share(R, s):
+    """(n,3,3) rotations R turned by the share s (n,) of their angle about the same axis (s = 0: the identity). The axis
+    and angle come from R's skew part and trace, as _nb_turn_share takes them."""
+    v = 0.5 * np.stack([R[:, 2, 1] - R[:, 1, 2], R[:, 0, 2] - R[:, 2, 0], R[:, 1, 0] - R[:, 0, 1]], 1)    # sin(a) axis
+    sn = np.linalg.norm(v, axis=1)
+    a = s * np.arctan2(sn, 0.5 * (R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2] - 1.0))
+    K = geom.skew(v / np.maximum(sn, 1e-300)[:, None])
+    return np.eye(3)[None] + np.sin(a)[:, None, None] * K + (1.0 - np.cos(a))[:, None, None] * (K @ K)
+
+
+def _cone(u, t, cmax):
+    """Unit directions u (n,3) turned toward the unit directions t (n,3) until they are within acos(cmax) (n,) of them
+    (bend_max); rows already inside are left alone. Returns the rows that moved."""
+    c = np.einsum("ij,ij->i", u, t)
+    out = c < cmax
+    if out.any():
+        tt, w = t[out], u[out] - c[out, None] * t[out]
+        wn = np.linalg.norm(w, axis=1)
+        flat = wn < 1e-9                                # turned right round: bend toward any side
+        if flat.any():
+            w[flat] = np.cross(tt[flat], np.where(np.abs(tt[flat, 2:]) < 0.9, [[0.0, 0.0, 1.0]], [[1.0, 0.0, 0.0]]))
+            wn[flat] = np.linalg.norm(w[flat], axis=1)
+        cm = cmax[out]
+        u[out] = cm[:, None] * tt + (np.sqrt(1.0 - cm * cm) / wn)[:, None] * w
+    return out
+
+
 class _Model:
     def __init__(self, chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, params, frames, rig, fps,
                  substeps, wind, use_masks, anchor_free):
@@ -479,6 +524,20 @@ class _Model:
         self.sdecay = np.exp(-2.0 * get("zeta") * np.sqrt(self.alpha))
         self.heavy = np.full(N, np.exp(-30.0 * dt))          # settling damping
         self.sweeps, self.ftl = int(SWEEPS), float(FTL_DAMP)
+        # inertia: each substep carries a strand along by the share `carry` of its anchor's move (no carry: 1 - inertia
+        # = 0 everywhere, the dynamics untouched); bend_max: the cone a segment keeps about its rest direction on its
+        # parent, as a cosine (-2: no limit)
+        self.carry = 1.0 - get("inertia")
+        self.carry_root = self.carry[self.roots]
+        self.carries = bool((self.carry > 0).any())
+        self.bend_cos = np.array([-2.0 if pr[f]["bend_max"] is None else np.cos(np.radians(pr[f]["bend_max"]))
+                                  for f in fam])
+        self.bends = bool((self.bend_cos > -1.5).any())
+        root_of = np.arange(N)
+        for i in range(N):
+            if par[i] >= 0:
+                root_of[i] = root_of[par[i]]
+        self.row = self.rpos[root_of]                       # each bone's chain: its row of the per-root kinematics
         # ---- anchors
         self.a_root = self.a_src[self.roots]
         self.root_local = np.einsum("kji,kj->ki", self.rest_R[self.a_root],
@@ -616,19 +675,51 @@ class _NumpyEngine:
         self.D, self.x = M.initial_state()
         self.v = np.zeros((M.N, 3))
         self.tgt, self.tgt_prev = self.x.copy(), self.x.copy()
+        if M.carries:                                   # where the anchors were on the last substep: the first frame
+            b = M.block([0], [0.0], [0.0])
+            self.prev = (b.H0[0], b.Da[0])
 
-    def shape_pass(self, p, H0, Da, pull):
+    def shape_pass(self, p, H0, Da, pull, bend=False):
         """Root to tip: each segment's rest-shape target (its rest direction carried by the parent's current frame),
-        optionally pulled toward (bending stiffness), and the bone's frame D from its current direction."""
+        optionally pulled toward (bending stiffness) or turned back within bend_max of it (bend: the rest of the strand
+        goes along, so every length stays exact), and the bone's frame D from its current direction."""
         M, D, tgt = self.M, self.D, self.tgt
+        shift = np.zeros_like(p) if bend else None      # how far each particle's ancestors were turned back
         for lv, I in enumerate(M.levels):
+            if bend and lv:
+                shift[I] = shift[M.par[I]]
+                p[I] += shift[I]
             head, Dp = (H0[M.rpos[I]], Da[M.rpos[I]]) if lv == 0 else (p[M.par[I]], D[M.par[I]])
-            tgt[I] = head + M.L[I, None] * np.einsum("kij,kj->ki", Dp, M.d0[I])
+            t = np.einsum("kij,kj->ki", Dp, M.d0[I])
+            tgt[I] = head + M.L[I, None] * t
             if pull:
                 p[I] += M.alpha[I, None] * (tgt[I] - p[I])
             dv = p[I] - head
-            u = dv / np.maximum(np.linalg.norm(dv, axis=1), 1e-12)[:, None]
+            n = np.maximum(np.linalg.norm(dv, axis=1), 1e-12)
+            u = dv / n[:, None]
+            if bend:
+                moved = _cone(u, t, M.bend_cos[I])
+                if moved.any():
+                    J = I[moved]
+                    new = head[moved] + u[moved] * n[moved, None]
+                    shift[J] += new - p[J]
+                    p[J] = new
             D[I] = Dp @ geom.min_rot(M.d0[I], np.einsum("kji,kj->ki", Dp, u))
+
+    def carry(self, H0, Da):
+        """Carry the strands along by the share M.carry of their anchors' move since the last substep: positions and
+        rest-shape targets turn about each chain's root and shift with it, velocities turn. They feel only the rest."""
+        M = self.M
+        H0p, Dap = self.prev
+        self.prev = (H0, Da)
+        B = np.where(M.carry > 0)[0]
+        rows = M.row[B]
+        Rf = _turn_share(Da @ np.transpose(Dap, (0, 2, 1)), M.carry_root)[rows]
+        o = H0p[rows]
+        shift = o + (M.carry_root[:, None] * (H0 - H0p))[rows]
+        self.x[B] = shift + np.einsum("nij,nj->ni", Rf, self.x[B] - o)
+        self.tgt_prev[B] = shift + np.einsum("nij,nj->ni", Rf, self.tgt_prev[B] - o)
+        self.v[B] = np.einsum("nij,nj->ni", Rf, self.v[B])
 
     def relax(self, p, H0):
         """Segment lengths (position-based distance constraints, Gauss-Seidel root to tip; both ends move unless one is
@@ -738,6 +829,8 @@ class _NumpyEngine:
     def substep(self, blk, r, decay):
         M, dt = self.M, self.M.dt
         H0, Da, W = blk.H0[r], blk.Da[r], _world_row(blk.W, r)
+        if M.carries:
+            self.carry(H0, Da)
         if blk.wind is not None:
             u = blk.wmean[r] + blk.wind.fluctuation(self.x, blk.wdisp[r], blk.wt[r])
             v = self.v * decay[:, None] + u * M.wgain[:, None]
@@ -763,7 +856,7 @@ class _NumpyEngine:
                     np.add.at(pushed, ends, push)
                     contact[ends[c]] = True
         corr = self.project(p, H0)                      # exact lengths: the bones keyed from these frames render this
-        self.shape_pass(p, H0, Da, False)               # final frames and targets from the settled positions
+        self.shape_pass(p, H0, Da, False, M.bends)      # final frames and targets from the settled positions
         vn = (p - self.x) / dt
         if M.ftl:                                       # dynamic FTL: a child's move pulls its parent
             has = M.child >= 0
@@ -1002,20 +1095,27 @@ if HAVE_NUMBA:
                 out[i, j] = Dp[i, 0] * R[0, j] + Dp[i, 1] * R[1, j] + Dp[i, 2] * R[2, j]
 
     @_jit
-    def _nb_shape_pass(n, H0r, Dar, p, D, tgt, Lc, d0, alpha, pull):
-        """Root to tip: each segment's rest-shape target, optionally pulled toward, and the bone frame D (the numpy
-        engine's shape_pass for one chain)."""
+    def _nb_shape_pass(n, H0r, Dar, p, D, tgt, Lc, d0, alpha, pull, bend, bcos):
+        """Root to tip: each segment's rest-shape target, optionally pulled toward or turned back within bend_max of it
+        (bend, bcos the cone's cosines: the rest of the strand goes along), and the bone frame D (the numpy engine's
+        shape_pass for one chain)."""
+        sx, sy, sz = 0.0, 0.0, 0.0                        # how far the segments above were turned back
         for j in range(n):
             if j == 0:
                 hx, hy, hz = H0r[0], H0r[1], H0r[2]
                 Dp = Dar
             else:
+                if bend:
+                    p[j, 0] += sx
+                    p[j, 1] += sy
+                    p[j, 2] += sz
                 hx, hy, hz = p[j - 1, 0], p[j - 1, 1], p[j - 1, 2]
                 Dp = D[j - 1]
             a0, a1, a2 = d0[j, 0], d0[j, 1], d0[j, 2]
-            tx = hx + Lc[j] * (Dp[0, 0] * a0 + Dp[0, 1] * a1 + Dp[0, 2] * a2)
-            ty = hy + Lc[j] * (Dp[1, 0] * a0 + Dp[1, 1] * a1 + Dp[1, 2] * a2)
-            tz = hz + Lc[j] * (Dp[2, 0] * a0 + Dp[2, 1] * a1 + Dp[2, 2] * a2)
+            t0 = Dp[0, 0] * a0 + Dp[0, 1] * a1 + Dp[0, 2] * a2
+            t1 = Dp[1, 0] * a0 + Dp[1, 1] * a1 + Dp[1, 2] * a2
+            t2 = Dp[2, 0] * a0 + Dp[2, 1] * a1 + Dp[2, 2] * a2
+            tx, ty, tz = hx + Lc[j] * t0, hy + Lc[j] * t1, hz + Lc[j] * t2
             tgt[j, 0], tgt[j, 1], tgt[j, 2] = tx, ty, tz
             if pull:
                 p[j, 0] += alpha[j] * (tx - p[j, 0])
@@ -1024,10 +1124,68 @@ if HAVE_NUMBA:
             dx, dy, dz = p[j, 0] - hx, p[j, 1] - hy, p[j, 2] - hz
             nn = max(np.sqrt(dx * dx + dy * dy + dz * dz), 1e-12)
             u0, u1, u2 = dx / nn, dy / nn, dz / nn
+            if bend:
+                cm = bcos[j]
+                c = u0 * t0 + u1 * t1 + u2 * t2
+                if c < cm:                                # outside the cone: turn it back onto its rim
+                    w0, w1, w2 = u0 - c * t0, u1 - c * t1, u2 - c * t2
+                    wn = np.sqrt(w0 * w0 + w1 * w1 + w2 * w2)
+                    if wn < 1e-9:                         # turned right round: bend toward any side
+                        if abs(t2) < 0.9:
+                            w0, w1, w2 = t1, -t0, 0.0
+                        else:
+                            w0, w1, w2 = 0.0, t2, -t1
+                        wn = np.sqrt(w0 * w0 + w1 * w1 + w2 * w2)
+                    f = np.sqrt(1.0 - cm * cm) / wn
+                    u0, u1, u2 = cm * t0 + f * w0, cm * t1 + f * w1, cm * t2 + f * w2
+                    nx, ny, nz = hx + u0 * nn, hy + u1 * nn, hz + u2 * nn
+                    sx, sy, sz = sx + (nx - p[j, 0]), sy + (ny - p[j, 1]), sz + (nz - p[j, 2])
+                    p[j, 0], p[j, 1], p[j, 2] = nx, ny, nz
             _nb_min_rot_mul(Dp, a0, a1, a2, Dp[0, 0] * u0 + Dp[1, 0] * u1 + Dp[2, 0] * u2,
                             Dp[0, 1] * u0 + Dp[1, 1] * u1 + Dp[2, 1] * u2,
                             Dp[0, 2] * u0 + Dp[1, 2] * u1 + Dp[2, 2] * u2,
                             D[j])
+
+    @_jit
+    def _nb_turn_share(R, s, out):
+        """out = R turned by the share s of its angle about the same axis (the numpy _turn_share for one rotation)."""
+        vx, vy, vz = 0.5 * (R[2, 1] - R[1, 2]), 0.5 * (R[0, 2] - R[2, 0]), 0.5 * (R[1, 0] - R[0, 1])
+        sn = np.sqrt(vx * vx + vy * vy + vz * vz)
+        a = s * np.arctan2(sn, 0.5 * (R[0, 0] + R[1, 1] + R[2, 2] - 1.0))
+        k = max(sn, 1e-300)
+        kx, ky, kz = vx / k, vy / k, vz / k
+        K = np.zeros((3, 3))
+        K[0, 1], K[0, 2], K[1, 0], K[1, 2], K[2, 0], K[2, 1] = -kz, ky, kz, -kx, -ky, kx
+        sa, ca = np.sin(a), 1.0 - np.cos(a)
+        for i in range(3):
+            for j in range(3):
+                out[i, j] = (1.0 if i == j else 0.0) + sa * K[i, j] + ca * (K[i, 0] * K[0, j] + K[i, 1] * K[1, j] +
+                                                                            K[i, 2] * K[2, j])
+
+    @_jit
+    def _nb_carry(j0, j1, s, hp, dp, h, d, x, v, tgt_prev):
+        """One chain (bones j0..j1-1): carried along by the share s of its anchor's move from (hp, dp) to (h, d), its
+        root and frame on the last substep and on this one (the numpy engine's carry)."""
+        dR = np.empty((3, 3))
+        for i in range(3):
+            for k in range(3):
+                dR[i, k] = d[i, 0] * dp[k, 0] + d[i, 1] * dp[k, 1] + d[i, 2] * dp[k, 2]
+        Rf = np.empty((3, 3))
+        _nb_turn_share(dR, s, Rf)
+        sx, sy, sz = hp[0] + s * (h[0] - hp[0]), hp[1] + s * (h[1] - hp[1]), hp[2] + s * (h[2] - hp[2])
+        for j in range(j0, j1):
+            yx, yy, yz = x[j, 0] - hp[0], x[j, 1] - hp[1], x[j, 2] - hp[2]
+            x[j, 0] = sx + (Rf[0, 0] * yx + Rf[0, 1] * yy + Rf[0, 2] * yz)
+            x[j, 1] = sy + (Rf[1, 0] * yx + Rf[1, 1] * yy + Rf[1, 2] * yz)
+            x[j, 2] = sz + (Rf[2, 0] * yx + Rf[2, 1] * yy + Rf[2, 2] * yz)
+            yx, yy, yz = tgt_prev[j, 0] - hp[0], tgt_prev[j, 1] - hp[1], tgt_prev[j, 2] - hp[2]
+            tgt_prev[j, 0] = sx + (Rf[0, 0] * yx + Rf[0, 1] * yy + Rf[0, 2] * yz)
+            tgt_prev[j, 1] = sy + (Rf[1, 0] * yx + Rf[1, 1] * yy + Rf[1, 2] * yz)
+            tgt_prev[j, 2] = sz + (Rf[2, 0] * yx + Rf[2, 1] * yy + Rf[2, 2] * yz)
+            yx, yy, yz = v[j, 0], v[j, 1], v[j, 2]
+            v[j, 0] = Rf[0, 0] * yx + Rf[0, 1] * yy + Rf[0, 2] * yz
+            v[j, 1] = Rf[1, 0] * yx + Rf[1, 1] * yy + Rf[1, 2] * yz
+            v[j, 2] = Rf[2, 0] * yx + Rf[2, 1] * yy + Rf[2, 2] * yz
 
     @_jit
     def _nb_relax(n, H0r, p, Lc):
@@ -1190,7 +1348,7 @@ if HAVE_NUMBA:
             pl[jj, 0] = x[j, 0] + v[j, 0] * dt
             pl[jj, 1] = x[j, 1] + v[j, 1] * dt
             pl[jj, 2] = (x[j, 2] + v[j, 2] * dt) + gdt2
-        _nb_shape_pass(n, H0r, Dar, pl, Dg, tg, Lg, dg, ag, True)
+        _nb_shape_pass(n, H0r, Dar, pl, Dg, tg, Lg, dg, ag, True, False, ag)       # no cone on the pull pass
         for jj in range(n):
             contl[jj] = False
             pushedl[jj, 0], pushedl[jj, 1], pushedl[jj, 2] = 0.0, 0.0, 0.0
@@ -1228,10 +1386,11 @@ if HAVE_NUMBA:
 
     @_jit
     def _nb_post(n, j0, r, x, v, pl, ubl, pushedl, contl, corrl, H0r, Dar, Dg, tg, Lg, dg, ag, tgt_prev, sdec, stick, dt,
-                 ftl, use_wind, wcar):
-        """One chain: exact lengths, the bone frames and the new velocities; the particles become the state."""
+                 ftl, use_wind, wcar, bend, bcg):
+        """One chain: exact lengths, the bone frames (within bend_max of the rest shape when bend) and the new
+        velocities; the particles become the state."""
         _nb_project(n, H0r, pl, Lg, corrl)
-        _nb_shape_pass(n, H0r, Dar, pl, Dg, tg, Lg, dg, ag, False)
+        _nb_shape_pass(n, H0r, Dar, pl, Dg, tg, Lg, dg, ag, False, bend, bcg)
         for jj in range(n):                             # velocities
             j = j0 + jj
             vnx, vny, vnz = (pl[jj, 0] - x[j, 0]) / dt, (pl[jj, 1] - x[j, 1]) / dt, (pl[jj, 2] - x[j, 2]) / dt
@@ -1269,11 +1428,14 @@ if HAVE_NUMBA:
                     skind, sk, floor_z, has_floor,
                     kv, ae, ph, om, use_wind, use_turb,
                     dt, samp, sweeps, ftl, xs, Ds, dep, who,
-                    la, lb, ld0, lk, lrr, len_, lmid, chain_of, is_root):
+                    la, lb, ld0, lk, lrr, len_, lmid, chain_of, is_root,
+                    bend, bcos, carries, carry, H0p, Dap):
         """Advance the chains cids (one coupled group, or independent chains) by nsteps substeps in lockstep (substep i
         uses block row i * rstride), with velocity decay `dec`; every rec_every steps store a frame (first rec_f0), and
         rec_start >= 0 stores the current state first as that frame. State arrays x v tgt_prev Dst tgt are per bone in
-        chain-major order and updated in place. la lb ld0 lk lrr len_ lmid: the lateral links of these chains."""
+        chain-major order and updated in place. la lb ld0 lk lrr len_ lmid: the lateral links of these chains. bend /
+        bcos: the bend_max cone per bone; carries / carry (per chain): the share of the anchor's move each substep
+        carries a chain along, from H0p / Dap (its root and frame on the substep before the first, updated in place)."""
         K = skind.shape[0]
         N = x.shape[0]
         nl = la.shape[0]
@@ -1299,6 +1461,12 @@ if HAVE_NUMBA:
             for ci in range(cids.shape[0]):
                 c = cids[ci]
                 j0, j1 = cptr[c], cptr[c + 1]
+                if carries and carry[c] > 0.0:
+                    if step == 0:
+                        _nb_carry(j0, j1, carry[c], H0p[c], Dap[c], H0[r, c], Da[r, c], x, v, tgt_prev)
+                    else:
+                        _nb_carry(j0, j1, carry[c], H0[r - rstride, c], Da[r - rstride, c], H0[r, c], Da[r, c], x, v,
+                                  tgt_prev)
                 _nb_pre(j1 - j0, j0, r, x, v, dec, wgain, wmean, wdisp, wt, kv, ae, ph, om, use_wind, use_turb, dt, gdt2,
                         p[j0:j1], ub[j0:j1], H0[r, c], Da[r, c], Dst[j0:j1], tgt[j0:j1], Lc[j0:j1], d0[j0:j1],
                         alpha[j0:j1], pushed[j0:j1], cont[j0:j1])
@@ -1324,7 +1492,7 @@ if HAVE_NUMBA:
                 j0, j1 = cptr[c], cptr[c + 1]
                 _nb_post(j1 - j0, j0, r, x, v, p[j0:j1], ub[j0:j1], pushed[j0:j1], cont[j0:j1], corr[j0:j1], H0[r, c],
                          Da[r, c], Dst[j0:j1], tgt[j0:j1], Lc[j0:j1], d0[j0:j1], alpha[j0:j1], tgt_prev, sdec, stick, dt,
-                         ftl, use_wind, wcar)
+                         ftl, use_wind, wcar, bend, bcos[j0:j1])
             if rec_every > 0 and (step + 1) % rec_every == 0:
                 f = rec_f0 + (step + 1) // rec_every - 1
                 for ci in range(cids.shape[0]):
@@ -1334,6 +1502,14 @@ if HAVE_NUMBA:
                                sk, floor_z, has_floor, samp, cand, Sb, Nb, xs, Ds, dep, who)
                 _nb_record_links(f, r, H0, chain_of, is_root, x, la, lb, lrr, len_, sc[r], sb[r], sm[r], bsc[r], bsr[r],
                                  skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, dep, who)
+        if carries and nsteps > 0:                              # the next call carries from where the anchors are now
+            rl = (nsteps - 1) * rstride
+            for ci in range(cids.shape[0]):
+                c = cids[ci]
+                for i in range(3):
+                    H0p[c, i] = H0[rl, c, i]
+                    for k in range(3):
+                        Dap[c, i, k] = Da[rl, c, i, k]
 
 
 class _NumbaEngine:
@@ -1355,6 +1531,9 @@ class _NumbaEngine:
         D, x = M.initial_state()
         self.x, self.Dst, self.v = take(x), take(D), np.zeros((M.N, 3))
         self.tgt, self.tgt_prev = self.x.copy(), self.x.copy()
+        self.bcos, self.carry = take(M.bend_cos), np.ascontiguousarray(M.carry_root)     # per bone / per chain
+        b0 = M.block([0], [0.0], [0.0])                         # the anchors on the substep before the first
+        self.H0p, self.Dap = np.ascontiguousarray(b0.H0[0]), np.ascontiguousarray(b0.Da[0])
         P = M.P
         self.skind = np.concatenate([np.full(P[k]["n"], i) for i, k in enumerate(geom.KINDS)]).astype(np.int64)
         self.sk = np.zeros((M.K, 5))
@@ -1456,7 +1635,8 @@ class _NumbaEngine:
                         self.Dst, self.tgt, blk.H0, blk.Da, sc, sb, sm, bsc, bsr,
                         *[np.ascontiguousarray(a) for a in wind[:4]], self.skind, self.sk, floor[0], floor[1],
                         *wind[4:8], wind[8], wind[9], M.dt, M.samples, M.sweeps, M.ftl, self.xs, self.Ds, self.dep,
-                        self.who, *grp[1:], self.chain_of, self.is_root)
+                        self.who, *grp[1:], self.chain_of, self.is_root, M.bends, self.bcos, M.carries, self.carry,
+                        self.H0p, self.Dap)
 
         if self.pool is None:
             go(self.groups[0])
@@ -1533,8 +1713,8 @@ def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, para
         eng.record(0, blk0, 0)
         _nonfinite(M, eng, 0, 1)
         t2 = time.perf_counter()
-        per_row = 8.0 * (M.K * 20 + len(M.roots) * 12 + 16) * 3               # block memory: about 48 MB at most
-        nfb = max(1, int(48e6 // (M.substeps * per_row)))
+        per_row = 8.0 * (M.K * 20 + len(M.roots) * 12 + 16) * 3               # block memory: about BLOCK_BYTES at most
+        nfb = max(1, int(BLOCK_BYTES // (M.substeps * per_row)))
         for kb in range(0, F - 1, nfb):
             ke = min(kb + nfb, F - 1)
             ks = np.repeat(np.arange(kb, ke), M.substeps)

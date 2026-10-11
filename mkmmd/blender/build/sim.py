@@ -3,7 +3,7 @@
 [sim.<cast>] keys
   families = [...]            chain families to simulate (default: the hair families, ears and tails the rig has)
   params = {family: {...}}    solver parameters per family: sag = [root, tip] deg, drag, zeta, radius, radius_max,
-                              friction, wind_drag (docs: mkmmd/solvers/strands.py)
+                              friction, wind_drag, lateral, inertia, bend_max (docs: mkmmd/solvers/strands.py)
   colliders = "set" | [...]   scene collider specs or a [colliders] set (docs/design.md: Colliders)
   props = true                add every prop card's colliders (seats, doors, dash, wheel...)
   fingers = true              finger and palm capsules of every cast member
