@@ -28,6 +28,13 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      the weight goes from foot to foot
   crouch = [[t, metres], ...]        the hips drop by that much, the feet planted (the knees bend: a landing, a squat), eased
                                      between keys like `rise`
+  air = [{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30}]
+                                     the legs while the body is off the ground (a jump, a blast; the root's height is keyed
+                                     elsewhere): they tuck up and back, one after the other, the toes point, and they reach down
+                                     again for the landing (mkmmd.core.perform.air_plan)
+  step_turn = [{t, deg, dur, first, lift = 0.045, dip = 0.02, move = [x, y]}]   the body turns round on the spot like a
+                                     person: the cast root's yaw (and its travel), the chest leading the hips, the feet
+                                     stepping round one after the other, the hips sinking (mkmmd.core.perform.turn_plan)
   blink = {per_min = 15, seed = 0, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1)
   sing = {timeline = "audio/timeline.json" (the default), lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
@@ -257,26 +264,82 @@ def _window(ts, b, ease=0.15):
     return PF.smooth((ts - lo) / ease + 1.0) * PF.smooth((hi - ts) / ease + 1.0)
 
 
-def _body(ctx, name, m, spec, ts, frames, settle):
-    """bounce, crouch, rise, kick and the rock's hips: the hips (the `center` bone) and the feet (the leg IK bones) move on
-    top of the offsets the pose stage gave them (eased in over the settle like them). `bounce` dips the hips on the beats
-    while the feet stay planted (the knees bend: a punk's pump); `crouch = [[t, metres], ...]` lowers them so (a landing, a
-    squat); `rock.hips` shifts them toward the model's left with the rock's own swing (the weight goes from foot to foot);
-    `rise = [[t, metres], ...]` lifts the whole body, feet too (she floats); `kick` flicks one foot up and back on the
-    beats, `hold` of the way lifted between them. Returns report numbers."""
-    bn, rs, kk, cr = spec.get("bounce"), spec.get("rise"), spec.get("kick"), spec.get("crouch")
+def _turn(ctx, name, m, spec, ts, frames):
+    """step_turn: the body turns round on the spot like a person (mkmmd.core.perform.turn_plan): the cast root's yaw, and
+    its travel for turns that `move`, are keyed here, before the gaze is sampled, so the head keeps to its targets through
+    the turn; the chest's lead and the feet's steps and the hips' dip are keyed by the caller and `_body` from the plan
+    this returns (None without turns), with report numbers. The point turned about is the root's origin."""
+    turns = spec.get("step_turn")
+    if not turns:
+        return None, {}
+    where = f"perform.{name}.step_turn"
+    if not isinstance(turns, list):
+        raise BuildError(f"{where}: a list of turns [{{t, deg, dur, first, lift, dip, move}}]")
+    root, arm = m.root, m.arm
+    if root is None or root == arm:
+        raise BuildError(f"{where}: the member has no root object to turn")
+    if root.rotation_mode not in ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"):
+        raise BuildError(f"{where}: the root {root.name!r} turns in {root.rotation_mode}, not in Euler angles")
+    smap = S.semantic_map(arm)
+    W0 = arm.matrix_world.to_3x3().normalized()                 # the character's frame before the turns
+    Wi = W0.inverted()
+    centre = arm.matrix_world.inverted() @ root.matrix_world.translation
+    feet0 = (m.base or {}).get("feet") or {}
+    feet = {}
+    for s in ("L", "R"):
+        ik = smap.get(f"leg_ik.{s}")
+        if ik:
+            p = arm.data.bones[ik].head_local + Wi @ Vector(feet0.get(s, Vector()))
+            feet[s] = (p.x - centre.x, p.y - centre.y)
+    try:
+        plan = PF.turn_plan(ts, turns, feet)
+    except ValueError as e:
+        raise BuildError(f"{where}: {e}") from None
+    P = root.parent.matrix_world.to_3x3().normalized().inverted() if root.parent else Matrix.Identity(3)
+    loc0 = Vector(root.location)
+    locs = [loc0 + P @ (W0 @ Vector((float(x), float(y), 0.0))) for x, y in plan["shift"]]   # as the steps carry it
+    moved = [i for i in range(3) if max(abs(v[i] - loc0[i]) for v in locs) > 1e-9]
+    ad = root.animation_data
+    for path, i in [("rotation_euler", 2)] + [("location", i) for i in moved]:
+        for k in ctx.data.get("key", []):
+            if k.get("target") == root.name and k.get("prop") == path and int(k.get("index", 0)) == i:
+                raise BuildError(f"{where}: a [[key]] also keys {root.name!r} {path}[{i}], which the turns key: keep one of them")
+        if ad and ad.action and ad.action.fcurves.find(path, index=i):
+            raise BuildError(f"{where}: {root.name!r} {path}[{i}] is already keyed by an earlier stage")
+    yaw0 = float(root.rotation_euler[2])
+    K.key_prop(root, "rotation_euler", frames, [yaw0 + float(y) for y in plan["yaw"]], index=2, interp="LINEAR")
+    for i in moved:
+        K.key_prop(root, "location", frames, [v[i] for v in locs], index=i, interp="LINEAR")
+    lead = float(np.degrees(np.abs(plan["chest"]).max())) if len(ts) else 0.0
+    return plan, {"step_turn": {"turns": len(turns), "deg": round(float(np.degrees(plan["yaw"][-1])), 1),
+                                "chest_lead_deg": round(lead, 1), "feet": sorted(feet),
+                                "feet_gap_mm": round(plan["gap"] * 1000, 1) if math.isfinite(plan["gap"]) else None}}
+
+
+def _body(ctx, name, m, spec, ts, frames, settle, turn=None):
+    """bounce, crouch, rise, kick, air, a step_turn's feet and the rock's hips: the hips (the `center` bone) and the feet
+    (the leg IK bones) move on top of the offsets the pose stage gave them (eased in over the settle like them). `bounce`
+    dips the hips on the beats while the feet stay planted (the knees bend: a punk's pump); `crouch = [[t, metres], ...]`
+    lowers them so (a landing, a squat); `rock.hips` shifts them toward the model's left with the rock's own swing (the
+    weight goes from foot to foot); `rise = [[t, metres], ...]` lifts the whole body, feet too (she floats); `kick` flicks
+    one foot up and back on the beats, `hold` of the way lifted between them; `air` tucks both legs while the body is off
+    the ground and points the toes (mkmmd.core.perform.air_plan); `turn`, a step_turn's plan (`_turn`), steps the feet
+    round to the turned stance and sinks the hips while the root turns. Returns report numbers."""
+    bn, rs, kk, cr, ai = spec.get("bounce"), spec.get("rise"), spec.get("kick"), spec.get("crouch"), spec.get("air")
     rk = spec.get("rock") or {}
     hips = float(rk.get("hips", 0.0))
-    if not (bn or rs or kk or cr or hips):
+    if not (bn or rs or kk or cr or hips or ai or turn):
         return {}
     arm = m.arm
     smap = S.semantic_map(arm)
-    W = arm.matrix_world.to_3x3().normalized()
-    up_w, back_w, left_w = W @ Vector((0.0, 0.0, 1.0)), W @ Vector((0.0, 1.0, 0.0)), W @ Vector((1.0, 0.0, 0.0))
+    W = arm.matrix_world.to_3x3().normalized()       # armature offsets to world ones: key_bone_locs turns them back
+    up_w, left_w = W @ Vector((0.0, 0.0, 1.0)), W @ Vector((1.0, 0.0, 0.0))
     base = m.base or {}
     centre0 = Vector(base.get("center", (0.0, 0.0, 0.0)))
     feet0 = {s: Vector(v) for s, v in (base.get("feet") or {}).items()}
-    lift, dip, side, info = np.zeros(len(ts)), np.zeros(len(ts)), np.zeros(len(ts)), {}
+    toes0 = {s: math.radians(float(v)) for s, v in (base.get("toes") or {}).items()}
+    n = len(ts)
+    lift, dip, side, info = np.zeros(n), np.zeros(n), np.zeros(n), {}
     if bn:
         beats, acc = _beat_marks(ctx, bn, f"perform.{name}.bounce")
         dip = float(bn.get("depth", 0.03)) * _window(ts, bn) * PF.beat_pulse(
@@ -286,13 +349,15 @@ def _body(ctx, name, m, spec, ts, frames, settle):
         down = PF.eased_keys(ts, cr)
         dip = dip + down
         info["crouch_mm"] = round(float(np.abs(down).max()) * 1000, 1)
+    if turn:
+        dip = dip + turn["dip"]
     if hips:
         side = hips * np.sin(2.0 * np.pi * ts / float(rk.get("period", 4.0)) + float(rk.get("phase", 0.0)))
         info["hips_mm"] = round(abs(hips) * 1000, 1)
     if rs:
         lift = PF.eased_keys(ts, rs)
         info["rise_mm"] = round(float(np.abs(lift).max()) * 1000, 1)
-    kick_side, kick = None, None
+    kick_side, kick, reach = None, None, np.zeros(3)
     if kk:
         kick_side = kk.get("foot", "L")
         if kick_side not in ("L", "R"):
@@ -301,24 +366,48 @@ def _body(ctx, name, m, spec, ts, frames, settle):
         hold = float(kk.get("hold", 0.0))
         pulse = np.minimum(PF.beat_pulse(ts, beats, float(kk.get("attack", 0.06)), float(kk.get("decay", 0.18)), acc), 1.5)
         kick = (hold + (1.0 - hold) * pulse) * _window(ts, kk)
-        reach = up_w * float(kk.get("height", 0.12)) + back_w * float(kk.get("back", 0.08))
-        info["kick"] = {"foot": kick_side, "peak_mm": round(float(kick.max()) * reach.length * 1000, 1)}
+        reach = np.array([0.0, float(kk.get("back", 0.08)), float(kk.get("height", 0.12))])
+        info["kick"] = {"foot": kick_side, "peak_mm": round(float(kick.max()) * float(np.linalg.norm(reach)) * 1000, 1)}
+    air_off, air_pitch = None, None
+    if ai:
+        try:
+            air_off, air_pitch = PF.air_plan(ts, ai if isinstance(ai, list) else [ai])
+        except ValueError as e:
+            raise BuildError(f"perform.{name}.air: {e}") from None
+        info["air"] = {s: {"tuck_mm": round(float(air_off[s][:, 2].max()) * 1000, 1),
+                           "point_deg": round(float(np.degrees(air_pitch[s].max())), 1)} for s in ("L", "R")}
     centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i]) + left_w * float(side[i]))
               for i, s in enumerate(settle)]
     K.key_bone_locs(arm, smap["center"], frames, centre, interp="LINEAR")
-    if rs or kk:
-        for side in ("L", "R"):
-            ik = smap.get(f"leg_ik.{side}")
-            if not ik:
-                continue
-            f0 = feet0.get(side, Vector())
-            vals = []
-            for i, s in enumerate(settle):
-                v = f0 * float(s) + up_w * float(lift[i])
-                if side == kick_side:
-                    v = v + reach * float(kick[i])
-                vals.append(tuple(v))
-            K.key_bone_locs(arm, ik, frames, vals, interp="LINEAR")
+    if not (rs or kk or ai or turn):
+        return info
+    for s in ("L", "R"):
+        ik = smap.get(f"leg_ik.{s}")
+        if not ik:
+            continue
+        d = np.zeros((n, 3))                                     # armature-axis offsets on top of the base
+        d[:, 2] += lift
+        if s == kick_side:
+            d += kick[:, None] * reach
+        if air_off is not None:
+            d += air_off[s]
+        yaw_rel = np.zeros(n)
+        if turn and s in turn["feet"]:
+            P, y = turn["feet"][s] - turn["shift"], turn["yaw"]       # about the moving point turned about
+            c, sn = np.cos(y), np.sin(y)
+            d[:, 0] += c * P[:, 0] + sn * P[:, 1] - P[0, 0]       # the floor point turned into the hips' frame
+            d[:, 1] += -sn * P[:, 0] + c * P[:, 1] - P[0, 1]
+            d[:, 2] += turn["lift"][s]
+            yaw_rel = turn["foot_yaw"][s] - y
+        f0 = feet0.get(s, Vector())
+        K.key_bone_locs(arm, ik, frames, [tuple(f0 * float(st) + W @ Vector(d[i])) for i, st in enumerate(settle)],
+                        interp="LINEAR")
+        pitch = air_pitch[s] if air_pitch is not None else np.zeros(n)
+        if (turn and s in turn["feet"]) or pitch.any():           # the foot's yaw and its toes, on top of the pose's toes
+            toes = toes0.get(s, 0.0) * np.asarray(settle, float)
+            up, lat = Vector((0.0, 0.0, 1.0)), Vector((1.0, 0.0, 0.0))
+            K.key_bone_arm(arm, ik, frames, [Quaternion(up, float(yaw_rel[i] + toes[i])) @ Quaternion(lat, float(pitch[i]))
+                                             for i in range(n)], interp="LINEAR")
     return info
 
 
@@ -395,6 +484,7 @@ def run(ctx):
         arm = m.arm
         smap = S.semantic_map(arm)
         base = m.base.get("spine") or {}
+        plan, turn_info = _turn(ctx, name, m, spec, ts, frames)  # the root turns before the gaze is sampled
         lat, back, up = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))     # armature axes (faces -Y)
         fwd = -back
         # ---- targets: idle look + gaze events (eye height, 3 m ahead by default)
@@ -451,6 +541,8 @@ def run(ctx):
         startle = PF.startles(ts, spec.get("startle", []))
         lean_x = np.radians(PF.eased_keys(ts, spec.get("lean", [])))
         turn_x = np.radians(PF.eased_keys(ts, spec.get("turn", [])))
+        if plan is not None:
+            turn_x = turn_x + plan["chest"]                        # the chest leads a step_turn
         tilt_x = np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
         head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
         head_pitch_x, head_yaw_x = np.zeros(len(ts)), np.zeros(len(ts))
@@ -518,8 +610,8 @@ def run(ctx):
                 Ri = R.inverted()
                 loc = [tuple((Ri @ q.to_matrix() @ R).to_quaternion()) for q in qs]
                 K.key_bone_quats(arm, b, frames, loc, interp="LINEAR")
-        info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames)}
-        info.update(_body(ctx, name, m, spec, ts, frames, settle))
+        info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames), **turn_info}
+        info.update(_body(ctx, name, m, spec, ts, frames, settle, plan))
         # ---- face: blinks + lids
         bl = spec.get("blink", {})
         blink_m = _morph(m, "blink")

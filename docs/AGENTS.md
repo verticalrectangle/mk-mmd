@@ -81,11 +81,15 @@ square crop of a vertical master). Put the plan in comments of `mk.toml` or a lo
 - **Perform** ([Perform](design.md#perform)): gaze events over an idle target, eye-only glances, breathing, sway, nods, beat bob, blinks,
   expressions, lip sync from the timeline (`sing`; `words = [[2, -1]]` mouths only chosen words, a partner shouting the line endings), twitches,
   strumming (`strum`: down strokes on the downbeats, the pick meeting the string at each strike).
+  A character that turns round uses `step_turn` (the head, chest and hips in turn, the feet stepping), not a `[[key]]` on its root's
+  rotation: that spins it like a figure on a turntable. A character in the air (a jump, a blast; its height keyed on the root) gets
+  `air`, so its legs tuck and reach down to land instead of hanging straight, and a `crouch` before it to brace.
   Group and material morphs (vowels with a tongue bone, a blush) are keyed like any other: the cast stage binds the model's morph sliders
   (`bound_morphs` in its report).
   Take the numbers from `mk ref measure` or a timeline, not from taste.
 - **Moves** ([Moves](design.md#moves)): `[[move.<cast>]]` puts named moves on the beats (`chest_pat`, `paws`, `point`, `heart_wink`,
-  `hands_up`, `stank` ...) or on clip seconds of their own (`hits = [...]`: a `bonk` on the snares), and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them (a two-hand move then
+  `hands_up`, `stank` ...) or on clip seconds of their own (`hits = [...]`: a `bonk` on the snares; `flung` throws both arms up on its
+  time, as a reaction does, where other moves set off early to arrive on it), and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them (a two-hand move then
   plays with the free hand only; `place = "dainty"` rests a hand lightly on the front of a skirt, elbows in); they compile to the pose's hand keys (riding the chest) and perform's lean, twitches and faces. The hands
   come in from outside and stop at the body, clothes and hair, and wrists stay within 60 degrees of the forearm: the pose report's
   `moves.places` says how far each place was kept out and how much its wrist bends. A hand travels between places at a human pace

@@ -1051,12 +1051,14 @@ in, the two hands together when both rest there: a girl's polite stand) or `"mic
 attached mic that leans back up to the lips, so the forearm rises to it and the elbow hangs by the side). A hand
 travels at a human pace: a trip takes 0.1 s plus its wrist's way at 1.6 m/s (eased: it peaks near twice that), or as long
 as turning its palm or its fingers' way at 600 degrees a second takes, if that is longer, and it reaches a move's first
-place on the move's time, so it sets off before it. It holds its last place to the end of the move, then goes home to its
-rest place if it can stay there 0.15 s before its next move, else straight on to that move, leaving its place early enough
-to get there on time; a next move too close for that (the hand would have to jump) is a build error that says how long the
-trip takes. One hand cannot play two moves at once. A hand that rests at the mic keeps the mic in its fist through every
-move it plays (the mic moves aim it); a two-hand move leaves it at the mic and plays with the other hand only, except
-`hands_up` (the mic goes up too), and `heart_push`, which needs both hands free, is a build error for a member holding a mic.
+place on the move's time, so it sets off before it. A reaction is the other way round: `flung` leaves where the hand is on
+its own time (a hand does not see a blast coming) and is thrown there in 0.06 s plus its wrist's way at 4.5 m/s. A hand
+holds its last place to the end of the move, then goes home to its rest place if it can stay there 0.15 s before its next
+move, else straight on to that move, leaving its place early enough to get there on time; a next move too close for that
+(the hand would have to jump) is a build error that says how long the trip takes. One hand cannot play two moves at once.
+A hand that rests at the mic keeps the mic in its fist through every move it plays (the mic moves aim it); a two-hand move
+leaves it at the mic and plays with the other hand only, except `hands_up` and `flung` (the mic goes up too), and
+`heart_push`, which needs both hands free, is a build error for a member holding a mic.
 
 | Move | What it does |
 |---|---|
@@ -1069,6 +1071,7 @@ move it plays (the mic moves aim it); a two-hand move leaves it at the mic and p
 | `sparkle` | both hands open beside the face; `smile_eyes` |
 | `drip_check` | the hand by the chest turns over halfway; `jito` eyes |
 | `hands_up` | both arms up |
+| `flung` | both arms thrown up by a blast, the hands leaving on its time; they come home when it ends, so end it as the body lands for the hands to come down with the landing |
 | `mic_lens` | the (mic) hand held out at the camera, the mic upright and leaning to the lens |
 | `mic_up` | the (mic) hand raised forward and up, the mic upright over it, the palm toward the head (a fist holds a mic across its palm, so a mic pointing forward from an upright forearm would twist the palm outward) |
 | `mic_across` | the (mic) hand held out across the body to the other side, the mic upright (offered to a partner on that side) |
@@ -1198,8 +1201,10 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0, axis = "side", hips = 0}`: a periodic sway of the upper body and of the head: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed ones; `axis` `"side"` leans the body (like `tilt`) and rolls the head (like `head_tilt`) toward the left, `"front"` leans the body forward (like `lean`) and nods the head, `"turn"` twists the body (like `turn`) and shakes the head. Unlike the keys it goes on at any clip time, so a dreamy sway survives a re-cut; a squirm seen side-on is a fast `turn` (a swing a beat). `rock.hips` (metres) shifts the hips toward the left with the same swing, the feet planted, so the weight goes from foot to foot: a groove without steps |
 | `bounce` | `{depth = 0.03, beats = [t, ...], timeline, downbeat_accent = 1.6, from, to, attack = 0.05, decay = 0.16}`: the hips (the `center` bone) dip `depth` m on each beat (downbeats weighted), the feet planted, so the knees pump; `from`, `to` (clip seconds) limit it |
 | `rise` | `[[t, metres], ...]`: the whole body, feet too, lifts by that much (eased between keys): she floats |
-| `crouch` | `[[t, metres], ...]`: the hips drop by that much, the feet planted, so the knees bend (eased between keys, on top of `bounce`): a landing, a squat |
+| `crouch` | `[[t, metres], ...]`: the hips drop by that much, the feet planted, so the knees bend (eased between keys, on top of `bounce`): a landing, a squat, a brace before a jump |
 | `kick` | `{foot = "L", height = 0.12, back = 0.08, hold = 0, beats, timeline, downbeat_accent, from, to, attack = 0.06, decay = 0.18}`: that foot flicks up and back on the beats; `hold` (0..1) keeps it that share of the way up between them (a foot kicked up behind a lovestruck girl) |
+| `air` | `{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30}` (or a list): the legs of a body off the ground (a jump, a blast; its height is the root's, keyed by `[[key]]`) from take-off `from` to landing `to`: over `rise` s both feet come up toward the hips by `tuck` m and back by `back` m (the knees bend forward), the foot `first` ahead and the other `lag` s later by `share` of it, the toes pointing `point` degrees down; they hold still (a [freeze](#freezes) in the air shows no jump when the world starts again) and over the last `extend` s reach down again, so the feet are under the hips at the landing. Added to `kick`. Mind the knees: a model's legs straight while its root is lifted look hung, not jumped |
+| `step_turn` | `[{t, deg, dur, first, lift = 0.045, dip = 0.02, move}]`: the body turns round on the spot like a person, not a figure on a turntable. From `t` the cast root turns `deg` degrees toward the left (negative: right) over `dur` s (default 0.2 s and 0.11 s per 100 degrees: 0.36 s for 145), and travels `move` `[x, y]` m meanwhile (in the character's frame before its first turn: x its left, y behind; a step toward what it turns to), the chest leading the hips (by at most 30 degrees) and unwinding as they arrive; the foot `first` steps round, then the other (by default the order that keeps the feet further apart: about a point in front of the ankles or behind them, the other order sets a foot down where the other still stands), each lifted `lift` m between rolling off and setting down, one foot always down and none sliding; a foot is never more than 35 degrees from the hips (it swivels on its ankle), and the hips sink `dip` m meanwhile. The report has `feet_gap_mm`, the least distance between the ankles. Give the head a `gaze` at what the body turns to, a moment before, and it leads the chest. The root's yaw, and the axes `move` travels along, are keyed here, so a `[[key]]` on them is an error |
 | `drum` | `{hand = "R", fingers = ["little", "ring", "middle", "index"], deg = 25, lift = 0.16, roll = 0.02, beats, timeline, downbeat_accent, from, to}`: the fingers of one hand tap on the beats (a driver drumming on the wheel): each lifts at its base joint by `deg` (the middle joint by a third of it) about its own flexion axis, from wherever its keys hold it (a grip's solved curl), over the first half of the `lift` seconds before the beat and falls, fastest at the end, back onto it on the beat; the little finger leads the index by `roll` s per finger. The palm stays where the grip put it, so a hand wrapped round a rim never moves through it. The report has `drum` (`hand`, `fingers`, `taps`, `deg`, `frames`) |
 
 #### Face and mouth

@@ -149,3 +149,60 @@ def test_rock_is_a_periodic_sine_of_clip_time_toward_the_models_left():
     assert PF.rock(np.array([1.0]), 4.0, 3.0)[0] == pytest.approx(np.radians(3.0))     # a quarter period in: the peak, + = her left
     assert PF.rock(ts, 4.0, 3.0, phase=np.pi) == pytest.approx(-r)              # the phase turns the lean around
     assert not PF.rock(ts, 4.0, 0.0).any()                                      # no amplitude, no motion
+
+
+FEET = {"L": (0.09, 0.03), "R": (-0.09, 0.03)}         # ankles on the floor about the point turned about (x left, y back)
+
+
+def _turned(p, deg):
+    a = np.radians(deg)
+    return np.cos(a) * p[0] - np.sin(a) * p[1], np.sin(a) * p[0] + np.cos(a) * p[1]
+
+
+def test_a_turn_on_the_spot_steps_one_foot_then_the_other_into_the_turned_stance():
+    """Rin's 145 degree turn to the boombox and back spun her on a turntable in four frames: a turn steps the feet round
+    one at a time (one always down, and a foot down never slides, even as the body travels) into the turned and moved
+    stance and back, never further than TWIST_MAX from the hips and never onto each other (her ankles stand behind the
+    point she turns about: stepping with the inside foot first set it down where the other still stood), and the chest
+    leads the hips, by at most CHEST_MAX, in each direction."""
+    ts = np.arange(5.5, 7.2, 1 / 120)
+    go, back = [0.0, 0.03], [0.0, -0.03]
+    plan = PF.turn_plan(ts, [{"t": 5.86, "deg": 145, "move": go}, {"t": 6.52, "deg": -145, "move": back}], FEET)
+    yaw, feet, lift = plan["yaw"], plan["feet"], plan["lift"]
+    i = int(np.searchsorted(ts, 6.4))                                            # between the turns
+    assert np.degrees(yaw[i]) == pytest.approx(145.0) and plan["shift"][i] == pytest.approx(go)
+    for s in "LR":
+        assert feet[s][i] == pytest.approx(np.add(_turned(FEET[s], 145.0), go))
+        assert feet[s][-1] == pytest.approx(FEET[s]) and yaw[-1] == pytest.approx(0.0, abs=1e-12)
+        moved = np.linalg.norm(np.diff(feet[s], axis=0), axis=1) > 1e-12
+        up = (lift[s][1:] > 0) | (lift[s][:-1] > 0)
+        assert moved.any() and not (moved & ~up).any()                           # it moves only off the ground
+        assert np.abs(plan["foot_yaw"][s] - yaw).max() <= PF.TWIST_MAX + 1e-9
+    assert not ((lift["L"] > 0) & (lift["R"] > 0)).any()
+    assert plan["gap"] == pytest.approx(np.linalg.norm(feet["L"] - feet["R"], axis=1).min()) and plan["gap"] > 0.08
+    there, home = (ts > 5.86) & (ts < 6.3), (ts > 6.52) & (ts < 7.0)
+    assert plan["chest"][there].max() > np.radians(10) and plan["chest"][home].min() < -np.radians(10)
+    assert np.abs(plan["chest"]).max() <= PF.CHEST_MAX and plan["chest"][i] == pytest.approx(0.0, abs=1e-9)
+    with pytest.raises(ValueError, match="starts before the turn before it ends"):
+        PF.turn_plan(ts, [{"t": 5.86, "deg": 145}, {"t": 6.0, "deg": -145}], FEET)
+
+
+def test_in_the_air_the_legs_tuck_one_after_the_other_hold_still_and_reach_down_to_land():
+    """Blown up by the blast, Len hung in the air with straight legs: in the air the feet come up and back, the first
+    ahead of the other, the toes pointed; the pose holds still in between (a freeze shows one frame of it while the world
+    stops, so it must not have moved on when the world starts again) and the feet are under the hips at the landing."""
+    ts = np.arange(9.3, 10.6, 1 / 120)
+    off, pitch = PF.air_plan(ts, [{"from": 9.392, "to": 10.455}])
+    at = lambda t: int(np.argmin(np.abs(ts - t)))                              # noqa: E731
+    for s in "LR":
+        assert not off[s][: at(9.39)].any() and not off[s][at(10.455) + 1:].any() and not pitch[s][at(10.455) + 1:].any()
+    mid = at(9.9)
+    assert off["L"][mid] == pytest.approx([0.0, PF.AIR["back"], PF.AIR["tuck"]])
+    assert off["R"][mid] == pytest.approx([0.0, PF.AIR["share"] * PF.AIR["back"], PF.AIR["share"] * PF.AIR["tuck"]])
+    assert pitch["L"][mid] == pytest.approx(np.radians(PF.AIR["point"]))
+    early = at(9.392 + 0.07)
+    assert off["R"][early][2] < 0.5 * PF.AIR["share"] * off["L"][early][2]     # the second foot follows
+    hold = (ts > 9.392 + PF.AIR["rise"] + PF.AIR["lag"]) & (ts < 10.455 - PF.AIR["extend"])
+    assert hold.sum() > 30 and all(np.ptp(off[s][hold], axis=0).max() == 0 for s in "LR")
+    with pytest.raises(ValueError, match="from before to"):
+        PF.air_plan(ts, [{"from": 10.0, "to": 9.5}])

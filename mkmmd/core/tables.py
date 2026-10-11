@@ -37,6 +37,7 @@ PERFORM = {
     "twitch": ("bones", "family", "t", "deg", "axis", "dur"),
     "bounce": ("depth", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"), "rise": None, "crouch": None,
     "kick": ("foot", "height", "back", "hold", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"),
+    "air": PF.AIR_KEYS, "step_turn": PF.TURN_KEYS,
     "strum": ("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "kick", "windmill",
               "windmill_dur") + tuple(strum.DEFAULTS),
     "drum": ("hand", "fingers", "deg", "lift", "roll", "timeline", "beats", "downbeat_accent", "from", "to"),

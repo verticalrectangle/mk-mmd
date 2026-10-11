@@ -26,8 +26,10 @@ the front of the skirt or thighs, the two hands together; `mic`: holding a mic a
 REST_MIN seconds before its next move, else it goes straight on to that move. A hand travels at a human pace (`travel`:
 TRAVEL_MIN, plus its wrist's way at TRAVEL_SPEED, or as long as its palm takes to turn over at TURN_SPEED) and reaches
 each move's first place on the move's time, so it sets off before it, leaving the place it holds early if it must; a
-move that leaves the hand too little time to get there is refused. A hand that rests at the mic keeps its grip in every
-move: a two-hand move leaves it at the mic (except one that raises it, `hands_up`), and one that needs both hands free
+move that leaves the hand too little time to get there is refused. A move that is a reaction (`react`: `flung`, arms
+thrown up by a blast) is the other way round: the hand leaves where it is on the move's time and is thrown there
+(`fling`: FLING_MIN, plus its way at FLING_SPEED). A hand that rests at the mic keeps its grip in every move: a two-hand
+move leaves it at the mic (except one that raises it, `hands_up`, `flung`), and one that needs both hands free
 (`heart_push`) is refused."""
 import math
 
@@ -45,6 +47,8 @@ TRAVEL_MIN = 0.1                 # seconds the shortest move of a hand from one 
 TRAVEL_SPEED = 1.6               # m/s: ... plus its wrist's way at this pace (eased in and out: it peaks near twice that)
 TURN_SPEED = 600.0               # deg/s: ... or as long as turning its palm or its fingers' way at this pace takes
 REST_MIN = 0.15                  # seconds a hand stays at its rest place at least, or it goes straight on to the next move
+FLING_MIN = 0.06                 # seconds a hand thrown by a reaction (`react`) is on its way at least ...
+FLING_SPEED = 4.5                # m/s: ... plus its wrist's way at this pace
 WRIST = 60.0                     # degrees: the most a hand bends away from its forearm (as predicted: the IK's lands within ~10)
 FAR = 0.3                        # m: how far out a hand by the body starts its approach to it
 STEP = 0.01                      # m: the approach's step (the contact is then found to 0.003 mm by halving)
@@ -300,6 +304,7 @@ MOVES = {
     "sparkle": {"hand": "places", "places": (("sparkle", 0.0),), "both": True, "face": [("smile_eyes", 0.7)]},
     "drip_check": {"hand": "places", "places": (("drip_in", 0.0), ("drip_out", 0.5)), "face": [("jito", 0.5)]},
     "hands_up": {"hand": "places", "places": (("up", 0.0),), "both": True, "mic_ok": True},
+    "flung": {"hand": "places", "places": (("up", 0.0),), "both": True, "mic_ok": True, "react": True},
     "mic_lens": {"hand": "places", "places": (("mic_lens", 0.0),)},
     "mic_up": {"hand": "places", "places": (("mic_up", 0.0),)},
     "mic_across": {"hand": "places", "places": (("mic_across", 0.0),)},
@@ -364,9 +369,10 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
         if "hits" in e and m.get("hand") != "beats":
             raise MoveError(f"{what}: hits are for a move played on beats "
                             f"({', '.join(k for k, v in MOVES.items() if v.get('hand') == 'beats')})")
+        react = bool(m.get("react"))
         if m.get("hand") == "places":
             for side in sides:
-                plays[side].append((t0, t1, [(t0 + share * dur, p, (0, 0, 0)) for p, share in m["places"]]))
+                plays[side].append((t0, t1, [(t0 + share * dur, p, (0, 0, 0)) for p, share in m["places"]], react))
         elif m.get("hand") == "beats":
             if "hits" in e:
                 hs = e["hits"]
@@ -384,7 +390,7 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
                 seq = [(t0, off, m["off"])] if off != on and bs[0] - t0 > 1e-6 else []     # the wind-up
                 for b, nb in zip(bs, bs[1:] + [t1]):
                     seq += [(b, on, m["on"]), (0.5 * (b + nb), off, m["off"])]
-                plays[side].append((t0, t1, seq))
+                plays[side].append((t0, t1, seq, react))
         if "lean" in m or "tilt" in m:
             body.append((t0, t1, m.get("lean", 0.0), m.get("tilt", 0.0), what))
         if "twitch" in m:
@@ -437,9 +443,16 @@ def travel(a, b):
     return max(TRAVEL_MIN + way / TRAVEL_SPEED, turn / TURN_SPEED)
 
 
+def fling(a, b):
+    """Seconds a hand thrown from one place to another by a reaction takes: FLING_MIN plus its wrist's way at
+    FLING_SPEED."""
+    return FLING_MIN + float(np.linalg.norm(np.asarray(b[0], float) - np.asarray(a[0], float))) / FLING_SPEED
+
+
 def _hand(spans, side, rest, world, at):
     """The keys of one hand: its moves' places on their times (`at(place)` resolves one), travelling between them at a
-    human pace (`travel`), home to `rest` between two moves when it can stay there REST_MIN seconds."""
+    human pace (`travel`), home to `rest` between two moves when it can stay there REST_MIN seconds. `spans` are (t0, t1,
+    [(t, place, offset)], react): a reacting move's hand leaves where it is on t0 and arrives when `fling` gets it there."""
     grip = SHAPES["curled"] if rest == "mic" else None             # a mic hand never lets go of the mic
     keys = []
 
@@ -459,25 +472,39 @@ def _hand(spans, side, rest, world, at):
         if spans[k][0] < spans[k - 1][1] - 1e-6:
             raise MoveError(f"the {side} hand plays two moves at once (at {spans[k - 1][0]} and {spans[k][0]} s)")
     home = where(rest)
-    straight = [False] + [                                         # from move k - 1 straight on to move k
-        nseq[0][0] - t1 < travel(where(*pseq[-1][1:]), home) + REST_MIN + travel(home, where(*nseq[0][1:]))
-        for (_, t1, pseq), (_, _, nseq) in zip(spans, spans[1:])]
-    for k, (_, t1, seq) in enumerate(spans):
+    straight, plan = [False], [list(sp) for sp in spans[:1]]        # from move k - 1 straight on to move k
+    for (_, t1, pseq, _), (t0, nt1, nseq, react) in zip(spans, spans[1:]):
+        last = where(*pseq[-1][1:])
+        if react:                                                    # it leaves on t0 from where it is by then
+            straight.append(t0 - t1 < travel(last, home) + REST_MIN)
+        else:
+            straight.append(nseq[0][0] - t1 < travel(last, home) + REST_MIN + travel(home, where(*nseq[0][1:])))
+        plan.append([t0, nt1, nseq, react])
+    for k, (t0, _, seq, react) in enumerate(plan):                  # a reaction arrives when its fling gets it there
+        if react:
+            frm = where(*plan[k - 1][2][-1][1:]) if straight[k] else home
+            arrive = t0 + fling(frm, where(*seq[0][1:]))
+            plan[k][2] = [(max(t, arrive), p, off) for t, p, off in seq]
+
+    def trip(k, a, b):
+        return fling(a, b) if plan[k][3] else travel(a, b)
+
+    for k, (_, t1, seq, _) in enumerate(plan):
         if not straight[k]:                                          # it sets off from home to arrive on time
-            leave = seq[0][0] - travel(home, where(*seq[0][1:]))
+            leave = seq[0][0] - trip(k, home, where(*seq[0][1:]))
             key(max(leave, 0.0) if k == 0 else leave, rest)
         for t, p, off in seq:
             key(t, p, off)
         last, lt, end = where(*seq[-1][1:]), seq[-1][0], t1        # the last place holds to the end of the move ...
-        if k + 1 < len(spans) and straight[k + 1]:
-            nt, nplace, noff = spans[k + 1][2][0]
-            need = travel(last, where(nplace, noff))
+        if k + 1 < len(plan) and straight[k + 1]:
+            nt, nplace, noff = plan[k + 1][2][0]
+            need = trip(k + 1, last, where(nplace, noff))
             end = min(t1, nt - need)                                 # ... or the hand leaves it in time for the next
             if end < lt - 1e-6:
                 raise MoveError(f"the {side} hand needs {need:.2f} s to get from {seq[-1][1]!r} (at {lt:g} s) to "
                                 f"{nplace!r} (at {nt:g} s) and has {nt - lt:.2f} s: start the next move later")
         if end - lt > 1e-6:
             key(end, seq[-1][1], seq[-1][2])
-        if k + 1 == len(spans) or not straight[k + 1]:
+        if k + 1 == len(plan) or not straight[k + 1]:
             key(t1 + travel(last, home), rest)
     return keys

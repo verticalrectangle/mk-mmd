@@ -226,3 +226,139 @@ def clamp_look(f, u, d, share, limits=None):
     f, u = np.asarray(f, float), np.asarray(u, float)
     out = math.cos(e) * (math.cos(y) * f + math.sin(y) * np.cross(u, f)) + math.sin(e) * u
     return tuple(out / np.linalg.norm(out))
+
+
+# ------------------------------------------------------------------------------ the whole body: turning round, airborne
+TURN_LEAD = 0.05                 # s: the chest turns this far ahead of the hips, and unwinds as they arrive ...
+CHEST_MAX = math.radians(30.0)   # ... by at most about this much (the spine's twist)
+TURN_LIFT = 0.045                # m: a stepping foot's lift halfway through its step
+TURN_DIP = 0.02                  # m: the hips sink this much while the feet step (the knees give)
+TURN_STEPS = ((0.0, 0.58), (0.42, 1.0))     # shares of a turn's span: the first foot's step, then the other's ...
+ROLL = 0.15                      # ... each rolling off and setting down, unmoved, over this share of its step: one foot
+#                                  is always down, and a foot down never slides
+TWIST_MAX = math.radians(35.0)   # a foot turns at most this far from the hips: farther, it swivels on its ankle
+TURN_KEYS = ("t", "deg", "dur", "first", "lift", "dip", "move")
+AIR = {"tuck": 0.24, "back": 0.10, "first": "L", "share": 0.7, "lag": 0.06, "rise": 0.14, "extend": 0.22, "point": 30.0}
+AIR_KEYS = ("from", "to") + tuple(AIR)
+
+
+def turn_dur(deg):
+    """Seconds a brisk turn on the spot takes: 0.2 s and 0.11 s per 100 degrees (145 degrees: 0.36 s)."""
+    return 0.2 + 0.0011 * abs(float(deg))
+
+
+def _side(v, where):
+    if v not in ("L", "R"):
+        raise ValueError(f"{where}: \"L\" or \"R\", not {v!r}")
+    return v
+
+
+def turn_plan(ts, turns, feet):
+    """Turning round on the spot as a person does, not as a statue on a turntable. `turns` [{t, deg, dur, first, lift,
+    dip, move}]: from `t` the body turns `deg` degrees toward its left (negative: its right) over `dur` seconds (default
+    `turn_dur`), and travels `move` [x, y] metres meanwhile (in the character's frame before its first turn: x its left, y
+    behind). The chest leads the hips by TURN_LEAD (at most about CHEST_MAX ahead) and unwinds as they arrive; the foot
+    `first` steps over the first TURN_STEPS share of the span and the other foot over the second (by default the order
+    that keeps the feet further apart: turning about a point in front of the ankles or behind them, one order sets a foot
+    down where the other still stands), each rolling off and setting down over ROLL of its step and lifted `lift` metres
+    (TURN_LIFT) between, set down where the turned (and moved) stance puts it; a foot never turns more than TWIST_MAX from
+    the hips (planted, it swivels on its ankle); the hips sink `dip` metres (TURN_DIP) meanwhile. `feet` {side: (x, y)}
+    are the ankles' floor positions relative to the point the body turns about, in that frame. Returns {"yaw": the hips'
+    turn (F,) rad, "shift": the point's travel (F, 2) m, "chest": the chest's lead on top of the turn (F,) rad, "dip": (F,)
+    m, "feet": {side: (F, 2) floor positions}, "lift": {side: (F,) m}, "foot_yaw": {side: (F,) rad}, "gap": the least
+    distance between the ankles during the turns, m (inf with one foot)}, positions and foot yaws in that frame. Raises
+    ValueError for a bad or overlapping turn."""
+    ts = np.asarray(ts, float)
+    n = len(ts)
+    out = {"yaw": np.zeros(n), "shift": np.zeros((n, 2)), "chest": np.zeros(n), "dip": np.zeros(n), "feet": {}, "lift": {},
+           "foot_yaw": {}, "gap": math.inf}
+    state = {}                                                   # side: [offset in the body's frame, yaw, neutral yaw]
+    for s, (x, y) in feet.items():
+        _side(s, "turn feet")
+        state[s] = [np.array([float(x), float(y)]), 0.0, 0.0]
+        out["feet"][s] = np.tile([float(x), float(y)], (n, 1))
+        out["lift"][s], out["foot_yaw"][s] = np.zeros(n), np.zeros(n)
+    body, shift, end = 0.0, np.zeros(2), -math.inf
+    for i, tr in enumerate(sorted(turns, key=lambda tr: float(tr["t"]) if isinstance(tr, dict) and "t" in tr else 0.0)):
+        where = f"turn {i}"
+        if not isinstance(tr, dict) or "t" not in tr or "deg" not in tr or set(tr) - set(TURN_KEYS):
+            raise ValueError(f"{where}: expected {{{', '.join(TURN_KEYS)}}} with t and deg")
+        t0, th = float(tr["t"]), math.radians(float(tr["deg"]))
+        dur = float(tr.get("dur", turn_dur(tr["deg"])))
+        lift, dip = float(tr.get("lift", TURN_LIFT)), float(tr.get("dip", TURN_DIP))
+        move = np.asarray(tr.get("move", (0.0, 0.0)), float)
+        if dur <= 0 or lift < 0 or dip < 0 or move.shape != (2,):
+            raise ValueError(f"{where}: dur must be positive, lift and dip not negative, move [x, y] metres")
+        if t0 < end - 1e-6:
+            raise ValueError(f"{where} at {t0:g} s starts before the turn before it ends ({end:g} s)")
+        end = t0 + dur
+        lead = min(TURN_LEAD, dur / 3.0)
+        m = ts >= t0
+        tm = ts[m]
+        go = smooth((tm - t0 - lead) / (dur - lead))
+        hips = body + th * go
+        out["yaw"][m] = hips
+        out["shift"][m] = shift + go[:, None] * move
+        ahead = th * (smooth((tm - t0) / (dur - lead)) - go)
+        out["chest"][m] = CHEST_MAX * np.tanh(ahead / CHEST_MAX)
+        out["dip"] += dip * np.sin(np.pi * np.clip((ts - t0) / dur, 0.0, 1.0))
+
+        def steps(first):
+            """{side: (positions, lift, yaw)} over tm with the foot `first` stepping first."""
+            got = {}
+            for s, (local, yaw0, neutral) in state.items():
+                k0, k1 = TURN_STEPS[0] if s == first else TURN_STEPS[1]
+                s0, s1 = t0 + k0 * dur, t0 + k1 * dur
+                u = np.clip((tm - s0) / (s1 - s0), 0.0, 1.0)
+                w = smooth(np.clip((u - ROLL) / (1.0 - 2.0 * ROLL), 0.0, 1.0))      # its way, off the ground
+                ang = body + th * w
+                c, sn = np.cos(ang), np.sin(ang)
+                pos = shift + w[:, None] * move + np.stack([c * local[0] - sn * local[1], sn * local[0] + c * local[1]], 1)
+                want = np.where(tm < s0, yaw0, yaw0 + (body + th + neutral - yaw0) * w)
+                got[s] = (pos, lift * np.where((w > 0.0) & (w < 1.0), np.sin(np.pi * w), 0.0),
+                          np.clip(want, hips + neutral - TWIST_MAX, hips + neutral + TWIST_MAX))
+            return got
+
+        def gap(got):
+            return float(np.linalg.norm(got["L"][0] - got["R"][0], axis=1).min()) if len(got) == 2 and len(tm) else math.inf
+
+        if "first" in tr:
+            got = steps(_side(tr["first"], f"{where} first"))
+        else:                                                    # the order that keeps the feet furthest apart
+            got = max((steps(s) for s in ("L", "R")), key=gap)
+        out["gap"] = min(out["gap"], gap(got))
+        for s, (pos, up, yaw) in got.items():
+            out["feet"][s][m], out["lift"][s][m], out["foot_yaw"][s][m] = pos, up, yaw
+            state[s][1] = body + th + state[s][2]
+        body, shift = body + th, shift + move
+    return out
+
+
+def air_plan(ts, spans):
+    """The legs of a body in the air (a jump, a blast): each span {from, to, tuck, back, first, share, lag, rise, extend,
+    point} runs from take-off `from` to landing `to` (clip seconds). Over `rise` s the feet come up toward the hips by
+    `tuck` metres and back by `back` (the knees bend and come forward), the foot `first` ahead and the other `lag` s later,
+    by `share` of it; the toes point down by `point` degrees; over the last `extend` s the legs reach down again, so the
+    feet are back under the hips at the landing. Defaults AIR. Returns ({side: (F, 3) offsets (x its left, y behind, z
+    up) m}, {side: (F,) the toes' pitch down, rad}); overlapping spans take the larger. Raises ValueError for a bad span."""
+    ts = np.asarray(ts, float)
+    off = {s: np.zeros((len(ts), 3)) for s in ("L", "R")}
+    pitch = {s: np.zeros(len(ts)) for s in ("L", "R")}
+    for i, sp in enumerate(spans):
+        where = f"air {i}"
+        if not isinstance(sp, dict) or "from" not in sp or "to" not in sp or set(sp) - set(AIR_KEYS):
+            raise ValueError(f"{where}: expected {{{', '.join(AIR_KEYS)}}} with from and to")
+        c = dict(AIR, **{k: v for k, v in sp.items() if k in AIR})
+        t0, t1 = float(sp["from"]), float(sp["to"])
+        first = _side(c["first"], f"{where} first")
+        rise, extend, share, lag = (float(c[k]) for k in ("rise", "extend", "share", "lag"))
+        if t1 <= t0 or rise <= 0 or extend <= 0 or lag < 0 or not 0.0 <= share <= 1.0:
+            raise ValueError(f"{where}: from before to, rise and extend positive, lag not negative, share within 0..1")
+        down = 1.0 - smooth((ts - (t1 - extend)) / extend)
+        for s in ("L", "R"):
+            k, late = (1.0, 0.0) if s == first else (share, lag)
+            e = smooth((ts - t0 - late) / rise) * down * k
+            v = np.stack([np.zeros(len(ts)), float(c["back"]) * e, float(c["tuck"]) * e], 1)
+            off[s] = np.where(np.abs(v) > np.abs(off[s]), v, off[s])
+            pitch[s] = np.maximum(pitch[s], math.radians(float(c["point"])) * e)
+    return off, pitch

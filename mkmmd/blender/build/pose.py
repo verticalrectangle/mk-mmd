@@ -892,6 +892,7 @@ def run(ctx):
         for s, deg in (spec.get("toes") or {}).items():          # foot yaw about the vertical through the ankle (L and R)
             if smap.get(f"leg_ik.{s}") and float(deg):
                 K.key_bone_arm(arm, smap[f"leg_ik.{s}"], [f0, f1], [Quaternion(), _q((0, 0, 1), float(deg))], interp="BEZIER")
+                m.base.setdefault("toes", {})[s] = float(deg)    # perform's air and step_turn key the foot on top of it
             info.setdefault("toes", {})[s] = float(deg)
         # cloth draped over the seat: chains whose bones point along chosen directions
         if spec.get("drape"):

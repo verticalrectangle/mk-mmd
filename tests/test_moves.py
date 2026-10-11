@@ -266,6 +266,24 @@ def test_a_two_hand_move_leaves_the_mic_hand_at_the_mic_unless_it_raises_it():
         MV.compile([{"name": "rest", "hand": "R", "place": "chest"}], MARKS)
 
 
+def test_a_reaction_leaves_on_its_own_time_from_where_the_hand_is_and_is_thrown_there():
+    """Thrown up by the blast, the arms would have set off before it, as a planned move does to arrive on time: a
+    reaction (`flung`) leaves on its time from the place the hand holds (the mic held across, kept until then) or from
+    home, arrives at a thrown pace, and goes home when it ends (the hands come down as they land)."""
+    es = [{"name": "rest", "hand": "R", "place": "mic"}, {"name": "mic_across", "t": 8.4, "dur": 0.992, "hand": "R"},
+          {"name": "flung", "t": 9.392, "dur": 0.96}]
+    hands = MV.compile(es, MARKS)["hands"]
+    across, up, mic = (MV.resolve(n, "R", MARKS) for n in ("mic_across", "up", "mic"))
+    R = hands["R"]
+    assert max(k["t"] for k in R if k["at"] == near(across[0])) == pytest.approx(9.392)
+    arrive = min(k["t"] for k in R if k["at"] == near(up[0]))
+    assert arrive == pytest.approx(9.392 + MV.fling(across, up), abs=1e-4) and arrive - 9.392 < MV.travel(across, up)
+    assert R[-1]["at"] == near(mic[0]) and R[-1]["t"] > 9.392 + 0.96 and {k["fingers"] for k in R} == {"curled"}
+    home, up_l, L = MV.resolve("rest", "L", MARKS), MV.resolve("up", "L", MARKS), hands["L"]
+    assert L[0]["at"] == near(home[0]) and L[0]["t"] == pytest.approx(9.392)
+    assert L[1]["at"] == near(up_l[0]) and L[1]["t"] == pytest.approx(9.392 + MV.fling(home, up_l), abs=1e-3)
+
+
 def test_a_mic_at_the_mouth_leans_back_up_to_the_lips_from_a_fist_under_them_so_the_elbow_hangs():
     """The mic was held upright from a fist turned square across the face, so the forearm lay level and the elbow stuck
     out at the height of the shoulder."""
