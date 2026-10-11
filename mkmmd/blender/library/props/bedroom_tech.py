@@ -180,4 +180,4 @@ def cassette_player(name, coll, root, slots=None):
     use, colliders = PLAYER.assemble(K, spec, M.new_rng(name, "label"))
     size, bounds = _bounds(K)
     return K.card(use=use, colliders=colliders, origin="floor_center", front="-Y", size=size, bounds=bounds,
-                  label=spec, params={"glow": K.root["glow"]})
+                  label=spec, params={"glow": K.root["glow"], "pump": K.root["pump"]})

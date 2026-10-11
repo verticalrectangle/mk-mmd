@@ -15,7 +15,7 @@ from . import bedroom_tech_cabinet as CAB
 from . import bedroom_tech_geo as G
 from . import bedroom_tech_maths as M
 from . import bedroom_tech_tape as TAPE
-from .cafe_kit import L, N, bm_box, bm_lathe, principled
+from .cafe_kit import L, N, bm_box, bm_lathe, drive, principled
 
 # ------------------------------------------------------------------ body (m)
 BODY_W, BODY_D = 0.340, 0.115
@@ -40,6 +40,7 @@ BAY_ZC = 0.5 * (BAY_WIN[2] + BAY_WIN[3])         # 0.0891: centre of the window
 CASSETTE_D = 0.0045                              # the cassette's label face is this far behind the front plane
 SPK_X, SPK_Z, SPK_R = 0.1145, 0.0845, 0.0455     # speaker centre (+-x), height, bezel outer radius
 GRILLE_R = 0.0405                                # radius of the cloth inside the bezel
+PUMP_SWELL, PUMP_PUSH = 0.12, 0.004              # `pump` at 1: a grille swells this share (inside its bezel), comes this far out
 
 DIAL_CX, DIAL_Z = -0.0215, 0.5 * (TOP_PLATE[0] + TOP_PLATE[1])      # dial window centre
 DIAL_OUT = (0.086, 0.0170)              # bezel outer size
@@ -381,21 +382,21 @@ def build_glow(C):
     return bm
 
 
-def build_grilles(C):
-    """Both speaker grilles: cloth (material 0), concentric ribs and the centre dome (1 metal)."""
+def build_grille():
+    """One speaker grille about its centre on the front face: cloth (material 0), concentric ribs and the centre dome
+    (1 metal)."""
     bm = bmesh.new()
-    for sgn in (-1, 1):
-        cl = bmesh.new()
-        bm_lathe(cl, [(GRILLE_R, 0.0004), (GRILLE_R - 0.0004, 0.0006), (0.0, 0.0010)], segs=72, mat=0, uv=False)
-        G.put(bm, cl, loc=(sgn * SPK_X, YF, SPK_Z), rot=_TO_FRONT)
-        mt = bmesh.new()
-        for r in M.rib_radii(0.0118, 0.0372, 6):
-            w = 0.0011
-            bm_lathe(mt, [(r + w, 0.0006), (r + w * 0.7, 0.0014), (r, 0.0017), (r - w * 0.7, 0.0014), (r - w, 0.0006)],
-                     segs=72, mat=1, uv=False)
-        bm_lathe(mt, [(0.0090, 0.0008), (0.0086, 0.0016), (0.0064, 0.0027), (0.0030, 0.0033), (0.0, 0.0034)], segs=32, mat=1,
-                 uv=False)
-        G.put(bm, mt, loc=(sgn * SPK_X, YF, SPK_Z), rot=_TO_FRONT)
+    cl = bmesh.new()
+    bm_lathe(cl, [(GRILLE_R, 0.0004), (GRILLE_R - 0.0004, 0.0006), (0.0, 0.0010)], segs=72, mat=0, uv=False)
+    G.put(bm, cl, loc=(0.0, 0.0, 0.0), rot=_TO_FRONT)
+    mt = bmesh.new()
+    for r in M.rib_radii(0.0118, 0.0372, 6):
+        w = 0.0011
+        bm_lathe(mt, [(r + w, 0.0006), (r + w * 0.7, 0.0014), (r, 0.0017), (r - w * 0.7, 0.0014), (r - w, 0.0006)],
+                 segs=72, mat=1, uv=False)
+    bm_lathe(mt, [(0.0090, 0.0008), (0.0086, 0.0016), (0.0064, 0.0027), (0.0030, 0.0033), (0.0, 0.0034)], segs=32, mat=1,
+             uv=False)
+    G.put(bm, mt, loc=(0.0, 0.0, 0.0), rot=_TO_FRONT)
     return bm
 
 
@@ -446,12 +447,18 @@ def build_cassette(K, label_spec, rng):
 
 # ================================================================= assembly
 def assemble(K, label_spec, rng):
-    """Build the player's objects and custom property; -> (use dict, collider specs) for the card."""
+    """Build the player's objects and custom properties; -> (use dict, collider specs) for the card."""
     K.prop("glow", 1.0, 0.0, 1.0, "emission of the dial, LED and level meter (0 = dark, 1 = normal)")
+    K.prop("pump", 0.0, 0.0, 1.0, "the speakers' kick (0 = at rest, 1 = both grilles swollen and pushed out of the front)")
     C = colours(K)
     mats = make_materials(K, C)
     K.to_obj("body", build_body(C), [mats["plastic"]])
-    K.to_obj("grilles", build_grilles(C), [mats["cloth"], mats["metal"]])
+    var = ("pump", K.root, '["pump"]')
+    for side, sgn in (("L", 1.0), ("R", -1.0)):                  # its own left is +x: it faces -y
+        g = K.to_obj(f"grille_{side}", build_grille(), [mats["cloth"], mats["metal"]], loc=(sgn * SPK_X, YF, SPK_Z))
+        for i in (0, 2):
+            drive(g, "scale", f"1 + {PUMP_SWELL} * min(max(pump, 0), 1)", i, var)
+        drive(g, "location", f"{YF} - {PUMP_PUSH} * min(max(pump, 0), 1)", 1, var)
     K.to_obj("glass", build_glass(C), [mats["glass"]]).visible_shadow = False
     K.to_obj("glow", build_glow(C), [mats["glow"]])
     K.to_obj("hinges", build_hinges(), [mats["metal"]])

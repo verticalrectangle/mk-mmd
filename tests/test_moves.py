@@ -105,8 +105,6 @@ def test_an_aimed_mic_points_where_aimed_across_a_palm_that_continues_the_forear
     assert sigma * np.cross(d, p) == pytest.approx(aim / np.linalg.norm(aim))   # the thumb side, as at the mic place
     f = MV.forearm(side, MARKS, pt)
     assert bend == pytest.approx(90.0 - math.degrees(math.acos(abs(f @ aim) / np.linalg.norm(aim))), abs=1e-6)
-    m_d, m_p = MV.place("mic", side, MARKS)[1:3]
-    assert sigma * np.cross(m_d, m_p) / np.linalg.norm(np.cross(m_d, m_p)) == pytest.approx([0, 0, 1])   # the mic place's mic is upright
 
 
 # ---------------------------------------------------------------- the hands off the body
@@ -164,10 +162,11 @@ def test_places_by_the_face_and_chest_stay_on_their_own_side_clear_of_a_mic_at_t
 def test_a_move_holds_its_last_place_to_its_end_and_the_hand_goes_home_after_it():
     out = MV.compile([{"name": "point", "t": 1.0, "dur": 0.8, "hand": "L"}], MARKS)
     keys = out["hands"]["L"]
-    home = MV.resolve("rest", "L", MARKS)[0]
-    point = MV.resolve("point", "L", MARKS)[0]
-    assert [k["t"] for k in keys] == pytest.approx([1.0 - MV.EASE, 1.0, 1.8, 1.8 + MV.EASE])
-    assert [k["at"] for k in keys] == [near(p) for p in (home, point, point, home)]
+    home, point = MV.resolve("rest", "L", MARKS), MV.resolve("point", "L", MARKS)
+    there = MV.travel(home, point)
+    assert there > MV.TRAVEL_MIN + 0.1                                    # a hand by the hip to the arm held out
+    assert [k["t"] for k in keys] == pytest.approx([1.0 - there, 1.0, 1.8, 1.8 + MV.travel(point, home)], abs=1e-4)
+    assert [k["at"] for k in keys] == [near(p[0]) for p in (home, point, point, home)]
     assert keys[1]["fingers"] == "point" and keys[0]["fingers"] == "relaxed"
     assert set(out["places"]["L"]) == {"rest", "point"}
 
@@ -179,7 +178,28 @@ def test_moves_close_together_go_straight_on_and_far_apart_go_home_between():
         return [k["at"] for k in MV.compile(es, MARKS)["hands"]["L"]]
     home = near(MV.resolve("rest", "L", MARKS)[0])
     assert ats(0.2).count(home) == 2                                      # in before the first, out after the last
-    assert ats(1.0).count(home) == 4                                      # and home between them
+    assert ats(1.2).count(home) == 4                                      # and home between them
+
+
+def test_a_hand_travels_at_a_human_pace_and_sets_off_early_to_arrive_on_time():
+    """Moves laid end to end (a point held to 1.5 s, a heart at 1.52 s) made the hand jump between them within a frame."""
+    es = [{"name": "point", "t": 1.0, "dur": 0.5, "hand": "L"}, {"name": "heart_wink", "t": 1.52, "dur": 0.4, "hand": "L"},
+          {"name": "peace_eye", "t": 2.1, "dur": 0.3, "hand": "L"}]
+    keys = MV.compile(es, MARKS)["hands"]["L"]
+    places = {n: MV.resolve(n, "L", MARKS) for n in ("rest", "point", "heart", "peace")}
+    at = lambda k: next(n for n, r in places.items() if k["at"] == near(r[0]))   # noqa: E731
+    for a, b in zip(keys, keys[1:]):                                      # never faster than a quick gesture, on average
+        assert np.linalg.norm(np.subtract(b["at"], a["at"])) <= 1.6 * (b["t"] - a["t"]) + 1e-3, (at(a), at(b))
+        assert b["t"] - a["t"] >= MV.TRAVEL_MIN - 1e-3, (at(a), at(b))
+    assert [k["t"] for k in keys if at(k) == "heart"][0] == pytest.approx(1.52)       # on its time
+    assert [k["t"] for k in keys if at(k) == "peace"][0] == pytest.approx(2.1)
+    assert [at(k) for k in keys] == ["rest", "point", "point", "heart", "heart", "peace", "peace", "rest"]
+
+
+def test_a_move_that_leaves_the_hand_too_little_time_to_get_there_is_refused():
+    with pytest.raises(MV.MoveError, match=r"the L hand needs 0\.\d\d s to get from 'point' \(at 1 s\) to 'heart'"):
+        MV.compile([{"name": "point", "t": 1.0, "dur": 0.1, "hand": "L"},
+                    {"name": "heart_wink", "t": 1.15, "dur": 0.4, "hand": "L"}], MARKS)     # 18 cm in 0.15 s
 
 
 def test_one_hand_cannot_play_two_moves_at_once():
@@ -244,6 +264,18 @@ def test_a_two_hand_move_leaves_the_mic_hand_at_the_mic_unless_it_raises_it():
         MV.compile([{"name": "rest", "hand": "R", "place": "mic"}, {"name": "heart_push", "t": 1.0}], MARKS)
     with pytest.raises(MV.MoveError, match="rest"):
         MV.compile([{"name": "rest", "hand": "R", "place": "chest"}], MARKS)
+
+
+def test_a_mic_at_the_mouth_leans_back_up_to_the_lips_from_a_fist_under_them_so_the_elbow_hangs():
+    """The mic was held upright from a fist turned square across the face, so the forearm lay level and the elbow stuck
+    out at the height of the shoulder."""
+    S = np.asarray(MARKS["arm.R"], float)
+    pt, d, p, _, _, bend = MV.resolve("mic", "R", MARKS)
+    E = AR.pole_elbow(S, pt, MARKS["upper"], MARKS["fore"], S + np.array(AR.POLE) * [-1, 1, -1])
+    assert S[2] - E[2] > 0.12 and abs(E[0] - S[0]) < 0.1 and bend < 20.0   # the elbow hangs by the side, the wrist straight
+    mic = np.cross(d, p)                                                   # the right fist's hole: toward the grille
+    up = np.asarray(MARKS["mouth"], float) - pt
+    assert pt[2] < MARKS["mouth"][2] - 0.08 and mic @ up / np.linalg.norm(up) > 0.9   # under the lips, aimed up at them
 
 
 def test_a_dainty_hand_waits_lightly_on_the_front_of_the_body_and_goes_back_there():

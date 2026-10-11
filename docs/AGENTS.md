@@ -88,8 +88,10 @@ square crop of a vertical master). Put the plan in comments of `mk.toml` or a lo
   `hands_up`, `stank` ...) or on clip seconds of their own (`hits = [...]`: a `bonk` on the snares), and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them (a two-hand move then
   plays with the free hand only; `place = "dainty"` rests a hand lightly on the front of a skirt, elbows in); they compile to the pose's hand keys (riding the chest) and perform's lean, twitches and faces. The hands
   come in from outside and stop at the body, clothes and hair, and wrists stay within 60 degrees of the forearm: the pose report's
-  `moves.places` says how far each place was kept out and how much its wrist bends. Draw a pose sheet of every move, front and 3/4, and look at
-  it closely before building the shots.
+  `moves.places` says how far each place was kept out and how much its wrist bends. A hand travels between places at a human pace
+  and the build refuses a move it cannot reach in time (it says how long the trip takes): a few gestures, each held, read better
+  than one on every word. Draw a pose sheet of every move, front and 3/4, and look at it closely before building the shots, then
+  watch the moves in motion: a sheet does not show how a hand gets from one place to the next.
 - **Sim** ([Sim](design.md#sim)): hair, ears, tails and skirts are solved outside Blender and baked. List the families, give the colliders (the
   seat, the car, the fingers, the floor), and `wind = { carrier = "car", ... }` in a moving vehicle. `mk build --skip sim` is the fast loop for poses
   and performance.

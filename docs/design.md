@@ -678,7 +678,7 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `bedroom_desk` | an 80s writing desk, 1.20 x 0.60 x 0.74 m, three drawers; options `edge` (slot of the band round the top, "pine"), `drawers` (three slots, "foam,love,gold"); `use.rest` `top` and `front` |
 | `desk_chair` | a chrome cantilever chair with padded seat and back; seats a character exactly as `cafe_chair` does; options `upholstery` ("iris"), `accent` ("love") |
 | `desk_lamp` | a spring-arm desk lamp that owns a warm spot light; options `paint` (slot or `#hex`, "love"), `power`; root properties `power` (60 W) and `on` (0..1: key it to switch the lamp); yaw aims it (0 looks toward -Y) |
-| `cassette_player` | a compact radio-cassette player (a boombox), 0.34 x 0.115 x 0.16 m; option `label` (the cassette's label colour); root property `glow` (0..1); `use.surface` `dial` |
+| `cassette_player` | a compact radio-cassette player (a boombox), 0.34 x 0.115 x 0.16 m; option `label` (the cassette's label colour); root properties `glow` (0..1) and `pump` (0..1: both speaker grilles, `<name>_grille_L` and `_R`, swell 12 % about their centres and come 4 mm out of the front; key it on the kicks); `use.surface` `dial` |
 | `cassette_tape` | a compact cassette lying on the desk; option `label` (a slot or `#hex`; by default picked from the instance name) |
 | `handheld_mic` | a handheld vocal microphone, 162 mm long with a 51 mm ball grille, standing on its tail along +Z, and its cord `<name>_cable`; colour roles `body`, `grille`, `hardware`, `cable` (`slots`: a palette slot or `#hex`); `use.anchor` `jack` (the cord's exit under the tail), `use.look` `grille` and `grip`. Put it in a hand with `attach` and `cable` (see [Posing](#posing)) |
 | `fuse` | a cartoon fuse: a rope (`<name>_cord`, 14 mm thick) that leaves a socket at the root, up and over in a curl, with a spiky spark (`<name>_spark`) that is lit at its tip and burns it down. Root properties for `[[key]]`, 0..1: `grow` (how much of the rope has sprouted, along its length; default 1), `burn` (how much has burned down from the tip; 0), `lit` (the spark's size, flickering; 0). Leave `grow` at 1 in the slots and key it from 0: the props stage measures the form as built. Options `points` (`[[x, y, z], ...]` from the root, the first `[0, 0, 0]`), `radius`; colour roles `cord` (text), `spark` (gold), `cap` (base); `use.look` `base` and `tip`. The spark has no parent (it rides the rope's end on a Follow Path constraint and copies the root's world scale), so `scale` and `parent` carry it too |
@@ -1022,12 +1022,16 @@ build error); other keys of the same tables stay the project's (a `ride` of the 
 
 `{name = "rest", hand, place}` says where a hand waits when no move plays it: `"rest"` (default: hanging by the hip; over a wide
 skirt the arm swings out until the hand clears it), `"dainty"` (resting lightly on the front of the skirt or the thighs, elbows
-in, the two hands together when both rest there: a girl's polite stand) or `"mic"` (a fist at the mouth, holding an attached
-mic). A hand goes from its rest place to a move's first place in 0.12 s, holds its last
-place to the end of the move and goes back in 0.12 s, unless its next move starts within 0.35 s: then it goes straight on. One
-hand cannot play two moves at once. A hand that rests at the mic keeps the mic in its fist through every move it plays (the
-mic moves aim it); a two-hand move leaves it at the mic and plays with the other hand only, except `hands_up` (the mic goes up
-too), and `heart_push`, which needs both hands free, is a build error for a member holding a mic.
+in, the two hands together when both rest there: a girl's polite stand) or `"mic"` (a fist under the mouth, holding an
+attached mic that leans back up to the lips, so the forearm rises to it and the elbow hangs by the side). A hand
+travels at a human pace: a trip takes 0.1 s plus its wrist's way at 1.6 m/s (eased: it peaks near twice that), or as long
+as turning its palm or its fingers' way at 600 degrees a second takes, if that is longer, and it reaches a move's first
+place on the move's time, so it sets off before it. It holds its last place to the end of the move, then goes home to its
+rest place if it can stay there 0.15 s before its next move, else straight on to that move, leaving its place early enough
+to get there on time; a next move too close for that (the hand would have to jump) is a build error that says how long the
+trip takes. One hand cannot play two moves at once. A hand that rests at the mic keeps the mic in its fist through every
+move it plays (the mic moves aim it); a two-hand move leaves it at the mic and plays with the other hand only, except
+`hands_up` (the mic goes up too), and `heart_push`, which needs both hands free, is a build error for a member holding a mic.
 
 | Move | What it does |
 |---|---|
@@ -1059,7 +1063,8 @@ natural:
 
 - **The wrist.** The elbow the arm IK will give (the default pole, `mkmmd.core.armreach`) fixes the forearm, and a hand that
   would bend more than 60 degrees from it is turned toward it as a whole (the IK's own lands within about 10 degrees of that).
-  A move with something in the fist (a mic, a hammer) aims it instead: its hand continues the forearm as far as a fist round a handle pointing that way allows.
+  A place with something in the fist (a mic, a hammer) aims it instead: its hand continues the forearm as far as a fist round
+  a handle pointing that way allows (the mic at the mouth: the forearm rises to a fist under the lips).
 - **The skin.** The build measures the distance to every face of the member's meshes in the rest pose that belongs to neither
   arm: its body, clothes and hair. The hand (a box the size of the model's hand and of its finger shape) comes in from outside
   and stops where it first comes within its margin: an arm held out swings in round the shoulder (so it stays in reach; a hanging

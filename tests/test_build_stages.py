@@ -486,6 +486,23 @@ def test_a_scaled_library_prop_grows_its_colliders_and_use_points_and_place_is_r
     assert code == 3 and "BuildError" in out["error"] and "give `at` with `scale`" in out["error"]
 
 
+def test_a_boombox_pump_swells_both_speaker_grilles_about_their_centres_and_pushes_them_out(make, capsys):
+    import numpy as np
+    keyed = SCALED.format(where="at = [0.0, 1.0, 0.0]") + ('[[key]]\ntarget = "box"\nprop = "pump"\n'
+                                                           'keys = [[0.0, 0.0], [1.0, 1.0]]\n')
+    code, out = make(keyed, with_cast=False, until="keys")
+    assert code == 0, out.get("error")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), '[obj(f"box_grille_{s}").dims for s in "LR"] + '
+                   '[obj(f"box_grille_{s}").loc for s in "LR"]', "--frames", "31,61"], capsys)   # pump 0, then 1
+    assert code == 0, q
+    (dl0, dr0, l0, r0), (dl1, dr1, l1, r1) = ([np.array(v) for v in f] for f in q["values"])
+    assert dl0[0] == pytest.approx(4 * 2 * 0.0405, rel=0.01) and dl1[0] == pytest.approx(1.12 * dl0[0], rel=1e-3)
+    assert dr1[2] == pytest.approx(1.12 * dr0[2], rel=1e-3)                  # both grilles, across and up
+    for p0, p1, x in ((l0, l1, 4 * 0.1145), (r0, r1, -4 * 0.1145)):
+        assert p0[0] == pytest.approx(x, abs=1e-4) and p1[0] == pytest.approx(x, abs=1e-4)   # about the speaker's centre
+        assert p1[1] - p0[1] == pytest.approx(-4 * 0.004, abs=1e-4)                        # out of the front (-Y)
+
+
 MIC = """[pose.mq]
 feet = "floor"
 
@@ -523,8 +540,8 @@ def test_a_move_holds_its_place_to_its_end_then_the_hand_goes_home_and_a_posed_h
     code, out = make(MOVES.format(extra=""), until="pose")
     assert code == 0, out.get("error")
     assert not [w for w in warnings(out) if "short of its goal" in w]                     # the arm out is within reach
-    code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "37,58,68,76",
-                   "--project", str(make.root)], capsys)                                  # t 0.2, 0.9, 1.23, 1.5
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "34,58,68,85",
+                   "--project", str(make.root)], capsys)                                  # t 0.1, 0.9, 1.23, 1.8
     import numpy as np
     before, mid, end, after = (np.array(v) for v in q["values"])
     assert np.linalg.norm(mid - before) > 0.15                                           # it pointed
@@ -578,6 +595,11 @@ def test_moved_hands_ride_the_chest_through_a_lean_and_come_in_to_the_body_from_
     from mkmmd.core import armreach as AR
     predicted = AR.pole_elbow(S, W, np.linalg.norm(E - S), np.linalg.norm(W - E), S + np.array(AR.POLE) * [1, 1, -1])
     assert np.linalg.norm(predicted - E) < 5e-3                   # the elbow the move library planned the wrist for
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "[list(bone(b).head) for b in ('arm.R', 'elbow.R', 'wrist.R')]",
+                   "--frames", "40", "--project", str(make.root)], capsys)                # the mic hand
+    S, E, W = (np.array(v) for v in q["values"][0])
+    planned = AR.pole_elbow(S, W, np.linalg.norm(E - S), np.linalg.norm(W - E), S + np.array(AR.POLE) * [-1, 1, -1])
+    assert np.linalg.norm(planned - E) < 5e-3 and S[2] - E[2] > 0.12  # its elbow hangs under the shoulder, as planned
 
 
 @pytest.fixture(scope="module")

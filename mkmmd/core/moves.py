@@ -13,18 +13,21 @@ side, clear of a mic held at the mouth and of its cord.
 Every place is made natural before it is keyed (`resolve`):
 - the wrist: the elbow an arm IK gives (the pose stage's default pole, mkmmd.core.armreach) fixes the forearm, and a hand
   that would bend more than WRIST degrees from it is turned toward it; a place for a fist round a held thing (a mic, a
-  hammer) is aimed instead (AIM): the hand continues the forearm as far as a grip on a handle pointing that way allows; two
-  hands that meet in one shape (SHAPED, the two-hand heart) keep the orientation written for them, sized to the arm so it
-  suits any body;
+  hammer) is aimed instead (AIM): the hand continues the forearm as far as a grip on a handle pointing that way allows
+  (the mic at the mouth leans back to the lips from a fist under them, so the forearm rises to it); two hands that meet
+  in one shape (SHAPED, the two-hand heart) keep the orientation written for them, sized to the arm so it suits any body;
 - the skin: given the build's distance to the member's own body, clothes and hair (`clear`), the hand comes in from
   outside and stops where it first comes within its margin: an arm held out (OUT) swings in round the shoulder, so it
   stays in reach (a hanging hand rises off a wide skirt), a hand by the body comes in straight (TOUCH, else straight out
   from the body's axis); a touching place (a pat on the chest, hands over the ears) ends on the surface, any other one
   where it was asked unless that is too close to, or inside, the body.
 A hand that has played its move goes back to its rest place (`rest`: hanging by the hip; `dainty`: resting lightly on
-the front of the skirt or thighs, the two hands together; `mic`: holding a mic at the mouth) unless its next move starts
-within HOLD seconds. A hand that rests at the mic keeps its grip in every move: a
-two-hand move leaves it at the mic (except one that raises it, `hands_up`), and one that needs both hands free
+the front of the skirt or thighs, the two hands together; `mic`: holding a mic at the mouth) when it has time to stay there
+REST_MIN seconds before its next move, else it goes straight on to that move. A hand travels at a human pace (`travel`:
+TRAVEL_MIN, plus its wrist's way at TRAVEL_SPEED, or as long as its palm takes to turn over at TURN_SPEED) and reaches
+each move's first place on the move's time, so it sets off before it, leaving the place it holds early if it must; a
+move that leaves the hand too little time to get there is refused. A hand that rests at the mic keeps its grip in every
+move: a two-hand move leaves it at the mic (except one that raises it, `hands_up`), and one that needs both hands free
 (`heart_push`) is refused."""
 import math
 
@@ -37,8 +40,11 @@ class MoveError(ValueError):
     """A bad `[[move.<cast>]]`."""
 
 
-HOLD = 0.35                      # seconds: a hand whose next move starts sooner goes straight on to it
-EASE = 0.12                      # seconds a move takes to get into its first place, and back out of its last
+EASE = 0.12                      # seconds a move's lean or tilt takes to come in, and to go back
+TRAVEL_MIN = 0.1                 # seconds the shortest move of a hand from one place to another takes ...
+TRAVEL_SPEED = 1.6               # m/s: ... plus its wrist's way at this pace (eased in and out: it peaks near twice that)
+TURN_SPEED = 600.0               # deg/s: ... or as long as turning its palm or its fingers' way at this pace takes
+REST_MIN = 0.15                  # seconds a hand stays at its rest place at least, or it goes straight on to the next move
 WRIST = 60.0                     # degrees: the most a hand bends away from its forearm (as predicted: the IK's lands within ~10)
 FAR = 0.3                        # m: how far out a hand by the body starts its approach to it
 STEP = 0.01                      # m: the approach's step (the contact is then found to 0.003 mm by halving)
@@ -78,6 +84,7 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
 }
 AIM = {  # a fist round a handle (a mic, a hammer): where the handle points, for the left hand, x mirrored for the right. A
     # fist holds a handle across its palm, so a straight wrist keeps it square to the forearm: the aims lean from upright
+    "mic": (0.0, 0.77, 0.64),                          # at the mouth: leaning back to the lips from the fist under them
     "mic_lens": (0.0, -0.4, 0.92),                     # held out, leaning to the lens
     "mic_up": (0.0, 0.08, 1.0),                        # raised forward and up, the mic upright over it (the palm in)
     "mic_across": (-0.25, -0.3, 0.92),                 # held out to the other side, upright for a partner there
@@ -90,7 +97,6 @@ TOUCH = {  # a place on the body: the way the hand comes in to it, for the left 
     "ears": (1.0, 0.0, 0.0),
     "dainty": (0.0, -1.0, 0.0),
 }
-FIXED = ("mic",)                 # places keyed as written: the mic's grip at the mouth (the mic is fitted to it)
 SHAPED = ("heart_push",)         # two hands that meet in one shape: their orientation is kept as written
 
 
@@ -119,7 +125,7 @@ def place(name, side, marks):
         "rest": (out("rest"), _v(0, 0, -1), _v(-s, 0, 0), "relaxed"),
         "dainty": (chest + marks["reach"] * _v(s * 0.186, -0.1, -0.461), _v(-s * 0.6, -0.15, -0.78), _v(0, 1, 0),
                    "relaxed"),                         # written inside: the approach rests it on the skirt or thighs
-        "mic": (mouth + _v(s * 0.082, -0.082, -0.078), _v(-s, -0.3, 0), _v(-s * 0.3, 1, 0), "curled"),
+        "mic": (mouth + _v(s * 0.03, -0.10, -0.13), _v(-s * 0.45, -0.45, 0.77), _v(-s, 0, 0), "curled"),   # under the lips
         "mic_lens": (out("mic_lens"), _v(0, -1, 0), _v(-s, 0, 0), "curled"),
         "mic_up": (out("mic_up"), _v(0, 0, 1), _v(-s, 0, 0), "curled"),
         "mic_across": (out("mic_across"), _v(-s, -1, 0), _v(0, 0, 1), "curled"),
@@ -247,8 +253,6 @@ def resolve(name, side, marks, clear=None):
     """The place `name` for the hand `side` made natural (module docstring): (point, dir, palm, shape, moved, bend):
     `moved` the metres the approach kept it out by, `bend` its wrist's degrees from the forearm."""
     pt, d, p, shape = place(name, side, marks)
-    if name in FIXED:
-        return pt, _unit(d), _unit(p), shape, 0.0, bend(d, forearm(side, marks, pt))
     s = 1.0 if side == "L" else -1.0
 
     def orient(at):
@@ -424,10 +428,24 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
     return out
 
 
+def travel(a, b):
+    """Seconds a hand takes from one place to another (each (point, dir, palm, ...) as `resolve` gives it, the point
+    with any offset): TRAVEL_MIN plus its wrist's way at TRAVEL_SPEED, or as long as turning its fingers' way or its palm
+    at TURN_SPEED takes when that is longer."""
+    way = float(np.linalg.norm(np.asarray(b[0], float) - np.asarray(a[0], float)))
+    turn = max(bend(a[1], b[1]), bend(a[2], b[2]))
+    return max(TRAVEL_MIN + way / TRAVEL_SPEED, turn / TURN_SPEED)
+
+
 def _hand(spans, side, rest, world, at):
-    """The keys of one hand: its moves' places in turn (`at(place)` resolves one), home to `rest` between them."""
+    """The keys of one hand: its moves' places on their times (`at(place)` resolves one), travelling between them at a
+    human pace (`travel`), home to `rest` between two moves when it can stay there REST_MIN seconds."""
     grip = SHAPES["curled"] if rest == "mic" else None             # a mic hand never lets go of the mic
     keys = []
+
+    def where(name, off=(0, 0, 0)):
+        point, d, palm, *_ = at(name)
+        return np.asarray(point, float) + np.asarray(off, float), d, palm
 
     def key(t, name, off=(0, 0, 0)):
         point, d, palm, shape, *_ = at(name)
@@ -437,15 +455,29 @@ def _hand(spans, side, rest, world, at):
     if not spans and rest != "rest":
         key(0.0, rest)                                               # it waits there from the start
         return keys
-    for k, (t0, t1, seq) in enumerate(spans):
-        if k and t0 < spans[k - 1][1] - 1e-6:
-            raise MoveError(f"the {side} hand plays two moves at once (at {spans[k - 1][0]} and {t0} s)")
-        if not keys or t0 - spans[k - 1][1] > HOLD:
-            key(max(seq[0][0] - EASE, 0.0), rest)
+    for k in range(1, len(spans)):
+        if spans[k][0] < spans[k - 1][1] - 1e-6:
+            raise MoveError(f"the {side} hand plays two moves at once (at {spans[k - 1][0]} and {spans[k][0]} s)")
+    home = where(rest)
+    straight = [False] + [                                         # from move k - 1 straight on to move k
+        nseq[0][0] - t1 < travel(where(*pseq[-1][1:]), home) + REST_MIN + travel(home, where(*nseq[0][1:]))
+        for (_, t1, pseq), (_, _, nseq) in zip(spans, spans[1:])]
+    for k, (_, t1, seq) in enumerate(spans):
+        if not straight[k]:                                          # it sets off from home to arrive on time
+            leave = seq[0][0] - travel(home, where(*seq[0][1:]))
+            key(max(leave, 0.0) if k == 0 else leave, rest)
         for t, p, off in seq:
             key(t, p, off)
-        if t1 - seq[-1][0] > 1e-6:                                  # the last place holds to the end of the move
-            key(t1, seq[-1][1], seq[-1][2])
-        if k + 1 == len(spans) or spans[k + 1][0] - t1 > HOLD:
-            key(t1 + EASE, rest)
+        last, lt, end = where(*seq[-1][1:]), seq[-1][0], t1        # the last place holds to the end of the move ...
+        if k + 1 < len(spans) and straight[k + 1]:
+            nt, nplace, noff = spans[k + 1][2][0]
+            need = travel(last, where(nplace, noff))
+            end = min(t1, nt - need)                                 # ... or the hand leaves it in time for the next
+            if end < lt - 1e-6:
+                raise MoveError(f"the {side} hand needs {need:.2f} s to get from {seq[-1][1]!r} (at {lt:g} s) to "
+                                f"{nplace!r} (at {nt:g} s) and has {nt - lt:.2f} s: start the next move later")
+        if end - lt > 1e-6:
+            key(end, seq[-1][1], seq[-1][2])
+        if k + 1 == len(spans) or not straight[k + 1]:
+            key(t1 + travel(last, home), rest)
     return keys
