@@ -154,7 +154,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 |---|---|---|
 | `[project]` | everything | `name` (default: the folder's name), `fps`, `frame0`, `duration`, `blend` (where `mk build` saves the scene) |
 | `[[output]]` | build, look, render, post, framing | `name` (`"16x9"`), `size = [width, height]`; one per delivered aspect: every shot gets a camera per output, the first sets the scene's default render size |
-| `[audio]` | post, timeline | `file`, `start` (song seconds at clip time 0) |
+| `[audio]` | post, timeline, the site | `file`, `start` (song seconds at clip time 0), `hits` (a JSON file of named lists of hit times, clip seconds, each a number or `{t, db}`: the site's timeline shows them as lanes), `lanes` (which of those lists, in order; default all but `beats` and `downbeats`) |
 | `[scene]` | scene stage | `start`, `end` (frame range; default: 3 s of pre-roll before `frame0` to the last frame of the clip), `settle_frames` (24: the frames the rest pose takes to ease into the base pose) |
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
@@ -3015,16 +3015,17 @@ restores the wheel and `mk model build` repairs and retries on its own.
 
 A review puts decisions to a person with pictures, choices and models, and gets the answers back to the agent that asked.
 `NAME.review.toml` (`mkmmd/review.py` has the format): `[review]` title and text (Markdown); `[[question]]` id, ask, text,
-images, models, recommended; `[[question.option]]` id, label, text, images, models. Images are paths beside the review
-(PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a .glb, a model file Blender imports, or a
-.pmx) or `{label, spec, parts, set}`, with pose (default tpose), morph and region applied by `mk model glb`. `mk review
-check` names every problem at once; `mk review open NAME.review.toml [--where right|down|tab] [--wait [--timeout S]]`
-checks it, starts (or keeps) `NAME.answers.json` and opens it as a page of the site (below), with `--wait` returning
-when the person presses Send, with the answers; `mk review answers` prints the answers with their options' labels, what
-is still open, the marks and the views kept from the 3D viewer.
+images, models, music, recommended; `[[question.option]]` id, label, text, images, models. Images are paths beside the
+review (PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a .glb, a model file Blender imports,
+or a .pmx) or `{label, spec, parts, set}`, with pose (default tpose), morph and region applied by `mk model glb`; music is
+a project folder or `{project, from, to}`: the project's music timeline (below) under the question, over that span of
+the clip. `mk review check` names every problem at once; `mk review open NAME.review.toml [--where right|down|tab]
+[--wait [--timeout S]]` checks it, starts (or keeps) `NAME.answers.json` and opens it as a page of the site (below), with
+`--wait` returning when the person presses Send, with the answers; `mk review answers` prints the answers with their
+options' labels, what is still open, the marks and the views kept from the 3D viewer.
 
-The page shows each question as a card: its text, its pictures (one fits the width; several share a height in a strip
-that scrolls sideways), its models (a button opens the viewer), its options with a radio and a notes field. Keys: j/k
+The page shows each question as a card: its text, its music, its pictures (one fits the width; several sit whole in a
+strip that scrolls sideways), its models (a button opens the viewer), its options with a radio and a notes field. Keys: j/k
 move between questions, 1-9 choose, n writes a note, Esc leaves a field, ? shows them. Choices and notes are saved as
 they change (`PUT answers`, checked: an answer that does not fit the review is refused whole). A picture's pen button
 opens it to draw on, filling the pane: pen, arrow, ellipse, box, text and eraser in eight colours, undo and redo, zoom
@@ -3044,9 +3045,21 @@ folder and the folders of its pictures and models, a project's root), the page's
 (`<cache>/site/`), with byte ranges for media. One server serves every page; `server.json` in the site cache (pid, port,
 token) lets the next command find it, and it stops after three hours without a request (`mk site --stop` stops it).
 `api.py` holds the routes (`open`, `review`, `answers`, `marks`, `send`, `model`, `section`, `measures`, `snapshot`,
-`project`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser block docked beside the agent's pane
-(`--where right|down|tab`), else in the system's browser. `mk site [--where ...] [--url] [--stop]` opens the project's
-page (its reviews, each with its title, how many questions are answered and whether it was sent).
+`project`, `music`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser block docked beside the
+agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab reviews|music] [--where ...]
+[--url] [--stop]` opens the project's page: its reviews (each with its title, how many questions are answered and whether
+it was sent) and, when it has an [audio] file or a timeline, its music.
+
+The music timeline (`mkmmd/site/music.py` builds it, `web/js/music.js` draws it) puts a project's clip on one canvas, in
+clip seconds: the clip's audio (the [audio] file cut from `start` for `duration` by ffmpeg, a WAV in the site cache;
+without ffmpeg the whole file plays from `start`) played through Web Audio over its waveform, then lanes for the beats
+(bars numbered at the downbeats), each list of the project's `[audio] hits` and each stem of the timeline's `onsets`,
+the words by `(line, word)` (the page never gets their text), the shots of the cut, and the effects packed into rows
+(transitions, inserts, glitches, freezes, rings, and texts while they are up). Space plays, a click or a drag moves the
+playhead (a click on a hit, word, shot or effect jumps to its start and names it, a shot with its frames), a drag along
+the ruler loops that span, Ctrl+wheel or a pinch zooms, a sideways wheel pans, a double-click fits; ← and → step a beat,
+l loops, f fits, Home goes back. The clock reads clip seconds, the Blender frame and bar.beat. What the project gets
+wrong (a timeline that is missing, a cut that does not plan) is listed under it and the rest is still drawn.
 
 The page (`web/`) is plain JavaScript modules and one stylesheet, no build step and no library, laid out for a narrow
 pane (about 560 px) and following the host's light or dark theme. Its 3D viewer (`web/js/viewer/`) is a WebGL2 renderer

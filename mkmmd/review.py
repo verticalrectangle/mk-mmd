@@ -9,8 +9,8 @@ picture is a lab sheet).
 
 NAME.review.toml
   [review]             title (required), text (Markdown)
-  [[question]]         id (required: letters, digits, _ and -), ask (required), text, images, models, recommended (an
-                       option id)
+  [[question]]         id (required: letters, digits, _ and -), ask (required), text, images, models, music,
+                       recommended (an option id)
   [[question.option]]  id (required, as a question's, unique in its question), label (required), text, images, models
   images  paths relative to the review file (PNG, JPEG, WebP, GIF; others are shown as PNG previews). A lab sheet
           (`mk model lab`: its .json beside it) is measured: lines drawn over it come back in mm.
@@ -18,6 +18,8 @@ NAME.review.toml
           `mk model glb`; or {label, spec, parts, set}: a spec (model.toml, base:NAME) built in-process. pose (default
           tpose), morph (a list of NAME or NAME=WEIGHT) and region (default body; head, hand, foot, arm, leg with side L
           or R: only that part, framed up close) apply to .pmx and spec models.
+  music   a project folder (or its mk.toml), or {project, from, to}: the project's music timeline under the question
+          (its audio, beats, hits, words, shots and effects; `from` and `to` in clip seconds show that span)
 
 NAME.answers.json   the page's record: answers {question: {choice, notes}}, sent (when Send was pressed), message (what
                     the agent reads)
@@ -121,6 +123,31 @@ def _model(base, m, where, problems):
     return {**out, "glb": argv}
 
 
+def _music(base, m, where, problems):
+    """A question's music, checked: {project (absolute folder), from, to (clip seconds, when given)}, or None."""
+    spec = {"project": m} if isinstance(m, str) else m
+    if not isinstance(spec, dict) or not isinstance(spec.get("project"), str) or set(spec) - {"project", "from", "to"}:
+        problems.append(f"{where}: music is a project folder or {{project, from, to}}")
+        return None
+    root = (base / spec["project"]).expanduser().resolve()
+    if root.name == "mk.toml":
+        root = root.parent
+    if not (root / "mk.toml").is_file():
+        problems.append(f"{where}: music: no mk.toml in {spec['project']}")
+        return None
+    out = {"project": str(root)}
+    for k in ("from", "to"):
+        if k in spec:
+            if isinstance(spec[k], bool) or not isinstance(spec[k], (int, float)):
+                problems.append(f"{where}: music `{k}` is clip seconds")
+                return None
+            out[k] = float(spec[k])
+    if out.get("from", 0.0) < 0 or ("from" in out and "to" in out and out["to"] <= out["from"]):
+        problems.append(f"{where}: music `from` and `to` must be a span of the clip (0 <= from < to)")
+        return None
+    return out
+
+
 def load(path):
     """The review at `path`, checked and with every path absolute: what the page shows. Raises ReviewError naming
     every problem."""
@@ -168,7 +195,8 @@ def load(path):
         qs.append({"id": qid, "ask": str(q.get("ask", "")), "text": str(q.get("text", "")),
                    "recommended": None if rec is None else str(rec), "options": opts,
                    "images": [x for x in (_image(base, i, where, problems, previews) for i in q.get("images", [])) if x],
-                   "models": [x for x in (_model(base, m, where, problems) for m in q.get("models", [])) if x]})
+                   "models": [x for x in (_model(base, m, where, problems) for m in q.get("models", [])) if x],
+                   "music": _music(base, q["music"], where, problems) if "music" in q else None})
     if not qs:
         problems.append("no [[question]]")
     if problems:

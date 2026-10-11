@@ -10,6 +10,7 @@ elsewhere in the browser. One server serves every page mk opens; it stops by its
 
 Examples:
   mk site                       # this project's page
+  mk site --tab music           # its music: the audio, beats, hits, words, shots and effects
   mk site --where tab           # in a new Tern tab
   mk site --stop                # stop the server
 """
@@ -20,6 +21,7 @@ def add(sub):
                        formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--where", default="right", choices=["right", "down", "tab"], help="where it opens in Tern (default: "
                                                                                        "right of this pane)")
+    p.add_argument("--tab", choices=["reviews", "music"], help="the tab it opens on (default: reviews)")
     p.add_argument("--url", action="store_true", help="print the page's URL, open nothing")
     p.add_argument("--stop", action="store_true", help="stop the server")
     add_project_arg(p)
@@ -32,7 +34,7 @@ def run(args):
         return 0
     proj = get_project(args, required=True)
     try:
-        url = SHOW.page(project=str(proj.root))
+        url = SHOW.page(project=str(proj.root)) + (f"&tab={args.tab}" if args.tab else "")
         how = {} if args.url else SHOW.show(url, args.where)
     except (RuntimeError, OSError, ValueError) as e:
         raise UsageError(f"cannot open the site: {e}")

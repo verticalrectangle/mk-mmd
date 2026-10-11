@@ -51,6 +51,7 @@ text = "no title"
 [[question]]
 id = "two words"
 ask = "?"
+music = "nowhere"
 [[question]]
 id = "dup"
 ask = "first"
@@ -62,12 +63,15 @@ id = "A"
 id = "dup"
 ask = "second"
 models = [{ label = "m", file = "notes.txt" }, { label = "p", spec = "base:girl", pose = "dance" }]
+music = { project = ".", from = 3.0, to = 1.0 }
 """)
+    (tmp_path / "mk.toml").write_text('[project]\nfps = 30\nframe0 = 1\nduration = 4.0\n', encoding="utf-8")
     with pytest.raises(RV.ReviewError) as e:
         RV.load(f)
     problems = str(e.value).splitlines()
     for needle in ("needs a title", "'two words'", "'dup' is used twice", "no image missing.png", "needs a label",
-                   "recommended 'Z'", "notes.txt: not a .pmx", "pose 'dance'"):
+                   "recommended 'Z'", "notes.txt: not a .pmx", "pose 'dance'", "music: no mk.toml in nowhere",
+                   "music `from` and `to` must be a span"):
         assert sum(needle in p for p in problems) == 1, needle
 
 

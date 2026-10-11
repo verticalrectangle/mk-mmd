@@ -1,9 +1,10 @@
-// The review: its questions as cards (pictures, models, options, notes), saved as they change, and Send.
+// The review: its questions as cards (pictures, models, music, options, notes), saved as they change, and Send.
 import { api } from "./api.js";
 import { h, clear, topLayer, toast } from "./ui.js";
 import { markdown } from "./md.js";
 import { openDrawing, paintMarks, baseWidth, fontSize } from "./draw.js";
 import { openViewer } from "./viewer/viewer.js";
+import { musicView } from "./music.js";
 
 const CUBE = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>';
 
@@ -154,6 +155,7 @@ export async function openReview(path, frame) {
     const el = h("section", { class: "q", id: "q-" + q.id, onpointerdown: () => setCurrent(i, false) },
       h("div", { class: "q-head" }, h("span", { class: "q-num", text: String(i + 1) }), h("span", { class: "q-ask", text: q.ask }), chosen),
       q.text ? h("div", { class: "q-text" }, markdown(q.text)) : null,
+      q.music ? musicView(q.music.project, { from: q.music.from ?? null, to: q.music.to ?? null }) : null,
       pictures(q.images), models(q.models, family, q), viewBox,
       q.options.length ? h("div", { class: "opts" + (q.options.length <= 3 ? " few" : "") }, opts) : null,
       notes);

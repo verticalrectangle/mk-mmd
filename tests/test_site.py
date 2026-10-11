@@ -1,15 +1,22 @@
 """The site's server (mkmmd.site): it answers only with its token and to its own address, serves files only from the
-folders a page was opened for (with byte ranges, which audio and video seek with), and a review goes through it the
-way the page uses it: opened, answers checked and kept, sent."""
+folders a page was opened for (with byte ranges, which audio and video seek with), a review goes through it the way
+the page uses it (opened, answers checked and kept, sent), and a project's music comes back in clip seconds: the clip's
+audio cut from the song where [audio] starts, the hits lanes the project names, the shots and effects, and the words by
+number, never their text."""
 import http.client
 import json
+import math
+import shutil
+import struct
 import threading
 import urllib.parse
+import wave
 
 import pytest
 
 from mkmmd import review as RV
 from mkmmd.site import api as API
+from mkmmd.site import music as MU
 from mkmmd.site import server as S
 
 
@@ -82,3 +89,93 @@ def test_a_review_goes_through_the_server_as_the_page_uses_it(site, tmp_path):
     sent = json.loads(data)
     assert status == 200 and sent["sent"] and "A: Rin's" in sent["message"]
     assert RV.show(f)["sent"] == sent["sent"] and RV.answers(f)["answers"][0]["notes"] == "yes"
+
+
+def song(path, seconds=6.0, tone_from=1.0, rate=8000):
+    """A stereo WAV: silence, then a loud 440 Hz tone from `tone_from` seconds on."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2), w.setsampwidth(2), w.setframerate(rate)
+        frames = bytearray()
+        for i in range(int(seconds * rate)):
+            v = int(16000 * math.sin(2 * math.pi * 440 * i / rate)) if i >= tone_from * rate else 0
+            frames += struct.pack("<hh", v, v)
+        w.writeframes(bytes(frames))
+
+
+def music_project(root):
+    """A 4 s clip at 30 fps from Blender frame 101, of a song whose clip starts at 1.0 s: two shots, a ring, a freeze, a
+    lyric text on line 1, the project's hits file and a timeline whose words have text."""
+    (root / "audio").mkdir(parents=True)
+    song(root / "audio" / "song.wav")
+    (root / "mk.toml").write_text("""
+[project]
+fps = 30
+frame0 = 101
+duration = 4.0
+[audio]
+file = "audio/song.wav"
+start = 1.0
+hits = "audio/hits.json"
+lanes = ["kick", "snare"]
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+[[shot]]
+name = "b"
+from = 2.0
+to = 4.0
+[[ring]]
+at = 0.5
+center = [0.0, 0.0, 1.0]
+dur = 0.8
+[[freeze]]
+from = 1.0
+to = 1.5
+[[text]]
+name = "sung"
+lyrics = { line = 1 }
+""", encoding="utf-8")
+    (root / "audio" / "hits.json").write_text(json.dumps({
+        "beats": [0.0, 0.5], "kick": [0.5, {"t": 1.5, "db": -3.0}], "snare": [1.0], "hats": [0.25]}), encoding="utf-8")
+    (root / "audio" / "timeline.json").write_text(json.dumps({
+        "fps": 30, "bpm": 120.0, "beats": [0.0, 0.5, 1.0], "downbeats": [0.0], "onsets": {"other": [0.75]},
+        "lines": [{"start": 1.2, "end": 2.6, "words": [{"text": "SECRETWORD", "start": 1.2, "end": 1.9},
+                                                     {"text": "OTHERWORD", "start": 2.0, "end": 2.6}]}]}), encoding="utf-8")
+
+
+def test_the_music_comes_in_clip_seconds_with_words_by_number_only(tmp_path):
+    root = tmp_path / "proj"
+    music_project(root)
+    m = MU.music(root, tmp_path / "cache")
+    assert "SECRETWORD" not in json.dumps(m) and "OTHERWORD" not in json.dumps(m)
+    assert m["words"] == [{"line": 1, "word": 1, "start": 1.2, "end": 1.9}, {"line": 1, "word": 2, "start": 2.0, "end": 2.6}]
+    assert [(lane["name"], lane["source"]) for lane in m["lanes"]] == [("kick", "hits"), ("snare", "hits"), ("other", "onsets")]
+    assert m["lanes"][0]["hits"] == [{"t": 0.5, "db": None}, {"t": 1.5, "db": -3.0}]
+    assert m["shots"] == [{"name": "a", "from": 0.0, "to": 2.0}, {"name": "b", "from": 2.0, "to": 4.0}]
+    spans = {e["kind"]: (e["from"], e["to"]) for e in m["effects"]}
+    assert spans == {"ring": (0.5, 1.3), "freeze": (1.0, 1.5), "text": (1.2, 2.6)}
+    assert m["problems"] == []
+    if shutil.which("ffmpeg"):
+        with wave.open(m["audio"]["path"]) as w:                      # the clip: from 1.0 s of the song, 4 s long
+            assert abs(w.getnframes() / w.getframerate() - 4.0) < 0.05 and m["audio"]["offset"] == 0.0
+            first = struct.unpack(f"<{2 * 441}h", w.readframes(441))      # its first 10 ms are the tone, not silence
+            assert max(abs(v) for v in first) > 8000
+
+
+def test_music_is_served_for_the_projects_its_pages_were_opened_for(site, tmp_path):
+    root = tmp_path / "proj"
+    music_project(root)
+    f = tmp_path / "talk" / "t.review.toml"
+    f.parent.mkdir()
+    f.write_text(f'[review]\ntitle = "T"\n[[question]]\nid = "q"\nask = "?"\nmusic = {{ project = "{root}", from = 1.0 }}\n',
+                 encoding="utf-8")
+    q = "api/music?path=" + urllib.parse.quote(str(root))
+    assert ask(site, "GET", q)[0] == 403
+    assert ask(site, "POST", "api/open", {"review": str(f)})[0] == 200
+    status, data, _ = ask(site, "GET", q)
+    m = json.loads(data)
+    assert status == 200 and [s["name"] for s in m["shots"]] == ["a", "b"]
+    status, wav, _ = ask(site, "GET", m["audio"]["url"])
+    assert status == 200 and wav[:4] == b"RIFF"

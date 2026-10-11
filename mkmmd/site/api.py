@@ -14,6 +14,7 @@ import numpy as np
 
 from .. import __version__
 from .. import review as RV
+from . import music as MU
 from .server import HttpError, body_json, cache
 
 
@@ -67,13 +68,16 @@ def stop(site, query, body):
 
 
 def _allow_review(site, r):
-    """A review's page may show its pictures and models wherever they are: their folders are served."""
+    """A review's page may show its pictures, models and music wherever they are: their folders are served."""
     site.allow(Path(r["path"]).parent)
     for img in _images(r):
         site.allow(Path(img["path"]).parent)
     for m in _models(r):
         if m.get("open"):
             site.allow(Path(m["open"]).parent)
+    for q in r["questions"]:
+        if q.get("music"):
+            site.allow(q["music"]["project"])
 
 
 def open_page(site, query, body):
@@ -99,7 +103,8 @@ SKIP = {"build", "renders", "out", "node_modules", "__pycache__"}
 
 
 def project(site, query, body):
-    """A project's page: its name, root and review files (each with its title, answers and whether it was sent)."""
+    """A project's page: its name, root, review files (each with its title, answers and whether it was sent) and whether
+    it has music (an [audio] file or a timeline)."""
     root = Path(query.get("path") or "").expanduser().resolve()
     if not (root / "mk.toml").is_file():
         raise HttpError(422, f"{root} has no mk.toml")
@@ -119,7 +124,27 @@ def project(site, query, body):
         except RV.ReviewError as e:
             item["error"] = str(e)
         reviews.append(item)
-    return 200, {"name": proj.name, "root": str(root), "reviews": reviews}
+    has_music = bool((proj.data.get("audio") or {}).get("file")) or (root / MU.TIMELINE).is_file()
+    return 200, {"name": proj.name, "root": str(root), "reviews": reviews, "music": has_music}
+
+
+def music(site, query, body):
+    """A project's music timeline (mkmmd.site.music) with its audio as a file URL: the page must have been opened for the
+    project, or for a review whose question names it."""
+    root = Path(query.get("path") or "").expanduser().resolve()
+    if not (root / "mk.toml").is_file():
+        raise HttpError(422, f"{root} has no mk.toml")
+    site.allowed(root / "mk.toml")
+    from ..project import ProjectError
+    try:
+        out = MU.music(root, cache())
+    except ProjectError as e:
+        raise HttpError(422, str(e))
+    a = out["audio"]
+    if a and a.get("path"):
+        site.allow(Path(a["path"]).parent)               # the [audio] file itself when ffmpeg cannot cut the clip
+        a["url"] = file_url(a["path"])
+    return 200, out
 
 
 def review(site, query, body):
@@ -318,4 +343,4 @@ def routes():
     return {("GET", "ping"): ping, ("POST", "stop"): stop, ("POST", "open"): open_page, ("GET", "project"): project,
             ("GET", "review"): review, ("PUT", "answers"): answers, ("POST", "send"): send, ("PUT", "marks"): marks,
             ("GET", "model"): model, ("POST", "section"): section, ("GET", "measures"): measures,
-            ("POST", "snapshot"): snapshot}
+            ("POST", "snapshot"): snapshot, ("GET", "music"): music}
