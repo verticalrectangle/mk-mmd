@@ -1,16 +1,18 @@
-// A project's page: its tabs (Reviews; Music, Scene and Checks when the project has them), the first one open; `tab`
-// (the page's ?tab=) opens another, `review` (?review=) opens that review in the Reviews tab. A review opens inside the
-// page, under the tabs, and ‹ Reviews (or the Reviews tab) goes back to the list.
+// A project's page: its tabs (Brief and Reviews; Music, Scene and Checks when the project has them), the brief open
+// while it is written but not sent, else the reviews; `tab` (the page's ?tab=) opens another, `review` (?review=) opens
+// that review in the Reviews tab. A review opens inside the page, under the tabs, and ‹ Reviews (or the Reviews tab)
+// goes back to the list.
 import { api } from "./api.js";
 import { h, clear } from "./ui.js";
 import { openReview } from "./review.js";
 import { musicView } from "./music.js";
 import { sceneView } from "./scene/scene.js";
 import { checksView } from "./checks.js";
+import { briefView } from "./brief.js";
 
 export async function openProject(root, frame, tab = null, review = null) {
   let P = await api("GET", "project", { query: { path: root } });
-  const tabs = [["reviews", "Reviews", showReviews]];
+  const tabs = [["brief", "Brief", showBrief], ["reviews", "Reviews", showReviews]];
   if (P.music) tabs.push(["music", "Music", showMusic]);
   if (P.scene) tabs.push(["scene", "Scene", showScene]);
   if (P.checks) tabs.push(["checks", "Checks", showChecks]);
@@ -32,6 +34,11 @@ export async function openProject(root, frame, tab = null, review = null) {
     clear(frame.main);
     history.replaceState(null, "", "?" + new URLSearchParams({ project: root, tab: id, ...(opts.review ? { review: opts.review } : {}) }));
     await fn(opts);
+  }
+
+  function showBrief() {
+    shown = briefView(P.root, { dock: frame.dock });
+    frame.main.append(shown);
   }
 
   function showMusic() {
@@ -87,5 +94,6 @@ export async function openProject(root, frame, tab = null, review = null) {
     if (gone) open.dispose();             // another tab opened while it loaded
   }
 
-  await go(review ? "reviews" : tabs.some((t) => t[0] === tab) ? tab : tabs[0][0], review ? { review } : {});
+  const first = P.brief && P.brief.written && !P.brief.sent ? "brief" : "reviews";
+  await go(review ? "reviews" : tabs.some((t) => t[0] === tab) ? tab : first, review ? { review } : {});
 }

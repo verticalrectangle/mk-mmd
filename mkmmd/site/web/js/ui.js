@@ -1,7 +1,8 @@
 // Small DOM helpers shared by the site's views.
 
 // h("div", {class: "x", onclick: fn, text: "..."}, ...children): an element; children may be nodes, strings, arrays,
-// or null/false (skipped). Properties that exist on the element (value, checked ...) are set as properties.
+// or null/false (skipped). Properties that exist on the element (value, checked ...) are set as properties: a
+// textarea's text is its `value` property, which no attribute sets.
 export function h(tag, props = {}, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
@@ -10,7 +11,7 @@ export function h(tag, props = {}, ...kids) {
     else if (k === "text") el.textContent = v;
     else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2), v);
     else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
-    else if (k in el && typeof v !== "string") el[k] = v;
+    else if (k === "value" || (k in el && typeof v !== "string")) el[k] = v;
     else el.setAttribute(k, v === true ? "" : String(v));
   }
   for (const kid of kids.flat(Infinity)) {

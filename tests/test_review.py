@@ -104,6 +104,54 @@ def test_reopening_keeps_the_answers(tmp_path):
     assert RV.show(f)["answers"]["eyes"] == {"choice": "A", "notes": "keep"}
 
 
+def test_a_treatment_starts_on_the_agents_picks_and_tags_its_ideas(tmp_path):
+    """`preselect`: a question with nothing in the answers file starts on its recommended option, so Send alone takes
+    the agent's picks, and an answer the person gave (even one without a choice) stays theirs; `tag` ("my idea") marks
+    the agent's own ideas in what the agent reads back."""
+    f = write(tmp_path / "treatment.review.toml", """
+[review]
+title = "Treatment"
+preselect = true
+[[question]]
+id = "orbit"
+ask = "Orbit on the hit?"
+tag = "my idea"
+recommended = "keep"
+[[question.option]]
+id = "keep"
+label = "Keep"
+[[question.option]]
+id = "cut"
+label = "Cut"
+[[question]]
+id = "open"
+ask = "Opening shot?"
+recommended = "wide"
+[[question.option]]
+id = "wide"
+label = "Wide"
+[[question.option]]
+id = "close"
+label = "Close"
+[[question]]
+id = "free"
+ask = "Anything else?"
+""")
+    assert RV.show(f)["answers"] == {"orbit": {"choice": "keep", "notes": ""}, "open": {"choice": "wide", "notes": ""}}
+    RV.write_answers(f, {"open": {"choice": None, "notes": "not sure"}})
+    got = RV.show(f)["answers"]
+    assert got["open"] == {"choice": None, "notes": "not sure"} and got["orbit"] == {"choice": "keep", "notes": ""}
+    msg = RV.message(f)
+    assert "1. [my idea] Orbit on the hit? → keep: Keep" in msg and "2. Opening shot? → no choice" in msg
+    assert [a["tag"] for a in RV.answers(f)["answers"]] == ["my idea", None, None]
+    f.write_text(f.read_text(encoding="utf-8").replace("preselect = true\n", ""), encoding="utf-8")
+    assert "orbit" not in RV.show(f)["answers"]                             # without it a pick is only recommended
+    f.write_text(f.read_text(encoding="utf-8").replace('tag = "my idea"', 'tag = "' + "x" * 30 + '"'), encoding="utf-8")
+    with pytest.raises(RV.ReviewError) as e:
+        RV.load(f)
+    assert "tag is a short label" in str(e.value)
+
+
 def test_model_entries_become_commands_mk_accepts(tmp_path):
     (tmp_path / "m.pmx").write_bytes(b"")
     (tmp_path / "ready.glb").write_bytes(b"")

@@ -17,15 +17,24 @@ let playing = null;                 // the view whose audio plays: one at a time
 
 // The context that plays is made by the first Play, inside its click or key press, and its resume() is not waited
 // for: WebKit holds a context made outside a gesture "interrupted" for good, and settles resume() only once a source
-// plays. Decoding needs no context of the page's own (an OfflineAudioContext decodes).
-const context = () => audioCtx || (audioCtx = new AudioContext());
-const decode = (url) => {
+// plays. Decoding needs no context of the page's own (an OfflineAudioContext decodes). The Brief tab plays the same way.
+export const context = () => audioCtx || (audioCtx = new AudioContext());
+export const decode = (url) => {
   if (!decoded.has(url)) decoded.set(url, bytes(url).then((b) => new OfflineAudioContext(2, 1, 44100).decodeAudioData(b)));
   return decoded.get(url);
 };
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-function colours() {
+// One view plays at a time: the one that starts claims the audio (the one before it pauses) and releases it when it goes.
+export function claim(view) {
+  if (playing && playing !== view) playing.pause();
+  playing = view;
+}
+export function release(view) {
+  if (playing === view) playing = null;
+}
+
+export function colours() {
   const c = {};
   for (const k of ["fg", "muted", "faint", "line", "sunk", "card", "hover", "accent", "accent-soft", "ok", "warn", "bad"]) c[k] = css("--" + k);
   c.lanes = [c.accent, c.warn, c.ok, c.bad, c.muted];
@@ -34,7 +43,7 @@ function colours() {
 }
 
 // Peaks of the clip's audio per column (min, max of both channels averaged), over clip seconds a..b.
-function peaks(buf, offset, a, b, cols) {
+export function peaks(buf, offset, a, b, cols) {
   const sr = buf.sampleRate, L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : null;
   const n = L.length, out = new Float32Array(cols * 2);
   for (let i = 0; i < cols; i++) {
@@ -52,7 +61,7 @@ function peaks(buf, offset, a, b, cols) {
   return out;
 }
 
-function niceStep(secPerPx) {
+export function niceStep(secPerPx) {
   for (const s of [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60]) if (s / secPerPx >= 64) return s;
   return 120;
 }
@@ -117,8 +126,7 @@ export function musicView(root, { from = null, to = null } = {}) {
   }
   function startAt(t) {
     stopSrc();
-    if (playing && playing !== api_) playing.pause();
-    playing = api_;
+    claim(api_);
     const ctx = context(), src = ctx.createBufferSource();
     if (ctx.state !== "running") ctx.resume().catch(() => {});
     src.buffer = S.buf;
@@ -421,7 +429,7 @@ export function musicView(root, { from = null, to = null } = {}) {
   scheme.addEventListener("change", relayer);
   const themed = new MutationObserver(relayer);        // a page that sets its theme (the exported page's ?theme=)
   themed.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-  el.dispose = () => { pause(); ro.disconnect(); themed.disconnect(); scheme.removeEventListener("change", relayer); if (playing === api_) playing = null; };
+  el.dispose = () => { pause(); ro.disconnect(); themed.disconnect(); scheme.removeEventListener("change", relayer); release(api_); };
   // The clock other views follow (the scene plays to it): the playhead in clip seconds, and the transport.
   el.player = { now: () => now(), playing: () => !!S.src, play, pause, seek, toggle: () => (S.src ? pause() : play()) };
 

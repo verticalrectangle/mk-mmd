@@ -8,9 +8,10 @@ in its 3D viewer, and the person draws on the pictures. Send writes the answers 
 picture is a lab sheet).
 
 NAME.review.toml
-  [review]             title (required), text (Markdown)
+  [review]             title (required), text (Markdown), preselect (true: a question nobody has answered yet starts
+                       on its recommended option, so Send alone takes the agent's picks)
   [[question]]         id (required: letters, digits, _ and -), ask (required), text, images, models, music,
-                       recommended (an option id)
+                       recommended (an option id), tag (a short label shown by the question, e.g. "my idea")
   [[question.option]]  id (required, as a question's, unique in its question), label (required), text, images, models
   images  paths relative to the review file (PNG, JPEG, WebP, GIF; others are shown as PNG previews). A lab sheet
           (`mk model lab`: its .json beside it) is measured: lines drawn over it come back in mm.
@@ -39,6 +40,7 @@ from .model import lab as LAB
 
 SUFFIX = ".review.toml"
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
+TAG_MAX = 24                                            # characters in a question's tag
 SHOWN = {".png", ".jpg", ".jpeg", ".webp", ".gif"}      # what a browser draws
 MAX_SIDE = 4096                                         # ... at most this many pixels a side
 PREVIEW_SIDE = 2048
@@ -163,6 +165,8 @@ def load(path):
     head = doc.get("review") or {}
     if not head.get("title"):
         problems.append("[review] needs a title")
+    if not isinstance(head.get("preselect", False), bool):
+        problems.append("[review] preselect is true or false")
     unknown = set(doc) - {"review", "question"}
     if unknown:
         problems.append(f"unknown tables: {', '.join(sorted(unknown))} (a review has [review] and [[question]])")
@@ -192,8 +196,12 @@ def load(path):
         rec = q.get("recommended")
         if rec is not None and str(rec) not in oseen:
             problems.append(f"{where} ({qid}): recommended {rec!r} is not one of its options")
+        tag = q.get("tag")
+        if tag is not None and not (isinstance(tag, str) and tag.strip() and len(tag) <= TAG_MAX):
+            problems.append(f"{where} ({qid}): tag is a short label (at most {TAG_MAX} characters)")
+            tag = None
         qs.append({"id": qid, "ask": str(q.get("ask", "")), "text": str(q.get("text", "")),
-                   "recommended": None if rec is None else str(rec), "options": opts,
+                   "recommended": None if rec is None else str(rec), "tag": tag.strip() if tag else None, "options": opts,
                    "images": [x for x in (_image(base, i, where, problems, previews) for i in q.get("images", [])) if x],
                    "models": [x for x in (_model(base, m, where, problems) for m in q.get("models", [])) if x],
                    "music": _music(base, q["music"], where, problems) if "music" in q else None})
@@ -201,7 +209,8 @@ def load(path):
         problems.append("no [[question]]")
     if problems:
         raise ReviewError("\n".join(problems))
-    return {"path": str(path), "title": str(head["title"]), "text": str(head.get("text", "")), "questions": qs,
+    return {"path": str(path), "title": str(head["title"]), "text": str(head.get("text", "")),
+            "preselect": head.get("preselect", False) is True, "questions": qs,
             "answers_file": str(answers_path(path)), "marks_file": str(marks_path(path))}
 
 
@@ -216,10 +225,16 @@ def _read_json(p):
 
 
 def show(path):
-    """`load` plus the answers given so far: what the page starts from."""
+    """`load` plus the answers given so far: what the page starts from. In a review with `preselect`, a question the
+    answers file has nothing for has its recommended option chosen (an answer kept there, even one without a choice,
+    stays as it is)."""
     r = load(path)
     rec = _read_json(r["answers_file"]) or {}
     r["answers"] = rec.get("answers") or {}
+    if r["preselect"]:
+        for q in r["questions"]:
+            if q["recommended"] and q["id"] not in r["answers"]:
+                r["answers"][q["id"]] = {"choice": q["recommended"], "notes": ""}
     r["sent"] = rec.get("sent")
     return r
 
@@ -284,7 +299,7 @@ def message(path):
         pick = "no choice"
         if a.get("choice"):
             pick = f"{a['choice']}: " + next((o["label"] for o in q["options"] if o["id"] == a["choice"]), "?")
-        lines.append(f"{i}. {q['ask']} → {pick}")
+        lines.append(f"{i}. " + (f"[{q['tag']}] " if q["tag"] else "") + f"{q['ask']} → {pick}")
         if a.get("notes"):
             lines.append("   notes: " + a["notes"].replace("\n", "\n   "))
     n = mark_count(path)
@@ -497,7 +512,7 @@ def answers(path):
         if q["options"] and not a.get("choice"):
             missing.append(q["id"])
         got.append({"id": q["id"], "ask": q["ask"], "choice": a.get("choice"), "label": label,
-                    "recommended": q["recommended"], "notes": a.get("notes", "")})
+                    "recommended": q["recommended"], "tag": q["tag"], "notes": a.get("notes", "")})
     return {"review": r["path"], "title": r["title"], "sent": r["sent"], "complete": not missing, "unanswered": missing,
             "answers": got, "marks": marks(path),
             "views": [{k: v[k] for k in ("path", "model", "label", "question", "camera") if k in v} for v in views(path)]}

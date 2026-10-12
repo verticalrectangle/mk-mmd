@@ -7,14 +7,15 @@ from .. import __version__
 from ..bridge import BlenderError
 from .common import RUNTIME, USAGE, UsageError, emit
 
-COMMANDS = ["assets", "build", "check", "doctor", "export", "grip", "inspect", "look", "model", "play", "post", "q", "ref",
-            "render", "review", "serve", "site", "timeline"]
+COMMANDS = ["assets", "brief", "build", "check", "doctor", "export", "grip", "inspect", "look", "model", "play", "post", "q",
+            "ref", "render", "review", "serve", "site", "timeline"]
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="mk", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Making a video, in order: assets add, timeline analyze, build, check, look, render, post, assets credits.\n"
+        epilog="Making a video, in order: brief new, assets add, timeline analyze, build, check, look, render, post,\n"
+               "assets credits.\n"
                "Output is JSON on stdout. Exit codes: 0 ok, 1 a check, gate or verification failed, 2 usage or\n"
                "configuration error, 3 Blender or runtime error.\n"
                "Docs: README.md, docs/AGENTS.md (the playbook), docs/design.md (the reference).")

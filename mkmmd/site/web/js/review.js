@@ -164,7 +164,8 @@ export async function openReview(path, frame) {
     const music = q.music ? musicView(q.music.project, { from: q.music.from ?? null, to: q.music.to ?? null }) : null;
     if (music) musics.push(music);
     const el = h("section", { class: "q", id: "q-" + q.id, onpointerdown: () => setCurrent(i, false) },
-      h("div", { class: "q-head" }, h("span", { class: "q-num", text: String(i + 1) }), h("span", { class: "q-ask", text: q.ask }), chosen),
+      h("div", { class: "q-head" }, h("span", { class: "q-num", text: String(i + 1) }),
+        q.tag ? h("span", { class: "badge tag", text: q.tag }) : null, h("span", { class: "q-ask", text: q.ask }), chosen),
       q.text ? h("div", { class: "q-text" }, markdown(q.text)) : null,
       music,
       pictures(q.images), models(q.models, family, q), viewBox,

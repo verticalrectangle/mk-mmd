@@ -37,6 +37,7 @@ degrees (see [Conventions](#conventions)).
 - [Timeline](#timeline)
 - [Cache](#cache)
 - [Characters (mk model)](#characters-mk-model)
+- [Briefs (mk brief)](#briefs-mk-brief)
 - [Reviews (mk review)](#reviews-mk-review)
 - [The site (mk site, mkmmd/site)](#the-site-mk-site-mkmmdsite)
 - [Exporting the page (mk export web)](#exporting-the-page-mk-export-web)
@@ -55,7 +56,8 @@ degrees (see [Conventions](#conventions)).
 | timeline | `mkmmd.timeline` (`mk timeline`) | the CLI only | numpy; torch, torchaudio, demucs, faster-whisper with the `timeline` extra |
 | post | `mkmmd.post`, `mkmmd.cutfx`, `mkmmd.matte` (`mk post`, the cut effects) | the CLI only | numpy, opencv, Pillow, `mkmmd.core` |
 | review | `mkmmd.review` (`mk review`) | the CLI and the site's server | stdlib, numpy, Pillow, `mkmmd.model.lab` |
-| site | `mkmmd.site` (`mk site`, the review page): the server, its API, `web/` (plain JavaScript) | its own process on 127.0.0.1, the page in a browser or Tern's browser block | stdlib, numpy, `mkmmd.review`, `mk model glb` and Blender (model files) as subprocesses |
+| brief | `mkmmd.brief` (`mk brief`) | the CLI and the site's server | stdlib, Pillow, `mkmmd.project`; ffprobe |
+| site | `mkmmd.site` (`mk site`, the review page): the server, its API, `web/` (plain JavaScript) | its own process on 127.0.0.1, the page in a browser or Tern's browser block | stdlib, numpy, `mkmmd.review`, `mkmmd.brief`, `mk model glb`, `mk timeline analyze` and Blender (model files) as subprocesses |
 | tern | `tern/` (the Tern plugin: Luau, `plugin.toml`) | Tern's session daemon and windows | Tern's `tern` API; runs `mk` |
 
 Rules:
@@ -2932,7 +2934,10 @@ downbeats from kick accents plus harmonic change (chords change on beat 1; kicks
 3). Words come from a lyrics file (one sung line per line) or from Whisper's transcription, aligned with wav2vec2 CTC
 on the vocal stem and snapped to sung onsets; Whisper's line breaks are then corrected on the song's line grid (line
 starts recur every one or two bars: merged lines are split at the grid, mid-line breaks merged). Lines and words are
-numbered from 1; tools refer to words as `(line, word)` and never print their text.
+numbered from 1; tools refer to words as `(line, word)` and never print their text. The aligner (wav2vec2 trained on
+English, words reduced to a-z) times English words; for a song in another language `--no-words` gives the beats and
+bars only. While it runs, `analyze` names its stages on stderr (`timeline: stems`, `whisper`, `align`): the Brief tab
+shows them.
 
 `onsets` (`{"other": [t, ...]}`, clip seconds, sorted) are the moments notes are plucked or strummed in a Demucs stem,
 `onsets_meta` its `band`, `latency_ms` and per-onset `strength` (dB). `analyze` stores the `other` stem (guitars and keys).
@@ -3098,11 +3103,66 @@ touches add-ons) can delete mmd_tools' bundled opencc wheel, and every PMX impor
 import_model could not be found"; use another config folder (`BLENDER_USER_CONFIG`) for such scripts. `mk doctor --fix`
 restores the wheel and `mk model build` repairs and retries on its own.
 
+## Briefs (`mk brief`)
+
+A video starts from a brief: what the person wants from it, written before anything is built, which the agent answers
+with a treatment (a review, below; docs/AGENTS.md: Brief). `mk brief new DIR --song FILE [--lyrics FILE] [--name NAME]
+[--where right|down|tab] [--no-open]` makes the project: the song copied into `audio/`, an mk.toml whose clip is the
+whole song (30 fps, `frame0` 91 after 3 s of pre-roll), an empty `brief/brief.json`, and `audio/lyrics.txt` when lyrics
+are given; a folder with an mk.toml is refused. Then it opens the project's page (below) on its Brief tab beside the
+agent's pane; `mk site --tab brief` opens it again. `mkmmd/brief.py` has the format and the checks.
+
+The Brief tab (`web/js/brief.js`) has three cards:
+
+- **The song**, on one canvas: on top a strip of the whole song (its waveform, from a WAV of the song in the site cache)
+  where the part of the song is a window with a handle at each end: dragging a handle resizes it (snapping to lines and
+  bars), dragging the window moves it, a drag elsewhere on the strip draws a new one, a click listens there, and
+  **Whole song** takes it all; each change says what the part is now, with Undo. The part is the project's clip:
+  `[audio] start` and `[project] duration` are rewritten in mk.toml at once, in place, every other line as it was (`PUT
+  clip`; refused while the words are being timed, and on a project with shots unless the person moves the music under
+  them). Under the strip, the part up close in song seconds (**Fit** frames it again, Ctrl+wheel zooms): a ruler and
+  the waveform for the playhead (a click or a drag scrubs), then once the words are timed the bars and the lines by
+  number (the words as ticks, never their text), and the parts lane. The lyrics are pasted once, one sung line per
+  line, and kept as `audio/lyrics.txt` for `mk timeline analyze --lyrics`: the page says how many lines it has and
+  never shows them again (`PUT lyrics`). Sung in English (the words are timed) or another language (the bars only).
+  **Time the words** runs `mk timeline analyze` on the clip in the background (`POST words`: with the lyrics when there
+  are, `--no-words` for another language; its output in `.mk/words.json` and `.mk/words.log`) and shows its stage and
+  time until the lines and bars appear; a timeline of another stretch than the clip is called stale.
+- **Part by part**: a click on a line writes about it (the part that holds it, else a new part over it; Shift reaches
+  the selected part to it); a drag across lines, or along the parts lane over any stretch (an intro, a solo), makes a
+  part; a part's edges drag (a drag held at the edge of the close view pans it). Parts never overlap. Each has a card:
+  its lines and times, ▶ to play it, a note (what the person wants there, as loose or as exact as they like), pictures
+  (added, dropped or pasted: `POST picture`, kept as `brief/pictures/<hash>.<ext>`, PNG, JPEG, WebP or GIF), and after
+  the first, the earlier part it comes back from (a chorus), the same or bigger. A click on a word names it, and a
+  button puts `(line, word)` into the selected part's note. Deleting a part offers Undo (its note, pictures and the
+  parts that came back from it come back with it). A part the clip no longer holds (the part of the song changed after
+  it was written) is kept and marked.
+- **The video as a whole**: the idea, who is in it, where, the look, where it is posted, the sizes (9:16, 1:1, 16:9),
+  pictures.
+
+It is saved as it changes (`PUT brief`, checked whole like a review's answers: parts inside the song that do not
+overlap, a part coming back from one before it, known sizes, pictures in `brief/pictures/`). **Send** (in the dock)
+gives it the time and types it into the pane of the agent that opened the page, as a review's Send does: the part of
+the song, the video, each part with its lines, times and note, on one line that ends with `mk brief show` when it is
+long. `brief/brief.json`: `version`, `language` (`en` or `other`), `video` (`story`, `cast`, `place`, `look`,
+`posting`, `sizes`, `pictures`), `parts` (`id`, `from` and `to` in song seconds, `note`, `pictures`, `echo` {`of`,
+`how`: `same` or `bigger`}), `saved`, `sent`.
+
+`mk brief show` prints what the agent reads: the song and its length; the clip (song seconds, whether it is the whole
+song); the lyrics' line count; the language; the timeline's numbers (bpm, beats, bars, lines, words, `words_source`,
+`matches_clip`); the video (pictures as paths); each part with its song and clip seconds, `in_clip`, the lines, the
+first and last words `(line, word)` and the bars it covers (bar 1 starts at the first downbeat, 0 is a pickup), its
+note, pictures and `echo` (the part's number and how); and `open`, the stretches of the clip (half a second or more)
+no part covers. Numbers and the person's words, never lyric text.
+
 ## Reviews (`mk review`)
 
 A review puts decisions to a person with pictures, choices and models, and gets the answers back to the agent that asked.
-`NAME.review.toml` (`mkmmd/review.py` has the format): `[review]` title and text (Markdown); `[[question]]` id, ask, text,
-images, models, music, recommended; `[[question.option]]` id, label, text, images, models. Images are paths beside the
+`NAME.review.toml` (`mkmmd/review.py` has the format): `[review]` title, text (Markdown) and preselect; `[[question]]` id,
+ask, text, images, models, music, recommended, tag; `[[question.option]]` id, label, text, images, models. With
+`preselect = true` a question the answers file has nothing for starts on its recommended option, so Send alone takes
+the agent's picks (a treatment); an answer the person gave stays theirs. A tag is a short label beside the question
+("my idea": the agent's own ideas in a treatment), read back with the answers. Images are paths beside the
 review (PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a .glb, a model file Blender imports,
 or a .pmx) or `{label, spec, parts, set}`, with pose (default tpose), morph and region applied by `mk model glb`; music is
 a project folder or `{project, from, to}`: the project's music timeline (below) under the question, over that span of
@@ -3138,11 +3198,13 @@ token) lets the next command find it, and it stops after three hours without a r
 `mk render` with `engine = "mk"` runs a server of its own on the same code for its page (`render`: the bake, the frames,
 the passes coming back; [mk's own renderer](#mks-own-renderer)).
 `api.py` holds the routes (`open`, `review`, `answers`, `marks`, `send`, `model`, `section`, `measures`, `snapshot`,
-`project`, `music`, `scene`, `draft`, `checks`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser
-block docked beside the agent's pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab
-reviews|music|scene|checks] [--where ...] [--url] [--stop]` opens the project's page: its reviews (each with its title,
-how many questions are answered and whether it was sent), its music when it has an [audio] file or a timeline, its
-scene when `mk build` has baked it, and its checks when it has `[[check]]` entries. A review opens inside that page,
+`project`, `music`, `scene`, `draft`, `checks`, and the brief's `brief`, `clip`, `lyrics`, `picture`, `words`,
+`send_brief`). `show.py` opens a page: in Tern (when `$TERN_PANE` is set) as a browser block docked beside the agent's
+pane (`--where right|down|tab`), else in the system's browser. `mk site [--tab brief|reviews|music|scene|checks]
+[--where ...] [--url] [--stop]` opens the project's page: its brief ([Briefs](#briefs-mk-brief)), its reviews (each with
+its title, how many questions are answered and whether it was sent), its music when it has an [audio] file or a
+timeline, its scene when `mk build` has baked it, and its checks when it has `[[check]]` entries. It opens on the brief
+while one is written and not sent, else on the reviews. A review opens inside that page,
 under its tabs (‹ Reviews or the Reviews tab goes back to the list, any other tab leaves it, its answers saved), and so
 does a review `mk review open` opens when it lies in a project (an mk.toml above it); one in no project opens alone.
 

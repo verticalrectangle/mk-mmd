@@ -16,7 +16,7 @@ For agents (and people) driving `mk`. Every command prints JSON; exit codes are 
 
 | Phase | Do | Commands |
 |---|---|---|
-| 1. Brief | the song span, the outputs, the story, the palette, the cast, the places, the effects | |
+| 1. Brief | the person's wishes part by part and for the video as a whole; your treatment and questions back | `mk brief new`, `mk brief show`, `mk review open` |
 | 2. Timeline | beats, downbeats, loudness, note onsets, word timings | `mk timeline analyze`, `show`, `onsets` |
 | 3. Storyboard | shots on downbeats, the effect at each cut, what each output shows | |
 | 4. Cast, sets, props | register and clear assets, model what is missing, place everything | `mk assets`, `mk inspect`, `mk ref photos`, `mk build --until props` |
@@ -32,10 +32,34 @@ the sheets look right, then render a draft, post it, and render the final once t
 
 ## 1. Brief
 
-Write down before touching a file: the song and the span (`start` in song seconds, `duration`), the outputs (`16x9`, `9x16`, `1x1`: each
-gets its own camera for every shot), fps (30), the palette ([Palettes](design.md#palettes)), who is in the scene, where, with which
-props, and the effects you want. Keep the brief free of lyric text. Choose `frame0` so that at least 3 seconds (90 frames at 30 fps)
-come before it: that pre-roll is where poses ease in and hair settles (`[scene] settle_frames`, default 24).
+A video starts from what the person wants. Given a song, `mk brief new DIR --song FILE [--lyrics FILE]` makes the project
+and opens its Brief tab beside your pane ([Briefs](design.md#briefs-mk-brief)): they choose the part of the song, paste its
+lyrics, time the words, and write what they want for each line or group of lines and for the video as a whole. Send types
+it into your pane; `mk brief show` reads all of it: each part on the song and on the clip with its lines, words and bars,
+and `open`, the stretches no part covers. Someone who tells you in chat instead gets the same: put their wishes into the
+brief's parts yourself (`brief/brief.json`). Nothing you write about it quotes the lyrics: refer to `(line, word)`.
+
+Then pitch a **treatment**, as a music video director pitches an artist: a review (`review/treatment.review.toml` with
+`[review] preselect = true`, [Reviews](design.md#reviews-mk-review)) that answers the brief part by part.
+
+- **Their wishes first.** A question per part: their note in your words, the shot you would make of it as the recommended
+  option and one or two others, `music = { project = "..", from, to }` over the part (clip seconds), and test frames of
+  their own scene as pictures (`mk look` renders in seconds), not stock references.
+- **Go further.** The music suggests what the brief did not say: a freeze-frame orbit on the biggest hit, glitches on a
+  snare fill, the light turning at the chorus, the camera holding still through a long note, type that hits on the words
+  that matter, a chorus that grows each time it comes back. Each extra is a question with `tag = "my idea"`, Keep
+  (recommended) and Cut. When an idea needs something mk cannot do yet, say so, and build it.
+- **Ask deeper**, only where the brief left room: who the camera is (someone in the crowd, a film crew), whether a part
+  that comes back repeats its shots or grows, what lands on the drop, the frame people will screenshot, lyrics on screen
+  or not, the look of each part. Each with pictures and your pick as the recommended option.
+
+`preselect` starts every question on your pick, so Send alone means "go with your taste" and the person changes only what
+they want changed. Their answers, with the brief, are the plan: the song span (the clip the brief set), the outputs (the
+brief's sizes: `16x9`, `9x16`, `1x1`, each gets its own camera for every shot), the palette ([Palettes](design.md#palettes)),
+who is in the scene, where, with which props, and the effects. `mk brief new` starts at 30 fps with `frame0` 91: at least
+3 seconds (90 frames) come before clip time 0, where poses ease in and hair settles (`[scene] settle_frames`, default 24).
+A whole song is many parts: build it and show it section by section (a draft of each for review) rather than all at once;
+a final of a whole song takes hours to render.
 
 ## 2. Timeline
 
@@ -43,14 +67,16 @@ come before it: that pre-roll is where poses ease in and hair settles (`[scene] 
 `[audio] file` and `start`) turns the song span into beats, downbeats, per-frame loudness, note onsets and word timings by
 `(line, word)`; `mk timeline show` prints its numbers. Pick shot boundaries on downbeats from it. A lyrics file (`--lyrics`, one sung line
 per line) beats Whisper's line breaks. For a strummed or plucked part, `mk timeline onsets` recomputes the onsets of a Demucs stem. If
-the transcription is wrong the words move, not the beats: check `words_source` and `word_stats` in the summary.
+the transcription is wrong the words move, not the beats: check `words_source` and `word_stats` in the summary. The Brief tab's
+Time the words runs this on the clip already (with the lyrics when the person pasted them); run it again when the part changes.
 
 ## 3. Storyboard
 
 List the shots as a table (name, `from`, `to` in clip seconds on downbeats, subject, camera, what happens at the cut). Decide at each
 cut whether it is a plain cut or a [transition or insert](design.md#transitions-and-inserts), and what each output shows: a 9:16 output
 crops differently from a 16:9 one (`[shot.aspect.<output>]`, `frame = {...}` to solve the lens per output, or a lens shift for an exact
-square crop of a vertical master). Put the plan in comments of `mk.toml` or a local file, never in the repository's tracked docs.
+square crop of a vertical master). Say whose each idea is (the brief's part, or yours): the person should always see which
+ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never in the repository's tracked docs.
 
 ## 4. Cast, sets and props
 

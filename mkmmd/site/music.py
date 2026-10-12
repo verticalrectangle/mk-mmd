@@ -73,34 +73,40 @@ def _text_span(e, words):
     return None
 
 
+def wav(src, start, duration, cache_dir):
+    """`src` from `start` for `duration` seconds (None: to its end) for the page: {path, offset} (`path` the file to
+    play, `offset` the seconds of it at `start`). With ffmpeg it is cut out as WAV (cached by the file's size and time,
+    start and duration), else the whole file plays from `start` ({path: src, offset: start}); `problem` says why."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return {"path": str(src), "offset": start}
+    st = Path(src).stat()
+    key = hashlib.sha1(json.dumps([str(src), st.st_size, st.st_mtime_ns, start, duration]).encode()).hexdigest()[:20]
+    out = Path(cache_dir) / "audio" / f"{key}.wav"
+    if not out.is_file():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(out.stem + ".part.wav")
+        span = ["-ss", f"{start:.6f}"] + (["-t", f"{duration:.6f}"] if duration is not None else [])
+        r = subprocess.run([ffmpeg, "-v", "error", "-y", *span, "-i", str(src), "-ac", "2", "-ar", "44100",
+                            "-c:a", "pcm_s16le", str(tmp)], capture_output=True, text=True, timeout=300)
+        if r.returncode != 0 or not tmp.is_file():
+            return {"path": str(src), "offset": start,
+                    "problem": "ffmpeg could not cut it: " + (r.stderr.strip()[-300:] or f"exit {r.returncode}")}
+        tmp.replace(out)
+    return {"path": str(out), "offset": 0.0}
+
+
 def audio(proj, cache_dir):
     """The clip's audio for the page: {file, path, offset} (`path` the file to play, `offset` the seconds of it at clip
     time 0), {file, problem} when it cannot be played, None without an [audio] file. With ffmpeg the clip is cut out as
-    WAV (cached by the file's size and time, start and duration), else the whole file is played from its start."""
+    WAV (`wav`), else the whole file is played from its start."""
     au = proj.data.get("audio") or {}
     if not au.get("file"):
         return None
     src = proj.path(au["file"])
     if not src.is_file():
         return {"file": str(src), "problem": f"[audio] file {au['file']} not found"}
-    start, dur = float(au.get("start", 0.0)), float(proj.duration)
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        return {"file": str(src), "path": str(src), "offset": start}
-    st = src.stat()
-    key = hashlib.sha1(json.dumps([str(src), st.st_size, st.st_mtime_ns, start, dur]).encode()).hexdigest()[:20]
-    out = Path(cache_dir) / "audio" / f"{key}.wav"
-    if not out.is_file():
-        out.parent.mkdir(parents=True, exist_ok=True)
-        tmp = out.with_name(out.stem + ".part.wav")
-        r = subprocess.run([ffmpeg, "-v", "error", "-y", "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(src),
-                            "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(tmp)],
-                           capture_output=True, text=True, timeout=300)
-        if r.returncode != 0 or not tmp.is_file():
-            return {"file": str(src), "path": str(src), "offset": start,
-                    "problem": "ffmpeg could not cut the clip: " + (r.stderr.strip()[-300:] or f"exit {r.returncode}")}
-        tmp.replace(out)
-    return {"file": str(src), "path": str(out), "offset": 0.0}
+    return {"file": str(src), **wav(src, float(au.get("start", 0.0)), float(proj.duration), cache_dir)}
 
 
 def music(root, cache_dir):

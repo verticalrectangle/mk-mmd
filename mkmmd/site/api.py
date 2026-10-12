@@ -7,12 +7,14 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 
 import numpy as np
 
 from .. import __version__
+from .. import brief as BR
 from .. import review as RV
 from . import draft as DR
 from . import music as MU
@@ -130,8 +132,9 @@ SKIP = {"build", "renders", "out", "node_modules", "__pycache__"}
 
 
 def project(site, query, body):
-    """A project's page: its name, root, review files (each with its title, answers and whether it was sent) and whether
-    it has music (an [audio] file or a timeline), a baked scene and checks."""
+    """A project's page: its name, root, its brief (whether it is written and when it was sent), review files (each
+    with its title, answers and whether it was sent) and whether it has music (an [audio] file or a timeline), a baked
+    scene and checks."""
     root = Path(query.get("path") or "").expanduser().resolve()
     if not (root / "mk.toml").is_file():
         raise HttpError(422, f"{root} has no mk.toml")
@@ -152,8 +155,14 @@ def project(site, query, body):
             item["error"] = str(e)
         reviews.append(item)
     has_music = bool((proj.data.get("audio") or {}).get("file")) or (root / MU.TIMELINE).is_file()
-    return 200, {"name": proj.name, "root": str(root), "reviews": reviews, "music": has_music,
-                 "scene": bool(proj.blend) and (bake_dir(proj) / "bake.json").is_file(), "checks": bool(proj.checks)}
+    written = (root / BR.BRIEF).is_file()
+    try:
+        sent = BR.read(root)["sent"] if written else None
+    except BR.BriefError:
+        sent = None
+    return 200, {"name": proj.name, "root": str(root), "brief": {"written": written, "sent": sent}, "reviews": reviews,
+                 "music": has_music, "scene": bool(proj.blend) and (bake_dir(proj) / "bake.json").is_file(),
+                 "checks": bool(proj.checks)}
 
 
 def bake_dir(proj):
@@ -302,25 +311,169 @@ def _agent_of(site, path):
     return None
 
 
+def _tell(site, path, text, more):
+    """Type `text` as one line into the Tern pane of the agent that opened the page of `path` (or of a folder above
+    it): {delivered: "pane"}, else {delivered: None} (no agent; `why` when telling it failed). Past TELL_MAX the line
+    ends with where the rest is (`more`)."""
+    agent = _agent_of(site, path)
+    if agent is None:
+        return {"delivered": None}
+    line = " | ".join(s.strip() for s in text.splitlines() if s.strip())
+    if len(line) > TELL_MAX:
+        line = line[:TELL_MAX - 60 - len(more)].rstrip() + f" ... (all of it: {more})"
+    try:
+        SHOW.tell(agent, line)
+        return {"delivered": "pane"}
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        return {"delivered": None, "why": str(e)}
+
+
 def send(site, query, body):
     """Send the review (RV.send) and get it to the agent: a waiting `mk review open --wait` has it; else the answers
     are typed into the pane of the agent that opened the page. `delivered` says which ("waiting", "pane"), or None
     (no agent: they are saved for `mk review answers`; `why` when telling the pane failed)."""
     path = _review_path(site, query)
     text = _call(RV.send, path)
-    out = {"sent": _call(RV.show, path)["sent"], "message": text, "delivered": None}
+    out = {"sent": _call(RV.show, path)["sent"], "message": text}
     if SHOW.is_waiting(path):
-        out["delivered"] = "waiting"
-    elif (agent := _agent_of(site, path)) is not None:
-        line = " | ".join(s.strip() for s in text.splitlines() if s.strip())
-        if len(line) > TELL_MAX:
-            line = line[:TELL_MAX - 60].rstrip() + f" ... (all of it: mk review answers {path})"
+        return 200, {**out, "delivered": "waiting"}
+    return 200, {**out, **_tell(site, path, text, f"mk review answers {path}")}
+
+
+# ----------------------------------------------------------------------------------------------------------- briefs
+def _brief(fn, *args):
+    try:
+        return fn(*args)
+    except BR.BriefError as e:
+        raise HttpError(422, str(e))
+
+
+def brief(site, query, body):
+    """The Brief tab (mkmmd.brief): the brief with each picture's URL, the song (a WAV of the whole of it in the site
+    cache) and its length, the clip, how many lines the lyrics have (never their text), the timeline in song seconds
+    (numbers only), the run timing the words, how many shots the clip carries, the sizes a video can have."""
+    proj = _project(site, query)
+    doc = _brief(BR.read, proj.root)
+    s = _brief(BR.song, proj)
+    song = None
+    if s:
+        a = MU.wav(s[0], 0.0, None, cache())
+        site.allow(Path(a["path"]).parent)
+        song = {"file": str(s[0]), "seconds": round(s[1], 3), "url": file_url(a["path"]), "offset": a["offset"],
+                "problem": a.get("problem")}
+    c0, c1 = BR.clip(proj)
+    pictures = [*doc["video"]["pictures"], *(x for p in doc["parts"] for x in p["pictures"])]
+    return 200, {"brief": doc, "pictures": {x: file_url(proj.root / x) for x in pictures}, "song": song,
+                 "clip": {"start": round(c0, 3), "end": round(c1, 3)}, "lyrics": BR.lyrics_lines(proj.root),
+                 "timeline": BR.timeline(proj), "words": _words_state(site, proj.root), "shots": BR.shots(proj),
+                 "sizes": list(BR.SIZES)}
+
+
+def save_brief(site, query, body):
+    """Keep the brief the page gives ({brief: {language, video, parts}}, checked: one that does not fit is refused
+    whole, naming each problem)."""
+    proj = _project(site, query)
+    return 200, {"brief": _brief(BR.save, proj.root, (body_json(body) or {}).get("brief"))}
+
+
+def set_clip(site, query, body):
+    """Make a stretch of the song the project's clip ({start, end} in song seconds; `force` when shots are on the
+    clip, which would then move against the music). Not while the words are being timed."""
+    proj = _project(site, query)
+    b = body_json(body) or {}
+    if _words_state(site, proj.root)["running"]:
+        raise HttpError(409, "the words are being timed: the part can change when they are")
+    n = BR.shots(proj)
+    if n and not b.get("force"):
+        raise HttpError(409, f"the project has {n} shot{'s' if n > 1 else ''} on its clip: moving the part moves the "
+                             "music under them")
+    start, end = _brief(BR.set_clip, proj.root, b.get("start"), b.get("end"))
+    return 200, {"clip": {"start": start, "end": end}}
+
+
+def lyrics(site, query, body):
+    """Keep the lyrics of the part ({text}, one sung line per line; empty removes them): answers how many lines they
+    have, never the text."""
+    proj = _project(site, query)
+    return 200, {"lines": _brief(BR.set_lyrics, proj.root, (body_json(body) or {}).get("text"))}
+
+
+def picture(site, query, body):
+    """Keep a picture for the brief ({data: a data URL}): its path in the project and its URL."""
+    import base64
+    proj = _project(site, query)
+    head, _, data = str((body_json(body) or {}).get("data", "")).partition(",")
+    if not (head.startswith("data:") and head.endswith(";base64") and data):
+        raise HttpError(400, "a picture is a data URL (data:image/...;base64,...)")
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except ValueError:
+        raise HttpError(400, "the picture's data is not base64")
+    rel = _brief(BR.add_picture, proj.root, raw)
+    return 200, {"path": rel, "url": file_url(proj.root / rel)}
+
+
+def _words_state(site, root):
+    """The run timing the words of the project at `root`: {running, stage (the analysis's last `timeline: NAME`
+    line), seconds, exit, error}."""
+    with site.lock:
+        run = site.state.get("word_runs", {}).get(str(root))
+    if run is None:
+        return {"running": False, "stage": None, "seconds": None, "exit": None, "error": None}
+    code = run["proc"].poll()
+    if code is not None and run["t1"] is None:
+        run["t1"] = time.monotonic()
+    try:
+        log = Path(run["log"]).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        log = ""
+    stages = [ln.split(":", 1)[1].strip() for ln in log.splitlines() if ln.startswith("timeline:")]
+    out = {"running": code is None, "stage": stages[-1] if stages else None,
+           "seconds": round((run["t1"] or time.monotonic()) - run["t0"], 1), "exit": code, "error": None}
+    if code:
         try:
-            SHOW.tell(agent, line)
-            out["delivered"] = "pane"
-        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-            out["why"] = str(e)
-    return 200, out
+            out["error"] = json.loads(Path(run["out"]).read_text(encoding="utf-8")).get("error")
+        except (OSError, ValueError, AttributeError):
+            pass
+        out["error"] = out["error"] or log.strip()[-600:] or f"exit {code}"
+    return out
+
+
+def words(site, query, body):
+    """The run timing the words (`_words_state`)."""
+    return 200, _words_state(site, _project(site, query).root)
+
+
+def time_words(site, query, body):
+    """Time the words of the clip: `mk timeline analyze` in the background (into audio/timeline.json), with the
+    lyrics when the brief's language is English and it has them, the beats only (--no-words) for another language."""
+    proj = _project(site, query)
+    if _brief(BR.song, proj) is None:
+        raise HttpError(422, "the project has no [audio] file: there is no song to time")
+    doc = _brief(BR.read, proj.root)
+    argv = [sys.executable, "-m", "mkmmd.cli.main", "timeline", "analyze", "--project", str(proj.root)]
+    if doc["language"] != "en":
+        argv.append("--no-words")
+    elif BR.lyrics_lines(proj.root):
+        argv += ["--lyrics", str(proj.root / BR.LYRICS)]
+    with site.lock:
+        runs = site.state.setdefault("word_runs", {})
+        run = runs.get(str(proj.root))
+        if run is not None and run["proc"].poll() is None:
+            raise HttpError(409, "the words are being timed already")
+        out, log = proj.mk_dir / "words.json", proj.mk_dir / "words.log"
+        with open(out, "w", encoding="utf-8") as fo, open(log, "w", encoding="utf-8") as fl:
+            proc = subprocess.Popen(argv, stdout=fo, stderr=fl, stdin=subprocess.DEVNULL, cwd=str(proj.root))
+        runs[str(proj.root)] = {"proc": proc, "t0": time.monotonic(), "t1": None, "out": out, "log": log}
+    return 200, _words_state(site, proj.root)
+
+
+def send_brief(site, query, body):
+    """Send the brief (BR.send) and type it into the pane of the agent that opened the project's page."""
+    proj = _project(site, query)
+    text = _brief(BR.send, proj.root)
+    return 200, {"sent": BR.read(proj.root)["sent"], "message": text,
+                 **_tell(site, proj.root, text, f"mk brief show --project {proj.root}")}
 
 
 # ----------------------------------------------------------------------------------------------------------- models
@@ -487,4 +640,7 @@ def routes():
             ("GET", "review"): review, ("PUT", "answers"): answers, ("POST", "send"): send, ("PUT", "marks"): marks,
             ("GET", "model"): model, ("POST", "section"): section, ("GET", "measures"): measures,
             ("POST", "snapshot"): snapshot, ("GET", "music"): music, ("GET", "scene"): scene, ("GET", "draft"): draft,
-            ("GET", "checks"): checks, ("POST", "checks"): run_checks}
+            ("GET", "checks"): checks, ("POST", "checks"): run_checks, ("GET", "brief"): brief,
+            ("PUT", "brief"): save_brief, ("PUT", "clip"): set_clip, ("PUT", "lyrics"): lyrics,
+            ("POST", "picture"): picture, ("GET", "words"): words, ("POST", "words"): time_words,
+            ("POST", "send_brief"): send_brief}

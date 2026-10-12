@@ -24,8 +24,9 @@ mk doctor
 `mk doctor` tells you what is missing (and `mk doctor --fix` repairs mmd_tools' bundled wheels). Point mk at your Blender with
 `MK_BLENDER=/path/to/blender` or `~/.config/mk/config.toml` ([Configuration](docs/design.md#configuration)).
 
-Reviews (`mk review open`: pictures to draw on, choices, notes and models to turn in 3D) open as a page mk serves on
-this machine, in Tern beside the agent's pane or in the browser. In [Tern](https://stencil.so/tern), `tern plugin link
+Briefs (`mk brief new`: a song, the part of it, what you want for each line) and reviews (`mk review open`: pictures to draw
+on, choices, notes and models to turn in 3D) open as a page mk serves on this machine, in Tern beside the agent's pane or in
+the browser. In [Tern](https://stencil.so/tern), `tern plugin link
 tern/` (from the checkout) also opens any `.pmx` as a model with its numbers, posed in Tern's 3D block (see
 [tern/README.md](tern/README.md)).
 
@@ -86,6 +87,7 @@ mk look --frames 100          # a picture of the cut to look at
 
 ```sh
 mk doctor                                               # is everything installed?
+mk brief new ~/videos/blue --song blue.flac             # the project, its Brief tab: the part, the lyrics, what you want
 mk assets add model.pmx --kind model --slug my_model --author NAME   # register a model (its rig.json comes with it)
 mk assets show my_model --terms                         # read its terms of use, then record licence and credit
 mk timeline analyze song.flac --start 15.59 --duration 30.6 --out audio/timeline.json
@@ -97,8 +99,8 @@ mk post --preset draft                                  # grade + MP4 with the s
 mk assets credits --out CREDITS.md
 ```
 
-The playbook ([docs/AGENTS.md](docs/AGENTS.md)) goes from the brief to the credits: brief, timeline, storyboard, cast, sets and props,
-pose, perform and sim, shots, effects and type, checks, look sheets, render and post, credits.
+The playbook ([docs/AGENTS.md](docs/AGENTS.md)) goes from the brief to the credits: brief (and the agent's treatment), timeline,
+storyboard, cast, sets and props, pose, perform and sim, shots, effects and type, checks, look sheets, render and post, credits.
 
 ## A fuller project
 
@@ -215,8 +217,9 @@ max = 8.0
 | `mk inspect` | describes a model (rig.json: semantic bones, chains, bodies, expressions, quirks) or a motion (tempo, energy, travel) |
 | `mk assets` | the local asset registry: `add`, `scan`, `list`, `show` (terms of use), `set` (licence and credit fields), `rm`, `credits` for a project |
 | `mk model` | builds an original MMD character from a spec in code and exports a PMX: `new` (a character on a model base), `build`, `info`, `studio`; `lab` (views, pose sheets and side-by-side numbers of specs and PMX files, no Blender), `trace` (a red line drawn on a lab sheet, in millimetres) and `glb` (a model posed, T-pose by default, as one .glb with its textures, for Tern's 3D block) (see Characters in design.md) |
-| `mk review` | puts decisions to a person: a review file of questions with pictures, choices, notes and models, answered on a page mk serves (pictures to draw on, a 3D viewer with cuts and measures); `check`, `open` (`--wait` returns the answers when Send is pressed), `answers` (marks drawn on lab sheets come back in mm) |
-| `mk site` | opens the project's page, served on this machine: its reviews; its music as a timeline to play and scrub (the audio, beats, the project's hits, words by `(line, word)`, shots and effects; `--tab music`); and the built scene played to the music through the shot cameras, or the draft beside it (`--tab scene`); `--stop` stops the server |
+| `mk brief` | starts a video from a song: `new` makes the project and opens its Brief tab, where you choose the part of the song, paste its lyrics, time the words and write what you want for each line or group of lines (pictures, a part that comes back the same or bigger) and for the video as a whole; Send gets it to the agent, who answers with a treatment in Reviews; `show` prints it as the agent reads it (numbers and your words, never lyrics) |
+| `mk review` | puts decisions to a person: a review file of questions with pictures, choices, notes and models, answered on a page mk serves (pictures to draw on, a 3D viewer with cuts and measures; `preselect` starts each question on the agent's pick, `tag` marks its own ideas); `check`, `open` (`--wait` returns the answers when Send is pressed), `answers` (marks drawn on lab sheets come back in mm) |
+| `mk site` | opens the project's page, served on this machine: its brief (`--tab brief`); its reviews; its music as a timeline to play and scrub (the audio, beats, the project's hits, words by `(line, word)`, shots and effects; `--tab music`); and the built scene played to the music through the shot cameras, or the draft beside it (`--tab scene`); `--stop` stops the server |
 | `mk export web` | writes the project's scene and music as a static page any web server can host (the scene view, its timeline and the videos; the 3D scene packed and loaded on demand), with its credits and the models' readmes; refuses while an asset is unreviewed or forbids redistribution |
 | `mk timeline` | analyses a song span: `analyze` (tempo, beats, bars, loudness, note onsets, sung words by `(line, word)`), `show`, `onsets` |
 | `mk ref` | measures blinks, gaze, nods, sway and mouth in reference clips of real people (`search`, `add`, `track`, `measure`, `sheet`, `clean`; Pexels + MediaPipe); `mk ref photos` fetches licensed Wikimedia photos to model props from |

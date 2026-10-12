@@ -1,4 +1,4 @@
-"""mk site: the project's page (its reviews, the music, the scene and its checks), served on this machine."""
+"""mk site: the project's page (its brief, its reviews, the music, the scene and its checks), served on this machine."""
 import argparse
 
 from ..site import server as S
@@ -10,6 +10,7 @@ elsewhere in the browser. One server serves every page mk opens; it stops by its
 
 Examples:
   mk site                       # this project's page
+  mk site --tab brief           # its brief: the part of the song and what you want for each line
   mk site --tab music           # its music: the audio, beats, hits, words, shots and effects
   mk site --tab scene           # the built scene played to the music, through the shot cameras
   mk site --tab checks          # the project's checks, failing first, each at its worst moment
@@ -19,11 +20,12 @@ Examples:
 
 
 def add(sub):
-    p = sub.add_parser("site", help="the project's page: reviews, music, scene and checks", description=HELP,
+    p = sub.add_parser("site", help="the project's page: brief, reviews, music, scene and checks", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--where", default="right", choices=["right", "down", "tab"], help="where it opens in Tern (default: "
                                                                                        "right of this pane)")
-    p.add_argument("--tab", choices=["reviews", "music", "scene", "checks"], help="the tab it opens on (default: reviews)")
+    p.add_argument("--tab", choices=["brief", "reviews", "music", "scene", "checks"],
+                   help="the tab it opens on (default: the brief when it is written but not sent, else the reviews)")
     p.add_argument("--url", action="store_true", help="print the page's URL, open nothing")
     p.add_argument("--stop", action="store_true", help="stop the server")
     add_project_arg(p)

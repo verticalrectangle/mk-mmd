@@ -2,6 +2,7 @@
 file, and recompute note onsets into an existing one."""
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .. import config as CFG
@@ -85,7 +86,7 @@ def onsets(args, proj):
     cache = (proj.mk_dir / "cache" / "timeline") if proj else CFG.cache_dir() / "timeline"
     try:
         new, meta = A.timeline_onsets(tl, str(cache), tuple(args.stem or A.ONSET_STEMS), lo, hi, args.context,
-                                      log=lambda *a: None)
+                                      log=stage)
     except ValueError as e:
         raise UsageError(str(e))
     for key, add in (("onsets", new), ("onsets_meta", meta)):          # per stem: other stems' onsets stay
@@ -96,6 +97,12 @@ def onsets(args, proj):
           "onsets": {k: {**A.onset_stats(v, beats), "band": meta[k]["band"], "latency_ms": meta[k]["latency_ms"]}
                      for k, v in new.items()}})
     return 0
+
+
+def stage(*what):
+    """The analysis's stages (stems, whisper, align) on stderr as `timeline: NAME` lines: the Brief tab shows them while
+    it waits. Never lyric text."""
+    print("timeline:", *what, file=sys.stderr, flush=True)
 
 
 def run(args):
@@ -127,7 +134,7 @@ def run(args):
     from ..timeline.analyze import analyse, summary
     cache = (proj.mk_dir / "cache" / "timeline") if proj else CFG.cache_dir() / "timeline"
     tl = analyse(audio, start, duration, fps, str(cache), words=not args.no_words, lyrics=args.lyrics,
-                 whisper_model=args.model, language=args.language, context=args.context, log=lambda *a: None)
+                 whisper_model=args.model, language=args.language, context=args.context, log=stage)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(tl, ensure_ascii=False, indent=1), encoding="utf-8")
     emit({"out": str(out), **summary(tl)})
