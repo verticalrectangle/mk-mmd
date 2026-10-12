@@ -30,24 +30,28 @@ export function shotView(bake, blob, output, t, k) {
   return { shot, VP, key: norm3([back[0] * 0.6 + up[0] * 0.7, back[1] * 0.6 + up[1] * 0.7, back[2] * 0.6 + up[2] * 0.7]) };
 }
 
-// `at`: open on that clip second (a check card's worst moment).
-export function sceneView(root, { at = null } = {}) {
+// `at`: open on that clip second (a check card's worst moment). `view`: "3d" or "draft" to open on. `lazy`: fetch bake.bin
+// and scene.glb only when 3D is first shown (the exported page: `mk export web`), behind a button that names their size.
+// `draftLabel`: the Draft button's name. `maxHeight`: the stage's largest height in px (default 62 % of the window).
+export function sceneView(root, { at = null, view = "3d", lazy = false, draftLabel = "Draft", maxHeight = null } = {}) {
   const el = h("div", { class: "scene", tabindex: "0" });
-  const S = { gl: null, scene: null, bake: null, blob: null, drafts: [], players: new Map(), output: null, view: "3d",
-    mode: "shaded", cam: "shot", orbit: new Orbit(), raf: 0, last: "", drag: null };
+  const S = { gl: null, scene: null, bake: null, blob: null, R: null, loading: null, drafts: [], players: new Map(), output: null,
+    view, mode: "shaded", cam: "shot", orbit: new Orbit(), raf: 0, last: "", drag: null };
   const outputSel = dropdown({ title: "Output", onChange: (v) => { S.output = v; refresh(); } });
   const seg = (name, items) => h("div", { class: "seg small" }, items.map(([v, label]) =>
     h("button", { text: label, "data-v": v, onclick: () => { S[name] = v; refresh(); } })));
-  const viewSeg = seg("view", [["3d", "3D"], ["draft", "Draft"]]);
+  const viewSeg = seg("view", [["3d", "3D"], ["draft", draftLabel]]);
   const camSeg = seg("cam", [["shot", "Shot"], ["free", "Free"]]);
   const modeSeg = seg("mode", [["shaded", "Shaded"], ["grey", "Grey"]]);
   const label = h("div", { class: "scene-label" });
   const canvas = h("canvas", { class: "scene-canvas" });
   const flat = h("canvas", { class: "scene-canvas draft", hidden: true });
-  const stage = h("div", { class: "scene-stage" }, canvas, flat, label);
+  const loadBtn = h("button", { class: "btn primary scene-load", hidden: true, onclick: () => loadScene() });
+  const stage = h("div", { class: "scene-stage" }, canvas, flat, label, loadBtn);
   const note = h("div", { class: "scene-note" });
   const timeline = musicView(root);
   el.append(h("div", { class: "scene-bar" }, outputSel, viewSeg, camSeg, modeSeg), stage, note, timeline);
+  el.player = timeline.player;
 
   function refresh() {
     const hasDraft = S.drafts.includes(S.output);
@@ -56,11 +60,13 @@ export function sceneView(root, { at = null } = {}) {
       segEl.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === S[key]));
     }
     viewSeg.querySelector("[data-v=draft]").disabled = !hasDraft;
-    viewSeg.querySelector("[data-v=draft]").title = hasDraft ? "mk post's draft of this output" : "No draft of this output (mk post --preset draft)";
+    viewSeg.querySelector("[data-v=draft]").title = hasDraft ? `${draftLabel} of this output, on the timeline's clock` : "No draft of this output (mk post --preset draft)";
     camSeg.hidden = modeSeg.hidden = S.view === "draft";
     canvas.hidden = S.view === "draft";
     flat.hidden = S.view !== "draft";
+    loadBtn.hidden = S.view === "draft" || !!S.scene || !!S.loading;
     if (S.view === "draft") loadDraft(S.output);
+    else if (!lazy) loadScene();
     S.last = "";
   }
 
@@ -79,10 +85,10 @@ export function sceneView(root, { at = null } = {}) {
     }
   }
 
-  // the canvases at the output's aspect, as wide as the pane allows and at most 62 % of its height
+  // the canvases at the output's aspect, as wide as the pane allows and at most `maxHeight` (62 % of the window) tall
   function size() {
     const out = S.bake.outputs.find((o) => o.name === S.output) || S.bake.outputs[0];
-    const [W, H] = out.size, avail = stage.clientWidth || 300, maxH = Math.max(160, innerHeight * 0.62);
+    const [W, H] = out.size, avail = stage.clientWidth || 300, maxH = Math.max(160, maxHeight || innerHeight * 0.62);
     let w = avail, hh = avail * H / W;
     if (hh > maxH) { hh = maxH; w = hh * W / H; }
     const dpr = devicePixelRatio || 1;
@@ -103,7 +109,7 @@ export function sceneView(root, { at = null } = {}) {
 
   function frame() {
     S.raf = requestAnimationFrame(frame);
-    if (!el.isConnected || !S.scene) return;
+    if (!el.isConnected || !S.bake) return;
     const out = size(), b = S.bake, t = timeline.player ? timeline.player.now() : 0;
     const k = Math.max(0, Math.min(b.frames - 1, Math.floor(t * b.fps + 1e-6)));
     const shot = shotAt(t), held = (b.freezes || []).find(([f0, f1]) => b.frame0 + k >= f0 && b.frame0 + k < f1);
@@ -118,6 +124,7 @@ export function sceneView(root, { at = null } = {}) {
       if (p && p.error) note.textContent = "The draft cannot be decoded: " + p.error.message;
       return;
     }
+    if (!S.scene) return;
     S.scene.setFrame(k);
     const gl = S.gl;
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -160,23 +167,44 @@ export function sceneView(root, { at = null } = {}) {
     if (timeline.dispose) timeline.dispose();
   };
 
+  // bake.bin and scene.glb into the 3D view (once): at once in mk's site, on the button's press in the exported page.
+  function loadScene() {
+    if (S.loading || !S.R) return S.loading;
+    loadBtn.hidden = true;
+    note.textContent = "Loading the scene…";
+    note.classList.remove("bad");
+    S.loading = (async () => {
+      try {
+        const [bin, glb] = await Promise.all([bytes(S.R.bin), bytes(S.R.glb)]);
+        S.blob = new Float32Array(bin);
+        S.gl = canvas.getContext("webgl2", { antialias: true });
+        if (!S.gl) throw new Error("this browser has no WebGL2");
+        S.scene = new SceneGL(S.gl, glb, S.bake, S.blob);
+        S.scene.onChange = () => { S.last = ""; };
+        S.orbit.fit(S.scene.bounds);
+        note.textContent = S.R.stale ? "The .blend is newer than this bake: `mk build --bake` bakes it again." : "";
+        S.last = "";
+      } catch (e) {
+        S.loading = null;
+        loadBtn.hidden = S.view === "draft";
+        note.textContent = "The scene cannot be shown: " + e.message;
+        note.classList.add("bad");
+      }
+    })();
+    return S.loading;
+  }
+
   (async () => {
     try {
       const R = await api("GET", "scene", { query: { path: root } });
-      note.textContent = "Loading the scene…";
-      const [json, bin, glb] = await Promise.all([bytes(R.json), bytes(R.bin), bytes(R.glb)]);
-      S.bake = JSON.parse(new TextDecoder().decode(json));
-      S.blob = new Float32Array(bin);
+      S.bake = JSON.parse(new TextDecoder().decode(await bytes(R.json)));
+      S.R = R;
       S.drafts = R.drafts || [];
       S.output = S.bake.outputs[0].name;
       outputSel.setOptions(S.bake.outputs.map((o) => [o.name, `${o.name} · ${o.size[0]}×${o.size[1]}`]));
       outputSel.value = S.output;
-      S.gl = canvas.getContext("webgl2", { antialias: true });
-      if (!S.gl) throw new Error("this browser has no WebGL2");
-      S.scene = new SceneGL(S.gl, glb, S.bake, S.blob);
-      S.scene.onChange = () => { S.last = ""; };
-      S.orbit.fit(S.scene.bounds);
-      note.textContent = R.stale ? "The .blend is newer than this bake: `mk build --bake` bakes it again." : "";
+      const mb = R.sizes ? (R.sizes.bin + R.sizes.glb) / 1e6 : null;
+      loadBtn.textContent = mb === null ? "Load the 3D scene" : `Load the 3D scene · ${mb.toFixed(1)} MB`;
       refresh();
       size();
       frame();

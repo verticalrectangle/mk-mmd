@@ -1,0 +1,35 @@
+/* The exported page (mk export web): site.css laid out as a document a host page can embed, and three themes a host
+   picks with ?theme= (without it, the system's): light (Rosé Pine Dawn), dark (Rosé Pine Moon), mono (black and white
+   only: no translucent fill, a chosen button is inverted). */
+
+html, body { height: auto; }
+body { display: block; overflow: visible; }
+#main { padding: 0; overflow: visible; }
+.music { margin-bottom: 0; }
+.music .hint-line { display: none; }
+.scene-bar { flex-wrap: wrap; }
+.scene-bar .dropdown { max-width: none; }
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #faf4ed; --fg: #575279; --muted: #797593; --faint: #9893a5; --line: #dfdad9; --card: #fffaf3;
+  --hover: #f2e9e1; --sunk: #f2e9e1;
+  --accent: #b4637a; --accent-fg: #faf4ed; --accent-soft: rgba(180, 99, 122, 0.12);
+  --ok: #286983; --ok-soft: rgba(40, 105, 131, 0.12); --warn: #ea9d34; --bad: #b4637a;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #232136; --fg: #e0def4; --muted: #908caa; --faint: #6e6a86; --line: #393552; --card: #2a273f;
+  --hover: #393552; --sunk: #2a283e;
+  --accent: #ea9a97; --accent-fg: #232136; --accent-soft: rgba(234, 154, 151, 0.14);
+  --ok: #9ccfd8; --ok-soft: rgba(156, 207, 216, 0.12); --warn: #f6c177; --bad: #eb6f92;
+}
+:root[data-theme="mono"] {
+  color-scheme: dark;
+  --bg: #000; --fg: #fff; --muted: #fff; --faint: #fff; --line: #fff; --card: #000;
+  --hover: #000; --sunk: #000;
+  --accent: #fff; --accent-fg: #000; --accent-soft: transparent;
+  --ok: #fff; --ok-soft: transparent; --warn: #fff; --bad: #fff;
+}
+:root[data-theme="mono"] :is(.seg button.on, .btn.on, .tabs button.on) { background: #fff; color: #000; }
+:root[data-theme="mono"] .scene-label { background: #000; border: 1px solid #fff; }

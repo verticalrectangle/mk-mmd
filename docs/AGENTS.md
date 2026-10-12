@@ -190,6 +190,10 @@ booms of a hits lane overtones a phone can play, and the report's `boom_phone_db
 `mk assets credits --out CREDITS.md` builds the credits from the cast and `[credits] assets`; put what only the project knows (the song, a print made for it, the palette, tools) in
 `[credits] lines`. It exits 1 while any asset is unreviewed or has no author or credit line.
 
+To publish the result, `mk export web` writes `out/web/`: the scene and its timeline as a static page, with
+`CREDITS.md` and each model's readme. It exits 1 under the same rule, and also when an asset's restrictions forbid
+redistribution.
+
 ## Modelling props
 
 A prop assembled from boxes reads as a toy even when every dimension is right. For anything built in code (a library prop, a vehicle, furniture, a set element) follow this loop, and do

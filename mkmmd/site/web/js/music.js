@@ -419,7 +419,9 @@ export function musicView(root, { from = null, to = null } = {}) {
   ro.observe(cv);
   const scheme = matchMedia("(prefers-color-scheme: dark)");
   scheme.addEventListener("change", relayer);
-  el.dispose = () => { pause(); ro.disconnect(); scheme.removeEventListener("change", relayer); if (playing === api_) playing = null; };
+  const themed = new MutationObserver(relayer);        // a page that sets its theme (the exported page's ?theme=)
+  themed.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  el.dispose = () => { pause(); ro.disconnect(); themed.disconnect(); scheme.removeEventListener("change", relayer); if (playing === api_) playing = null; };
   // The clock other views follow (the scene plays to it): the playhead in clip seconds, and the transport.
   el.player = { now: () => now(), playing: () => !!S.src, play, pause, seek, toggle: () => (S.src ? pause() : play()) };
 

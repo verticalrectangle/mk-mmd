@@ -176,20 +176,29 @@ def _run(args, reg):
         slugs = list(args.slugs)
         lines = []
         if not slugs:
-            proj = get_project(args, required=True)
-            slugs = list(dict.fromkeys(c["asset"] for c in proj.cast if c.get("asset")))   # one entry per asset
-            slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
-            lines = proj.data.get("credits", {}).get("lines", [])
+            slugs, lines = project_credits(get_project(args, required=True))
         if not slugs and not lines:
             raise UsageError("no assets: give slugs, or list them in the project's cast / [credits] assets / lines")
-        text, problems = reg.credits(slugs) if slugs else ("# Credits\n", [])
-        text = text.rstrip("\n") + "\n" + extra_credits(lines)
+        text, problems = credits_text(reg, slugs, lines)
         if args.out:
             Path(args.out).write_text(text + "\n", encoding="utf-8")
         emit({"assets": slugs, "lines": len(lines), "out": args.out, "problems": problems,
               "text": None if args.out else text})
         return CHECK_FAILED if problems else 0
     return 0
+
+
+def project_credits(proj):
+    """The assets a project credits (its cast's, then its [credits] assets, each once) and its own [credits] lines."""
+    slugs = list(dict.fromkeys(c["asset"] for c in proj.cast if c.get("asset")))
+    slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
+    return slugs, proj.data.get("credits", {}).get("lines", [])
+
+
+def credits_text(reg, slugs, lines):
+    """CREDITS.md for those assets and lines, and the registry's problems with them (what is still unreviewed)."""
+    text, problems = reg.credits(slugs) if slugs else ("# Credits\n", [])
+    return text.rstrip("\n") + "\n" + extra_credits(lines), problems
 
 
 def extra_credits(lines):

@@ -214,8 +214,7 @@ def music(site, query, body):
     from ..project import Project, ProjectError
     try:
         out = MU.music(root, cache())
-        out["checks"] = [{"name": r["name"], "ok": r["ok"], "t": r["t"]} for r in _checks_of(Project.load(root))["results"]
-                         if r.get("t") is not None and "ok" in r]
+        out["checks"] = check_marks(Project.load(root))
     except ProjectError as e:
         raise HttpError(422, str(e))
     a = out["audio"]
@@ -238,6 +237,12 @@ def _checks_of(proj):
         at = r["detail"].get("at_frame") if isinstance(r.get("detail"), dict) else None
         r["t"] = None if at is None else round(proj.time(at), 4)
     return doc
+
+
+def check_marks(proj):
+    """The checks the music timeline marks: [{name, ok, t}] for each check whose last result has a worst moment."""
+    return [{"name": r["name"], "ok": r["ok"], "t": r["t"]} for r in _checks_of(proj)["results"]
+            if r.get("t") is not None and "ok" in r]
 
 
 def checks(site, query, body):

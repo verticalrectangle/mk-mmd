@@ -39,6 +39,7 @@ degrees (see [Conventions](#conventions)).
 - [Characters (mk model)](#characters-mk-model)
 - [Reviews (mk review)](#reviews-mk-review)
 - [The site (mk site, mkmmd/site)](#the-site-mk-site-mkmmdsite)
+- [Exporting the page (mk export web)](#exporting-the-page-mk-export-web)
 
 
 ## Layers
@@ -3198,3 +3199,30 @@ allow and for its morphs by panel, the model posed in Tern's 3D preview (T-pose 
 page in Tern's browser block cannot reach the plugin (its title and URL changes raise no event, and `mk://` links do not
 navigate), so Send goes through the server.
 
+
+## Exporting the page (`mk export web`)
+
+`mk export web [--out DIR] [--outputs 9x16,1x1] [--video final|draft|none] [--side PX] [--crf N] [--texture-side PX]`
+(`mkmmd/site/export.py`) writes the project's scene and music as a folder of static files any web server can host (default
+`out/web`): the site's scene view and its music timeline from the site's own modules, with `web/js/api_static.js` as
+`js/api.js` so every route reads a file under `data/` instead of the server. `export.html` and `export.css` lay the view
+out as a document a host page can embed: `?theme=light|dark|mono` (Rosé Pine Dawn, Rosé Pine Moon, black and white;
+without it the system's), `?view=3d|draft` and `?maxh=PX` for the stage's height; in an iframe it posts its height and its
+clock (`{source: "mk-export", type: "height"|"clock"}`) to its parent and takes `{source: "mk-host", type: "theme"}`.
+
+What it writes: `scene.json` and `music.json` (what the `scene` and `music` routes answer, with the files' URLs and no
+local path; the music carries the checks' worst moments), `bake.json`, `bake.mkz`, `scene.glb.gz` (the textures as WebP
+no larger than `--texture-side`), each output's video (mk post's final, else its draft; H.264 at most `--side` px, its
+sound) with `draft_<output>.json` for the Video view, `audio.m4a`, `CREDITS.md` (as `mk assets credits` writes it),
+`licences/<asset>/` (each asset's readme files) and `manifest.json`. The page loads `bake.mkz` and `scene.glb.gz` only
+when 3D is first shown, behind a button that names their size. Nothing is written while any asset the project uses is
+unreviewed or its restrictions forbid redistribution (exit 1), since its meshes and textures leave this machine; a
+folder `mk export web` did not write is never written over.
+
+`bake.mkz` is `bake.bin` packed: `MKZ1`, a JSON header's length and the header (`floats` and one entry per stream: `at`,
+`rows`, `cols`, `mode`), then the gzipped body. A stream is a block the bake's description names (an armature's joints,
+a node's matrices, a camera, morph weights, a cable's vertices, its triangles, a ring's points). Each number is rounded
+to the stream's step (`STEP`, `CABLE_STEP`: 5e-5 m for joints and nodes, 1e-4 for weights, 1/256 for normals, 1 for
+indices and visibility, which come back exact), stored as its change from the frame before (`delta`) or from the
+geometry it shares a triangle list with (`ref`), zigzagged and split into four byte planes. A block with a NaN or a
+number past the grid, and the floats between the named blocks, stay float32 (`raw`).
