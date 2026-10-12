@@ -3114,23 +3114,25 @@ agent's pane; `mk site --tab brief` opens it again. `mkmmd/brief.py` has the for
 
 The Brief tab (`web/js/brief.js`) has three cards:
 
-- **The song**, on one canvas: on top a strip of the whole song (its waveform, from a WAV of the song in the site cache)
-  where the part of the song is a window with a handle at each end: dragging a handle resizes it (snapping to lines and
-  bars), dragging the window moves it, a drag elsewhere on the strip draws a new one, a click listens there, and
-  **Whole song** takes it all; each change says what the part is now, with Undo. The part is the project's clip:
-  `[audio] start` and `[project] duration` are rewritten in mk.toml at once, in place, every other line as it was (`PUT
-  clip`; refused while the words are being timed, and on a project with shots unless the person moves the music under
-  them). Under the strip, the part up close in song seconds (**Fit** frames it again, Ctrl+wheel zooms): a ruler and
-  the waveform for the playhead (a click or a drag scrubs), then once the words are timed the bars and the lines by
-  number (the words as ticks, never their text), and the parts lane. The lyrics are pasted once, one sung line per
-  line, and kept as `audio/lyrics.txt` for `mk timeline analyze --lyrics`: the page says how many lines it has and
-  never shows them again (`PUT lyrics`). Sung in English (the words are timed) or another language (the bars only).
-  **Time the words** runs `mk timeline analyze` on the clip in the background (`POST words`: with the lyrics when there
-  are, `--no-words` for another language; its output in `.mk/words.json` and `.mk/words.log`) and shows its stage and
-  time until the lines and bars appear; a timeline of another stretch than the clip is called stale.
+- **The song**, on one canvas where every lane has the same scale, in song seconds: the part lane, where the part of
+  the song is a bar with a handle at each end (dragging a handle resizes it, snapping to lines and bars; dragging the
+  bar moves it; a drag on the empty lane draws a new one; a click listens there; each change says what the part is
+  now, with Undo, and "use the whole song" takes it all); under it the time ruler and the waveform, which only move the
+  playhead (a click or a drag scrubs), dimmed outside the part; then once the words are timed the bars and the lines by
+  number (the words as ticks, never their text), and the parts lane. The part is the project's clip: `[audio] start`
+  and `[project] duration` are rewritten in mk.toml at once, in place, every other line as it was (`PUT clip`; refused
+  while the words are being timed, and on a project with shots unless the person moves the music under them). Nothing
+  zooms by itself: **Song** shows the whole song, **Part** the part (the page opens on it), Ctrl+wheel zooms; a drag
+  held at the edge of the view pans it, and a handle let go past the edge stays in sight. The lyrics are pasted once,
+  one sung line per line, and kept as `audio/lyrics.txt` for `mk timeline analyze --lyrics`: the page says how many
+  lines it has and never shows them again (`PUT lyrics`). Sung in English (the words are timed) or another language
+  (the bars only). **Time the words** runs `mk timeline analyze` on the clip in the background (`POST words`: with the
+  lyrics when there are, `--no-words` for another language; its output in `.mk/words.json` and `.mk/words.log`) and
+  shows its stage and time until the lines and bars appear; a timeline of another stretch than the clip is called
+  stale.
 - **Part by part**: a click on a line writes about it (the part that holds it, else a new part over it; Shift reaches
   the selected part to it); a drag across lines, or along the parts lane over any stretch (an intro, a solo), makes a
-  part; a part's edges drag (a drag held at the edge of the close view pans it). Parts never overlap. Each has a card:
+  part; a part's edges drag (a drag held at the edge of the view pans it). Parts never overlap. Each has a card:
   its lines and times, ▶ to play it, a note (what the person wants there, as loose or as exact as they like), pictures
   (added, dropped or pasted: `POST picture`, kept as `brief/pictures/<hash>.<ext>`, PNG, JPEG, WebP or GIF), and after
   the first, the earlier part it comes back from (a chorus), the same or bigger. A click on a word names it, and a

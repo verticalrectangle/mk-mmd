@@ -1,18 +1,19 @@
 // The Brief tab (docs/design.md: Briefs): what the person wants from the video, written before anything is built. The
-// song on one canvas: on top a strip of the whole song where the part is a window with handles (drag a handle, drag
-// the window, or draw a new one; it becomes the project's clip, with Undo), and under it the part up close in song
-// seconds: a ruler for the playhead, the waveform, then once the words are timed the bars and the lines by number
-// (never their text), and the parts lane, each part a line, a group of lines or any stretch with a card: what the
-// person wants there, pictures, whether it comes back the same or bigger. The lyrics are pasted once and kept in the
-// project (never shown again); Time the words runs `mk timeline analyze` in the background; the video as a whole has
-// its own card. Saved as it changes; Send (in the dock) types it into the pane of the agent that opened the page.
+// song on one canvas, every lane on one scale in song seconds: the part lane (the part of the song as a bar with a
+// handle at each end: drag a handle, drag the bar, or draw a new one; it becomes the project's clip, with Undo), the
+// time ruler (the playhead), the waveform, then once the words are timed the bars and the lines by number (never their
+// text), and the parts lane, each part a line, a group of lines or any stretch with a card: what the person wants
+// there, pictures, whether it comes back the same or bigger. Nothing zooms by itself: Song and Part (and Ctrl+wheel)
+// do. The lyrics are pasted once and kept in the project (never shown again); Time the words runs `mk timeline
+// analyze` in the background; the video as a whole has its own card. Saved as it changes; Send (in the dock) types it
+// into the pane of the agent that opened the page.
 import { api } from "./api.js";
 import { h, clear, clamp, toast, dropdown } from "./ui.js";
 import { decode, context, peaks, niceStep, colours, claim, release } from "./music.js";
 
 const GUTTER = 50, PAD = 8;
-const ROW = { overview: 38, ruler: 20, wave: 38, beats: 18, lines: 24, parts: 28 };
-const SNAP_PX = 7, GRAB_PX = 10, TAB_W = 9, PAN_PX = 16, MIN_PART = 0.1, MIN_CLIP = 1.0;
+const ROW = { part: 30, ruler: 20, wave: 38, beats: 18, lines: 24, parts: 28 };
+const SNAP_PX = 7, GRAB_PX = 10, TAB_W = 11, PAN_PX = 16, MIN_PART = 0.1, MIN_CLIP = 1.0;
 const STAGES = { stems: "separating the voice from the band", whisper: "hearing the words", align: "timing each word" };
 const SIZE_LABEL = { "9x16": "9:16", "1x1": "1:1", "16x9": "16:9" };
 const FIELDS = [
@@ -22,8 +23,8 @@ const FIELDS = [
   ["look", "The look", "Colours, light, style, videos it should feel like", 2],
   ["posting", "Posted on", "TikTok, RedNote, X, YouTube…", 1],
 ];
-const OVERVIEW_KINDS = ["clip", "edge", "move"];       // drags on the whole-song strip
-const PANNING_KINDS = ["lines", "newpart", "resize", "scrub"];   // drags that pan the close view at its edges
+const PART_KINDS = ["clip", "edge", "move"];                            // drags on the part lane
+const PANNING_KINDS = [...PART_KINDS, "lines", "newpart", "resize", "scrub"];   // drags that pan the view at its edges
 
 const mmss = (t) => {
   const m = Math.floor(Math.max(0, t) / 60), s = Math.max(0, t) - 60 * m;
@@ -36,7 +37,7 @@ export function briefView(root, { dock }) {
   const el = h("div", { class: "brief" }, h("p", { class: "faint", text: "Loading…" }));
   const S = {
     B: null, doc: null, clip: [0, 0], dur: 0, view: [0, 1], sel: null, word: null, lastNote: null,
-    buf: null, norm: 1, ov: null, src: null, t0: 0, p0: 0, at: 0, stopAt: null, layer: null, C: null, w: 0, L: null,
+    buf: null, norm: 1, src: null, t0: 0, p0: 0, at: 0, stopAt: null, layer: null, C: null, w: 0, L: null,
     height: 0, drag: null, px: null, hover: null, raf: 0, timer: 0, poll: 0, undo: 0, gone: false, cards: new Map(),
   };
   const status = h("span", { class: "status grow" });
@@ -84,27 +85,25 @@ export function briefView(root, { dock }) {
   // ------------------------------------------------------------------------------------------------- the song card
   const playBtn = h("button", { class: "btn small play", text: "▶", title: "Play (space)" });
   const clock = h("span", { class: "clock", text: "" });
-  const wholeBtn = h("button", { class: "btn small", text: "Whole song", title: "Make the whole song the part" });
-  const fitBtn = h("button", { class: "btn small", text: "Fit", title: "Show the part up close (f)" });
+  const songBtn = h("button", { class: "btn small", text: "Song", title: "Show the whole song" });
+  const partBtn = h("button", { class: "btn small", text: "Part", title: "Show the part up close (f)" });
   const cv = h("canvas", { class: "lanes" });
   const readout = h("div", { class: "music-readout" });
   const wordBtn = h("button", { class: "btn small", hidden: true, onclick: () => putWord() });
   const undoBtn = h("button", { class: "btn small", hidden: true, text: "Undo" });
   const partLine = h("div", { class: "brief-part" });
   const songBox = h("div", { class: "music brief-song", tabindex: "0" },
-    h("div", { class: "transport" }, playBtn, clock, h("span", { class: "grow" }), wholeBtn, fitBtn), cv,
+    h("div", { class: "transport" }, playBtn, clock, h("span", { class: "grow" }), songBtn, partBtn), cv,
     h("div", { class: "brief-readout" }, readout, wordBtn, undoBtn),
-    h("div", { class: "hint-line", text: "the top strip is the whole song: drag the part's handles or the part itself, or draw a new one · click a line to write about it · drag across lines or along the parts lane for a section · space plays" }));
+    h("div", { class: "hint-line", text: "drag the part's handles or the part itself, or draw a new one on the part lane · click a line to write about it · drag across lines or along the parts lane for a section · Song and Part zoom · space plays" }));
   const lyricsRow = h("div", { class: "brief-row" });
   const langRow = h("div", { class: "brief-row" });
   const wordsRow = h("div", { class: "brief-row" });
   const cardsBox = h("div", { class: "brief-parts" });
 
   const x0 = () => GUTTER, x1 = () => S.w - PAD;
-  const tx = (t) => x0() + (t - S.view[0]) / (S.view[1] - S.view[0]) * (x1() - x0());    // the part up close
+  const tx = (t) => x0() + (t - S.view[0]) / (S.view[1] - S.view[0]) * (x1() - x0());
   const xt = (x) => S.view[0] + (x - x0()) / (x1() - x0()) * (S.view[1] - S.view[0]);
-  const ox = (t) => x0() + t / S.dur * (x1() - x0());                                      // the whole song
-  const xo = (x) => (x - x0()) / (x1() - x0()) * S.dur;
   const local = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   const lane = (id) => S.L && S.L.lanes.find((l) => l.id === id);
   const laneAt = (y) => S.L && S.L.lanes.find((l) => y >= l.y && y < l.y + l.h);
@@ -141,7 +140,7 @@ export function briefView(root, { dock }) {
   }
   function addPart(a, b) {
     if (b <= S.clip[0] || a >= S.clip[1]) {
-      readout.textContent = "Parts go inside the part of the song: choose it on the top strip first.";
+      readout.textContent = "Parts go inside the part of the song: set it on the part lane first.";
       return null;
     }
     [a, b] = [Math.max(a, S.clip[0]), Math.min(b, S.clip[1])];
@@ -209,8 +208,8 @@ export function briefView(root, { dock }) {
 
   // ------------------------------------------------------------------------------------------------- the canvas
   function layout() {
-    const L = [{ id: "overview", h: ROW.overview, label: "song" }, { id: "ruler", h: ROW.ruler, label: "" },
-      { id: "wave", h: ROW.wave, label: "" }];
+    const L = [{ id: "part", h: ROW.part, label: "part" }, { id: "ruler", h: ROW.ruler, label: "time" },
+      { id: "wave", h: ROW.wave, label: "song" }];
     if (T() && T().beats.length) L.push({ id: "beats", h: ROW.beats, label: "bars" });
     if (T() && T().lines.length) L.push({ id: "lines", h: ROW.lines, label: "lines" });
     L.push({ id: "parts", h: ROW.parts, label: "parts" });
@@ -219,13 +218,14 @@ export function briefView(root, { dock }) {
     S.L = { lanes: L };
     S.height = y + 2;
   }
-  // the close view: the part with a little of the song around it (the whole song when the part is all of it)
-  function fit() {
+  // the view on the whole song (Song) or on the part with a little of the song around it (Part); nothing else zooms
+  function showSong() { S.view = [0, S.dur]; invalidate(true); }
+  function showPart() {
     const [a, b] = S.clip, pad = (b - a) * 0.06;
     S.view = b - a >= S.dur - 0.05 ? [0, S.dur] : [Math.max(0, a - pad), Math.min(S.dur, b + pad)];
     invalidate(true);
   }
-  // pan (or widen) the close view so that a..b is in it
+  // pan the view, at the same zoom, so that a..b is in it (wider only when a..b does not fit)
   function reveal(a, b) {
     const [v0, v1] = S.view, w = v1 - v0;
     if (a >= v0 && b <= v1) return;
@@ -295,17 +295,7 @@ export function briefView(root, { dock }) {
       g.save();
       g.beginPath(); g.rect(x0() - 1, l.y, x1() - x0() + 2, l.h); g.clip();
       const mid = l.y + l.h / 2;
-      if (l.id === "overview") {
-        if (S.buf) {
-          if (!S.ov || S.ov.cols !== cols) S.ov = { cols, p: peaks(S.buf, offset(), 0, S.dur, cols) };
-          const p = S.ov.p, amp = (l.h / 2 - 5) / S.norm;
-          g.fillStyle = C.faint;
-          for (let i = 0; i < cols; i++) g.fillRect(x0() + i, mid - p[2 * i + 1] * amp, 1, Math.max(1, (p[2 * i + 1] - p[2 * i]) * amp));
-        }
-        const step = niceStep(S.dur / (x1() - x0())) * 2;
-        g.font = font(9.5); g.fillStyle = C.faint; g.textAlign = "left";
-        for (let t = step; t < S.dur; t += step) g.fillText(mmss(t).replace(/\.0$/, ""), ox(t) + 2, l.y + 7);
-      } else if (l.id === "ruler") {
+      if (l.id === "ruler") {
         const step = niceStep((v1 - v0) / (x1() - x0()));
         g.font = font(10); g.fillStyle = C.faint; g.strokeStyle = C.faint; g.textAlign = "left";
         for (let t = Math.ceil(v0 / step) * step; t <= v1 + 1e-9; t += step) {
@@ -363,46 +353,39 @@ export function briefView(root, { dock }) {
       }
       g.restore();
     }
-    // the close lanes outside the part of the song: dimmed
-    const top = lane("ruler").y;
-    g.fillStyle = C.card; g.globalAlpha = 0.62;
-    const a = clamp(tx(S.clip[0]), x0(), x1()), b = clamp(tx(S.clip[1]), x0(), x1());
-    if (a > x0()) g.fillRect(x0(), top, a - x0(), H - top);
-    if (b < x1()) g.fillRect(b, top, x1() - b, H - top);
-    g.globalAlpha = 1;
   }
 
-  // the part's window on the whole-song strip: its span, where its handles' grips are
-  function windowOf(span) {
-    const xa = ox(span[0]), xb = ox(span[1]), wide = xb - xa >= 2 * TAB_W + 6;
-    return { xa, xb, la: wide ? xa + TAB_W / 2 : xa, lb: wide ? xb - TAB_W / 2 : xb, wide };
+  // the part of the song on the part lane: its bar's ends in pixels of the view, and whether two tabs fit inside it
+  function barOf(span) {
+    const xa = tx(span[0]), xb = tx(span[1]);
+    return { xa, xb, wide: xb - xa >= 2 * TAB_W + 8 };
   }
-  function drawOverview(g, C) {
-    const l = lane("overview"), d = S.drag;
-    const span = d && OVERVIEW_KINDS.includes(d.kind) && d.moved ? d.span : S.clip;
-    const { xa, xb, wide } = windowOf(span), top = l.y + 2, hh = l.h - 4;
-    g.fillStyle = C.card; g.globalAlpha = 0.55;                              // the rest of the song, dimmed
-    g.fillRect(x0(), top, Math.max(0, xa - x0()), hh);
-    g.fillRect(xb, top, Math.max(0, x1() - xb), hh);
+  // the part: its bar with a handle at each end and its times on the part lane, the lanes under it dimmed outside it
+  function drawPart(g, C) {
+    const l = lane("part"), d = S.drag, top = lane("ruler").y;
+    const span = d && PART_KINDS.includes(d.kind) && d.moved ? d.span : S.clip;
+    const { xa, xb, wide } = barOf(span), H = S.height;
+    g.save();
+    g.beginPath(); g.rect(x0(), 0, x1() - x0(), H); g.clip();
+    g.fillStyle = C.card; g.globalAlpha = 0.62;
+    if (xa > x0()) g.fillRect(x0(), top, xa - x0(), H - top);
+    if (xb < x1()) g.fillRect(xb, top, x1() - xb, H - top);
     g.globalAlpha = 1;
-    g.fillStyle = C["accent-soft"]; g.fillRect(xa, top, xb - xa, hh);
-    g.fillStyle = C.accent; g.fillRect(xa, top, xb - xa, 2); g.fillRect(xa, top + hh - 2, xb - xa, 2);
+    const y = l.y + 4, hh = l.h - 8;
+    g.fillStyle = C["accent-soft"]; g.fillRect(xa, y, xb - xa, hh);
+    g.strokeStyle = C.accent; g.lineWidth = 1.5; g.strokeRect(xa + 0.75, y + 0.75, Math.max(0, xb - xa - 1.5), hh - 1.5);
     const tabs = wide ? [xa, xb - TAB_W] : [xa - TAB_W / 2, xb - TAB_W / 2];
-    for (const x of tabs) {                                                    // the handles: tabs with a grip
+    for (const x of tabs) {
       g.fillStyle = C.accent;
-      g.beginPath(); g.roundRect ? g.roundRect(x, top, TAB_W, hh, 3) : g.rect(x, top, TAB_W, hh); g.fill();
+      g.beginPath(); if (g.roundRect) g.roundRect(x, y, TAB_W, hh, 3); else g.rect(x, y, TAB_W, hh); g.fill();
       g.fillStyle = C.card;
-      g.fillRect(x + TAB_W / 2 - 1.5, top + hh / 2 - 6, 1, 12); g.fillRect(x + TAB_W / 2 + 0.5, top + hh / 2 - 6, 1, 12);
+      g.fillRect(x + TAB_W / 2 - 2, y + hh / 2 - 6, 1, 12); g.fillRect(x + TAB_W / 2 + 1, y + hh / 2 - 6, 1, 12);
     }
-    const va = ox(S.view[0]), vb = ox(S.view[1]);                             // what the close lanes show
-    g.fillStyle = C.muted; g.fillRect(va, l.y + l.h - 2, Math.max(2, vb - va), 2);
-    if (d && OVERVIEW_KINDS.includes(d.kind) && d.moved) {
-      g.font = `650 10.5px ${css("--font") || "sans-serif"}`; g.textBaseline = "middle";
-      const text = `${mmss(span[0])} – ${mmss(span[1])} · ${(span[1] - span[0]).toFixed(1)} s`, tw = g.measureText(text).width + 10;
-      const x = clamp((xa + xb) / 2 - tw / 2, x0(), x1() - tw);
-      g.fillStyle = C.fg; g.fillRect(x, l.y + 9, tw, 17);
-      g.fillStyle = C.card; g.textAlign = "left"; g.fillText(text, x + 5, l.y + 17.5);
-    }
+    g.font = `650 10.5px ${css("--font") || "sans-serif"}`; g.textBaseline = "middle"; g.textAlign = "center";
+    const text = `${mmss(span[0])} – ${mmss(span[1])} · ${(span[1] - span[0]).toFixed(1)} s`;
+    const a0 = Math.max(xa + (wide ? TAB_W : 0), x0()), b0 = Math.min(xb - (wide ? TAB_W : 0), x1());
+    if (g.measureText(text).width + 10 <= b0 - a0) { g.fillStyle = C.fg; g.fillText(text, (a0 + b0) / 2, l.y + l.h / 2); }
+    g.restore();
   }
 
   function draw() {
@@ -412,7 +395,7 @@ export function briefView(root, { dock }) {
     if (!w) return;
     if (w !== S.w || !S.layer) { S.w = w; S.layer = null; }
     const d = S.drag;
-    if (d && d.moved && PANNING_KINDS.includes(d.kind) && S.px !== null) {   // a drag held at an edge pans the close view
+    if (d && d.moved && PANNING_KINDS.includes(d.kind) && S.px !== null) {   // a drag held at an edge pans the view
       const span = S.view[1] - S.view[0], step = span * 0.02;
       const dv = S.px > x1() - PAN_PX ? Math.min(step, S.dur - S.view[1]) : S.px < x0() + PAN_PX ? -Math.min(step, S.view[0]) : 0;
       if (dv) { S.view = [S.view[0] + dv, S.view[1] + dv]; S.layer = null; dragTo(S.px); }
@@ -427,7 +410,7 @@ export function briefView(root, { dock }) {
     g.clearRect(0, 0, cv.width, cv.height);
     g.drawImage(S.layer, 0, 0);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawOverview(g, C);
+    drawPart(g, C);
     const top = lane("ruler").y;
     if (d && d.moved && ["newpart", "lines", "resize"].includes(d.kind)) {
       const [a, b] = d.span, l = lane(d.kind === "lines" ? "lines" : "parts");
@@ -436,11 +419,10 @@ export function briefView(root, { dock }) {
       g.fillStyle = C.accent; g.fillRect(xa, l.y, xb - xa, 2);
     }
     if (S.hover !== null && !S.drag) { g.fillStyle = C.faint; g.fillRect(Math.round(S.hover), top + ROW.ruler, 1, S.height - top - ROW.ruler); }
-    const t = now(), x = tx(t), xs = ox(t);
+    const t = now(), x = tx(t);
     if (S.src && t >= (S.stopAt ?? S.dur) - 1e-3) { S.at = S.stopAt ?? S.dur; stopSrc(); S.stopAt = null; refresh(); }
-    g.fillStyle = C.accent;
-    g.fillRect(xs - 0.5, lane("overview").y + 2, 1, ROW.overview - 4);
     if (x >= x0() - 1 && x <= x1() + 1) {
+      g.fillStyle = C.accent;
       g.fillRect(x - 0.75, top, 1.5, S.height - top);
       g.beginPath(); g.moveTo(x - 5, top); g.lineTo(x + 5, top); g.lineTo(x, top + 7); g.fill();
     }
@@ -476,18 +458,21 @@ export function briefView(root, { dock }) {
     near.sort((a, b) => a.d - b.d);
     return near[0] || null;
   }
-  function handleAt(x) {                             // the part's handle near x on the whole-song strip: 0, 1 or null
-    const { la, lb } = windowOf(S.clip), da = Math.abs(x - la), db = Math.abs(x - lb);
-    if (Math.min(da, db) > GRAB_PX) return null;
-    return da <= db ? 0 : 1;
+  // the part's handle at x on the part lane (0: start, 1: end) or null: each one takes its tab and GRAB_PX past the
+  // bar's end, where a hand reaching for an edge lands; on a bar too narrow for two tabs the nearer end wins
+  function handleAt(x) {
+    const { xa, xb, wide } = barOf(S.clip), inner = wide ? TAB_W + 4 : (xb - xa) / 2;
+    const atA = x >= xa - GRAB_PX && x <= xa + inner, atB = x <= xb + GRAB_PX && x >= xb - inner;
+    if (atA && atB) return Math.abs(x - xa) <= Math.abs(x - xb) ? 0 : 1;
+    return atA ? 0 : atB ? 1 : null;
   }
   // `t` pulled to the nearest line edge, downbeat, edge of the part of the song or of another part within SNAP_PX
-  function snap(t, X, except = null) {
+  function snap(t, except = null) {
     const c = [S.clip[0], S.clip[1]];
     if (T()) { for (const ln of T().lines) c.push(ln.start, ln.end); c.push(...T().downbeats); }
     for (const p of parts()) if (p.id !== except) c.push(p.from, p.to);
     let best = t, bd = SNAP_PX;
-    for (const v of c) { const dd = Math.abs(X(v) - X(t)); if (dd < bd) { bd = dd; best = v; } }
+    for (const v of c) { const dd = Math.abs(tx(v) - tx(t)); if (dd < bd) { bd = dd; best = v; } }
     return best;
   }
   function describeWord(t) {
@@ -499,9 +484,9 @@ export function briefView(root, { dock }) {
   function cursorAt(x, y) {
     const l = laneAt(y);
     if (!l) return "default";
-    if (l.id === "overview") {
+    if (l.id === "part") {
       if (handleAt(x) !== null) return "ew-resize";
-      const { xa, xb } = windowOf(S.clip);
+      const { xa, xb } = barOf(S.clip);
       return x > xa && x < xb ? "grab" : "crosshair";
     }
     if (l.id === "parts") return edgeAt(x) ? "ew-resize" : partAt(xt(x)) ? "pointer" : "crosshair";
@@ -517,21 +502,18 @@ export function briefView(root, { dock }) {
     const [x, y] = local(e), l = laneAt(y);
     if (!l) return;
     S.px = x;
-    if (l.id === "overview") {
-      const t = clamp(xo(x), 0, S.dur), side = handleAt(x), { xa, xb } = windowOf(S.clip);
+    const t = clamp(xt(x), 0, S.dur);
+    if (l.id === "part") {
+      const side = handleAt(x), { xa, xb } = barOf(S.clip);
       if (side !== null) S.drag = { kind: "edge", x, side, span: [...S.clip], moved: false };
       else if (x > xa && x < xb) { S.drag = { kind: "move", x, t0: t, span: [...S.clip], moved: false }; cv.style.cursor = "grabbing"; }
-      else S.drag = { kind: "clip", x, a: t, span: [t, t], moved: false };
-      invalidate();
-      return;
-    }
-    const t = clamp(xt(x), 0, S.dur);
-    if (l.id === "lines") S.drag = { kind: "lines", x, a: t, span: [t, t], moved: false, shift: e.shiftKey };
+      else S.drag = { kind: "clip", x, a: snap(t), span: [t, t], moved: false };
+    } else if (l.id === "lines") S.drag = { kind: "lines", x, a: t, span: [t, t], moved: false, shift: e.shiftKey };
     else if (l.id === "parts") {
       const edge = edgeAt(x);
       if (edge) S.drag = { kind: "resize", x, edge, span: [edge.part.from, edge.part.to], moved: false };
       else if (partAt(t)) S.drag = { kind: "pick", x, part: partAt(t), moved: false };
-      else S.drag = { kind: "newpart", x, a: snap(t, tx), span: [t, t], moved: false };
+      else S.drag = { kind: "newpart", x, a: snap(t), span: [t, t], moved: false };
     } else {
       S.drag = { kind: "scrub", x, moved: false, wasPlaying: !!S.src };
       pause();
@@ -543,20 +525,16 @@ export function briefView(root, { dock }) {
   function dragTo(x) {
     const d = S.drag;
     if (Math.abs(x - d.x) > (d.kind === "clip" ? 8 : 3)) d.moved = true;   // a new part of the song takes a real drag
-    if (OVERVIEW_KINDS.includes(d.kind)) {
-      const t = clamp(xo(x), 0, S.dur);
-      if (d.kind === "clip") d.span = [Math.min(d.a, t), Math.max(d.a, t)];
-      else if (d.kind === "edge") { const s = [...S.clip]; s[d.side] = snap(t, ox); d.span = [Math.min(...s), Math.max(...s)]; }
-      else { const len = S.clip[1] - S.clip[0], a = clamp(S.clip[0] + t - d.t0, 0, S.dur - len); d.span = [a, a + len]; }
-      return;
-    }
     const t = clamp(xt(x), 0, S.dur);
-    if (d.kind === "lines") {
+    if (d.kind === "clip") { const b = snap(t); d.span = [Math.min(d.a, b), Math.max(d.a, b)]; }
+    else if (d.kind === "edge") { const s = [...S.clip]; s[d.side] = snap(t); d.span = [Math.min(...s), Math.max(...s)]; }
+    else if (d.kind === "move") { const len = S.clip[1] - S.clip[0], a = clamp(S.clip[0] + t - d.t0, 0, S.dur - len); d.span = [a, a + len]; }
+    else if (d.kind === "lines") {
       const ls = linesIn(Math.min(d.a, t) - 1e-3, Math.max(d.a, t) + 1e-3).concat([lineAt(d.a), lineAt(t)].filter(Boolean));
       d.span = ls.length ? [Math.min(...ls.map((ln) => ln.start)), Math.max(...ls.map((ln) => ln.end))] : [Math.min(d.a, t), Math.max(d.a, t)];
-    } else if (d.kind === "newpart") { const b = snap(t, tx); d.span = [Math.min(d.a, b), Math.max(d.a, b)]; }
+    } else if (d.kind === "newpart") { const b = snap(t); d.span = [Math.min(d.a, b), Math.max(d.a, b)]; }
     else if (d.kind === "resize") {
-      const p = d.edge.part, v = snap(t, tx, p.id);
+      const p = d.edge.part, v = snap(t, p.id);
       d.span = d.edge.side === "from" ? [Math.min(v, p.to - MIN_PART), p.to] : [p.from, Math.max(v, p.from + MIN_PART)];
     } else if (d.kind === "scrub") S.at = t;
   }
@@ -565,7 +543,7 @@ export function briefView(root, { dock }) {
     S.px = x;
     if (!S.drag) {
       const l = laneAt(y);
-      S.hover = l && l.id !== "overview" && x >= x0() && x <= x1() ? x : null;
+      S.hover = l && l.id !== "part" && x >= x0() && x <= x1() ? x : null;
       cv.style.cursor = cursorAt(x, y);
       invalidate();
       return;
@@ -577,15 +555,21 @@ export function briefView(root, { dock }) {
     const d = S.drag;
     if (!d) return;
     S.drag = null;
-    const [x, y] = local(e);
+    const [x, y] = local(e), t = clamp(xt(x), 0, S.dur);
     cv.style.cursor = cursorAt(x, y);
-    if (OVERVIEW_KINDS.includes(d.kind)) {
+    if (PART_KINDS.includes(d.kind)) {
       const [a, b] = d.span;
-      if (d.moved && b - a >= MIN_CLIP) setClip(a, b);
-      else if (d.moved) readout.textContent = `A part of the song is at least ${MIN_CLIP} s long.`;
-      else { const t = clamp(xo(x), 0, S.dur); seek(t); reveal(t, t); }      // a click: listen there
+      if (d.moved && b - a >= MIN_CLIP) {
+        if (d.kind === "edge") {                       // a handle let go past the view: pan (never zoom) to show it
+          const kept = S.clip[1 - d.side], end = Math.abs(a - kept) < 1e-9 ? b : a, w = S.view[1] - S.view[0], m = w * 0.04;
+          const shift = end > S.view[1] - m ? end - (S.view[1] - m) : end < S.view[0] + m ? end - (S.view[0] + m) : 0;
+          if (shift) { const s = clamp(S.view[0] + shift, 0, S.dur - w); S.view = [s, s + w]; }
+        }
+        setClip(a, b);
+      } else if (d.moved) readout.textContent = `A part of the song is at least ${MIN_CLIP} s long.`;
+      else seek(t);                                                           // a click: listen there
     } else if (d.kind === "lines") {
-      const t = clamp(xt(x), 0, S.dur), w = describeWord(t);
+      const w = describeWord(t);
       if (!d.moved) {
         const ln = lineAt(t);
         if (ln) {
@@ -598,12 +582,12 @@ export function briefView(root, { dock }) {
       } else if (d.span[1] - d.span[0] >= MIN_PART) addPart(d.span[0], d.span[1]);
     } else if (d.kind === "newpart") {
       if (d.moved && d.span[1] - d.span[0] >= MIN_PART) addPart(d.span[0], d.span[1]);
-      else seek(clamp(xt(x), 0, S.dur));
+      else seek(t);
     } else if (d.kind === "resize") {
       if (d.moved) {
         const p = d.edge.part, span = free(Math.max(d.span[0], 0), Math.min(d.span[1], S.dur), p.id);
         if (span) { p.from = +span[0].toFixed(3); p.to = +span[1].toFixed(3); sortParts(); changed(true); select(p.id); }
-      } else { const p = partAt(clamp(xt(x), 0, S.dur)); if (p) select(p.id, true); }
+      } else { const p = partAt(t); if (p) select(p.id, true); }
     } else if (d.kind === "pick") {
       select(d.part.id, true);
       seek(d.part.from);
@@ -637,15 +621,15 @@ export function briefView(root, { dock }) {
     if (e.key === " ") S.src ? pause() : play();
     else if (e.key === "ArrowRight") stepBeat(1);
     else if (e.key === "ArrowLeft") stepBeat(-1);
-    else if (e.key === "f") fit();
+    else if (e.key === "f") showPart();
     else if (e.key === "Home") seek(S.clip[0]);
     else return;
     e.preventDefault();
     e.stopPropagation();
   });
   playBtn.addEventListener("click", () => (S.src ? pause() : play()));
-  fitBtn.addEventListener("click", () => { fit(); if (!S.src) seek(S.clip[0]); });
-  wholeBtn.addEventListener("click", () => setClip(0, S.dur));
+  songBtn.addEventListener("click", showSong);
+  partBtn.addEventListener("click", () => { showPart(); if (!S.src) seek(S.clip[0]); });
   const ro = new ResizeObserver(() => { if (cv.clientWidth !== S.w) invalidate(true); });
   ro.observe(cv);
   const scheme = matchMedia("(prefers-color-scheme: dark)");
@@ -675,7 +659,7 @@ export function briefView(root, { dock }) {
     changed();
   }
 
-  // ---- the part of the song: the project's clip
+  // ---- the part of the song: the project's clip (the view stays where it is)
   async function setClip(a, b, force = false, undoing = false) {
     a = +clamp(a, 0, S.dur).toFixed(3); b = +clamp(b, 0, S.dur).toFixed(3);
     const before = [...S.clip];
@@ -683,7 +667,7 @@ export function briefView(root, { dock }) {
       const got = await api("PUT", "clip", { query: { path: root }, body: { start: a, end: b, force } });
       S.clip = [got.clip.start, got.clip.end];
       S.B.clip = got.clip;
-      renderPartLine(); renderWords(); renderCards(); fit();
+      renderPartLine(); renderWords(); renderCards(); invalidate(true);
       if (!S.src) seek(S.clip[0]);
       const text = `The part is ${mmss(S.clip[0])}–${mmss(S.clip[1])} now.`;
       if (undoing) { readout.textContent = text; undoBtn.hidden = true; }
@@ -700,8 +684,8 @@ export function briefView(root, { dock }) {
   function renderPartLine() {
     const [a, b] = S.clip, whole = a < 0.01 && b > S.dur - 0.05;
     clear(partLine).append(h("span", { class: "lbl", text: "The part" }),
-      h("span", { text: whole ? `the whole song · ${mmss(S.dur)}` : `${mmss(a)} – ${mmss(b)} · ${(b - a).toFixed(1)} s of ${mmss(S.dur)}` }));
-    wholeBtn.disabled = whole;
+      h("span", { text: whole ? `the whole song · ${mmss(S.dur)}` : `${mmss(a)} – ${mmss(b)} · ${(b - a).toFixed(1)} s of ${mmss(S.dur)}` }),
+      whole ? null : h("button", { class: "link", text: "use the whole song", title: "Make the whole song the part (Undo takes it back)", onclick: () => setClip(0, S.dur) }));
   }
 
   // ---- lyrics, language, timing the words
@@ -776,7 +760,7 @@ export function briefView(root, { dock }) {
         if (!S.B.words.exit) {
           const fresh = await api("GET", "brief", { query: { path: root } });
           Object.assign(S.B, { timeline: fresh.timeline, clip: fresh.clip, lyrics: fresh.lyrics, words: fresh.words });
-          layout(); fit();
+          layout();
           toast("The words are timed");
         }
         renderWords(); renderCards(); invalidate(true);
@@ -906,7 +890,7 @@ export function briefView(root, { dock }) {
       layout();
       el.append(h("section", { class: "brief-card" }, h("h3", { text: "The song" }), partLine, songBox, lyricsRow, langRow, wordsRow),
         h("section", { class: "brief-card" }, h("h3", { text: "Part by part" }), cardsBox));
-      renderPartLine(); renderLyrics(); renderLang(); renderWords(); renderCards(); fit(); refresh();
+      renderPartLine(); renderLyrics(); renderLang(); renderWords(); renderCards(); showPart(); refresh();
       if (S.B.words && S.B.words.running) followWords();
       if (S.B.song.problem) readout.textContent = "The song: " + S.B.song.problem;
       decode(S.B.song.url).then((buf) => {
