@@ -582,6 +582,8 @@ def build_donor(ctx):
     col = colour_of(marks(shape, donor.verts, member), pal, body_tex.base_tone(pal, look["flush"]), nt, look["neck"])
     img, painted = body_tex.bake(UVt, donor.verts[T], col, size=tex.shape[0])
     tex[..., :3] = np.where(painted[..., None], img, tex[..., :3])
+    if cfg.get("claws"):
+        tex = body_tex.claw_fade(tex, hand_l, shape.land["wrist.L"], cfg["claws"])
     tex_name = ctx.save_png("skin", tex)
     toon_name = ctx.save_png("skin_toon", body_tex.toon_ramp(pal, look["mult"]))
     mats, mat_names = skin_materials(ctx, cfg, look, tex_name, toon_name)

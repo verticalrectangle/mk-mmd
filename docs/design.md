@@ -2992,6 +2992,7 @@ parts = ["body", "head", "hair", "outfit"]            # build order = spec order
 include = ["proportions.toml", "colors.toml", "body.toml"]   # merged first, in order; later wins; `~` works
 out = "~/mk-assets/models/rin_mk"      # default output folder
 seed = 1                      # ctx.rng per part: the same stream whatever else is built
+height = 1.60                 # optional: the built parts are scaled about the floor so her skull top stands at 1.60 m
 needs = {hair = ["body", "head"]}      # parts `--only hair` builds first (default: body); builders may declare too
 builders = {tails = "mkmmd.model.parts.hair"}       # part -> module when it is not mkmmd/model/parts/<part>.py
 ```
@@ -3018,6 +3019,20 @@ def build(ctx) -> Part` (`mkmmd.model.build`): `ctx.spec`, `ctx.cfg` (the part's
 `ctx.log`, `ctx.need(part)`, `ctx.find_body(bone)`, `ctx.find_bone(name)`. A part returns `Part` (`mkmmd/model/part.py`:
 Material, Bone, Mesh, Morph, RigidBody, Joint); after each builder `part.check` and the cross-part checks run (unique
 names, parents, weights, materials, bodies, joints).
+
+`[model] height` (metres, floor to the top of her skull) scales what `build.run` returns about the floor, by height over
+`[proportions.head] crown_skull` (after leg_extra): vertices, morph offsets, bones, rigid bodies and joints
+(`part.scaled`); the builders, `ctx.parts` and `Part.info` stay at the spec's own size, so every proportion the base
+tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
+listing it in `[model] parts`: `sweater` (off-shoulder rib band, bloused knit body and sleeves, rib waistband and cuffs),
+`pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with a sneaker's settings and
+a painted face), `choker` (band and flower), and `hair_bow` (a bow on the side of the head with two tails on chains).
+The first three are cut out of the body's own skin (`outfit_shell.Shell`: fields on the skin such as a height or a
+limb's length coordinate, clipped exactly along their level lines, moved out along the normals, smoothed, kept off the
+skin at the vertices and the triangles' centres), so they carry the skin's weights and bend with it; their sizes are
+metres x S like the dress's. Colours come from `[colors.<part>]`, materials from `outfit_wear` (flat cloth, a toon ramp,
+a dark outline). The hair keeps its hanging locks off every garment built before it (`[model] parts` order), so long
+hair rests on a sweater instead of inside it.
 
 | Convention | |
 |---|---|

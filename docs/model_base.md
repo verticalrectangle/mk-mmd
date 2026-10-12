@@ -37,10 +37,15 @@ inside a base.
 |---|---|---|
 | `[proportions]` | proportions.toml | every size: the landmarks (bone heads, absolute metres), limb and torso sections, foot and shoe, the head outline `[proportions.head]`, the face layout `[proportions.face]` (where the eyes, brows, nose and mouth sit), the guide heights of the hair and the outfit; `leg_extra` lengthens the legs |
 | `[colors.*]` | colors.toml | `skin`, `hair`, `eyes`, `mouth`, `ears` (cat ears and tails), `black` (ribbons, shoes), `accent` (red nails); the base's colors.toml lists every key of each family |
-| `[body]` | body.toml | the skin look and the body's skin colours (`skin`), nails, the neck shadow band, ring resolution, skeleton options; `[body.hand]` the hand (a mesh, or the designed hand's keys); every key in `mkmmd/model/parts/body.py` |
-| `[head]` | head.toml | the face: `[head.shape]` (outline), `[head.face]`, eyes, lids, brows, mouth, the lash drawing `[head.lash]`, `[head.lashwing]`, `[head.lashfork]` ([head_part.md](head_part.md)); the eyes' colours, the lashes' and the brows' are `[colors.eyes]`, where eyes, brows and mouth sit is `[proportions.face]` |
-| `[hair]` | hair.toml | volume, bangs, side and back hair; `[hair.braids]`, `[hair.ears]`, `[hair.tails]` switch the braids, cat ears and tails ([hair_part.md](hair_part.md)) |
+| `[body]` | body.toml | the skin look and the body's skin colours (`skin`: `[body.skin] base` is the body's skin colour, `[head.skin] base` the face's), nails (`nails = "#rrggbb"` paints them), `claws` (the hands fade into a colour towards the fingertips), the neck shadow band, ring resolution, skeleton options; `[body.hand]` the hand (a mesh, or the designed hand's keys); every key in `mkmmd/model/parts/body.py` |
+| `[head]` | head.toml | the face: `[head.shape]` (outline), `[head.face]`, eyes, lids, brows, mouth (`[head.mouth] smirk` adds the lopsided grin にやり２), the lash drawing `[head.lash]`, `[head.lashwing]`, `[head.lashfork]` ([head_part.md](head_part.md)); the eyes' colours, the lashes' and the brows' are `[colors.eyes]`, where eyes, brows and mouth sit is `[proportions.face]` |
+| `[hair]` | hair.toml | volume, bangs, side and back hair (long hair: `[hair.back] end_above_chin`, `spread`, `behind`, `lean`, `tuck`, `turns`), `[hair.ahoge] enabled`; `[hair.braids]`, `[hair.ears]`, `[hair.tails]` switch the braids, cat ears and tails ([hair_part.md](hair_part.md)) |
 | `[outfit]` | outfit.toml | `print` (the leaf print), `shading` (`"auto"` in the girl: shadows, outlines and the ruffle's tint follow `[colors.outfit]`; `"tuned"`, the default, keeps the ones tuned for Rin's green), skirt chains, sleeve and collar physics, `[outfit.legs.ribbon] enabled` (the calf ribbon), `[colors.outfit]` the cloth and frill colours (`outfit_tex.DEFAULT_COLORS`), `[outfit.materials.<key>]` any material field (keys `dress frill frill_inner ruffle satin leg shoe sole`) |
+| other garments | (none) | parts a character lists in `[model] parts` instead of `outfit`: `sweater`, `pants`, `socks`, `sneakers`, `choker`, `hair_bow`; each has its `[<part>]` table and `[colors.<part>]` (the keys are in each module's docstring, `mkmmd/model/parts/<part>.py`) |
+
+The garment parts cut from the skin (sweater, pants, socks) follow her in any pose, since they carry the skin's weights.
+List the garments before `hair` in `[model] parts` and long hair rests on them (the hair keeps off whatever was built
+before it); `hair_bow` comes after the hair it is tied on.
 
 Where the keys and their defaults are: `DEFAULTS` at the top of `hair_head.py` (`[hair]`: volume, ring, bangs, side,
 back), `hair_braids.py`, `ears.py` and `tails.py`; `outfit.py` (its pieces read more keys where they use them:
@@ -76,7 +81,9 @@ nails = "red"                 # [colors.accent] nail_red
 ```
 
 Proportions are absolute numbers. `leg_extra = 0.03` in `[proportions]` makes her 3 cm taller in the legs: everything from
-the hip joint up rises 3 cm, the thigh and shin stretch alike and the feet stay. Any other change of height moves the
+the hip joint up rises 3 cm, the thigh and shin stretch alike and the feet stay. `[model] height = 1.60` makes the whole
+character bigger or smaller (built at the base's size, then scaled about the floor so her skull top stands there): the
+proportions stay the base's, and mk projects see her at that height. Any other change of height moves the
 numbers that hold heights together: the landmarks' z, `[proportions.sections.torso]` z and `[proportions.sections.neck]`
 z, `[proportions.head]` (crown_skull, chin_point, forehead_front), `[proportions.face]` (eye_z, brow_z, nose_tip,
 mouth_z), `[proportions.hair_guides]` and `[proportions.outfit_guides]`. Change a few at a time and look: the body, the

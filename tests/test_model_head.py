@@ -14,12 +14,12 @@ SHEET = (HL.SHEET["rows"] + 1) * HL.SHEET["nu"]                 # vertices per l
 NOSE_TIP = (0.0, -0.1170, 1.2330)                               # model space: the spec's [proportions.face] nose_tip [y, z]
 
 
-@pytest.fixture(scope="module")
-def head(tmp_path_factory):
+def build_head(tmp, head_cfg=None):
     sp = spec.from_dict({"model": {"name": "t", "parts": ["head"]},
                          "colors": {"skin": {"base": "#f1e7d6"}, "eyes": {}, "mouth": {}},
-                         "proportions": {"head": {}, "face": {"nose_tip": list(NOSE_TIP[1:])}, "hair_guides": {}}})
-    ctx = build.BuildCtx(sp, tmp_path_factory.mktemp("tex"), seed=1)
+                         "proportions": {"head": {}, "face": {"nose_tip": list(NOSE_TIP[1:])}, "hair_guides": {}},
+                         **({"head": head_cfg} if head_cfg else {})})
+    ctx = build.BuildCtx(sp, tmp, seed=1)
     ctx.part = "body"
     ctx.parts["body"] = P.Part("body", info=dict(neck_top=dict(z=1.159, center=(0.0, 0.0057), rx=0.0229, ry=0.0303),
                                                  skin=dict(base="#f1e7d6", toon="body_skin_toon.png")))
@@ -29,6 +29,24 @@ def head(tmp_path_factory):
     part = H.build(ctx)
     P.check(part)
     return part
+
+
+@pytest.fixture(scope="module")
+def head(tmp_path_factory):
+    return build_head(tmp_path_factory.mktemp("tex"))
+
+
+def test_the_smirk_is_lopsided_and_only_there_when_asked(head, tmp_path):
+    """[head.mouth] smirk adds にやり２, a grin whose left corner (her left, +x) rises well above its right one; a head
+    that does not ask has no such morph."""
+    assert "にやり２" not in {m.name for m in head.morphs}
+    part = build_head(tmp_path, {"mouth": {"smirk": 0.6}})
+    assert "にやり２" in {m.name for m in part.morphs}
+    face = mesh(part, "face")
+    d, V = face.morphs["にやり２"], np.asarray(face.verts)
+    side = np.abs(V[:, 0]) > 0.012                                  # out by the corners, past the lips' middle
+    up_l, up_r = d[side & (V[:, 0] > 0), 2].max(), d[side & (V[:, 0] < 0), 2].max()
+    assert up_l > 2.0 * up_r > 0.0
 
 
 def mesh(part, name):

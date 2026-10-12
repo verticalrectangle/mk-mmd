@@ -39,8 +39,17 @@ length, so the outline is slightly irregular.
 - **Back hair and nape**: `[hair.back]` (`hair_head.DEFAULTS`): `end_above_chin` (0) is where the locks end, metres above the chin's height (0: about the
   collar; negative lengthens them, -0.13 reaches the shoulder blades); `count` (8) darker inner clumps hang 2 cm lower under `count - 1` outer ones; `delta`
   (0) moves the hanging part out from the hair volume: a longer fall needs it (about 0.06 to 0.08 for -0.13), or the locks tuck into the back and the
-  build warns that their chains are inside the body's colliders; `width` (0.076), `thick` (0.018), `sway` (0.008, the soft S-curve, also `[hair.side] sway`).
-  The nape edge is a smooth layered wave ending in moderately pointed locks.
+  build warns that their chains are inside the body's colliders; `width` (0.076), `thick` (0.018), `sway` (0.008, the soft S-curve, also `[hair.side] sway`)
+  and `turns` (1.5, its half waves: 3 makes long hair wavy). The nape edge is a smooth layered wave ending in moderately pointed locks.
+  Long hair (to the middle of the back, `end_above_chin` -0.25): `spread` (74 degrees each side of the back) set to about 96 takes the locks round to
+  behind the ears; `behind` (0) combs the side-most ones back while they are on the head, `lean` (0) bends them back as they fall, by |sin| of
+  their azimuth, so they pass behind the shoulders instead of lying over them; `tuck` (0.25) pulls the falling locks in towards the back
+  (0.10 lets long hair lie on a sweater). The locks keep `BODY_GAP` off the body's skin and off every garment part built before the hair, and the
+  texture's root-to-tip gradient spans down to the lowest end. `[hair.ahoge] enabled` adds one springy lock standing out of the crown (`at`
+  azimuth and polar angle, `toward`, `height`, `reach`, `curl`) on a chain of its own (`アホ毛1..`).
+- **Side bow** (part `hair_bow`, listed after the hair): a knot and two loops on the hair's outer surface at `[hair_bow] at` (azimuth and polar
+  angle from the head's centre) and two long V-cut tails on chains (`リボン横A1..`, `リボン横B1..`, kind ribbon) that hang outside the hair's
+  outline and off the body and garments; `[colors.hair_bow] ribbon`.
 - **Shading**: the normals of every clump (and of the scalp cap) are blended 88 % (78 % at a clump's edges, so a clump has no rim of its own) towards a
   smooth head-shaped proxy (`hair_head.shade_proxy`: the normal of a vertical axis through the head, `[hair] shade z_hi z_lo`), which gives one terminator
   across the head under mmd_tools' view-normal toon and under any light. The toon step is a soft slope (`[hair.toon] edge 0.52, soft 0.20`) into

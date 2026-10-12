@@ -179,3 +179,37 @@ def test_mesh_body_needs_its_asset(tmp_path):
     spec = SP.load("base:girl", ['body.source="mesh"', f'body.mesh="{tmp_path / "nowhere.npz"}"'])
     with pytest.raises(BD.BuildError, match="does not exist"):
         BD.run(spec, only="body", tex_dir=tmp_path)
+
+
+@pytest.mark.parametrize("source", ["mesh", "procedural"])
+def test_claws_fade_the_hands_towards_the_fingertips(tmp_path, source):
+    """[body] claws paints the hands' tiles of the skin atlas: the skin colour at the wrist, the claw colour at the
+    fingertips (the right hand shares the left one's tiles), and leaves the rest of the body as it was."""
+    from PIL import Image
+    over = [f'body.source="{source}"', 'body.claws={color = "#00ff00", start = 0.3, full = 0.9}']
+    part = BD.run(SP.load("base:girl", over), only="body", tex_dir=tmp_path)[0]
+    plain = BD.run(SP.load("base:girl", [f'body.source="{source}"']), only="body", tex_dir=tmp_path / "plain")[0]
+    m = part.meshes[0]
+    img = np.asarray(Image.open(tmp_path / part.materials[0].texture).convert("RGB"), float) / 255.0
+    ref = np.asarray(Image.open(tmp_path / "plain" / plain.materials[0].texture).convert("RGB"), float) / 255.0
+    V = np.asarray(m.verts)
+    corners = np.array([i for f in m.faces for i in f])
+    skin = np.repeat(np.asarray(m.face_mat), [len(f) for f in m.faces]) == 0
+    L = part.info["landmarks"]
+
+    def colour(k):
+        u, v = m.uv[k]
+        return img[int((1.0 - v) * (img.shape[0] - 1)), int(u * (img.shape[1] - 1))]
+    for side in ("L", "R"):
+        w = np.asarray(L[f"wrist.{side}"], float)
+        out = w - np.asarray(L[f"elbow.{side}"], float)
+        d = np.linalg.norm(V[corners] - w, axis=1)
+        hand = skin & ((V[corners] - w) @ out > 0) & (d < 0.25)         # beyond the wrist and near it: the hand
+        d = np.where(hand, d, np.nan)
+        tip = int(np.nanargmax(d))
+        assert colour(tip)[1] > 0.9 and colour(tip)[0] < 0.2           # green at the fingertip
+        near = int(np.nanargmin(np.where(d > 0.01, d, np.nan)))
+        c = colour(near)
+        assert c[0] > 0.8 and c[1] - c[0] < 0.05                          # skin by the wrist
+    changed = np.abs(img - ref).max(2) > 0.02
+    assert 0 < changed.mean() < 0.4                         # the hands' tiles only (up to a third of the atlas)

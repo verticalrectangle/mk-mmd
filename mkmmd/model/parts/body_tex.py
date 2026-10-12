@@ -184,6 +184,32 @@ def bake(uv_tris, pos_tris, colour, size=1024, dilate=4):
     return img, done
 
 
+def claw_fade(tex, hand, wrist, cfg):
+    """The skin atlas `tex` (h, w, 3|4, floats 0..1 or uint8) with the hand's tiles fading into `cfg` colour towards the
+    fingertips (a "corrupted hands" look, [body] claws): over the left hand Shell `hand` (the right one shares its tiles),
+    its points at fraction t of the way from the `wrist` to its farthest point take the colour by smoothstep from `start`
+    (none) to `full` (all of it). Returns a float copy (h, w, 3|4)."""
+    out = np.array(tex, float) / (255.0 if np.asarray(tex).dtype == np.uint8 else 1.0)
+    col = hex_rgb(cfg.get("color", "#412543"))
+    a0, a1 = float(cfg.get("start", 0.30)), float(cfg.get("full", 0.92))
+    V = np.asarray(hand.verts, float)
+    w = np.asarray(wrist, float)
+    far = V[np.argmax(np.linalg.norm(V - w, axis=1))]
+    ax = (far - w) / max(np.linalg.norm(far - w), 1e-9)
+    length = float((far - w) @ ax)
+    T = np.array([[f[0], f[k], f[k + 1]] for f in hand.faces for k in range(1, len(f) - 1)])
+    UV = np.array([[u[0], u[k], u[k + 1]] for u in hand.uv for k in range(1, len(u) - 1)])
+
+    def share(P):
+        t = ((P - w) @ ax) / length
+        a = smoothstep((t - a0) / max(a1 - a0, 1e-6))
+        return np.repeat(a[:, None], 3, 1)
+    alpha, painted = bake(UV, V[T], share, size=out.shape[0], dilate=2)
+    a = np.where(painted, alpha[..., 0], 0.0)[..., None]
+    out[..., :3] = out[..., :3] * (1.0 - a) + col[None, None, :] * a
+    return out
+
+
 def toon_ramp(pal, mult, width=32, height=32, edge=0.5, soft=0.10):
     """Toon ramp (rows from the lit white at the top to the shadow colour `mult` at the bottom, as MMD reads it)."""
     v = np.linspace(1.0, 0.0, height)                        # row 0 = lit

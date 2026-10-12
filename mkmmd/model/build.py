@@ -333,7 +333,9 @@ def plan(spec, only=None):
 def run(spec, only=None, tex_dir=None, log=None, ctx=None, cache=None):
     """Build the parts of `spec` (a `Spec` or dict) and return them as a list, in spec order. `only`: a part name
     or list (their `needs` are built first). Textures go to `tex_dir` (default `<model.out>/tex`). `cache`
-    (`partcache.PartCache`): reuse the parts whose inputs did not change (their names in `ctx.cached`)."""
+    (`partcache.PartCache`): reuse the parts whose inputs did not change (their names in `ctx.cached`). With `[model]
+    height` the returned parts are scaled about the floor so the top of her skull ([proportions.head] crown_skull, after
+    leg_extra) stands at it; the builders and `ctx.parts` work at the spec's own size."""
     if not isinstance(spec, SP.Spec):
         spec = SP.from_dict(spec)
     cfg = SP.model_cfg(spec)
@@ -382,6 +384,15 @@ def run(spec, only=None, tex_dir=None, log=None, ctx=None, cache=None):
         check_refs(out)
         ctx.part = ""
     report_unread(ctx, None if only is None else names)
+    if cfg["height"] is not None:
+        top = ctx.get("proportions.head.crown_skull")
+        if not top:
+            raise BuildError("[model] height needs [proportions.head] crown_skull (the skull top it scales to)")
+        k = cfg["height"] / float(top)
+        ctx.part = "model"
+        ctx.log(f"height {cfg['height']:.3f} m: built {float(top):.4f} m to the skull top, scaled x{k:.4f}")
+        ctx.part = ""
+        out = [P.scaled(p, k) for p in out]
     return out
 
 

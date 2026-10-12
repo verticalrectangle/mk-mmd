@@ -17,6 +17,7 @@ DEFAULTS = dict(
     fold=0.0040,                   # the slit lies this far back at the middle (1 - (x / half_width)^2)^2 of it sideways
     fold_share=(0.0, 0.05, 0.40, 1.0),  # the share of the fold rings 0..3 take: the lips curl into the mouth line
     line_width=0.0009,            # width of the lip line strips
+    smirk=0.0,                     # > 0 adds the lopsided grin にやり２: how much more her left corner moves (SMIRK)
 )
 
 
@@ -224,12 +225,14 @@ def _sm(t):
     return t * t * (3.0 - 2.0 * t)
 
 
-def lip_field(P, side, cfg, up=0.0, dn=0.0, p=0.9, wx=0.0, cl=0.0, nar=0.0, pro=0.0, wave=0.0, drop=0.0, R=0.014):
+def lip_field(P, side, cfg, up=0.0, dn=0.0, p=0.9, wx=0.0, cl=0.0, nar=0.0, pro=0.0, wave=0.0, drop=0.0, R=0.014,
+              lean=0.0):
     """Skin offsets (n, 3) for a mouth shape. `P` rest positions, `side` (n,): +1 upper-lip margin vertices, -1 lower-lip
     margin vertices, 0 elsewhere. up / dn: how far the upper lip rises and the lower lip falls at the middle; p: the
     opening's profile exponent (smaller = rounder); wx: the corners move out by this much; cl: the corners rise; nar: the
     mouth narrows (fraction pulled in at the corners); pro: protrusion forward; wave: the closed line takes an omega
-    shape (amplitude); drop: the whole lower face goes down."""
+    shape (amplitude); drop: the whole lower face goes down; lean: lopsided, her left side moves 1 + lean times as much
+    and her right 1 - lean times (a smirk)."""
     c = SP.merge(DEFAULTS, cfg)
     hw, zm = c["half_width"], c["z"]
     x, z = P[:, 0], P[:, 2]
@@ -253,6 +256,8 @@ def lip_field(P, side, cfg, up=0.0, dn=0.0, p=0.9, wx=0.0, cl=0.0, nar=0.0, pro=
     dx = dx - x * nar * k
     dy = -pro * _sm(1.0 - np.hypot(x, z - zm) / 0.016)
     out = np.stack([dx, dy, dz], -1)
+    if lean:
+        out *= (1.0 + lean * np.clip(s, -1.0, 1.0))[:, None]
     box = (np.abs(x) < 0.05) & (np.abs(z - zm) < 0.035)
     out[~box] = 0.0
     return out
@@ -270,3 +275,4 @@ SHAPES = {
     "mouth_down": dict(cl=-0.0024),
     "grin": dict(up=0.0008, dn=0.0022, p=1.0, wx=0.0025, cl=0.0022),
 }
+SMIRK = dict(up=0.0020, dn=0.0050, p=0.9, wx=0.0035, cl=0.0038)    # にやり２ ([head.mouth] smirk = its lean)

@@ -9,7 +9,7 @@ Names: bones, morphs and materials use their PMX (Japanese) names; English names
 左/右 for standard bones (左腕) and chain bones may use either a prefix or a suffix (三つ編左1, 尻尾1_2).
 
 This module is the frozen interface: fields may be ADDED (with defaults), never renamed or removed."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -168,3 +168,20 @@ def check(part):
     if len(names) != len(set(names)):
         raise ValueError(f"{part.name}: duplicate bone names")
     return bones
+
+
+def scaled(part, k):
+    """A copy of `part` made `k` times bigger about the origin (the floor under the figure): vertices, morph offsets,
+    bones, rigid bodies (sizes and places) and joints (places and travel limits). Angles, masses, springs, materials and
+    `info` (what the builders told each other, in the units they built in) stay as they are."""
+    k = float(k)
+
+    def pt(p):
+        return None if p is None else tuple(float(x) * k for x in p)
+
+    meshes = [replace(m, verts=np.asarray(m.verts, float) * k,
+                      morphs={n: np.asarray(d, float) * k for n, d in m.morphs.items()}) for m in part.meshes]
+    bones = [replace(b, head=pt(b.head), tail=pt(b.tail)) for b in part.bones]
+    bodies = [replace(rb, size=pt(rb.size), location=pt(rb.location)) for rb in part.bodies]
+    joints = [replace(j, location=pt(j.location), move_lo=pt(j.move_lo), move_hi=pt(j.move_hi)) for j in part.joints]
+    return replace(part, meshes=meshes, bones=bones, bodies=bodies, joints=joints)

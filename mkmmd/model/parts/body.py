@@ -8,6 +8,8 @@ joints are made from it, not read from the landmarks.
 `[body]` keys (all optional):
   skin           {base, shade, blush, nail}  hex colours (default: [colors.skin] of the spec)
   nails          true | false | "#rrggbb"    nail plates on the fingertips (default true, pale pink); a colour paints them
+  claws          {color, start, full}        the hands fade into `color` (default "#412543") from `start` to `full` of the
+                 way from the wrist to the fingertips (body_tex.claw_fade; procedural and mesh bodies); off without it
   source         "procedural" (default: the body is built from the spec's proportions) | "mesh" (an artist's whole body
                  fitted to the skeleton, see body_donor.py: `mesh = "base:girl/body.npz"`) | "pmx" (taken from an existing
                  PMX model, see body_pmx.py: [body.pmx] path, materials, ...)
@@ -203,6 +205,9 @@ def build(ctx):
     z0, z1 = torso.s_range
     neck = dict(look["neck"], v_h=look["neck"]["height"] / (z1 - z0))
     tex = body_tex.skin_texture(body_tex.marks(shells), look["pal"], flush=look["flush"], neck=neck)
+    if cfg.get("claws"):
+        hand = next(s for s in shells if s.name == "hand_L")
+        tex = body_tex.claw_fade(tex, hand, shape.land["wrist.L"], cfg["claws"])
     toon = body_tex.toon_ramp(look["pal"], look["mult"])
     tex_name = ctx.save_png("skin", tex)
     toon_name = ctx.save_png("skin_toon", toon)

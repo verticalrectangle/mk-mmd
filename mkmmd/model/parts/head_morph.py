@@ -125,7 +125,7 @@ NAMES = {
     "a": ("あ", "mouth", "a"), "i": ("い", "mouth", "i"), "u": ("う", "mouth", "u"), "e": ("え", "mouth", "e"),
     "o": ("お", "mouth", "o"), "omega": ("ω", "mouth", "omega"), "mouth_smile": ("口角上げ", "mouth", "mouth corners up"),
     "mouth_down": ("口角下げ", "mouth", "mouth corners down"), "grin": ("にやり", "mouth", "grin"),
-    "blush": ("照れ", "other", "blush"),
+    "smirk": ("にやり２", "mouth", "smirk"), "blush": ("照れ", "other", "blush"),
 }
 
 
@@ -162,7 +162,11 @@ def build_mouth_morphs(M, behind=0.0035):
     ids_up = np.concatenate([[m["left"]], m["upper"][::-1], [m["right"]]])
     xs_up = V[ids3[ids_up]][:, 0]
     order = np.argsort(xs_up)
-    for key, params in MO.SHAPES.items():
+    shapes = dict(MO.SHAPES)
+    lean = float(m["cfg"].get("smirk", 0.0) or 0.0)
+    if lean:
+        shapes["smirk"] = dict(MO.SMIRK, lean=lean)
+    for key, params in shapes.items():
         d = MO.lip_field(V, side, m["cfg"], **params)
         M.skin(NAMES[key][0], d)
         dl = d[ids3]                                      # lip margin offsets in ring-3 column order

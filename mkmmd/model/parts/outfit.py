@@ -146,6 +146,17 @@ def cloth_colours(ctx):
     return {k: (pal[c], rin[c]) for k, c in (("dress", "dress_base"), ("frill", "frill"), ("frill_inner", "frill_inner"))}
 
 
+def make_fit(ctx):
+    """The body's surface and landmarks as an outfit_fit.Fit for a garment builder: sizes scale with S = head_tip.z / 1.7,
+    [proportions] leg_extra left out (longer legs make no bigger clothes)."""
+    skin = skin_from_body(ctx)
+    land = get_landmarks(ctx)
+    extra = float(ctx.get("proportions.leg_extra") or 0.0)
+    tip = land.get("head_tip")
+    return F.Fit(land, skin, log=ctx.log, bone_names=ctx.bones(),
+                 scale=(float(tip[2]) - extra) / 1.7 if extra and tip is not None else None)
+
+
 def guided(ctx, cfg):
     """The measured outfit heights ([proportions.outfit_guides]) fill the keys the spec leaves open."""
     g = ctx.get("proportions.outfit_guides", {}) or {}
@@ -159,12 +170,7 @@ def guided(ctx, cfg):
 @builder("outfit", needs=("body",))
 def build(ctx):
     cfg = guided(ctx, SP.merge(DEFAULTS, ctx.cfg))
-    skin = skin_from_body(ctx)
-    land = get_landmarks(ctx)
-    extra = float(ctx.get("proportions.leg_extra") or 0.0)         # longer legs make no bigger dress, frills or shoes
-    tip = land.get("head_tip")
-    fit = F.Fit(land, skin, log=ctx.log, bone_names=ctx.bones(),
-                scale=(float(tip[2]) - extra) / 1.7 if extra and tip is not None else None)
+    fit = make_fit(ctx)
     ribbon = SP.merge(LG.DEFAULTS["ribbon"], cfg["legs"].get("ribbon"))["enabled"]
     if cfg["shading"] not in ("tuned", "auto"):
         raise ValueError(f'[outfit] shading must be "tuned" or "auto", got {cfg["shading"]!r}')

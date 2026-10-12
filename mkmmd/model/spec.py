@@ -409,7 +409,8 @@ def from_dict(data, base=None):
 
 
 def model_cfg(spec):
-    """The `[model]` table with defaults: name, parts (required), seed, out (a Path), scale, builders."""
+    """The `[model]` table with defaults: name, parts (required), seed, out (a Path), scale, height (None, or metres from
+    the floor to the top of her skull: the built parts are scaled to it, `build.run`), builders."""
     m = dict(spec.get("model", {}))
     if not isinstance(m.get("parts"), list) or not m["parts"]:
         raise SpecError("[model] parts must list the parts to build, e.g. parts = [\"body\", \"head\"]")
@@ -421,6 +422,7 @@ def model_cfg(spec):
         "seed": int(m.get("seed", 1)),
         "out": expand(m.get("out", f"~/mk-assets/models/{name}"), base),
         "scale": float(m.get("scale", 0.08)),
+        "height": float(m["height"]) if m.get("height") is not None else None,
         "builders": dict(m.get("builders", {})),
         "needs": {k: list(v) for k, v in dict(m.get("needs", {})).items()},
         "comment": str(m.get("comment", "")),

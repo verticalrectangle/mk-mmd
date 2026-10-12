@@ -190,3 +190,36 @@ def test_find_helpers(registry, tmp_path):
     assert ctx.land_point("eye.L").tolist() == [0.03, -0.05, 1.4]
     with pytest.raises(BD.BuildError, match="landmark"):
         ctx.land_point("nope")
+
+
+def test_model_height_scales_every_length_about_the_floor(registry, tmp_path):
+    """`[model] height` makes the returned parts bigger about the floor so the skull top ([proportions.head]
+    crown_skull) stands at it: vertices, morph offsets, bone heads and tails, rigid bodies' places and sizes, joints'
+    places and travel limits. Angles, masses and the builders' own parts stay as built."""
+    @BD.builder("body")
+    def _body(ctx):
+        m = tri_mesh(weights={"全ての親": np.ones(3)})
+        m.morphs = {"あ": np.full((3, 3), 0.01)}
+        return P.Part("body", meshes=[m], materials=[P.Material("mat")],
+                      bones=[P.Bone("全ての親", (0.0, 0.0, 0.0)), P.Bone("頭", (0.0, 0.1, 1.2), tail=(0.0, 0.1, 1.4),
+                                                                       parent="全ての親")],
+                      bodies=[P.RigidBody("b", "頭", size=(0.05, 0.1, 0.0), location=(0.0, 0.0, 1.3),
+                                          rotation=(0.3, 0.0, 0.0), mass=2.0)],
+                      joints=[P.Joint("j", "b", "b", location=(0.0, 0.0, 1.25), move_lo=(-0.01, 0.0, 0.0),
+                                      move_hi=(0.01, 0.0, 0.0), rot_lo=(-0.5, 0.0, 0.0))])
+    spec = spec_for(["body"], proportions={"head": {"crown_skull": 1.5}})
+    spec["model"]["height"] = 1.8
+    ctx = BD.BuildCtx(spec, tmp_path)
+    (got,), k = BD.run(spec, ctx=ctx), 1.8 / 1.5
+    built = ctx.parts["body"]
+    assert np.allclose(got.meshes[0].verts, k * built.meshes[0].verts)
+    assert np.allclose(got.meshes[0].morphs["あ"], k * 0.01)
+    head = got.bones[1]
+    assert head.head == pytest.approx((0.0, 0.1 * k, 1.2 * k)) and head.tail == pytest.approx((0.0, 0.1 * k, 1.4 * k))
+    rb, j = got.bodies[0], got.joints[0]
+    assert rb.size == pytest.approx((0.05 * k, 0.1 * k, 0.0)) and rb.location == pytest.approx((0.0, 0.0, 1.3 * k))
+    assert rb.rotation == (0.3, 0.0, 0.0) and rb.mass == 2.0
+    assert j.location == pytest.approx((0.0, 0.0, 1.25 * k)) and j.move_lo == pytest.approx((-0.01 * k, 0.0, 0.0))
+    assert j.move_hi == pytest.approx((0.01 * k, 0.0, 0.0)) and j.rot_lo == (-0.5, 0.0, 0.0)
+    assert built.bones[1].head == (0.0, 0.1, 1.2)                   # the builders worked at the spec's own size
+    assert any("scaled x1.2000" in line for line in ctx.logs)
