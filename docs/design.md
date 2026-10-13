@@ -3025,8 +3025,8 @@ names, parents, weights, materials, bodies, joints).
 (`part.scaled`); the builders, `ctx.parts` and `Part.info` stay at the spec's own size, so every proportion the base
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
 listing it in `[model] parts`: `sweater` (off-shoulder: one rib band from arm to arm over the chest and the back, a
-loose knit body and sleeves that lie on the breasts, hang from the band and below the bust and gather into a rib
-waistband and cuffs), `pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with
+loose knit body and sleeves that lie on the breasts, hang from the band and below the bust, are joined under the arms
+by a sheet of the knit and gather into a rib waistband and cuffs), `pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with
 a sneaker's settings and a painted face), `choker` (band and flower), and `hair_bow` (a bow on the side of the head with
 two tails on chains). The first three are cut out of the body's own skin (`outfit_shell.Shell`: fields on the skin such
 as a height or a limb's length coordinate, clipped exactly along their level lines, moved out along the normals,

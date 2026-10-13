@@ -18,7 +18,7 @@ The fit (`fit`) takes the asset's own space to the character's; k is her neck se
          `foot_length` and `foot_width`, its sole stood on her shoe's inner floor (`foot_inner_floor_z`) and its ankle on hers
   blend  every vertex takes the torso warp, its arm's and its leg's transforms by its share of each region (`membership`);
          a limb's segments hand over by smooth steps across their joints (HALF)
-Then the breasts grow by `bust` (round each breast's front, fading to nothing BUST_RADIUS away), the neck's cut ring is
+Then the breasts grow by `bust` (`grow_bust`: a long slope from the chest above, a full round lower half), the neck's cut ring is
 laid onto the seam ellipse the head builds on (the skin below follows, fading over NECK_EASE),
 and each forearm is cut at the asset's edge loop nearest before the hand's seam: a strip joins that loop to a ring of the
 hand's seam size sampled from the fitted forearm at the seam, and the hand is welded to that ring as to the procedural
@@ -68,7 +68,8 @@ JOINTS = ("shoulder", "elbow", "wrist", "hip", "knee", "ankle", "toe_end", "heel
 LEAD = 0.07                 # the torso's height map is straight up to this far (donor m) below the shoulder joints
 HALF = dict(elbow=0.03, knee=0.05, ankle=0.03)    # half widths of the segment hand-overs (donor m)
 NECK_EASE = 0.012           # the skin under the neck's cut ring follows it onto the seam ellipse, fading over this height
-BUST_RADIUS = 0.065         # [body] bust grows a breast's skin this far round its front, fading to nothing
+BUST_RADII = (0.065, 0.085, 0.058)   # [body] bust: how far a breast's growth reaches across, up and down from its centre
+BUST_DROP = 0.012           # ... whose centre is this far below the breast's front (the lower half is the fuller one)
 GAP = 0.004                 # the forearm is cut at an edge loop at least this far before the hand's seam
 REACH = 0.06                # the forearm's section at the seam is the skin within this distance of the arm's centre line
 REF = (0.0, -1.0, 0.0)      # a forearm ring's first point faces this way (body_mesh.arm_shell's convention)
@@ -227,21 +228,28 @@ def fit(A, shape, nt, extra=0.0):
 
 
 def grow_bust(V, A, amount):
-    """The breasts grown `amount` metres forward ([body] bust); changes V. Round each breast's front (the donor's most
-    forward torso vertex on its side within 3 cm of bust_z) the torso's skin moves forward, a little outward and up,
-    fully at the front and fading to nothing BUST_RADIUS away: a smooth mound. Where the mounds meet (the cleavage) the
-    skin moves as far as the stronger one asks, not their sum, along their directions' weighted mean: straight
-    forward in the middle, so the body stays a mirror image."""
+    """The breasts grown `amount` metres forward ([body] bust); changes V. Each breast's front is the donor's most forward
+    torso vertex on its side within 3 cm of bust_z; round a centre BUST_DROP below it the skin of her front moves forward,
+    a little outward, fully at the centre and fading out over an ellipse of the frontal plane (BUST_RADII: across, up,
+    down): above the centre slowly, a long smooth slope from the chest, below it as a full round dome that meets the chest
+    in a crease and leans a little down, as a real breast's lower half does (not a cone round its tip). Where the two
+    meet (the cleavage) the skin moves as far as the stronger one asks, not their sum, along their directions' weighted
+    mean: straight forward in the middle, so the body stays a mirror image."""
     if not amount:
         return
     D, torso = A["verts"], A["member"][:, 0]
+    rx, ru, rl = BUST_RADII
     most, way = np.zeros(len(V)), np.zeros_like(V)
     for sg in (1.0, -1.0):
         near = np.flatnonzero((torso > 0.5) & (np.abs(D[:, 2] - A["bust_z"]) < 0.03) & (sg * D[:, 0] > 0.01))
-        front = V[near[np.argmin(D[near, 1])]]
-        w = torso * np.clip(1.0 - (np.linalg.norm(V - front, axis=1) / BUST_RADIUS) ** 2, 0.0, 1.0) ** 2
+        tip = V[near[np.argmin(D[near, 1])]]
+        dx, dz = V[:, 0] - tip[0], V[:, 2] - (tip[2] - BUST_DROP)
+        low = smoothstep(np.clip(0.5 - dz / 0.03, 0.0, 1.0))                       # 0 above the centre, 1 below it
+        r2 = (dx / rx) ** 2 + (dz / (ru + (rl - ru) * low)) ** 2
+        front = smoothstep(np.clip((tip[1] + 0.07 - V[:, 1]) / 0.03, 0.0, 1.0))    # her front only, not her back
+        w = torso * front * np.clip(1.0 - r2, 0.0, 1.0) ** (2.0 - 1.3 * low)
         most = np.maximum(most, w)
-        way += w[:, None] * unit(np.array([0.3 * sg, -1.0, 0.1]))
+        way += w[:, None] * unit(np.stack([np.full(len(V), 0.25 * sg), np.full(len(V), -1.0), -0.25 * low], 1))
     V += float(amount) * most[:, None] * unit(way)
 
 

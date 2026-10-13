@@ -275,5 +275,6 @@ SHAPES = {
     "mouth_down": dict(cl=-0.0024),
     "grin": dict(up=0.0008, dn=0.0022, p=1.0, wx=0.0025, cl=0.0022),
 }
-# にやり２ ([head.mouth] smirk = its lean): a wide open grin, the upper lip rising off the teeth so they show
+# にやり２ ([head.mouth] smirk = its lean): a wide open grin, the upper lip rising off the teeth so they show (their roots
+# ride the lip, their tips rise only `teeth` of the way: the bared teeth stand taller)
 SMIRK = dict(up=0.0045, dn=0.0095, p=0.75, wx=0.0085, cl=0.0068, teeth=0.1)

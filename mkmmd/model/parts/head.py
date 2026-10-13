@@ -477,7 +477,7 @@ def build(ctx):
     n_ring = mouth["n"]
     mouth_mesh.add("cavity", cv, cf, M_MOUTH, {HEAD: 1.0}, uv=cuv)
     A_front = cv[:n_ring]
-    tv, tf, txs = MO.teeth_geometry(A_front, mouth)
+    tv, tf, txs = MO.teeth_geometry(A_front, mouth, cfg.get("teeth"))
     mouth_mesh.add("teeth", tv, orient(tv, tf), M_TEETH, {HEAD: 1.0})
     tgv, tgf = MO.tongue_geometry(A_front, mouth)
     mouth_mesh.add("tongue", tgv, tgf, M_TONGUE, {HEAD: 1.0})

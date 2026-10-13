@@ -185,6 +185,37 @@ def test_the_band_is_one_piece_from_arm_to_arm(dressed):
         assert ((band[front] > 0.0) & (band[front] < c["band"]["height"] * S)).all(), band[front]
 
 
+def _front_cover(mesh, pts):
+    """Whether each point (x, z) lies on the mesh seen from the front (inside a face's projection onto the x-z plane)."""
+    V = np.asarray(mesh.verts)[:, [0, 2]]
+    hit = np.zeros(len(pts), bool)
+    for f in mesh.faces:
+        for j in range(1, len(f) - 1):
+            M = np.array([V[f[j]] - V[f[0]], V[f[j + 1]] - V[f[0]]]).T
+            if abs(np.linalg.det(M)) > 1e-12:
+                uv = np.linalg.solve(M, (pts - V[f[0]]).T).T
+                hit |= (uv >= 0.0).all(1) & (uv.sum(1) <= 1.0)
+    return hit
+
+
+def test_the_sleeves_are_joined_to_the_body_under_the_arms(dressed, tmp_path):
+    """Seen from the front, the corner under each arm between the sleeve and her side (within 12 cm of the arm joint) is
+    knit, as a loose sweater's is, not a gap between a tube and a tube: a sweater with `body.underarm` = 0 leaves it
+    open, this one covers most of it."""
+    _, parts, _ = dressed
+    spec = SP.load("base:girl", [WEAR, "body.bust=0.02", 'model.parts=["body", "sweater"]', "sweater.body.underarm=0.0"])
+    bare = {p.name: p for p in BD.run(spec, ctx=BD.BuildCtx(spec, tmp_path, seed=1))}
+    L = parts["body"].info["landmarks"]
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        arm = np.asarray(L[f"arm.{side}"], float)[[0, 2]]
+        gx, gz = np.meshgrid(arm[0] + sg * np.linspace(0.0, 0.1, 21), arm[1] - np.linspace(0.01, 0.15, 29))
+        pts = np.stack([gx.ravel(), gz.ravel()], 1)
+        open_ = ~_front_cover(bare["body"].meshes[0], pts) & ~_front_cover(bare["sweater"].meshes[0], pts)
+        open_ &= np.linalg.norm(pts - arm, axis=1) < 0.12
+        assert open_.sum() > 30, side
+        assert _front_cover(parts["sweater"].meshes[0], pts[open_]).mean() > 0.7, side
+
+
 def test_the_knit_lies_on_the_breasts_and_hangs_loose_below_them(dressed):
     """The loose knit shows her breasts as the drawing does: on their lower half (under the band) it lies on them, and
     from them it hangs loose: at her waist it stands well off her front and her sides instead of following her in."""

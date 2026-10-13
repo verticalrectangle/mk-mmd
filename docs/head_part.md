@@ -78,7 +78,10 @@ The eyes sit on the planes, their outer corners further back than the inner ones
   fold catches the outline and the shadow). The mouth shapes move the lips in z and keep the fold's depth; the corner shapes
   (口角上げ / 口角下げ, the corners' share of い, え, にやり) are bumps round each corner, the middle of the lips left still. The
   interior bag's inner rings stay behind the skin in front of them at rest (`cavity(..., shape)`) and in every mouth morph
-  (`build_mouth_morphs`): they follow the lips further than the skin under the lower lip does. The 照れ blush patches wait
+  (`build_mouth_morphs`): they follow the lips further than the skin under the lower lip does. The upper teeth hang from the
+  upper lip's edge (`[head.teeth]`: `height`, `half` width, `back`, and the two fangs' `fang` length, `fang_x`, `fang_w`;
+  `head_mouth.TEETH`); in にやり２ the lip rises off them: their roots ride the lip, their tips rise only a tenth as much, so
+  the bared teeth stand taller and no gap opens above them. The 照れ blush patches wait
   1.2 mm under the cheeks and follow the skin through every mouth shape (each vertex the mix of its four nearest skin vertices'
   offsets), so a shape that pulls the cheeks in (ω) never shows them.
 - **Eyes** (`head_eye`, `[head.eye]`): an anime eye, not an eyeball. The opening (`CORNER_IN/OUT`, `UPPER`, `LOWER`): the upper lid
