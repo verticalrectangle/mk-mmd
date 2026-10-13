@@ -176,13 +176,18 @@ def _front_radii(V):
     return f, np.sort(1.0 / np.linalg.eigvalsh(np.array([[2 * c[3], c[5]], [c[5], 2 * c[4]]])))
 
 
-def test_bust_grows_round_breasts_forward_and_nothing_else(tmp_path, donor):
+@pytest.fixture(scope="module")
+def busty(tmp_path_factory):
+    return make(tmp_path_factory.mktemp("busty"), "body.bust=0.05")
+
+
+def test_bust_grows_round_breasts_forward_and_nothing_else(donor, busty):
     """[body] bust moves the front of each breast forward by that much, the two alike (mirror images), keeping the
     donor's own round shape: at the new front the skin is curved at least half as gently as the donor's is at hers (not
     drawn out into a point); the two meet in the cleavage without adding up; nothing 14 cm or more from the fronts
     moves, nor anything of her back."""
     A = np.asarray(donor.meshes[0].verts)
-    B = np.asarray(make(tmp_path, "body.bust=0.05").meshes[0].verts)
+    B = np.asarray(busty.meshes[0].verts)
     move = B - A
     dist = np.linalg.norm(move, axis=1) / 0.05
     assert 0.97 < dist.max() < 1.005
@@ -198,6 +203,17 @@ def test_bust_grows_round_breasts_forward_and_nothing_else(tmp_path, donor):
     at = {k: i for i, k in enumerate(key(A))}
     twin = np.array([at.get(k, -1) for k in key(A * [-1.0, 1.0, 1.0])])
     assert (twin >= 0).all() and np.allclose(move[twin] * [-1.0, 1.0, 1.0], move, atol=1e-6)
+
+
+def test_the_grown_bust_moves_with_the_chest(donor, busty):
+    """The flesh [body] bust grows follows the chest, not an arm: where the skin moved a third of the bust or more no
+    shoulder or arm bone has any weight (the shoulder girdle's share of the upper chest would pull a grown breast in when
+    the arm swings down: in a pose with the arms down the bust looked caved in)."""
+    grown = np.linalg.norm(np.asarray(busty.meshes[0].verts) - np.asarray(donor.meshes[0].verts), axis=1) > 0.05 / 3
+    assert grown.sum() > 20
+    girdle = sum(np.asarray(w) for b, w in busty.meshes[0].weights.items()
+                 if b[:1] in ("左", "右") and b[1:] in ("肩", "腕", "腕捩", "ひじ", "手捩", "手首"))
+    assert girdle[grown].max() < 1e-6, girdle[grown].max()
 
 
 DIGIT_END = {"index": ("index3", "左人指３"), "middle": ("middle3", "左中指３"), "ring": ("ring3", "左薬指３"),

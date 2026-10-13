@@ -18,7 +18,8 @@ The fit (`fit`) takes the asset's own space to the character's; k is her neck se
          `foot_length` and `foot_width`, its sole stood on her shoe's inner floor (`foot_inner_floor_z`) and its ankle on hers
   blend  every vertex takes the torso warp, its arm's and its leg's transforms by its share of each region (`membership`);
          a limb's segments hand over by smooth steps across their joints (HALF)
-Then the breasts grow by `bust` (`grow_bust`: the front of each moved forward as it is, keeping the donor's own round shape), the neck's cut ring is
+Then the breasts grow by `bust` (`grow_bust`: the front of each moved forward as it is, keeping the donor's own round
+shape; the flesh it grows follows the chest, not an arm, `chest_flesh`), the neck's cut ring is
 laid onto the seam ellipse the head builds on (the skin below follows, fading over NECK_EASE),
 and each forearm is cut at the asset's edge loop nearest before the hand's seam: a strip joins that loop to a ring of the
 hand's seam size sampled from the fitted forearm at the seam, and the hand is welded to that ring as to the procedural
@@ -230,7 +231,8 @@ def fit(A, shape, nt, extra=0.0):
 
 
 def grow_bust(V, A, amount):
-    """The breasts grown `amount` metres forward ([body] bust); changes V. Each breast's front is the donor's most forward
+    """The breasts grown `amount` metres forward ([body] bust); changes V and returns (n,) each vertex's share of the
+    growth (0..1). Each breast's front is the donor's most forward
     torso vertex on its side within 3 cm of bust_z; round a centre BUST_OUT outward of it and BUST_DROP below, the skin
     of her front moves forward by amount x g over an ellipse of the frontal plane (BUST_RADII: in towards the middle,
     out, up, down), g = 1 - 3 s^2 + 2 s^3 of s, the squared normalised distance from the centre: flat on top, so the
@@ -239,7 +241,7 @@ def grow_bust(V, A, amount):
     a smooth max (not their sum), so the body stays a mirror image; the way is forward, the outer side leaning outward
     (BUST_TILT)."""
     if not amount:
-        return
+        return np.zeros(len(V))
     D, torso = A["verts"], A["member"][:, 0]
     r_in, r_out, r_up, r_lo = BUST_RADII
     hs = []
@@ -254,6 +256,26 @@ def grow_bust(V, A, amount):
     side = np.sign(V[:, 0]) * smoothstep(np.clip((np.abs(V[:, 0]) - 0.01) / 0.06, 0.0, 1.0))
     way = unit(np.stack([BUST_TILT * side, -np.ones(len(V)), np.zeros(len(V))], 1))
     V += float(amount) * h[:, None] * way
+    return h
+
+
+GIRDLE = ("肩", "腕", "腕捩", "ひじ", "手捩", "手首")  # what a shoulder or an arm takes of the upper chest
+
+
+def chest_flesh(W, ids, grown):
+    """The flesh the bust grew follows the chest: at the vertices `ids`, of what a shoulder or an arm takes there (the
+    girdle's share of the upper chest, body_weights.spine_weights) a share goes over to 上半身2, three times its part of
+    the growth `grown` (grow_bust; all of it from a third of the growth on), so a breast keeps its shape when an arm
+    swings down instead of being pulled in with it; changes W ({bone: (n,)})."""
+    share = np.clip(3.0 * np.asarray(grown, float), 0.0, 1.0)
+    if not share.any():
+        return
+    ids = np.asarray(ids)
+    for b in list(W):
+        if b[:1] in ("左", "右") and b[1:] in GIRDLE:
+            moved = W[b][ids] * share
+            W[b][ids] -= moved
+            W.setdefault("上半身2", np.zeros_like(W[b]))[ids] += moved
 
 
 def onto_seam(V, loop, nt):
@@ -534,7 +556,7 @@ def build_donor(ctx):
 
     # ---- the fitted skin, cut at the wrists
     V = fit(A, shape, nt, float(ctx.get("proportions.leg_extra") or 0.0))
-    grow_bust(V, A, float(cfg.get("bust", 0.0)))
+    grown = grow_bust(V, A, float(cfg.get("bust", 0.0)))
     onto_seam(V, A["neck"], nt)
     faces, twin = A["faces"], A["mirror"]
     tris = G.triangulated(faces)
@@ -605,7 +627,9 @@ def build_donor(ctx):
     tot = sum(out.values())
     if (tot < 1e-9).any():
         raise ValueError(f"{int((tot < 1e-9).sum())} body vertices without weights")
-    weights = BW.cap_weights({b: w / np.maximum(tot, 1e-12) for b, w in out.items()}, 4)
+    W = {b: w / np.maximum(tot, 1e-12) for b, w in out.items()}
+    chest_flesh(W, gidx["donor"], grown[used])
+    weights = BW.cap_weights(W, 4)
 
     # ---- materials and the skin texture
     look = skin_look(ctx, cfg)

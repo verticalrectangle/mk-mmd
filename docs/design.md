@@ -3042,7 +3042,9 @@ strokes on the cloth (thin dark ribbons a fraction of a millimetre above it, wit
 and socks, the folds of the knit, the creases of the pants; nothing outlines the breasts; `[<part>.ink]`,
 materials セーター線, 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and laces. The hair keeps its hanging
 locks off every garment built before it (`[model] parts` order), so long hair rests on a sweater instead of inside it.
-`[body] bust` (metres, the mesh body) moves each breast's front forward as it is, keeping the donor's round shape.
+`[body] bust` (metres, the mesh body) moves each breast's front forward as it is, keeping the donor's round shape; the
+flesh it grows follows the chest (`body_donor.chest_flesh`: the shoulder girdle's weights go to 上半身2 there), so the
+breasts keep their shape when the arms come down.
 
 | Convention | |
 |---|---|
