@@ -165,28 +165,35 @@ def test_mesh_body_is_symmetric(donor):
         assert np.allclose(w[twin], mesh.weights.get(m, np.zeros(len(V))), atol=1e-5), n
 
 
-def test_bust_grows_round_breasts_forward_and_nothing_else(tmp_path, donor):
-    """[body] bust moves each breast forward by about that much at its centre, the two alike (mirror images): a full
-    round lower half (3 cm below the centre the skin still moves most of the way) and a long slope from the chest
-    above (6 cm up some of it), not a cone round a tip; the two meet in the cleavage without adding up; nothing 10 cm
-    or more from the centres moves, nor anything of her back."""
-    A = np.asarray(donor.meshes[0].verts)
-    B = np.asarray(make(tmp_path, "body.bust=0.02").meshes[0].verts)
-    move = B - A
-    dist = np.linalg.norm(move, axis=1) / 0.02
-    assert 0.9 < dist.max() < 1.005
-    centres = [A[np.argmax(np.where(sg * A[:, 0] > 0, dist, -1.0))] for sg in (1.0, -1.0)]
-    c = centres[0]
-    assert c[0] == pytest.approx(-centres[1][0], abs=1e-6) and move[np.argmax(dist), 1] < -0.015
+def _front_radii(V):
+    """The skin's most forward point near the left breast and its two principal radii of curvature there (metres, the
+    smaller first), from a quadric y(x, z) fitted to the front-facing skin within 3 cm of it."""
+    sel = (V[:, 0] > 0.005) & (V[:, 0] < 0.13) & (np.abs(V[:, 2] - 1.04) < 0.07) & (V[:, 1] < 0.0)
+    f = V[sel][np.argmin(V[sel][:, 1])]
+    near = (np.abs(V[:, 0] - f[0]) < 0.03) & (np.abs(V[:, 2] - f[2]) < 0.03) & (V[:, 1] < f[1] + 0.03) & (V[:, 0] > 0.003)
+    X, Z = V[near, 0] - f[0], V[near, 2] - f[2]
+    c = np.linalg.lstsq(np.stack([np.ones_like(X), X, Z, X * X, Z * Z, X * Z], 1), V[near, 1], rcond=None)[0]
+    return f, np.sort(1.0 / np.linalg.eigvalsh(np.array([[2 * c[3], c[5]], [c[5], 2 * c[4]]])))
 
-    def on_front(dz):                                                   # her front, straight above or below the centre
-        sel = (np.abs(A[:, 0] - c[0]) < 0.01) & (np.abs(A[:, 2] - (c[2] + dz)) < 0.006) & (A[:, 1] < c[1] + 0.05)
-        return dist[np.flatnonzero(sel)[np.argmin(A[sel, 1])]]
-    assert on_front(-0.03) > 0.7 and on_front(0.06) > 0.1
-    cleavage = np.argmin(np.linalg.norm(A - 0.5 * (centres[0] + centres[1]), axis=1))
-    assert dist[cleavage] < 0.8                                         # the two meet there, not add up
-    far = np.min([np.linalg.norm(A - f, axis=1) for f in centres], axis=0) > 0.1
-    assert (dist[far] == 0.0).all() and (dist[A[:, 1] > c[1] + 0.1] == 0.0).all()
+
+def test_bust_grows_round_breasts_forward_and_nothing_else(tmp_path, donor):
+    """[body] bust moves the front of each breast forward by that much, the two alike (mirror images), keeping the
+    donor's own round shape: at the new front the skin is curved at least half as gently as the donor's is at hers (not
+    drawn out into a point); the two meet in the cleavage without adding up; nothing 14 cm or more from the fronts
+    moves, nor anything of her back."""
+    A = np.asarray(donor.meshes[0].verts)
+    B = np.asarray(make(tmp_path, "body.bust=0.05").meshes[0].verts)
+    move = B - A
+    dist = np.linalg.norm(move, axis=1) / 0.05
+    assert 0.97 < dist.max() < 1.005
+    fronts = [A[np.argmax(np.where(sg * A[:, 0] > 0, dist, -1.0))] for sg in (1.0, -1.0)]
+    assert fronts[0][0] == pytest.approx(-fronts[1][0], abs=1e-6) and move[np.argmax(dist), 1] < -0.045
+    (_, before), (_, after) = _front_radii(A), _front_radii(B)
+    assert after[0] > 0.5 * before[0], (before, after)
+    cleavage = np.argmin(np.linalg.norm(A - 0.5 * (fronts[0] + fronts[1]), axis=1))
+    assert dist[cleavage] < 0.9                                         # the two meet there, not add up
+    far = np.min([np.linalg.norm(A - f, axis=1) for f in fronts], axis=0) > 0.14
+    assert (dist[far] == 0.0).all() and (dist[A[:, 1] > fronts[0][1] + 0.1] == 0.0).all()
     key = lambda P: [tuple(k) for k in np.round(P / 1e-5).astype(np.int64)]
     at = {k: i for i, k in enumerate(key(A))}
     twin = np.array([at.get(k, -1) for k in key(A * [-1.0, 1.0, 1.0])])

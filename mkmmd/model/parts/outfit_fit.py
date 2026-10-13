@@ -249,6 +249,57 @@ class Skin:
             pn = self._pn = (fn, sums[inv].reshape(len(T), 3, 3), corner)
         return pn
 
+    def bridge(self, pts, radius, offset=0.0):
+        """Points (q, 3) moved out of the skin's hollows the way cloth spans them (an armpit, a cleavage): kept where a
+        ball of `radius` rolled over the skin from outside reaches, so cloth never follows a crease narrower than the ball
+        into it. A point at most `radius` off the skin whose own ball (touching the skin at its nearest point) is clear of
+        the skin is left alone; any other goes onto the nearest clear ball (`_balls`), shrunk by the point's own distance
+        off the skin (at least `offset`), so layers of cloth keep their order. Returns new points."""
+        P = np.array(pts, float).reshape(-1, 3)
+        d, q, tri, bary = self.closest(P)
+        near = np.flatnonzero(d < radius)
+        own = q[near] + radius * self.outward(tri[near], bary[near])
+        near = near[self.closest(own)[0] <= 0.98 * radius]
+        C = self._balls(radius, P[near], 2.5 * radius) if len(near) else np.zeros((0, 3))
+        if not len(C):
+            return P
+        cc = np.einsum("ij,ij->i", C, C)
+        for s in range(0, len(near), 256):                    # nearest clear ball by blocks (a few MB at a time)
+            ii = near[s:s + 256]
+            p = P[ii]
+            d2 = np.einsum("ij,ij->i", p, p)[:, None] - 2.0 * p @ C.T + cc[None, :]
+            j = np.argmin(d2, axis=1)
+            dist = np.sqrt(np.maximum(d2[np.arange(len(ii)), j], 0.0))
+            r = radius - np.maximum(d[ii], offset)
+            out = dist > r + 1e-9
+            P[ii[out]] = C[j[out]] + (p[out] - C[j[out]]) * (r[out] / dist[out])[:, None]
+        return P
+
+    def _balls(self, radius, around, reach, steps=6):
+        """(m, 3) centres of balls of `radius` touching the skin from outside without entering it, one per skin vertex
+        within `reach` of a point of `around`: the vertex's own (out along its normal) where that is clear, else walked
+        onto the ridge between the skin's sides (from twice as far out, `steps` times back to `radius` off the nearest
+        skin point), where the ball touches both sides of a crease."""
+        V = self.verts
+        vv = np.einsum("ij,ij->i", V, V)
+        close = np.zeros(len(V), bool)
+        for s in range(0, len(around), 256):
+            a = around[s:s + 256]
+            d2 = vv[:, None] - 2.0 * V @ a.T + np.einsum("ij,ij->i", a, a)[None, :]
+            close |= d2.min(axis=1) < reach * reach
+        _, q, tri, bary = self.closest(V[close])
+        n = self.outward(tri, bary)
+        C = q + radius * n
+        blocked = self.closest(C)[0] <= 0.98 * radius
+        X = q[blocked] + 2.0 * radius * n[blocked]
+        for _ in range(steps):
+            _, qx, tx, bx = self.closest(X)
+            v = X - qx
+            ln = np.linalg.norm(v, axis=1, keepdims=True)
+            X = qx + radius * np.where(ln > 1e-9, v / np.maximum(ln, 1e-12), self.outward(tx, bx))
+        C = np.concatenate([C[~blocked], X])
+        return C[self.closest(C)[0] > 0.98 * radius]
+
     def transfer(self, pts, bones=None, fallback=None, faces=None, smooth=0):
         """Skin weights {bone: (q,)} of the nearest surface points for `pts`; `bones` restricts the donor bones (the rest
         are dropped before interpolating); `faces` + `smooth` Laplacian-smooth the result over the garment mesh."""

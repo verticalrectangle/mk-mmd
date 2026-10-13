@@ -169,8 +169,9 @@ def test_the_sweater_leaves_the_shoulders_bare_and_ends_at_the_wrists(dressed):
 
 def test_the_band_is_one_piece_from_arm_to_arm(dressed):
     """The off-shoulder band runs from one upper arm over the chest to the other, its top line rising from the middle of
-    the chest to meet the arms: the skin in front of each shoulder joint, below the top of the arm, is under the band,
-    so the sleeves hang from the same band as the body (no bare notch between chest and arm, no separate sleeves)."""
+    the chest to meet the arms: the skin in front of each shoulder joint (2 to 5 cm in front of it, not yet the breast's
+    upper slope), below the top of the arm, is under the band, so the sleeves hang from the same band as the body (no
+    bare notch between chest and arm, no separate sleeves)."""
     ctx, parts, fit = dressed
     S = fit.S
     sh = SH.Shell.from_part(parts["body"])
@@ -179,7 +180,7 @@ def test_the_band_is_one_piece_from_arm_to_arm(dressed):
     for side in ("L", "R"):
         arm = np.asarray(fit.L[f"arm.{side}"], float)
         V = sh.verts
-        front = (np.abs(V[:, 0] - 0.9 * arm[0]) < 0.012) & (V[:, 1] < arm[1] - 0.02) \
+        front = (np.abs(V[:, 0] - 0.9 * arm[0]) < 0.012) & (V[:, 1] < arm[1] - 0.02) & (V[:, 1] > arm[1] - 0.05) \
             & (np.abs(V[:, 2] - (arm[2] - 0.045 * S)) < 0.01)
         assert front.sum() >= 2
         assert ((band[front] > 0.0) & (band[front] < c["band"]["height"] * S)).all(), band[front]
@@ -214,6 +215,42 @@ def test_the_sleeves_run_into_the_body_under_the_arms(dressed):
         under = (sg * V[:, 0] > 0) & (np.abs(s - 0.03 * S) < 0.006) & (V[:, 2] < arm[2] - 0.02 * S) \
             & (np.abs(V[:, 1] - arm[1]) < 0.01)
         assert under.sum() >= 1 and (band[under] > c["band"]["height"] * S).all(), band[under]
+
+
+def _knit(part):
+    """The sweater's knit vertices (n, 3)."""
+    m = part.meshes[0]
+    k = m.mats.index(SW.MAT_KNIT)
+    return np.asarray(m.verts)[np.unique([i for f, fm in zip(m.faces, m.face_mat) if fm == k for i in f])]
+
+
+def test_the_knit_spans_the_armpits_instead_of_going_into_them(dressed):
+    """Under each arm the knit runs from the sleeve into the body in a wide curve, as cloth does, instead of following
+    the skin's crease up into the armpit: in the upright plane through the shoulder joint, the knit between her side
+    and the arm is everywhere at least 6 cm below the joint (following the crease it would reach to 3.5 cm under it)."""
+    _, parts, fit = dressed
+    K = _knit(parts["sweater"])
+    S = fit.S
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        arm = np.asarray(fit.L[f"arm.{side}"], float)
+        under = (np.abs(K[:, 1] - arm[1]) < 0.004) & (np.abs(sg * K[:, 0] - sg * arm[0]) < 0.03 * S) \
+            & (K[:, 2] < arm[2] - 0.01 * S)
+        assert under.sum() >= 3
+        assert K[under, 2].max() < arm[2] - 0.06, (side, arm[2] - K[under, 2].max())
+
+
+def test_the_knit_spans_the_cleavage(dressed):
+    """Over her breasts the knit goes straight across from one to the other, as a sweater does, instead of dipping into
+    the cleavage: at the height of the bust its middle is no more than 1.5 mm behind the most forward knit beside it."""
+    _, parts, fit = dressed
+    K = _knit(parts["sweater"])
+    z = float(fit.L["bust_front"][2])
+    row = np.abs(K[:, 2] - z) < 0.01
+    middle = row & (np.abs(K[:, 0]) < 0.004)
+    beside = row & (np.abs(K[:, 0]) > 0.02) & (np.abs(K[:, 0]) < 0.06)
+    assert middle.sum() >= 2 and beside.sum() >= 4
+    assert K[middle, 1].min() - K[beside, 1].min() < 0.0015, (K[middle, 1].min(), K[beside, 1].min())
+
 
 
 def test_the_knit_lies_on_the_breasts_and_follows_her_waist_in_loosely(dressed):

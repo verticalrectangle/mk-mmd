@@ -175,7 +175,9 @@ checks it.
   sooner than the generated one: the back hair now keeps 4 mm off the body's skin (`hair_head.off_body`), and colliders
   fitted to the skin a bone owns took the trapezius with the shoulder (a ball of 6 cm radius reaching 4 cm above the
   skin, the hair's chains inside it), so the shoulder's are as wide as its top (`body_donor.shoulder_tops`). Sharper
-  creases (the armpit) need distances signed by the edge's normal, not one face's (`outfit_fit.Skin.outward`).
+  creases (the armpit) need distances signed by the edge's normal, not one face's (`outfit_fit.Skin.outward`), and
+  cloth cut from the skin must not follow them in: a sweater spans the armpits and the cleavage where a rolled ball
+  cannot reach (`outfit_fit.Skin.bridge`, `[sweater] bridge`).
 - **Cut where the neighbour starts.** The body's head comes off at a level plane just under the jaw and its neck ring is
   laid onto the seam ellipse the head builds on; each forearm is cut at an edge loop just before the hand's seam and a
   strip joins it to a ring of the hand's 56 points sampled from the fitted skin.

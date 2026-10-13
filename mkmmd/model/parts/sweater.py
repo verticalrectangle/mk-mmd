@@ -23,8 +23,11 @@ Where the pieces are, as fields on the skin (sizes in metres x S, S = head_tip.z
             (`sleeve_taper`, `sleeve_ease`, sagging `sleeve_sag` below the arm); the cloth it has to spare gathers in
             `folds` / `sleeve_folds` soft folds up to `fold_depth` deep, into a `blouse` over the waistband and a `puff`
             over each cuff; over its last `tuck` it goes in `under` the waistband and the cuffs (their tops roll down
-            onto it); each armpit bridged (`armpits`: within `armpit` of the crease under the arm, `armpit_relax` more
-            smoothing); smoothed (`relax`) and kept `gap` off the skin (vertices and triangle centres)
+            onto it); smoothed (`relax`) and kept `gap` off the skin (vertices and triangle centres)
+  bridge    the band and the knit span the skin's hollows as cloth does (Skin.bridge: where a ball of radius `bridge`
+            rolled over her cannot reach, the armpits and the cleavage, they lie on it instead of going in; the knit
+            before its smoothing, so it evens the spans, and again after it below the band, which the smoothing pulls
+            back into the armpits; its part under the band stays behind the band; 0: off)
   waistband `above_hip` (its top) over the hip joints (landmark leg.L), `height` deep, snug (`offset`), its hem rolled
   cuffs     `length` up the forearm from the wrist, `past` beyond it, snug, rolled at the hand
   ink       drawn lines (outfit_ink, `width` wide): ribs across the band, the waistband and the cuffs every `band` /
@@ -51,11 +54,11 @@ DEFAULTS = {
              "height": 0.058, "offset": 0.010, "roll": 0.008, "relax": 8},
     "body": {"offset": 0.008, "ease": 0.014, "taper": 0.5, "taper_back": 0.5, "cling": 0.070, "blouse": 0.010,
              "folds": 11, "fold_depth": 0.016, "sleeve_ease": 0.009, "sleeve_taper": 0.10, "sleeve_sag": 0.008,
-             "sleeve_folds": 7, "puff": 0.012, "tuck": 0.040, "under": 0.0022, "drop": 0.040, "relax": 8, "gap": 0.003,
-             "armpit": 0.035, "armpit_relax": 32},
+             "sleeve_folds": 7, "puff": 0.012, "tuck": 0.040, "under": 0.0022, "drop": 0.040, "relax": 8, "gap": 0.003},
     "waistband": {"above_hip": 0.095, "height": 0.034, "offset": 0.006, "relax": 4},
     "cuff": {"length": 0.062, "past": 0.004, "offset": 0.006, "relax": 4},
     "ink": {"enabled": True, "width": 0.0026, "band": 0.040, "waistband": 0.040, "cuff": 0.024, "folds": True},
+    "bridge": 0.045,
     "seed": 7,
 }
 COLORS = {"knit": "#e7a7eb", "rib": "#9f75b0", "ink": "#2e2234"}
@@ -165,26 +168,6 @@ def breasts(skin, fit):
 def _from_fronts(P, fronts):
     """(n,) distance of points P to the nearest breast front (inf without any)."""
     return np.min([np.linalg.norm(P - f, axis=1) for f in fronts], axis=0) if fronts else np.full(len(P), np.inf)
-
-
-def armpits(knit, P, fit, c):
-    """The knit at positions P (n, 3) with each armpit bridged: within `body.armpit` metres of the crease under each
-    arm (where the arm bones' share passes a half, below the shoulder joint) it is relaxed `body.armpit_relax` more
-    times, fading out over that distance, so it spans the armpit as cloth does instead of following the skin's crease
-    into it (and its triangles stay off the skin there). Returns new positions."""
-    S, L, bd = fit.S, fit.L, c["body"]
-    V, a, T = knit.verts, knit.fields["arm"], knit.tris
-    E = np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
-    mids = 0.5 * (V[E[:, 0]] + V[E[:, 1]])[(a[E[:, 0]] < 0.5) != (a[E[:, 1]] < 0.5)]
-    under = np.zeros(len(mids), bool)
-    for side, sg in (("L", 1.0), ("R", -1.0)):
-        under |= (sg * mids[:, 0] > 0.0) & (mids[:, 2] < float(L[f"arm.{side}"][2]))
-    mids = mids[under]
-    if not len(mids) or bd["armpit"] <= 0.0:
-        return P
-    d = np.min(np.linalg.norm(V[:, None, :] - mids[None, :, :], axis=2), axis=1)
-    w = G.smoothstep(np.clip(1.0 - d / (bd["armpit"] * S), 0.0, 1.0))[:, None]
-    return P + w * (knit.relax(P, int(bd["armpit_relax"])) - P)
 
 
 def hang(knit, skin, fit, c, centre_y, h, z_wb, end_s, fronts, rng):
@@ -327,8 +310,12 @@ def sweater(fit, body_part, cfg, soup):
     # ---- the band
     b = c["band"]
     h = b["height"] * S
+    r = c["bridge"] * S                                                     # spanning the hollows (Skin.bridge)
     band = upper.band(upper.fields["band"], 0.0, h)
     Pb = band.offset(b["offset"] * S, relax=b["relax"], fit=fit, gap=b["offset"] * S * 0.8)
+    if r > 0.0:
+        g = b["offset"] * S * 0.8
+        Pb = band.clear(fit.push_out(fit.skin.bridge(Pb, r, g), g), fit, g)
     loops = _loops_by(band, "band")                                         # the top rolled to the skin, the bottom
     rims = loops[:2]                                                        # onto the knit under it
     _add(soup, band, Pb, fit, centre_y, 1, torso_reps, rims,
@@ -345,8 +332,14 @@ def sweater(fit, body_part, cfg, soup):
     end_s = arm_len - cf["length"] * S
     rng = np.random.default_rng(int(c["seed"]))
     fronts = breasts(base, fit)
-    Pk = body.settle(armpits(body, hang(body, base, fit, c, centre_y, h, z_wb, end_s, fronts, rng), fit, c),
-                     relax=bd["relax"], fit=fit, gap=bd["gap"] * S)
+    Pk = hang(body, base, fit, c, centre_y, h, z_wb, end_s, fronts, rng)
+    if r > 0.0:
+        Pk = fit.skin.bridge(Pk, r, bd["gap"] * S)
+    Pk = body.settle(Pk, relax=bd["relax"], fit=fit, gap=bd["gap"] * S)
+    if r > 0.0:
+        below = body.fields["band"] >= h
+        Pk[below] = fit.skin.bridge(Pk[below], r, bd["gap"] * S)
+        Pk = body.clear(fit.push_out(Pk, bd["gap"] * S), fit, bd["gap"] * S)
     _add(soup, body, Pk, fit, centre_y, 0, torso_reps, (), 0.0, "body")
     gaps.append(body.gap(Pk, fit))
     info["knit_ease"] = float(np.median(fit.skin.closest(Pk[body.fields["arm"] < 0.3])[0]))
