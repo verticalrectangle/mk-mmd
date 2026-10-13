@@ -185,6 +185,37 @@ def test_the_band_is_one_piece_from_arm_to_arm(dressed):
         assert ((band[front] > 0.0) & (band[front] < c["band"]["height"] * S)).all(), band[front]
 
 
+def test_the_sleeves_run_into_the_body_under_the_arms(dressed):
+    """An off-shoulder sweater, not a tube top with arm rings: the band goes over each upper arm and opens under it, so
+    the knit is one piece (the sleeves run into the body under the arms) and the skin straight under each shoulder joint,
+    3 cm along the arm, is under the knit, not the band."""
+    ctx, parts, fit = dressed
+    S = fit.S
+    m = parts["sweater"].meshes[0]
+    knit = [f for f, k in zip(m.faces, m.face_mat) if k == 0]
+    used = np.unique([i for f in knit for i in f])
+    parent = {int(i): int(i) for i in used}
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for f in knit:
+        for j in f[1:]:
+            parent[find(int(j))] = find(int(f[0]))
+    assert len({find(int(i)) for i in used}) == 1
+    sh = SH.Shell.from_part(parts["body"])
+    c = SP.merge(SW.DEFAULTS, ctx.spec.get("sweater"))
+    band = SW.fields(sh, fit, c)["band"]
+    s, V = SH.both_sides(sh.verts, fit.L), sh.verts
+    for sg in (1.0, -1.0):
+        arm = np.asarray(fit.L["arm.L" if sg > 0 else "arm.R"], float)
+        under = (sg * V[:, 0] > 0) & (np.abs(s - 0.03 * S) < 0.006) & (V[:, 2] < arm[2] - 0.02 * S) \
+            & (np.abs(V[:, 1] - arm[1]) < 0.01)
+        assert under.sum() >= 1 and (band[under] > c["band"]["height"] * S).all(), band[under]
+
+
 def test_the_knit_lies_on_the_breasts_and_follows_her_waist_in_loosely(dressed):
     """The loose knit shows her figure as the drawing does: on their lower half (under the band) it lies on her breasts,
     and below them it follows her in towards the waist, loosely, instead of falling straight like a barrel: at her waist
@@ -217,20 +248,40 @@ def test_the_knit_lies_on_the_breasts_and_follows_her_waist_in_loosely(dressed):
 
 @pytest.mark.parametrize("name", ["sweater", "pants", "socks"])
 def test_drawn_lines_lie_just_outside_what_they_are_drawn_on(dressed, name):
-    """Every pen stroke of a garment lies a fraction of a millimetre outside its cloth (or, the cleavage above the
-    sweater's band, outside her skin): never inside it, where it cannot be seen, never floating off it. (A stroke's edge
-    may dip into a tight crease, the band in an armpit: a few vertices.)"""
-    _, parts, fit = dressed
+    """Every pen stroke of a garment lies a fraction of a millimetre outside its cloth: never inside it, where it cannot
+    be seen, never floating off it. (A stroke's edge may dip into a tight crease, the band in an armpit: a few
+    vertices.)"""
+    _, parts, _ = dressed
     m = parts[name].meshes[0]
     ink = m.mats.index(next(n for n in m.mats if n.endswith("線")))
     V = np.asarray(m.verts)
     fm = np.asarray(m.face_mat)
     cloth = OF.Skin(V, [tuple(f) for f, k in zip(m.faces, fm) if k != ink])
     iv = np.unique([i for f, k in zip(m.faces, fm) if k == ink for i in f])
-    d, s = cloth.closest(V[iv])[0], fit.skin.closest(V[iv])[0]
-    near = np.where(np.abs(d) <= np.abs(s), d, s)
+    near = cloth.closest(V[iv])[0]
     assert len(iv) > 50 and parts[name].info["lines"] > 5
     assert (near <= 0.0).mean() < 0.03 and np.percentile(near, 95) < 0.0012
+
+
+def test_no_line_outlines_her_breasts(dressed):
+    """The knit lying on her breasts shows them; no pen stroke outlines them: none on the knit within `cling` + 1 cm of
+    a breast's front (the band's ribs above them are the band's), and none on her skin (the cleavage above the band)."""
+    ctx, parts, fit = dressed
+    m = parts["sweater"].meshes[0]
+    ink = m.mats.index(SW.MAT_INK)
+    V, fm = np.asarray(m.verts), np.asarray(m.face_mat)
+    knit = OF.Skin(V, [tuple(f) for f, k in zip(m.faces, fm) if k == 0])
+    rib = OF.Skin(V, [tuple(f) for f, k in zip(m.faces, fm) if k == 1])
+    iv = np.unique([i for f, k in zip(m.faces, fm) if k == ink for i in f])
+    dk, dr = np.abs(knit.closest(V[iv])[0]), np.abs(rib.closest(V[iv])[0])
+    assert np.min([dk, dr], axis=0).max() < 0.003                     # every stroke on cloth, none on her skin
+    skin = SH.Shell.from_part(parts["body"])
+    skin.fields["arm"] = skin.share(SH.ARM)
+    fronts = SW.breasts(skin, fit)
+    c = SP.merge(SW.DEFAULTS, ctx.spec.get("sweater"))
+    on_knit = dk < dr
+    near = SW._from_fronts(V[iv], fronts) < c["body"]["cling"] * fit.S + 0.01
+    assert len(fronts) == 2 and not (on_knit & near).any()
 
 
 def test_pants_run_from_the_waist_into_the_socks(dressed):

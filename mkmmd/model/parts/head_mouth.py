@@ -277,5 +277,5 @@ SHAPES = {
 }
 # にやり２ ([head.mouth] smirk = its lean): a wide open grin with sharp corners (the opening's profile exponent p > 1
 # narrows it to a point at each corner, out and up), the upper lip rising off the teeth so they show (their roots ride
-# the lip, their tips rise only `teeth` of the way: the bared teeth stand taller)
-SMIRK = dict(up=0.0050, dn=0.0110, p=1.6, wx=0.0110, cl=0.0090, teeth=0.1)
+# the lip, their tips rise `teeth` of the way: the bared teeth stand a little taller, not long blocks)
+SMIRK = dict(up=0.0050, dn=0.0110, p=1.6, wx=0.0110, cl=0.0090, teeth=0.45)

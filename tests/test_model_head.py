@@ -71,7 +71,8 @@ def test_the_smirk_opens_to_sharp_corners(tmp_path):
 def test_the_smirk_bares_the_teeth_from_the_lip_down(tmp_path):
     """In にやり２ the upper lip rises off the teeth: their roots ride the lip's edge (no dark gap opens between the lip and
     the teeth: each root ends up at most a millimetre under the risen lip's lower edge, never below it), their tips rise
-    a tenth as much, so the bared teeth stand taller under the lip."""
+    part of the way, so the bared teeth stand taller under the lip, but the tips follow the lip at least a third of the
+    way (the bared teeth do not become long blocks)."""
     part = build_head(tmp_path, {"mouth": {"smirk": 0.6}})
     mo, face = mesh(part, "mouth"), mesh(part, "face")
     teeth = mo.mats.index(next(m.name for m in part.materials if m.name_en == "teeth"))
@@ -87,7 +88,8 @@ def test_the_smirk_bares_the_teeth_from_the_lip_down(tmp_path):
                & (df[:, 2] > 0.0))                                    # the upper lip's edge over this root, risen
         edge = (Vf[lip, 2] + df[lip, 2]).min()
         assert dr[2] > 0.003 and -0.0003 < r[2] + dr[2] - edge < 0.001
-    assert np.allclose(d[1::2][mid, 2], 0.1 * d[0::2][mid, 2], atol=1e-6)
+    up_root, up_tip = d[0::2][mid, 2], d[1::2][mid, 2]
+    assert (up_tip > up_root / 3.0).all() and (up_tip < up_root).all()
 
 
 def mesh(part, name):

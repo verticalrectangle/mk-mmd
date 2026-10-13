@@ -3024,8 +3024,9 @@ names, parents, weights, materials, bodies, joints).
 `[proportions.head] crown_skull` (after leg_extra): vertices, morph offsets, bones, rigid bodies and joints
 (`part.scaled`); the builders, `ctx.parts` and `Part.info` stay at the spec's own size, so every proportion the base
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
-listing it in `[model] parts`: `sweater` (off-shoulder: one rib band from arm to arm over the chest and the back, a
-loose knit body and sleeves that lie on the breasts, hang from the band and below the bust and gather into a rib
+listing it in `[model] parts`: `sweater` (off-shoulder: one rib band over the chest, the upper arms and the back that
+never rings an arm, a loose knit body and sleeves in one piece, the sleeves running into the body under the arms (each
+armpit bridged), that lie on the breasts, hang from the band and below the bust and gather into a rib
 waistband and cuffs), `pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with
 a sneaker's settings and a painted face), `choker` (band and flower), and `hair_bow` (a bow on the side of the head with
 two tails on chains). The first three are cut out of the body's own skin (`outfit_shell.Shell`: fields on the skin such
@@ -3036,7 +3037,7 @@ the waist, bridging the small of her back, not a barrel), on a finer shell, `She
 bend with it; their sizes are metres x S like the dress's. Colours come from `[colors.<part>]`, materials from
 `outfit_wear` (flat cloth, a toon ramp, a dark outline). They are **drawn** like the design: `outfit_ink` lays pen
 strokes on the cloth (thin dark ribbons a fraction of a millimetre above it, with its weights: the ribs of the bands
-and socks, the folds of the knit, the creases of the pants, the cleavage above the sweater's band; `[<part>.ink]`,
+and socks, the folds of the knit, the creases of the pants; nothing outlines the breasts; `[<part>.ink]`,
 materials セーター線, 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and laces. The hair keeps its hanging
 locks off every garment built before it (`[model] parts` order), so long hair rests on a sweater instead of inside it.
 `[body] bust` (metres, the mesh body) grows the breasts forward round their fronts.

@@ -81,8 +81,8 @@ The eyes sit on the planes, their outer corners further back than the inner ones
   (`build_mouth_morphs`): they follow the lips further than the skin under the lower lip does. The upper teeth hang from the
   upper lip's edge (`[head.teeth]`: `height`, `half` width, `back`, and the two fangs' `fang` length, `fang_x`, `fang_w`;
   `head_mouth.TEETH`); in にやり２ (a wide grin whose opening narrows to a sharp point at each corner: `head_mouth.SMIRK`'s
-  profile exponent `p` > 1) the lip rises off them: their roots ride the lip, their tips rise only a tenth as much, so
-  the bared teeth stand taller and no gap opens above them. The 照れ blush patches wait
+  profile exponent `p` > 1) the lip rises off them: their roots ride the lip, their tips rise `SMIRK["teeth"]` (0.45) as
+  much, so the bared teeth stand a little taller (not long blocks) and no gap opens above them. The 照れ blush patches wait
   1.2 mm under the cheeks and follow the skin through every mouth shape (each vertex the mix of its four nearest skin vertices'
   offsets), so a shape that pulls the cheeks in (ω) never shows them.
 - **Eyes** (`head_eye`, `[head.eye]`): an anime eye, not an eyeball. The opening (`CORNER_IN/OUT`, `UPPER`, `LOWER`): the upper lid

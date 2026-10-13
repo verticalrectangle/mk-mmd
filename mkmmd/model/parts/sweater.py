@@ -1,15 +1,19 @@
-"""The off-shoulder sweater (part `sweater`, numpy only): a wide folded rib band round the chest and the upper arms
-leaving the shoulders bare, a loose knit body and long sleeves that hang from the bust and the upper arms and blouse out
-over a snug ribbed waistband and long snug ribbed cuffs. Every piece is a shell cut from the body's own skin
-(outfit_shell): it keeps the skin's weights, so the sweater moves with her in any pose; the band is where her arm joins
-the chest too, so it stretches between them as cloth does.
+"""The off-shoulder sweater (part `sweater`, numpy only): a wide folded rib band round the chest, over the upper arms
+and across the back, leaving the shoulders bare, a loose knit body and long sleeves that hang from the bust and the
+upper arms, one piece of knit (the sleeves run into the body under the arms), and blouse out over a snug ribbed waistband
+and long snug ribbed cuffs. Every piece is a shell cut from the body's own skin (outfit_shell): it keeps the skin's
+weights, so the sweater moves with her in any pose; the band is where her arm joins the chest too, so it stretches
+between them as cloth does.
 
 Where the pieces are, as fields on the skin (sizes in metres x S, S = head_tip.z / 1.7 with leg_extra left out):
   band      the soft max of two descents, `chest` below the shoulder joints (landmark arm.L) on the torso, rising `rise`
             towards the arms (up to the shoulder joints' width), and `arm` along the upper arm from its joint
-            (outfit_shell.limb_coord): one level line runs across the chest, over each upper arm and across the back, so
-            the band is one piece from arm to arm; it is `height` deep below that line, `offset` off the skin, its top
-            edge rolled back to the skin (`roll`) so it reads as a thick fold
+            (outfit_shell.limb_coord), plus `under` metres under each arm (fully within a third of `under_span` turns of
+            straight under it, fading out at `under_span`; growing from nothing at the top line over its first
+            centimetre, so the line stays put): one level line runs across the chest, over each upper arm
+            and across the back, so the band is one piece from arm to arm and never rings an arm (under the arm the knit
+            runs from the body into the sleeve, as an off-shoulder sweater's does); it is `height` deep below that line,
+            `offset` off the skin, its top edge rolled back to the skin (`roll`) so it reads as a thick fold
   body      everything below the band down to the waistband and along the arms to the cuffs (`hang`): under the band
             `offset` off the skin, then leaving it over `drop` for loose cloth; on the breasts (within `cling` of each
             one's front, `breasts`) it lies on them, so they show; elsewhere it is `outfit_shell.drape`d round a vertical
@@ -19,13 +23,13 @@ Where the pieces are, as fields on the skin (sizes in metres x S, S = head_tip.z
             (`sleeve_taper`, `sleeve_ease`, sagging `sleeve_sag` below the arm); the cloth it has to spare gathers in
             `folds` / `sleeve_folds` soft folds up to `fold_depth` deep, into a `blouse` over the waistband and a `puff`
             over each cuff; over its last `tuck` it goes in `under` the waistband and the cuffs (their tops roll down
-            onto it); smoothed (`relax`) and kept `gap` off the skin (vertices and triangle centres)
+            onto it); each armpit bridged (`armpits`: within `armpit` of the crease under the arm, `armpit_relax` more
+            smoothing); smoothed (`relax`) and kept `gap` off the skin (vertices and triangle centres)
   waistband `above_hip` (its top) over the hip joints (landmark leg.L), `height` deep, snug (`offset`), its hem rolled
   cuffs     `length` up the forearm from the wrist, `past` beyond it, snug, rolled at the hand
   ink       drawn lines (outfit_ink, `width` wide): ribs across the band, the waistband and the cuffs every `band` /
-            `waistband` / `cuff` metres, a fold line along the band, the cleavage on the skin above it, and with `folds`
-            the knit's lines: under each breast where the knit leaves it, folds below the bust and over the waistband,
-            inside the elbows and over the cuffs (`enabled` true)
+            `waistband` / `cuff` metres, a fold line along the band, and with `folds` the knit's lines: folds over the
+            waistband, inside the elbows and over the cuffs (`enabled` true); nothing outlines the breasts
   seed      the folds' and the lines' random draw
 
 Spec: `[sweater]` (DEFAULTS below, tables merge key by key) and `[colors.sweater]` knit (the body and sleeves), rib (the
@@ -43,11 +47,12 @@ from . import outfit_shell as SH
 from . import outfit_wear as WR
 
 DEFAULTS = {
-    "band": {"chest": 0.055, "rise": 0.030, "arm": 0.030, "corner": 0.010, "height": 0.058, "offset": 0.010,
-             "roll": 0.008, "relax": 8},
+    "band": {"chest": 0.055, "rise": 0.030, "arm": 0.030, "corner": 0.010, "under": 0.14, "under_span": 0.14,
+             "height": 0.058, "offset": 0.010, "roll": 0.008, "relax": 8},
     "body": {"offset": 0.008, "ease": 0.014, "taper": 0.5, "taper_back": 0.5, "cling": 0.070, "blouse": 0.010,
              "folds": 11, "fold_depth": 0.016, "sleeve_ease": 0.009, "sleeve_taper": 0.10, "sleeve_sag": 0.008,
-             "sleeve_folds": 7, "puff": 0.012, "tuck": 0.040, "under": 0.0022, "drop": 0.040, "relax": 8, "gap": 0.003},
+             "sleeve_folds": 7, "puff": 0.012, "tuck": 0.040, "under": 0.0022, "drop": 0.040, "relax": 8, "gap": 0.003,
+             "armpit": 0.035, "armpit_relax": 32},
     "waistband": {"above_hip": 0.095, "height": 0.034, "offset": 0.006, "relax": 4},
     "cuff": {"length": 0.062, "past": 0.004, "offset": 0.006, "relax": 4},
     "ink": {"enabled": True, "width": 0.0026, "band": 0.040, "waistband": 0.040, "cuff": 0.024, "folds": True},
@@ -70,6 +75,13 @@ def fields(sh, fit, c):
     x_arm = 0.5 * (abs(float(L["arm.L"][0])) + abs(float(L["arm.R"][0])))
     rise = b["rise"] * S * np.clip(np.abs(V[:, 0]) / x_arm, 0.0, 1.0) ** 2           # up to the arms: one band, no notch
     band = SH.soft_max(z_top + rise - V[:, 2], s - b["arm"] * S, b["corner"] * S)
+    # under each arm the band's depth grows by `under` metres (from nothing at its top line over the first centimetre),
+    # so the band goes over the arm, never round it, and its top line stays where it was
+    off = np.abs(_wrap(SH.limb_angle(V, L) - 0.5))                                   # turns from straight under the arm
+    span = b["under_span"]
+    under = G.smoothstep(np.clip((span - off) / (2.0 / 3.0 * span), 0.0, 1.0))
+    by_arm = G.smoothstep(np.clip((np.abs(V[:, 0]) - (x_arm - 0.05 * S)) / (0.03 * S), 0.0, 1.0))
+    band = band + b["under"] * S * under * by_arm * np.clip(band / (0.01 * S), 0.0, 1.0)
     arm_len = 0.5 * (SH.limb_length(L, "L") + SH.limb_length(L, "R"))
     z_wb = float(L["leg.L"][2]) + c["waistband"]["above_hip"] * S
     return {"z": V[:, 2].copy(), "s": s, "arm": sh.share(SH.ARM), "band": band, "arm_len": arm_len, "z_wb": z_wb,
@@ -155,6 +167,26 @@ def _from_fronts(P, fronts):
     return np.min([np.linalg.norm(P - f, axis=1) for f in fronts], axis=0) if fronts else np.full(len(P), np.inf)
 
 
+def armpits(knit, P, fit, c):
+    """The knit at positions P (n, 3) with each armpit bridged: within `body.armpit` metres of the crease under each
+    arm (where the arm bones' share passes a half, below the shoulder joint) it is relaxed `body.armpit_relax` more
+    times, fading out over that distance, so it spans the armpit as cloth does instead of following the skin's crease
+    into it (and its triangles stay off the skin there). Returns new positions."""
+    S, L, bd = fit.S, fit.L, c["body"]
+    V, a, T = knit.verts, knit.fields["arm"], knit.tris
+    E = np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    mids = 0.5 * (V[E[:, 0]] + V[E[:, 1]])[(a[E[:, 0]] < 0.5) != (a[E[:, 1]] < 0.5)]
+    under = np.zeros(len(mids), bool)
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        under |= (sg * mids[:, 0] > 0.0) & (mids[:, 2] < float(L[f"arm.{side}"][2]))
+    mids = mids[under]
+    if not len(mids) or bd["armpit"] <= 0.0:
+        return P
+    d = np.min(np.linalg.norm(V[:, None, :] - mids[None, :, :], axis=2), axis=1)
+    w = G.smoothstep(np.clip(1.0 - d / (bd["armpit"] * S), 0.0, 1.0))[:, None]
+    return P + w * (knit.relax(P, int(bd["armpit_relax"])) - P)
+
+
 def hang(knit, skin, fit, c, centre_y, h, z_wb, end_s, fronts, rng):
     """Where the loose knit (the Shell `knit`, cut from the skin Shell `skin`) hangs, (n, 3): the body round a vertical
     axis through the waist's middle, the sleeves round each arm's bone line, both `outfit_shell.drape`d over the skin
@@ -220,13 +252,12 @@ def _wrap(a):
     return (np.asarray(a, float) + 0.5) % 1.0 - 0.5
 
 
-def ink(fit, c, pieces, centre_y, z_wb, end_s, fronts, rng):
+def ink(fit, c, pieces, centre_y, z_wb, end_s, rng):
     """The drawn lines on the sweater (`[sweater.ink]`): (outfit_ink lines, their widths as shares of `width`). Ribs
     across the band, the waistband and the cuffs every `band` / `waistband` / `cuff` metres, a broken fold line along
-    the band, the cleavage on the skin above it (each breast's outline through the band's top edge in the middle), and
-    with `folds` the knit's own lines: under each breast where the knit leaves it (`cling` round the breasts' `fronts`)
-    and a fold below each, where it blouses over the waistband, inside the elbows and where the sleeves gather over the
-    cuffs. `pieces`: {name: (Shell, positions)}, "skin" the body's own."""
+    the band, and with `folds` the knit's own lines: where it blouses over the waistband, inside the elbows and where the
+    sleeves gather over the cuffs. Nothing outlines her breasts: the knit lying on them shows them. `pieces`: {name:
+    (Shell, positions)}."""
     S, L = fit.S, fit.L
     k, h, cf = c["ink"], c["band"]["height"] * S, c["cuff"]
     for sh, _ in pieces.values():
@@ -247,19 +278,6 @@ def ink(fit, c, pieces, centre_y, z_wb, end_s, fronts, rng):
     wob = 0.06 * h * np.sin(2 * np.pi * (sh.verts[:, 0] / (0.09 * S) + sh.verts[:, 1] / (0.13 * S)))
     fold = INK.isolines(sh, P, sh.fields["band"] + wob, 0.42 * h)
     add(INK.dashes(fold, rng, (0.05 * S, 0.16 * S), (0.008 * S, 0.03 * S)), 0.9)
-    if fronts:                                                  # the breasts' inner tops above the band (the cleavage):
-        sh = pieces["skin"][0]                                  # each breast's outline through the band's top edge in
-        chest = sh.clip(0.04 * S + sh.fields["band"])           # the middle, inside its front, on the skin up to 4 cm
-        chest = chest.clip(0.004 * S - chest.fields["band"])    # x S above the band (made finer, so a line is smooth)
-        chest = chest.clip(0.3 - chest.fields["arm"]).subdivide().subdivide()
-        P = chest.verts
-        mid = [p for ln in INK.isolines(chest, P, chest.fields["band"], 0.0) for p in ln[0] if p[1] < centre_y]
-        if mid:
-            c0 = min(mid, key=lambda p: abs(p[0]))
-            chest.fields["x"] = chest.verts[:, 0]
-            for f in fronts:
-                add(INK.arcs(chest, P, np.linalg.norm(P - f, axis=1), float(np.linalg.norm(c0 - f)),
-                             lambda fl, f=f: np.sign(f[0]) * fl["x"] < 0.7 * abs(float(f[0])), fields=("x",)), 0.9)
     sh, P = pieces["waistband"]
     add(INK.ribs(sh, P, "az", k["waistband"] * S, "z", z_wb - c["waistband"]["height"] * S, z_wb, rng), 0.8)
     sh, P = pieces["cuffs"]
@@ -268,20 +286,8 @@ def ink(fit, c, pieces, centre_y, z_wb, end_s, fronts, rng):
         return lines, widths
     sh, P = pieces["body"]
     z, s = sh.fields["z"], sh.fields["s"]
-    sh.fields["x"] = sh.verts[:, 0]
     on_arm = sh.fields["arm"][sh.tris]
     trunk = (on_arm < 0.3).all(1)
-    if fronts:                                                  # under each breast, where the knit leaves it
-        sh.fields["fr"] = _from_fronts(sh.verts, fronts)
-        cl, zf = c["body"]["cling"] * S, min(float(f[2]) for f in fronts)
-        under = INK.arcs(sh, P, sh.fields["fr"], cl - 0.004 * S, lambda fl: fl["z"] < zf - 0.004 * S, fields=("z",),
-                         tris=trunk)
-        add(INK.dashes(under, rng, (0.03 * S, 0.08 * S), (0.003 * S, 0.010 * S)), 1.1)
-        for f in fronts:                                        # and a fold below it, towards the middle
-            xc, hw = 0.55 * float(f[0]), rng.uniform(0.012, 0.022) * S
-            add(INK.arcs(sh, P, z, zf - cl - rng.uniform(0.006, 0.018) * S,
-                         lambda fl, xc=xc, hw=hw: (np.abs(fl["x"] - xc) <= hw) & (np.abs(_wrap(fl["az"])) < 0.2),
-                         fields=("x", "az"), tris=trunk), 1.0)
     for _ in range(6):                                          # blousing over the waistband: slanted strokes
         ac, slope = rng.uniform(-0.32, 0.32), rng.uniform(-0.35, 0.35)
         g = z + slope * _wrap(sh.fields["az"] - ac) * 0.75 * S
@@ -339,8 +345,8 @@ def sweater(fit, body_part, cfg, soup):
     end_s = arm_len - cf["length"] * S
     rng = np.random.default_rng(int(c["seed"]))
     fronts = breasts(base, fit)
-    Pk = body.settle(hang(body, base, fit, c, centre_y, h, z_wb, end_s, fronts, rng), relax=bd["relax"], fit=fit,
-                     gap=bd["gap"] * S)
+    Pk = body.settle(armpits(body, hang(body, base, fit, c, centre_y, h, z_wb, end_s, fronts, rng), fit, c),
+                     relax=bd["relax"], fit=fit, gap=bd["gap"] * S)
     _add(soup, body, Pk, fit, centre_y, 0, torso_reps, (), 0.0, "body")
     gaps.append(body.gap(Pk, fit))
     info["knit_ease"] = float(np.median(fit.skin.closest(Pk[body.fields["arm"] < 0.3])[0]))
@@ -362,9 +368,8 @@ def sweater(fit, body_part, cfg, soup):
     gaps.append(cuff.gap(Pc, fit))
     lines = []
     if c["ink"]["enabled"]:
-        pieces = {"band": (band, Pb), "body": (body, Pk), "waistband": (ring, Pw), "cuffs": (cuff, Pc),
-                  "skin": (base, base.verts)}
-        lines, widths = ink(fit, c, pieces, centre_y, z_wb, end_s, fronts, rng)
+        pieces = {"band": (band, Pb), "body": (body, Pk), "waistband": (ring, Pw), "cuffs": (cuff, Pc)}
+        lines, widths = ink(fit, c, pieces, centre_y, z_wb, end_s, rng)
         soup.add(INK.strokes(base.bones, lines, np.asarray(widths) * c["ink"]["width"] * S, lift=0.0004 * S), 2)
     info.update(z_waistband=z_wb, min_gap=float(min(gaps)), lines=len(lines),
                 verts={"band": len(Pb), "body": len(Pk), "waistband": len(Pw), "cuffs": len(Pc)})
