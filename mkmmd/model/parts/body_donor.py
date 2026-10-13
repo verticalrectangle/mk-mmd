@@ -59,7 +59,7 @@ from . import body_mesh as BM
 from . import body_pmx_fit as F
 from . import body_shape, body_tex
 from . import body_weights as BW
-from .body import neck_ring, skin_info, skin_look, skin_materials
+from .body import claw_point, neck_ring, skin_info, skin_look, skin_materials
 from .body_geom import Path as Chain, Shell, Table, mirror_x, pchip, smoothstep, unit
 from .body_hand_mesh import open_loop
 
@@ -561,7 +561,7 @@ def build_donor(ctx):
 
     # ---- the wrists and the hands
     arm_l = wrist_shell("arm_L", donor.verts[loop], loop, ring, info, A["plain_uv"])
-    hand_l, nails_l = hm.hand_shells(shape, arm_l, BM.ATLAS, nails=bool(nails))
+    hand_l, nails_l = hm.hand_shells(shape, arm_l, BM.ATLAS, nails=bool(nails), claw=claw_point(cfg))
     arm_r = mirror_x(arm_l, "arm_R")
     arm_r.ext = {i: ("donor", int(twin[v])) for i, (_, v) in arm_l.ext.items()}
     shells = [donor, arm_l, hand_l] + nails_l + [arm_r]

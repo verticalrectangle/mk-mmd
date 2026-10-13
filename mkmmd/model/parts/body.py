@@ -8,8 +8,10 @@ joints are made from it, not read from the landmarks.
 `[body]` keys (all optional):
   skin           {base, shade, blush, nail}  hex colours (default: [colors.skin] of the spec)
   nails          true | false | "#rrggbb"    nail plates on the fingertips (default true, pale pink); a colour paints them
-  claws          {color, start, full}        the hands fade into `color` (default "#412543") from `start` to `full` of the
-                 way from the wrist to the fingertips (body_tex.claw_fade; procedural and mesh bodies); off without it
+  claws          {color, start, full, point} the hands fade into `color` (default "#412543") from `start` to `full` of the
+                 way from the wrist to the fingertips (body_tex.claw_fade; procedural and mesh bodies), and `point` metres
+                 (default 0) draw the fingertips out into sharp points (body_hand.claw_points; with `nails = false` the
+                 dark points are the claws); off without it
   source         "procedural" (default: the body is built from the spec's proportions) | "mesh" (an artist's whole body
                  fitted to the skeleton, see body_donor.py: `mesh = "base:girl/body.npz"`) | "pmx" (taken from an existing
                  PMX model, see body_pmx.py: [body.pmx] path, materials, ...)
@@ -117,6 +119,11 @@ def skin_look(ctx, cfg):
                 neck=dict(height=float(nk.get("height", 0.045)), strength=float(nk.get("strength", 0.9))))
 
 
+def claw_point(cfg):
+    """Metres the fingertips are drawn out into points ([body] claws.point; 0 without claws)."""
+    return float((cfg.get("claws") or {}).get("point", 0.0) or 0.0)
+
+
 def skin_materials(ctx, cfg, look, tex_name, toon_name):
     """([skin material, + the nail material unless [body] nails = false], their names)."""
     nails = cfg.get("nails", True)
@@ -186,7 +193,7 @@ def build(ctx):
     res = cfg.get("resolution") or {}
     nails = cfg.get("nails", True)
     shells = BM.build_shells(shape, int(res.get("torso", 32)), res.get("arm"), int(res.get("leg", 24)),
-                             nails=bool(nails))
+                             nails=bool(nails), claw=claw_point(cfg))
     verts, faces, uvs, face_mat, ranges, s_par, th_par, ring_par, gidx = G.join(shells)
     nv = len(verts)
 

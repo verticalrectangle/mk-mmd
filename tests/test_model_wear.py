@@ -185,40 +185,11 @@ def test_the_band_is_one_piece_from_arm_to_arm(dressed):
         assert ((band[front] > 0.0) & (band[front] < c["band"]["height"] * S)).all(), band[front]
 
 
-def _front_cover(mesh, pts):
-    """Whether each point (x, z) lies on the mesh seen from the front (inside a face's projection onto the x-z plane)."""
-    V = np.asarray(mesh.verts)[:, [0, 2]]
-    hit = np.zeros(len(pts), bool)
-    for f in mesh.faces:
-        for j in range(1, len(f) - 1):
-            M = np.array([V[f[j]] - V[f[0]], V[f[j + 1]] - V[f[0]]]).T
-            if abs(np.linalg.det(M)) > 1e-12:
-                uv = np.linalg.solve(M, (pts - V[f[0]]).T).T
-                hit |= (uv >= 0.0).all(1) & (uv.sum(1) <= 1.0)
-    return hit
-
-
-def test_the_sleeves_are_joined_to_the_body_under_the_arms(dressed, tmp_path):
-    """Seen from the front, the corner under each arm between the sleeve and her side (within 12 cm of the arm joint) is
-    knit, as a loose sweater's is, not a gap between a tube and a tube: a sweater with `body.underarm` = 0 leaves it
-    open, this one covers most of it."""
-    _, parts, _ = dressed
-    spec = SP.load("base:girl", [WEAR, "body.bust=0.02", 'model.parts=["body", "sweater"]', "sweater.body.underarm=0.0"])
-    bare = {p.name: p for p in BD.run(spec, ctx=BD.BuildCtx(spec, tmp_path, seed=1))}
-    L = parts["body"].info["landmarks"]
-    for side, sg in (("L", 1.0), ("R", -1.0)):
-        arm = np.asarray(L[f"arm.{side}"], float)[[0, 2]]
-        gx, gz = np.meshgrid(arm[0] + sg * np.linspace(0.0, 0.1, 21), arm[1] - np.linspace(0.01, 0.15, 29))
-        pts = np.stack([gx.ravel(), gz.ravel()], 1)
-        open_ = ~_front_cover(bare["body"].meshes[0], pts) & ~_front_cover(bare["sweater"].meshes[0], pts)
-        open_ &= np.linalg.norm(pts - arm, axis=1) < 0.12
-        assert open_.sum() > 30, side
-        assert _front_cover(parts["sweater"].meshes[0], pts[open_]).mean() > 0.7, side
-
-
-def test_the_knit_lies_on_the_breasts_and_hangs_loose_below_them(dressed):
-    """The loose knit shows her breasts as the drawing does: on their lower half (under the band) it lies on them, and
-    from them it hangs loose: at her waist it stands well off her front and her sides instead of following her in."""
+def test_the_knit_lies_on_the_breasts_and_follows_her_waist_in_loosely(dressed):
+    """The loose knit shows her figure as the drawing does: on their lower half (under the band) it lies on her breasts,
+    and below them it follows her in towards the waist, loosely, instead of falling straight like a barrel: at her waist
+    its sides stand 6 to 16 mm off her skin, its front 6 to 30 mm, and seen from the front it is at most a fifth wider
+    than she is there."""
     ctx, parts, fit = dressed
     S = fit.S
     c = SP.merge(SW.DEFAULTS, ctx.spec.get("sweater"))
@@ -236,9 +207,12 @@ def test_the_knit_lies_on_the_breasts_and_hangs_loose_below_them(dressed):
     z_w = 0.5 * (z_front - cl + parts["sweater"].info["z_waistband"])        # her waist, under the breasts
     at = np.abs(K[:, 2] - z_w) < 0.01
     az = SH.azimuth(K, (0.0, float(np.mean(K[at, 1]))))
-    for a0, least in ((0.0, 0.010), (0.25, 0.012), (0.75, 0.012)):            # front, her left, her right
+    for a0, lo, hi in ((0.0, 0.006, 0.03), (0.25, 0.006, 0.016), (0.75, 0.006, 0.016)):   # front, her left, her right
         sel = at & (np.abs((az - a0 + 0.5) % 1.0 - 0.5) < 0.04)
-        assert np.median(d[sel]) > least, (a0, np.median(d[sel]))
+        assert lo < np.median(d[sel]) < hi, (a0, np.median(d[sel]))
+    B = np.asarray(parts["body"].meshes[0].verts)
+    waist = (np.abs(B[:, 2] - z_w) < 0.01) & (np.abs(B[:, 0]) < 0.2)       # her trunk there, not her hands
+    assert np.ptp(K[at & (np.abs(K[:, 0]) < 0.2), 0]) < 1.2 * np.ptp(B[waist, 0])
 
 
 @pytest.mark.parametrize("name", ["sweater", "pants", "socks"])

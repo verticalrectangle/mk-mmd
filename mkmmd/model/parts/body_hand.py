@@ -193,6 +193,33 @@ def chain_coordinate(pts, P):
     return out
 
 
+def claw_points(V, chains, member, chain_s, frame, point, start=0.45, thin=0.85):
+    """The hand's vertices V (n, 3) with each fingertip drawn out into a claw ([body] claws.point): over the last
+    1 - `start` of a digit's last bone the skin comes in towards the bone line (to 1 - `thin` of its width at the tip)
+    and runs on `point` metres past the tip, curling a little towards the palm. `chains` the digits' joint polylines,
+    `member` each part's share of a vertex (PARTS order), `chain_s` (n, 5) the vertices' coordinates along the digits'
+    chains, `frame` the hand's (along, across, out of the palm). `point` 0 returns V unchanged."""
+    if point <= 0.0:
+        return V
+    V = np.array(V, float)
+    palm = unit(np.asarray(frame[2], float))
+    for k, p in enumerate(PARTS[1:]):
+        j3, tip = np.asarray(chains[p][2], float), np.asarray(chains[p][3], float)
+        ln = float(np.linalg.norm(tip - j3))
+        d = (tip - j3) / ln
+        s3 = float(np.linalg.norm(np.diff(np.asarray(chains[p], float)[:3], axis=0), axis=1).sum())
+        t = (chain_s[:, k] - s3) / ln
+        sel = (member[:, k + 1] > 0.5) & (t > start)
+        if not sel.any():
+            continue
+        w = smoothstep(np.clip((t[sel] - start) / (1.0 - start), 0.0, 1.0))[:, None]
+        q = V[sel] - j3
+        along = q @ d
+        radial = q - along[:, None] * d
+        V[sel] = j3 + (along[:, None] + point * w ** 2) * d + radial * (1.0 - thin * w) + palm * (0.3 * point * w ** 3)
+    return V
+
+
 # ---------------------------------------------------------------- the cage
 def _across_out(t, r, n):
     """Unit directions across the hand (towards the little finger, `r`) and out of the palm (`n`), perpendicular to the
@@ -621,9 +648,10 @@ def _nail(h, D, part, meta, V, N, F, fpart):
     return nail_plate(part, meta["path"], meta["length"] - L3, L3, axes, width, V, N, tri, D["nail"], 0.03 * h.sc)
 
 
-def hand_shells(shape, arm, atlas, nails=True):
+def hand_shells(shape, arm, atlas, nails=True, claw=0.0):
     """(hand_L Shell, [nail_<part>_L Shells]) for the left hand on the forearm `arm`: the hand's seam vertices are
-    welded to the arm's last ring (the ring moves onto the subdivided seam, sub-millimetre)."""
+    welded to the arm's last ring (the ring moves onto the subdivided seam, sub-millimetre); `claw` metres draw the
+    fingertips out into points (claw_points)."""
     D = shape.hand
     C, h = cage(shape.land, D, arm)
     orient(C)
@@ -656,6 +684,7 @@ def hand_shells(shape, arm, atlas, nails=True):
     for q, p in zip(uv, fpart):
         u0, v0, u1, v1 = atlas[PARTS[p]]
         uvs.append(np.stack([u0 + (u1 - u0) * np.clip(q[:, 0], 0, 1), v0 + (v1 - v0) * np.clip(q[:, 1], 0, 1)], 1))
+    V = claw_points(V, h.chain, member, chain_s, (h.a, h.r, h.n), claw)
     sh = Shell("hand_L")
     sh.verts = V
     sh.faces = [list(f) for f in F]

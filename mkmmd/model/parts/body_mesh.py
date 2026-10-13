@@ -322,15 +322,16 @@ def hand_module(D):
     return body_hand_mesh if D["mesh"] else body_hand
 
 
-def build_shells(shape, M_torso=32, M_arm=None, M_leg=24, nails=True):
+def build_shells(shape, M_torso=32, M_arm=None, M_leg=24, nails=True, claw=0.0):
     """All shells, left and right: [torso, arm_L, hand_L, leg_L, nails_L..., then the right side mirrored]. The hand is
-    welded onto the arm's last ring, which has as many points as the hand's seam (M_arm, when given, must say so)."""
+    welded onto the arm's last ring, which has as many points as the hand's seam (M_arm, when given, must say so); `claw`
+    metres draw its fingertips out into points (body_hand.claw_points)."""
     hm = hand_module(shape.hand)
     seam = hm.seam_size(shape.hand)
     if M_arm is not None and int(M_arm) != seam:
         raise ValueError(f"[body.resolution] arm must be {seam} (the hand's seam ring), got {M_arm}")
     arm = arm_shell(shape, seam)
-    hand, nail_shells = hm.hand_shells(shape, arm, ATLAS, nails=nails)
+    hand, nail_shells = hm.hand_shells(shape, arm, ATLAS, nails=nails, claw=claw)
     left = [arm, hand, leg_shell(shape, M_leg)] + nail_shells
     shells = [torso_shell(shape, M_torso)]
     shells += left

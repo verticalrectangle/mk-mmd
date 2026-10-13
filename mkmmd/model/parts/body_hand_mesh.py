@@ -245,9 +245,10 @@ def _uvs(F, member, tiles_uv, atlas):
     return out
 
 
-def hand_shells(shape, arm, atlas, nails=True):
+def hand_shells(shape, arm, atlas, nails=True, claw=0.0):
     """(hand_L Shell, [nail_<part>_L Shells]) from the asset on the forearm `arm` (body_mesh.arm_shell, as many points per
-    ring as the asset's seam): the asset's seam vertices are welded to the arm's last ring."""
+    ring as the asset's seam): the asset's seam vertices are welded to the arm's last ring; `claw` metres draw the
+    fingertips out into points (body_hand.claw_points)."""
     D = shape.hand
     P = place(shape.land, D)
     V, F, Wd, J = P["verts"], P["faces"], P["weights"], P["joints"]
@@ -274,6 +275,7 @@ def hand_shells(shape, arm, atlas, nails=True):
     for f, q in knuckles.items():
         back, front = cols(np.array([a_k]), np.array([q @ r]))
         palm_u[f] = (float(back[0]), float(front[0]))
+    V = BH.claw_points(V, chains, member, chain_s, frame, claw)
     sh = Shell("hand_L")
     sh.verts = V
     sh.faces = [list(f) for f in F]

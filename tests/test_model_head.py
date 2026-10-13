@@ -49,6 +49,25 @@ def test_the_smirk_is_lopsided_and_only_there_when_asked(head, tmp_path):
     assert up_l > 2.0 * up_r > 0.0
 
 
+def test_the_smirk_opens_to_sharp_corners(tmp_path):
+    """にやり２ is a sharp grin, not a rounded one: on each side the opening narrows to a point at the corner, so 85 % of
+    the way out (along the closed mouth line) it is under a quarter as tall as in the middle."""
+    part = build_head(tmp_path, {"mouth": {"smirk": 0.6}})
+    face, m = mesh(part, "face"), part.info["mouth"]
+    V, d = np.asarray(face.verts), face.morphs["にやり２"]
+
+    def opening(x):                                                  # the moved slit lines' heights at rest-x `x`
+        z = []
+        for ids in (np.asarray(m["slit_upper"]), np.asarray(m["slit_lower"])):
+            o = np.argsort(V[ids, 0])
+            z.append(np.interp(x, V[ids, 0][o], (V[ids, 2] + d[ids, 2])[o]))
+        return z[0] - z[1]
+    middle = opening(0.0)
+    assert middle > 0.01
+    for sg in (1.0, -1.0):
+        assert 0.0 < opening(sg * 0.85 * m["half_width"]) < 0.25 * middle, sg
+
+
 def test_the_smirk_bares_the_teeth_from_the_lip_down(tmp_path):
     """In にやり２ the upper lip rises off the teeth: their roots ride the lip's edge (no dark gap opens between the lip and
     the teeth: each root ends up at most a millimetre under the risen lip's lower edge, never below it), their tips rise

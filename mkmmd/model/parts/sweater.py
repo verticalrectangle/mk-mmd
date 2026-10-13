@@ -13,14 +13,13 @@ Where the pieces are, as fields on the skin (sizes in metres x S, S = head_tip.z
   body      everything below the band down to the waistband and along the arms to the cuffs (`hang`): under the band
             `offset` off the skin, then leaving it over `drop` for loose cloth; on the breasts (within `cling` of each
             one's front, `breasts`) it lies on them, so they show; elsewhere it is `outfit_shell.drape`d round a vertical
-            axis (the body: from the band's edge and below the breasts it falls almost straight, coming in no faster
-            than `taper` at the front and `taper_back` at the back, `ease` off the skin) and round each arm's bone line
+            axis (the body: from the band's edge and below the breasts it follows her figure in towards the waist,
+            loosely: `ease` off the skin, coming in no faster than `taper` at the front and `taper_back` at the back, so
+            it bridges the small of her back and never reads as a barrel) and round each arm's bone line
             (`sleeve_taper`, `sleeve_ease`, sagging `sleeve_sag` below the arm); the cloth it has to spare gathers in
             `folds` / `sleeve_folds` soft folds up to `fold_depth` deep, into a `blouse` over the waistband and a `puff`
             over each cuff; over its last `tuck` it goes in `under` the waistband and the cuffs (their tops roll down
-            onto it); smoothed (`relax`) and kept `gap` off the skin (vertices and triangle centres); under each arm a
-            sheet of the knit joins the sleeve to the body, `underarm` metres down her side and out along the sleeve,
-            sagging `underarm_sag` of its width (`underarm`; 0 for none)
+            onto it); smoothed (`relax`) and kept `gap` off the skin (vertices and triangle centres)
   waistband `above_hip` (its top) over the hip joints (landmark leg.L), `height` deep, snug (`offset`), its hem rolled
   cuffs     `length` up the forearm from the wrist, `past` beyond it, snug, rolled at the hand
   ink       drawn lines (outfit_ink, `width` wide): ribs across the band, the waistband and the cuffs every `band` /
@@ -46,10 +45,9 @@ from . import outfit_wear as WR
 DEFAULTS = {
     "band": {"chest": 0.055, "rise": 0.030, "arm": 0.030, "corner": 0.010, "height": 0.058, "offset": 0.010,
              "roll": 0.008, "relax": 8},
-    "body": {"offset": 0.008, "ease": 0.016, "taper": 0.03, "taper_back": 0.07, "cling": 0.070, "blouse": 0.010,
+    "body": {"offset": 0.008, "ease": 0.014, "taper": 0.5, "taper_back": 0.5, "cling": 0.070, "blouse": 0.010,
              "folds": 11, "fold_depth": 0.016, "sleeve_ease": 0.009, "sleeve_taper": 0.10, "sleeve_sag": 0.008,
-             "sleeve_folds": 7, "puff": 0.012, "tuck": 0.040, "under": 0.0022, "drop": 0.040, "relax": 8, "gap": 0.003,
-             "underarm": 0.08, "underarm_sag": 0.12},
+             "sleeve_folds": 7, "puff": 0.012, "tuck": 0.040, "under": 0.0022, "drop": 0.040, "relax": 8, "gap": 0.003},
     "waistband": {"above_hip": 0.095, "height": 0.034, "offset": 0.006, "relax": 4},
     "cuff": {"length": 0.062, "past": 0.004, "offset": 0.006, "relax": 4},
     "ink": {"enabled": True, "width": 0.0026, "band": 0.040, "waistband": 0.040, "cuff": 0.024, "folds": True},
@@ -217,53 +215,6 @@ def hang(knit, skin, fit, c, centre_y, h, z_wb, end_s, fronts, rng):
     return inside * (1.0 - t_in) + T * t_in
 
 
-def underarm(knit, P, fit, c, rows=8, cols=9):
-    """The cloth under each arm (`body.underarm` metres down her side and out along the sleeve, 0 for none): a sheet from
-    the sleeve's underside to the body's side, hanging `body.underarm_sag` of its width between them, so the sleeve and
-    the body are one garment, as a loose sweater's are, not a tube beside a tube. The band covers the armpit, where the
-    knit `knit` (at positions P) of the arm and of the trunk meet; the sheet starts under it: each row runs from the
-    sleeve's lowest point at a length along the arm (from where the sleeve starts) to the body's outermost point at a
-    height (from the top of its side), its edges tucked a millimetre into the knit, its weights between the two.
-    Returns outfit_geo Patches (the knit's material and tiles)."""
-    S, bd = fit.S, c["body"]
-    length = bd["underarm"] * S
-    if length <= 0.0:
-        return []
-    V, a, s, z = knit.verts, knit.fields["arm"], knit.fields["s"], knit.fields["z"]
-    tuck = P - knit.normals * 0.001 * S
-    out = []
-    for sg in (1.0, -1.0):
-        sleeve, trunk = (sg * V[:, 0] > 0.0) & (a > 0.8), (sg * V[:, 0] > 0.0) & (a < 0.2)
-        if not sleeve.any() or not trunk.any():
-            continue
-        s0, z0 = s[sleeve].min(), z[trunk].max()                        # where the sleeve and the side start, under the band
-        ring_a, ring_b = [], []
-        for t in np.linspace(0.0, 1.0, rows + 1):
-            sel_a = np.flatnonzero(sleeve & (np.abs(s - s0 - t * length) < 0.006 * S))
-            sel_b = np.flatnonzero(trunk & (np.abs(z - z0 + t * length) < 0.006 * S))
-            if len(sel_a) and len(sel_b):
-                ring_a.append(sel_a[np.argmin(z[sel_a])])                # the sleeve's underside there
-                ring_b.append(sel_b[np.argmax(sg * V[sel_b, 0])])       # the body's side there
-        if len(ring_a) < 2:
-            continue
-        u = np.linspace(0.0, 1.0, cols)
-        pts, wts = [], []
-        for ia, ib in zip(ring_a, ring_b):
-            A_, B_ = tuck[ia], tuck[ib]
-            sag = bd["underarm_sag"] * np.linalg.norm(B_ - A_) * 4.0 * u * (1.0 - u)
-            pts += list((1.0 - u)[:, None] * A_ + u[:, None] * B_ - sag[:, None] * np.array([0.0, 0.0, 1.0]))
-            wts += list((1.0 - u)[:, None] * knit.W[ia] + u[:, None] * knit.W[ib])
-        faces = [(k * cols + j, (k + 1) * cols + j, (k + 1) * cols + j + 1, k * cols + j + 1)
-                 for k in range(len(ring_a) - 1) for j in range(cols - 1)]
-        pts = np.array(pts)
-        uvs = [(pts[i, 0] / WR.TILE, -pts[i, 2] / WR.TILE) for f in faces for i in f]
-        W = np.array(wts)
-        patch = G.Patch(pts, faces, np.array(uvs), {b: W[:, i] for i, b in enumerate(knit.bones) if W[:, i].max() > 1e-6},
-                        0, "underarm")
-        out.append(G.orient_outward(patch, pts.mean(0) + np.array([0.0, 0.1, 0.0])))
-    return out
-
-
 def _wrap(a):
     """Turn fractions as signed offsets from 0 (-0.5 .. 0.5)."""
     return (np.asarray(a, float) + 0.5) % 1.0 - 0.5
@@ -391,9 +342,6 @@ def sweater(fit, body_part, cfg, soup):
     Pk = body.settle(hang(body, base, fit, c, centre_y, h, z_wb, end_s, fronts, rng), relax=bd["relax"], fit=fit,
                      gap=bd["gap"] * S)
     _add(soup, body, Pk, fit, centre_y, 0, torso_reps, (), 0.0, "body")
-    webs = underarm(body, Pk, fit, c)
-    for web in webs:
-        soup.add(web, 0)
     gaps.append(body.gap(Pk, fit))
     info["knit_ease"] = float(np.median(fit.skin.closest(Pk[body.fields["arm"] < 0.3])[0]))
     # ---- waistband

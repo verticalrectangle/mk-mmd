@@ -193,6 +193,45 @@ def test_bust_grows_round_breasts_forward_and_nothing_else(tmp_path, donor):
     assert (twin >= 0).all() and np.allclose(move[twin] * [-1.0, 1.0, 1.0], move, atol=1e-6)
 
 
+DIGIT_END = {"index": ("index3", "左人指３"), "middle": ("middle3", "左中指３"), "ring": ("ring3", "左薬指３"),
+             "little": ("little3", "左小指３"), "thumb": ("thumb2", "左親指２")}
+
+
+def _fingertips(part):
+    """Per digit of the left hand: (how far its skin runs past the tip joint, its width 3 mm short of its end) in metres,
+    measured on the skin its last bone drives, along that bone."""
+    m, L = part.meshes[0], part.info["landmarks"]
+    V, out = np.asarray(m.verts), {}
+    for f, (joint, bone) in DIGIT_END.items():
+        j, tip = np.asarray(L[f"{joint}.L"], float), np.asarray(L[f"{f}_tip.L"], float)
+        ln = float(np.linalg.norm(tip - j))
+        q = V[np.asarray(m.weights[bone]) > 0.5] - j
+        along = q @ ((tip - j) / ln)
+        across = np.linalg.norm(q - along[:, None] * ((tip - j) / ln), axis=1)
+        near = np.abs(along - (along.max() - 0.003)) < 0.0008
+        out[f] = (float(along.max()) - ln, 2.0 * float(across[near].max()))
+    return out
+
+
+def test_claws_draw_the_fingertips_out_into_sharp_points(tmp_path):
+    """[body] claws.point draws every fingertip out into a point: each digit's skin runs on about that far past its tip
+    joint and, 3 mm short of its end, is under 60 % as wide as the round fingertip is there; with nails = false there
+    are no nail plates (the dark points are the claws), and nothing off the digits' last bones moves."""
+    (tmp_path / "round").mkdir()
+    (tmp_path / "sharp").mkdir()
+    plain = make(tmp_path / "round", "body.nails=false")
+    part = make(tmp_path / "sharp", "body.nails=false", "body.claws.point=0.008")
+    assert "nails" not in {m.name_en for m in part.materials} | {m.name_en for m in plain.materials}
+    round_, sharp = _fingertips(plain), _fingertips(part)
+    for f in DIGIT_END:
+        assert 0.0065 < sharp[f][0] < 0.0095 and abs(round_[f][0]) < 0.0005, (f, sharp[f], round_[f])
+        assert sharp[f][1] < 0.6 * round_[f][1], (f, sharp[f], round_[f])
+    W = plain.meshes[0].weights
+    last = np.max([np.asarray(W[b.replace("左", s)]) for _, b in DIGIT_END.values() for s in ("左", "右")], axis=0)
+    A, B = np.asarray(plain.meshes[0].verts), np.asarray(part.meshes[0].verts)
+    assert A.shape == B.shape and np.array_equal(A[last == 0.0], B[last == 0.0])
+
+
 def test_mesh_body_takes_the_designed_hand_too(tmp_path):
     """Without a hand mesh the body's own designed hand is welded on at the wrists, as onto the generated arm."""
     part = make(tmp_path, 'body.hand={}')
