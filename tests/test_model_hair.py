@@ -227,6 +227,32 @@ def test_crown_sheen_follows_the_colour_family():
     assert np.array_equal(on[int(0.6 * 512):], off[int(0.6 * 512):])          # and nothing else changes
 
 
+def test_strand_lines_run_down_the_clumps_and_change_nothing_else():
+    """[hair.lines] count draws that many thin dark lines down every clump tile of the atlas to the tips, from a random
+    stream of their own: without any the atlas is the same; with them the cap tile and the roots are unchanged, and at
+    the tips each tile has its lines (narrow, dark) and nothing else differs."""
+    pal = hair_tex.palette()
+    T, N = hair_tex.TILE_PX, hair_tex.N_TILES
+    plain = hair_tex.make_atlas(pal, np.random.default_rng(0)).astype(int)
+    none = hair_tex.make_atlas(pal, np.random.default_rng(0), lines=0, line_rng=np.random.default_rng(5))
+    assert np.array_equal(none, plain)
+    lined = hair_tex.make_atlas(pal, np.random.default_rng(0), lines=2, line_strength=0.5,
+                                line_rng=np.random.default_rng(5)).astype(int)
+    assert np.array_equal(lined[:, N * T:], plain[:, N * T:])                       # the cap tile has none
+    for top in (0, 512):                                                            # nor the roots of either region
+        assert np.array_equal(lined[top:top + 80], plain[top:top + 80])
+    for top in (0, 512):
+        tips = slice(top + 460, top + 512)
+        for k in range(N):
+            a, b = lined[tips, k * T:(k + 1) * T, :3].sum(2), plain[tips, k * T:(k + 1) * T, :3].sum(2)
+            dark = (a < 0.7 * b).all(0)                                             # columns dark all down the tips
+            runs = np.flatnonzero(np.diff(np.concatenate([[0], dark.astype(int), [0]])) == 1)
+            assert 1 <= len(runs) <= 2 and dark.sum() <= 2 * 4
+            assert (a < 0.6 * b).any()
+            off = ~np.convolve(dark, np.ones(5), "same").astype(bool)               # away from the lines
+            assert np.array_equal(a[:, off], b[:, off])
+
+
 def test_chains_inside_the_body_colliders_are_reported():
     """`hair.overlaps` names every chain whose capsules overlap a static collider at rest, with its deepest bone; a
     clear chain, and a chain whose only overlap is its first body (that one ignores the colliders), are not reported."""

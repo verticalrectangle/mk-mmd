@@ -94,9 +94,11 @@ def wing_block(O, w, t, n, L, H, th, curl=0.16, fold=0.42):
 
 
 # ---------------------------------------------------------------- tails
-def tail_block(path, face, width, thick, notch, w_end=0.9):
+def tail_block(path, face, width, thick, notch, w_end=0.9, edge=0.0):
     """A short flat ribbon along `path` (m, 3) with a V-notched end: rows of a lens section (left edge, front, right edge,
-    back); the end row's middle points are pulled back by `notch`. `face` is the direction the ribbon's front looks."""
+    back); the end row's middle points are pulled back by `notch`. `face` is the direction the ribbon's front looks.
+    With `edge` > 0 each edge is a narrow flat side `edge` x `thick` tall instead of a knife edge (two points), so no
+    vertex is shared by faces looking opposite ways (a long, twisting ribbon's knife edge leaves Blender no normal)."""
     path = np.asarray(path, float)
     m = len(path)
     d = np.gradient(path, axis=0)
@@ -108,16 +110,23 @@ def tail_block(path, face, width, thick, notch, w_end=0.9):
         wi = width * (1.0 + (w_end - 1.0) * i / (m - 1))
         last = i == m - 1
         pull = -notch * d[i] if last else 0.0
-        v0 = i / (m - 1)
-        verts += [path[i] - 0.5 * wi * a, path[i] + 0.5 * thick * f + pull, path[i] + 0.5 * wi * a, path[i] - 0.5 * thick * f + pull]
-        uv += [(0.2 + 0.78 * v0, 0.0), (0.2 + 0.78 * v0, 0.5), (0.2 + 0.78 * v0, 1.0), (0.2 + 0.78 * v0, 0.5)]
+        v0 = 0.2 + 0.78 * i / (m - 1)
+        lft, rgt, up = path[i] - 0.5 * wi * a, path[i] + 0.5 * wi * a, 0.5 * edge * thick * f
+        front, back = path[i] + 0.5 * thick * f + pull, path[i] - 0.5 * thick * f + pull
+        if edge:
+            verts += [lft + up, front, rgt + up, rgt - up, back, lft - up]
+            uv += [(v0, 0.0), (v0, 0.5), (v0, 1.0), (v0, 1.0), (v0, 0.5), (v0, 0.0)]
+        else:
+            verts += [lft, front, rgt, back]
+            uv += [(v0, 0.0), (v0, 0.5), (v0, 1.0), (v0, 0.5)]
+    k = 6 if edge else 4
     faces = []
     for i in range(m - 1):
-        for j in range(4):
-            j2 = (j + 1) % 4
-            faces.append([i * 4 + j, i * 4 + j2, (i + 1) * 4 + j2, (i + 1) * 4 + j])
-    faces.append([3, 2, 1, 0])
-    faces.append([(m - 1) * 4 + k for k in range(4)])
+        for j in range(k):
+            j2 = (j + 1) % k
+            faces.append([i * k + j, i * k + j2, (i + 1) * k + j2, (i + 1) * k + j])
+    faces.append(list(range(k))[::-1])
+    faces.append([(m - 1) * k + j for j in range(k)])
     verts = np.array(verts)
     uv = np.array(uv)
     return Block("tail", verts, orient_outward(verts, faces), TX.ribbon_uv(uv[:, 0], uv[:, 1]))

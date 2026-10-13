@@ -8,7 +8,10 @@ Spec `[pants]` (sizes in metres x S, S = head_tip.z / 1.7 with leg_extra left ou
   hem        0.080   the leg ends this far above the ankle joints (tucked into a sock of a higher top)
   offset     0.0025  off the skin; `gap` 0.0018 the least, `relax` 4 smoothing passes
   roll       0.0020  the waist edge closed back towards the skin (reads as a waistband seam)
-`[colors.pants]` cloth (charcoal). Material ズボン, double sided, outlined dark."""
+  ink        drawn lines (outfit_ink), `width` 0.0026 wide: the groin from the crotch up each thigh's front (where the
+             leg's weights take over from the hips'), a fold across the lower belly, creases behind each knee and one
+             beside the knee cap (`enabled` true, `seed`)
+`[colors.pants]` cloth (charcoal), ink (the lines). Materials ズボン (double sided, outlined dark) and ズボン線 (ink)."""
 import numpy as np
 
 from .. import spec as SP
@@ -16,17 +19,58 @@ from ..build import builder
 from ..part import Part
 from . import outfit as OU
 from . import outfit_geo as G
+from . import outfit_ink as INK
 from . import outfit_shell as SH
 from . import outfit_wear as WR
 
-DEFAULTS = {"top": 0.080, "hem": 0.080, "offset": 0.0025, "gap": 0.0018, "relax": 4, "roll": 0.0020}
-COLORS = {"cloth": "#312d33"}
+DEFAULTS = {"top": 0.080, "hem": 0.080, "offset": 0.0025, "gap": 0.0018, "relax": 4, "roll": 0.0020,
+            "ink": {"enabled": True, "width": 0.0026, "seed": 3}}
+COLORS = {"cloth": "#312d33", "ink": "#0f0c12"}
 MAT = "ズボン"
+MAT_INK = "ズボン線"
 
 
-def pants(fit, body_part, cfg, soup, mat=0):
-    """Build the pants into `soup`. Returns info: the waist and hem heights, the vertex count, the closest distance of
-    the cloth to the skin."""
+def _near(a, centre, half):
+    """|a - centre| <= half for turn fractions a (wrapping)."""
+    return np.abs((np.asarray(a, float) - centre + 0.5) % 1.0 - 0.5) <= half
+
+
+def ink(sh, P, fit, z_top, rng):
+    """The pants' drawn lines (outfit_ink lines, widths as shares of [pants.ink] width): the groin, a fold across the
+    lower belly, the creases behind the knees and a line beside each knee cap."""
+    S, L = fit.S, fit.L
+    sh.fields.update(az=SH.azimuth(sh.verts), la=SH.limb_angle(sh.verts, L, SH.LEG_CHAIN, ref=(0.0, -1.0, 0.0)),
+                     s=SH.both_sides(sh.verts, L, SH.LEG_CHAIN))
+    lines, widths = [], []
+
+    def add(ls, w):
+        lines.extend(ls)
+        widths.extend([w] * len(ls))
+    hip = float(L["leg.L"][2])
+    # the groin: where the leg takes over from the hips, on the front, from the crotch up 7 cm x S
+    add(INK.arcs(sh, P, sh.fields["leg"], 0.6, lambda fl: _near(fl["az"], 0.0, 0.14) & (fl["z"] > hip - 0.09 * S)
+                 & (fl["z"] < hip - 0.02 * S), fields=("az", "z")), 1.0)
+    # a fold across the lower belly, under the sweater's waistband
+    zf, af = 0.5 * (hip + z_top) - rng.uniform(0.0, 0.01) * S, rng.uniform(-0.02, 0.02)
+    add(INK.arcs(sh, P, sh.fields["z"], zf, lambda fl: _near(fl["az"], af, 0.05), fields=("az",)), 0.9)
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        knee = np.asarray(L[f"knee.{side}"], float)
+        s_knee = float(np.linalg.norm(knee - np.asarray(L[f"leg.{side}"], float)))
+        on = (sh.fields["leg"][sh.tris] > 0.5).all(1) & (sg * sh.verts[sh.tris][:, :, 0] > 0.0).all(1)
+        for _ in range(3):                                      # behind the knee
+            c, half = 0.5 + rng.uniform(-0.05, 0.05), rng.uniform(0.06, 0.11)
+            add(INK.arcs(sh, P, sh.fields["s"], s_knee + rng.uniform(-0.012, 0.018) * S,
+                         lambda fl, c=c, half=half: _near(fl["la"], c, half), fields=("la",), tris=on), 0.8)
+        c = float(SH.limb_angle((knee + np.array([0.035 * sg, -0.035, 0.0]))[None], L, SH.LEG_CHAIN,
+                                ref=(0.0, -1.0, 0.0))[0])        # beside the knee cap, towards her outer side
+        add(INK.arcs(sh, P, sh.fields["s"], s_knee - rng.uniform(0.005, 0.015) * S,
+                     lambda fl, c=c: _near(fl["la"], c, 0.05), fields=("la",), tris=on), 0.8)
+    return lines, widths
+
+
+def pants(fit, body_part, cfg, soup):
+    """Build the pants into `soup` (material 0 the cloth, 1 the ink). Returns info: the waist and hem heights, the
+    vertex count, the closest distance of the cloth to the skin, the number of drawn lines."""
     c = SP.merge(DEFAULTS, cfg)
     S, L = fit.S, fit.L
     sh = SH.Shell.from_part(body_part)
@@ -43,9 +87,13 @@ def pants(fit, body_part, cfg, soup, mat=0):
     top = sorted(sh.loops(), key=lambda lp: -float(np.mean(sh.fields["z"][lp])))[:1]
     reps = (round(0.80 / WR.TILE), round(0.40 / WR.TILE))
     soup.add(sh.patch(P, u, v, ~leg_t, u_rep=reps[0], v_scale=1.0 / WR.TILE, tag="waist", rims=top,
-                      rim_depth=c["roll"] * S), mat)
-    soup.add(sh.patch(P, u, v, leg_t, u_rep=reps[1], v_scale=1.0 / WR.TILE, tag="legs"), mat)
-    return {"z_top": z_top, "z_hem": z_hem, "verts": len(P), "min_gap": sh.gap(P, fit)}
+                      rim_depth=c["roll"] * S), 0)
+    soup.add(sh.patch(P, u, v, leg_t, u_rep=reps[1], v_scale=1.0 / WR.TILE, tag="legs"), 0)
+    lines = []
+    if c["ink"]["enabled"]:
+        lines, widths = ink(sh, P, fit, z_top, np.random.default_rng(int(c["ink"]["seed"])))
+        soup.add(INK.strokes(sh.bones, lines, np.asarray(widths) * c["ink"]["width"] * S, lift=0.0004 * S), 1)
+    return {"z_top": z_top, "z_hem": z_hem, "verts": len(P), "min_gap": sh.gap(P, fit), "lines": len(lines)}
 
 
 @builder("pants", needs=("body",))
@@ -53,8 +101,11 @@ def build(ctx):
     cfg = SP.merge(DEFAULTS, ctx.cfg)
     fit = OU.make_fit(ctx)
     col = WR.colours(ctx, "pants", COLORS)
-    soup = G.Soup("pants", [MAT])
+    soup = G.Soup("pants", [MAT, MAT_INK])
     info = pants(fit, ctx.need("body"), cfg, soup)
-    mat = WR.material(ctx, MAT, "cloth", col["cloth"], WR.twill(col["cloth"]), shadow=(0.70, 0.66, 0.78))
-    ctx.log(f"waist {info['z_top']:.3f} m, hem {info['z_hem']:.3f} m, closest to the skin {info['min_gap'] * 1000:.1f} mm")
-    return Part("pants", meshes=[soup.mesh()], materials=[mat], info=info)
+    mats = [WR.material(ctx, MAT, "cloth", col["cloth"], WR.twill(col["cloth"]), shadow=(0.70, 0.66, 0.78)),
+            WR.ink_material(ctx, MAT_INK, "ink", col["ink"])]
+    mesh = soup.mesh()
+    ctx.log(f"waist {info['z_top']:.3f} m, hem {info['z_hem']:.3f} m, closest to the skin {info['min_gap'] * 1000:.1f} mm, "
+            f"{info['lines']} drawn lines")
+    return Part("pants", meshes=[mesh], materials=[m for m in mats if m.name in mesh.mats], info=info)

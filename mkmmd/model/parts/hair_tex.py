@@ -2,7 +2,8 @@
 
 Hair atlas (512 x 1024, v UP: v = 1 is the top row). Two regions, both made of clump tiles (96 px wide each: tiles 0-1 the
 base shade for outer layers, tiles 2-3 a shade darker for inner layers; every tile is a convex ribbon, lighter along the
-middle with a darker rim, and has one or two sparse strand lines) and a cap tile (the right 128 px, plain, for the scalp cap):
+middle with a darker rim, and on request carries a drawing's strand lines, `strand_lines`) and a cap tile (the right 128 px,
+plain, for the scalp cap):
   HEAD    rows 0..511    v in (0.5, 1]: a vertical gradient by HEIGHT, f = 0 at the top of the hair to f = 1 at the lowest hair:
                          dark root, base red, slightly lighter tips; plus the baked angel ring: per clump tile a thin soft patch
                          of the sheen colour (`ring`, `ring_core` of the palette) at f ~ ring_f (the upper crown), never across a
@@ -159,7 +160,23 @@ def sheen_alpha(f, x, params, fc, h):
     return amp * win[None, :] * band, amp * win[None, :] * core
 
 
-def make_atlas(pal, rng, ring_f=0.15, ring_w=0.045, ring=True):
+def strand_lines(h, count, strength, rng):
+    """(h, W) shading multiplier: `count` thin dark lines on every clump tile running down it to the tips, each from its
+    own height (a fifth to two thirds of the way down), fading in there, `strength` the darkest: the strand lines of a
+    drawing. The cap tile has none."""
+    M = np.ones((h, W))
+    rows = (np.arange(h) + 0.5) / h
+    xs = np.arange(TILE_PX) + 0.5
+    for k in range(N_TILES):
+        for _ in range(int(count)):
+            x0, f0 = rng.uniform(0.15, 0.85) * TILE_PX, rng.uniform(0.2, 0.67)
+            across = np.clip(1.75 - np.abs(xs - x0), 0.0, 1.0)          # about 3 px wide, its edges soft
+            along = _sm((rows - f0) / 0.12)
+            M[:, k * TILE_PX:(k + 1) * TILE_PX] *= 1.0 - strength * along[:, None] * across[None, :]
+    return M
+
+
+def make_atlas(pal, rng, ring_f=0.15, ring_w=0.045, ring=True, lines=0, line_strength=0.5, line_rng=None):
     """The hair atlas as (1024, 512, 4) uint8 (sRGB, alpha 255).
 
     Head region: soft gradients only. Outer tiles (0-1): a slightly darker root at the top of the hair -> base -> a lighter tip
@@ -167,7 +184,9 @@ def make_atlas(pal, rng, ring_f=0.15, ring_w=0.045, ring=True):
     with a soft falloff. The baked crown sheen (`ring` false: none): per outer tile one wide feathered band of `pal["ring"]`
     (centre at height fraction `ring_f`, half width `ring_w` as a fraction of the height range) with a slightly brighter soft
     core of `pal["ring_core"]`, a wavy centre line, interrupted at clump edges, faint on the inner tiles, none on the cap tile;
-    it follows the head and the lighting instead of crossing the bangs like a camera-relative sphere ring does."""
+    it follows the head and the lighting instead of crossing the bangs like a camera-relative sphere ring does. With
+    `lines` > 0 each clump tile of both regions carries that many strand lines (`strand_lines`, `line_strength`, drawn
+    from `line_rng` so the rest of the atlas is the same with or without them)."""
     img = np.zeros((H, W, 3))
     shadow, base, light = pal["shadow"], pal["base"], pal["light"]
     tone = np.concatenate([np.repeat(np.asarray(TILE_TONE), TILE_PX), np.full(W - N_TILES * TILE_PX, CAP_TONE)])
@@ -188,6 +207,9 @@ def make_atlas(pal, rng, ring_f=0.15, ring_w=0.045, ring=True):
     strand = _grad(t, [(0.0, shadow * 0.5 + base * 0.5), (0.25, base), (1.0, light)])
     S2, RIM2 = _tiles(rng, H - HEAD_ROWS)
     img[HEAD_ROWS:] = np.clip(strand[:, None, :] * tone[None, :, None] * (1.0 - 0.16 * RIM2[..., None]) * S2[..., None], 0, 1)
+    if lines:
+        img[:HEAD_ROWS] *= strand_lines(HEAD_ROWS, lines, line_strength, line_rng)[..., None]
+        img[HEAD_ROWS:] *= strand_lines(H - HEAD_ROWS, lines, line_strength, line_rng)[..., None]
     out = np.empty((H, W, 4), np.uint8)
     out[..., :3] = np.rint(img * 255).astype(np.uint8)
     out[..., 3] = 255

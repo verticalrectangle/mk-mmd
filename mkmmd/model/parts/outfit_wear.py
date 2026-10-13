@@ -63,6 +63,24 @@ def rib(rgb, ribs=8, depth=0.16, size=SIZE):
     return _rgba(np.asarray(rgb, float)[None, None, :] * shade[..., None])
 
 
+def ink_edges(mask, rx=2, ry=1):
+    """(h, w) bool: the pixels within the ellipse (rx, ry) pixels of the edge of the bool image `mask`, where it changes
+    from in to out: its outline drawn as an ink line on a painted texture. x wraps round (a face painted round a
+    shoe), y does not."""
+    mask = np.asarray(mask, bool)
+    out = np.zeros_like(mask)
+    for dy in range(-ry, ry + 1):
+        for dx in range(-rx, rx + 1):
+            if (dx / max(rx, 1)) ** 2 + (dy / max(ry, 1)) ** 2 > 1.0:
+                continue
+            m = np.roll(mask, dx, axis=1)
+            if dy:
+                m = np.concatenate([m[:1].repeat(dy, 0), m[:-dy]]) if dy > 0 else \
+                    np.concatenate([m[-dy:], m[-1:].repeat(-dy, 0)])
+            out |= m != mask
+    return out
+
+
 def twill(rgb, lines=18, depth=0.035, size=SIZE, seed=5):
     """Plain woven cloth: faint diagonal twill lines and a little noise. Tileable."""
     u, v = _grid(size)
@@ -92,3 +110,14 @@ def material(ctx, name, name_en, rgb, texture=None, shadow=(0.80, 0.74, 0.86), e
     return Material(name, name_en=name_en, diffuse=diffuse, specular=tuple(specular), shininess=float(shininess),
                     ambient=amb, texture=tex, toon=toon, double_sided=double_sided, edge=True,
                     edge_color=outline(rgb), edge_size=float(edge_size))
+
+
+def ink_material(ctx, name, name_en, rgb):
+    """The material of a garment's drawn lines (outfit_ink strokes): white diffuse under a small texture of the ink
+    colour (a flat colour without one washes out to a light grey under the studio's light, as the cloth would; through
+    the texture it stays the dark ink it is), unshaded (no toon), no outline, casting no shadow, seen from both sides.
+    The texture is written with ctx.save_png."""
+    tex = ctx.save_png(name_en, _rgba(np.broadcast_to(np.asarray(rgb, float), (8, 8, 3))))
+    return Material(name, name_en=name_en, diffuse=(1.0, 1.0, 1.0, 1.0), specular=(0.0, 0.0, 0.0), shininess=1.0,
+                    ambient=(0.5, 0.5, 0.5), texture=tex, double_sided=True, edge=False, drop_shadow=False,
+                    self_shadow=False, self_shadow_map=False)

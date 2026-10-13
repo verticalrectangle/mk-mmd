@@ -165,6 +165,28 @@ def test_mesh_body_is_symmetric(donor):
         assert np.allclose(w[twin], mesh.weights.get(m, np.zeros(len(V))), atol=1e-5), n
 
 
+def test_bust_grows_the_breasts_forward_and_nothing_else(tmp_path, donor):
+    """[body] bust moves each breast's front forward by about that much, the two alike (mirror images), the mounds
+    meeting in the cleavage without adding up; nothing BUST_RADIUS or more from the fronts moves (her back, arms, legs,
+    hands, the neck seam)."""
+    from mkmmd.model.parts import body_donor as BDN
+    A = np.asarray(donor.meshes[0].verts)
+    B = np.asarray(make(tmp_path, "body.bust=0.02").meshes[0].verts)
+    move = B - A
+    dist = np.linalg.norm(move, axis=1)
+    assert 0.018 < dist.max() < 0.0201
+    fronts = [A[np.argmax(np.where(sg * A[:, 0] > 0, dist, -1.0))] for sg in (1.0, -1.0)]
+    assert fronts[0][0] == pytest.approx(-fronts[1][0], abs=1e-6) and move[np.argmax(dist), 1] < -0.015
+    near = np.min([np.linalg.norm(A - f, axis=1) for f in fronts], axis=0)
+    assert (dist[near >= BDN.BUST_RADIUS] == 0.0).all()
+    cleavage = np.argmin(np.linalg.norm(A - 0.5 * (fronts[0] + fronts[1]), axis=1))
+    assert dist[cleavage] < 0.6 * 0.02                                       # the mounds meet there, not add up
+    key = lambda P: [tuple(k) for k in np.round(P / 1e-5).astype(np.int64)]
+    at = {k: i for i, k in enumerate(key(A))}
+    twin = np.array([at.get(k, -1) for k in key(A * [-1.0, 1.0, 1.0])])
+    assert (twin >= 0).all() and np.allclose(move[twin] * [-1.0, 1.0, 1.0], move, atol=1e-6)
+
+
 def test_mesh_body_takes_the_designed_hand_too(tmp_path):
     """Without a hand mesh the body's own designed hand is welded on at the wrists, as onto the generated arm."""
     part = make(tmp_path, 'body.hand={}')

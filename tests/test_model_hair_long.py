@@ -106,8 +106,27 @@ def test_a_bow_tails_v_cut_stays_beyond_the_row_before_it(long_hair):
     """The V-cut pulls the middle of a tail's end row back towards the knot; with a row closer than that before it the
     ribbon folds over itself there, and Blender gives the fold no normal (the build's verify fails)."""
     _, parts = long_hair
-    V = np.asarray(parts["hair_bow"].meshes[0].verts)           # the last tail's rows end the mesh, 4 points each
-    end, prev = V[-4:], V[-8:-4]
-    ahead = end[[0, 2]].mean(0) - prev[[0, 2]].mean(0)
-    for k in (1, 3):                                            # the pulled-back middle, front and back
+    V = np.asarray(parts["hair_bow"].meshes[0].verts)           # the last tail's rows end the mesh, 6 points each
+    end, prev = V[-6:], V[-12:-6]
+    ahead = end[[0, 2, 3, 5]].mean(0) - prev[[0, 2, 3, 5]].mean(0)
+    for k in (1, 4):                                            # the pulled-back middle, front and back
         assert (end[k] - prev.mean(0)) @ ahead > 0
+
+
+def test_a_bow_tails_edges_leave_every_vertex_a_normal(long_hair):
+    """A tail's edges are narrow flat sides, not knife edges: on the hanging tails no vertex has faces round it looking
+    opposite ways (where they do, their normals cancel and Blender gives a long twisting ribbon's edge no normal at
+    all: the build's verify fails)."""
+    bow = long_hair[1]["hair_bow"]
+    m = bow.meshes[0]
+    V = np.asarray(m.verts)
+    knot = max(b.head[2] for b in bow.bones if b.name.startswith("リボン横") and b.name.endswith("1"))
+    total, count = np.zeros_like(V), np.zeros(len(V))
+    for f in m.faces:
+        P = V[list(f)]
+        n = np.cross(P[1] - P[0], P[2] - P[0]) + (np.cross(P[2] - P[0], P[3] - P[0]) if len(f) == 4 else 0.0)
+        total[list(f)] += n / np.linalg.norm(n)
+        count[list(f)] += 1
+    tails = (count > 0) & (V[:, 2] < knot - 0.02)
+    assert tails.sum() > 100
+    assert (np.linalg.norm(total[tails], axis=1) / count[tails]).min() > 0.25

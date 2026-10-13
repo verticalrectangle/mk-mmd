@@ -7,7 +7,9 @@ Spec `[socks]` (sizes in metres x S, S = head_tip.z / 1.7 with leg_extra left ou
   top     0.105   the cuff's edge above the ankle joints
   snug    0.0020  off the skin up to `rise` 0.052 above the ankle joints (inside a shoe), then `loose` 0.0050 (over pants)
   roll    0.0045  the cuff's edge closed back towards the skin; `relax` 6, `gap` 0.0015
-`[colors.socks]` knit (cream). Material 靴下 (ribbed), double sided, outlined dark."""
+  ink     drawn rib lines (outfit_ink) from the ankle joints up to the cuff every `ribs` 0.016 round the leg, `width`
+          0.0022 wide (`enabled` true, `seed`)
+`[colors.socks]` knit (cream), ink (the lines). Materials 靴下 (ribbed, double sided, outlined dark) and 靴下線 (ink)."""
 import numpy as np
 
 from .. import spec as SP
@@ -15,17 +17,20 @@ from ..build import builder
 from ..part import Part
 from . import outfit as OU
 from . import outfit_geo as G
+from . import outfit_ink as INK
 from . import outfit_shell as SH
 from . import outfit_wear as WR
 
-DEFAULTS = {"top": 0.105, "snug": 0.0020, "rise": 0.052, "loose": 0.0050, "roll": 0.0045, "relax": 6, "gap": 0.0015}
-COLORS = {"knit": "#e1dfd7"}
+DEFAULTS = {"top": 0.105, "snug": 0.0020, "rise": 0.052, "loose": 0.0050, "roll": 0.0045, "relax": 6, "gap": 0.0015,
+            "ink": {"enabled": True, "width": 0.0022, "ribs": 0.016, "seed": 5}}
+COLORS = {"knit": "#e1dfd7", "ink": "#4a4540"}
 MAT = "靴下"
+MAT_INK = "靴下線"
 
 
-def socks(fit, body_part, cfg, soup, mat=0):
-    """Build both socks into `soup`. Returns info: the cuff height, the vertex count, the closest distance to the skin
-    above the ankle joints (`min_gap`)."""
+def socks(fit, body_part, cfg, soup):
+    """Build both socks into `soup` (material 0 the knit, 1 the ink). Returns info: the cuff height, the vertex count,
+    the closest distance to the skin above the ankle joints (`min_gap`), the number of drawn lines."""
     c = SP.merge(DEFAULTS, cfg)
     S, L = fit.S, fit.L
     z_ank = 0.5 * (float(L["ankle.L"][2]) + float(L["ankle.R"][2]))
@@ -40,9 +45,16 @@ def socks(fit, body_part, cfg, soup, mat=0):
     u = SH.limb_angle(sh.verts, L, SH.LEG_CHAIN, ref=(0.0, -1.0, 0.0))
     tops = [lp for lp in sh.loops() if float(np.mean(sh.fields["z"][lp])) > z_top - 0.01 * S]
     soup.add(sh.patch(P, u, -sh.verts[:, 2], u_rep=round(0.30 / WR.TILE), v_scale=1.0 / WR.TILE, tag="socks", rims=tops,
-                      rim_depth=c["roll"] * S), mat)
+                      rim_depth=c["roll"] * S), 0)
+    lines = []
+    if c["ink"]["enabled"]:
+        sh.fields["u"] = u
+        lines = INK.ribs(sh, P, "u", c["ink"]["ribs"] * S, "z", z_ank, z_top, np.random.default_rng(int(c["ink"]["seed"])),
+                         tris=(sh.fields["z"][sh.tris] > z_ank).all(1))
+        soup.add(INK.strokes(sh.bones, lines, c["ink"]["width"] * S, lift=0.0004 * S), 1)
     leg = sh.fields["z"] > z_ank
-    return {"z_top": z_top, "verts": len(P), "cuffs": len(tops), "min_gap": float(fit.skin.closest(P[leg])[0].min())}
+    return {"z_top": z_top, "verts": len(P), "cuffs": len(tops), "min_gap": float(fit.skin.closest(P[leg])[0].min()),
+            "lines": len(lines)}
 
 
 @builder("socks", needs=("body",))
@@ -50,9 +62,11 @@ def build(ctx):
     cfg = SP.merge(DEFAULTS, ctx.cfg)
     fit = OU.make_fit(ctx)
     col = WR.colours(ctx, "socks", COLORS)
-    soup = G.Soup("socks", [MAT])
+    soup = G.Soup("socks", [MAT, MAT_INK])
     info = socks(fit, ctx.need("body"), cfg, soup)
-    mat = WR.material(ctx, MAT, "knit", col["knit"], WR.rib(col["knit"], ribs=10, depth=0.10), shadow=(0.80, 0.78, 0.86))
+    mats = [WR.material(ctx, MAT, "knit", col["knit"], WR.rib(col["knit"], ribs=10, depth=0.10), shadow=(0.80, 0.78, 0.86)),
+            WR.ink_material(ctx, MAT_INK, "ink", col["ink"])]
+    mesh = soup.mesh()
     ctx.log(f"cuffs at {info['z_top']:.3f} m ({info['cuffs']}), above the ankles at least {info['min_gap'] * 1000:.1f} mm "
-            f"off the skin")
-    return Part("socks", meshes=[soup.mesh()], materials=[mat], info=info)
+            f"off the skin, {info['lines']} drawn lines")
+    return Part("socks", meshes=[mesh], materials=[m for m in mats if m.name in mesh.mats], info=info)

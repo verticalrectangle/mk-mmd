@@ -131,7 +131,7 @@ def bow(ctx_parts, head_centre, cfg, acc, rig, anchor_body=None):
         ch = rig.chain(f"リボン横{tag}", pts, "頭", kind="ribbon", radius=tc["radius"], anchor_body=anchor_body,
                        name_en=f"side_ribbon_{tag}")
         face = unit(np.array([n[0], n[1], 0.0]) + 0.3 * sgn * w)
-        tb = tail_block(P, face, tc["width"], tc["thick"], tc["notch"], w_end=1.15)
+        tb = tail_block(P, face, tc["width"], tc["thick"], tc["notch"], w_end=1.15, edge=0.4)
         acc.add(tb.verts, tb.faces, tb.uv, 0, weights=ch.weights(tb.verts))
         clear = float(obstacles.closest(P[3:])[0].min()) if len(P) > 3 else 0.0
         info["tails"][tag] = {"length": float(arclen(P)[-1]), "lowest_z": float(P[:, 2].min()), "clear": clear}

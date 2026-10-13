@@ -11,7 +11,8 @@ bands are such shells: they share the skin's topology and weights, so they defor
 Fields are per-vertex arrays computed on `sh.verts` (heights, a limb's length coordinate `limb_coord`, bone shares
 `share`); clipping interpolates every field, the normals and the weights along the cut edges, so a garment's edge is a
 clean level line however coarse the skin is there. `rim` closes an open edge of a shell back towards the skin (a band's
-rolled top, a sock's cuff) so the cloth reads thick instead of paper thin."""
+rolled top, a sock's cuff) so the cloth reads thick instead of paper thin. Loose cloth hangs where `drape` says (round an
+axis, from the widest part above it) on a finer shell (`subdivide`), so it can fold, and is `settle`d off the skin."""
 import numpy as np
 
 from . import outfit_fit as F
@@ -138,6 +139,23 @@ class Shell:
         sh.fields.pop("_band")
         return sh
 
+    def subdivide(self):
+        """Every triangle split in four at the middles of its edges (positions, normals, weights and fields interpolated,
+        winding kept): a finer shell for cloth that folds."""
+        T = self.tris
+        key = np.sort(np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]]), 1)
+        uniq, inv = np.unique(key, axis=0, return_inverse=True)
+        mid = len(self.verts) + np.asarray(inv).reshape(3, -1).T            # (m, 3): the middles of edges 01, 12, 20
+        a, b = uniq[:, 0], uniq[:, 1]
+        V = np.concatenate([self.verts, 0.5 * (self.verts[a] + self.verts[b])])
+        N = _unit(np.concatenate([self.normals, 0.5 * (self.normals[a] + self.normals[b])]))
+        W = np.concatenate([self.W, 0.5 * (self.W[a] + self.W[b])])
+        X = {k: np.concatenate([v, 0.5 * (v[a] + v[b])]) for k, v in self.fields.items()}
+        m01, m12, m20 = mid[:, 0], mid[:, 1], mid[:, 2]
+        tris = np.concatenate([np.stack([T[:, 0], m01, m20], 1), np.stack([m01, T[:, 1], m12], 1),
+                               np.stack([m20, m12, T[:, 2]], 1), np.stack([m01, m12, m20], 1)])
+        return Shell(V, tris, N, self.bones, W, X)
+
     # ---- topology
     def edges(self):
         """Unique undirected edges (e, 2)."""
@@ -192,11 +210,15 @@ class Shell:
         return P
 
     def offset(self, dist, relax=0, lam=0.5, fit=None, gap=None, iters=2):
-        """Positions (n, 3): each vertex moved out by `dist` (scalar or (n,)) along the skin's normal, smoothed `relax`
-        times (cloth bridges the skin's small dips) and, with `fit` and `gap`, pushed back out to at least `gap` off the
-        body's skin (`fit.push_out`), `iters` rounds of smoothing and pushing; then `clear` keeps the triangles off it."""
+        """Positions (n, 3): each vertex moved out by `dist` (scalar or (n,)) along the skin's normal, then `settle`d."""
         d = np.broadcast_to(np.asarray(dist, float), (len(self.verts),))
-        P = self.verts + self.normals * d[:, None]
+        return self.settle(self.verts + self.normals * d[:, None], relax, lam, fit, gap, iters)
+
+    def settle(self, P, relax=0, lam=0.5, fit=None, gap=None, iters=2):
+        """Cloth at positions P (n, 3) smoothed `relax` times (it bridges the skin's small dips) and, with `fit` and
+        `gap`, pushed back out to at least `gap` off the body's skin (`fit.push_out`), `iters` rounds of smoothing and
+        pushing; then `clear` keeps the triangles off it too."""
+        P = np.array(P, float)
         rounds = max(int(iters), 1) if relax else 1
         for _ in range(rounds):
             P = self.relax(P, int(relax) // rounds if relax else 0, lam)
@@ -282,26 +304,36 @@ ARM_CHAIN = ("arm", "elbow", "wrist")
 LEG_CHAIN = ("leg", "knee", "ankle")
 
 
-def limb_coord(V, land, side, names=ARM_CHAIN):
-    """(n,) a limb's length coordinate of points V: the arc length from its first joint (landmark `<names[0]>.<side>`)
-    along the bone line through the other two of the nearest point on it (before the first joint the first bone's line
-    goes on backwards, so for an arm the shoulder and the chest get small or negative values; past the last joint the
-    second bone's line goes on)."""
+def limb_axis(V, land, side, names=ARM_CHAIN):
+    """(s, q, d) for points V: s (n,) a limb's length coordinate, the arc length from its first joint (landmark
+    `<names[0]>.<side>`) along the bone line through the other two of the nearest point on it (before the first joint
+    the first bone's line goes on backwards, so for an arm the shoulder and the chest get small or negative values; past
+    the last joint the second bone's line goes on); q (n, 3) that nearest point; d (n, 3) the bone's unit direction
+    there."""
     a, e, w = (np.asarray(land[f"{n}.{side}"], float) for n in names)
     V = np.asarray(V, float)
     best, s, s0 = np.full(len(V), np.inf), np.zeros(len(V)), 0.0
-    for i, (p, q) in enumerate(((a, e), (e, w))):
-        d = q - p
+    q, dirs = np.zeros_like(V), np.zeros_like(V)
+    for i, (p, r) in enumerate(((a, e), (e, w))):
+        d = r - p
         ln = float(np.linalg.norm(d))
         u = d / ln
         t = (V - p) @ u
         tc = np.clip(t, -np.inf if i == 0 else 0.0, ln if i == 0 else np.inf)
-        dist = np.linalg.norm(V - (p + tc[:, None] * u), axis=1)
+        foot = p + tc[:, None] * u
+        dist = np.linalg.norm(V - foot, axis=1)
         better = dist < best
         best = np.where(better, dist, best)
         s = np.where(better, s0 + tc, s)
+        q = np.where(better[:, None], foot, q)
+        dirs = np.where(better[:, None], u, dirs)
         s0 += ln
-    return s
+    return s, q, dirs
+
+
+def limb_coord(V, land, side, names=ARM_CHAIN):
+    """(n,) a limb's length coordinate of points V (`limb_axis`)."""
+    return limb_axis(V, land, side, names)[0]
 
 
 def limb_length(land, side, names=ARM_CHAIN):
@@ -335,6 +367,54 @@ def azimuth(V, centre=(0.0, 0.0)):
     """(n,) the angle round a vertical axis through `centre` (x, y) as a fraction of a turn 0..1 (0 = front, -y)."""
     V = np.asarray(V, float)
     return (np.arctan2(V[:, 0] - centre[0], -(V[:, 1] - centre[1])) / (2 * np.pi)) % 1.0
+
+
+def _circ_smooth(R, passes, axis=1):
+    for _ in range(int(passes)):
+        R = 0.25 * np.roll(R, 1, axis) + 0.5 * R + 0.25 * np.roll(R, -1, axis)
+    return R
+
+
+def drape(s_skin, a_skin, r_skin, s_at, a_at, ds=0.006, na=72, window=2, taper=0.0, smooth=3):
+    """Radii (k,) of loose cloth round an axis, read at the cloth's points (s_at down the cloth from its top, a_at the
+    angle round the axis as a fraction of a turn). The body under it is given as skin points (s_skin, a_skin, r_skin:
+    r their distance from the axis), binned `ds` metres by `na` angles: a bin's radius is the farthest skin point within
+    `window` angle bins of it (the cloth bridges hollows such as the cleavage), and going down the cloth the radius never
+    comes in faster than `taper` metres per metre (scalar, or (na,) one per angle bin; it hangs from the widest part
+    above: a loose sweater falls from the bust instead of following the waist in). The radii are smoothed `smooth`
+    times round and down."""
+    s_skin, a_skin, r_skin = (np.asarray(x, float) for x in (s_skin, a_skin, r_skin))
+    s_at, a_at = np.asarray(s_at, float), np.asarray(a_at, float)
+    s0 = float(min(s_skin.min(), s_at.min()))
+    ns = int(np.ceil((float(max(s_skin.max(), s_at.max())) - s0) / ds)) + 2
+    i = np.clip(((s_skin - s0) / ds).astype(int), 0, ns - 1)
+    j = (np.floor((a_skin % 1.0) * na).astype(int)) % na
+    R = np.full((ns, na), -np.inf)
+    np.maximum.at(R, (i, j), r_skin)
+    R = np.max(np.stack([np.roll(R, k, 1) for k in range(-int(window), int(window) + 1)]), axis=0)
+    got = np.isfinite(R)
+    for col in np.flatnonzero(got.any(0)):                  # a bin's rows above its first skin point take that point's
+        first = int(np.argmax(got[:, col]))                 # radius: the cloth may start above the skin it is given
+        R[:first, col] = R[first, col]
+    for row in range(ns):                                   # bins still empty: from their row's neighbours, else above
+        got = np.isfinite(R[row])
+        if got.any() and not got.all():
+            x = np.arange(na)
+            R[row] = np.interp(x, np.concatenate([x[got] - na, x[got], x[got] + na]), np.tile(R[row][got], 3))
+        elif not got.any():
+            R[row] = R[row - 1] if row else 0.0
+    for row in range(1, ns):
+        R[row] = np.maximum(R[row], R[row - 1] - taper * ds)
+    R = _circ_smooth(R, smooth, 1)
+    for _ in range(int(smooth)):
+        R[1:-1] = 0.25 * R[:-2] + 0.5 * R[1:-1] + 0.25 * R[2:]
+    fs = np.clip((s_at - s0) / ds, 0.0, ns - 1.000001)
+    fa = (a_at % 1.0) * na - 0.5
+    i0, j0 = fs.astype(int), np.floor(fa).astype(int)
+    ts, ta = fs - i0, fa - j0
+    j0, j1 = j0 % na, (j0 + 1) % na
+    i1 = np.minimum(i0 + 1, ns - 1)
+    return (1 - ts) * ((1 - ta) * R[i0, j0] + ta * R[i0, j1]) + ts * ((1 - ta) * R[i1, j0] + ta * R[i1, j1])
 
 
 ARM, LEG, HEAD = F.is_arm, F.is_leg, F.is_head

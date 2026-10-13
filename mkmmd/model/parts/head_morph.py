@@ -167,6 +167,8 @@ def build_mouth_morphs(M, behind=0.0035):
     if lean:
         shapes["smirk"] = dict(MO.SMIRK, lean=lean)
     for key, params in shapes.items():
+        params = dict(params)
+        bare = float(params.pop("teeth", 1.0))           # how far the teeth rise with the upper lip (< 1 bares them)
         d = MO.lip_field(V, side, m["cfg"], **params)
         M.skin(NAMES[key][0], d)
         dl = d[ids3]                                      # lip margin offsets in ring-3 column order
@@ -182,6 +184,8 @@ def build_mouth_morphs(M, behind=0.0035):
         du = dl[ids_up][order]
         tx = H.teeth_x
         t_off = np.stack([np.interp(tx, xs_up[order], du[:, k]) for k in range(3)], -1)
+        if bare != 1.0:
+            t_off[:, 1:] *= bare
         td = np.zeros((len(teeth_rows), 3))
         td[0::2] = t_off
         td[1::2] = t_off

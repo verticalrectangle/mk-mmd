@@ -3,8 +3,9 @@ skeleton instead of lofted from the proportions' tables. The girl base's is Blen
 bases/girl/make_body.py makes that asset from its source.
 
 Spec (`[body]` in body.toml): `source = "mesh"` and `mesh = "base:girl/body.npz"` (a relative path is taken against the
-spec's folder; a missing asset with a maker beside it is made on first use), plus the procedural body's keys that still
-apply: skin, nails, neck_shadow, hand (the hands are the hand part's, welded on at the wrists), land, dims, skeleton.
+spec's folder; a missing asset with a maker beside it is made on first use), `bust` (metres, default 0: the breasts
+grown forward, `grow_bust`), plus the procedural body's keys that still apply: skin, nails, neck_shadow, hand (the hands
+are the hand part's, welded on at the wrists), land, dims, skeleton.
 
 The fit (`fit`) takes the asset's own space to the character's; k is her neck seam's height over the donor's neck cut,
 [proportions] leg_extra left out (longer legs make no wider body):
@@ -17,7 +18,8 @@ The fit (`fit`) takes the asset's own space to the character's; k is her neck se
          `foot_length` and `foot_width`, its sole stood on her shoe's inner floor (`foot_inner_floor_z`) and its ankle on hers
   blend  every vertex takes the torso warp, its arm's and its leg's transforms by its share of each region (`membership`);
          a limb's segments hand over by smooth steps across their joints (HALF)
-Then the neck's cut ring is laid onto the seam ellipse the head builds on (the skin below follows, fading over NECK_EASE),
+Then the breasts grow by `bust` (round each breast's front, fading to nothing BUST_RADIUS away), the neck's cut ring is
+laid onto the seam ellipse the head builds on (the skin below follows, fading over NECK_EASE),
 and each forearm is cut at the asset's edge loop nearest before the hand's seam: a strip joins that loop to a ring of the
 hand's seam size sampled from the fitted forearm at the seam, and the hand is welded to that ring as to the procedural
 forearm's last ring (with the designed hand, the ring's section table comes from the fitted forearm too).
@@ -66,6 +68,7 @@ JOINTS = ("shoulder", "elbow", "wrist", "hip", "knee", "ankle", "toe_end", "heel
 LEAD = 0.07                 # the torso's height map is straight up to this far (donor m) below the shoulder joints
 HALF = dict(elbow=0.03, knee=0.05, ankle=0.03)    # half widths of the segment hand-overs (donor m)
 NECK_EASE = 0.012           # the skin under the neck's cut ring follows it onto the seam ellipse, fading over this height
+BUST_RADIUS = 0.065         # [body] bust grows a breast's skin this far round its front, fading to nothing
 GAP = 0.004                 # the forearm is cut at an edge loop at least this far before the hand's seam
 REACH = 0.06                # the forearm's section at the seam is the skin within this distance of the arm's centre line
 REF = (0.0, -1.0, 0.0)      # a forearm ring's first point faces this way (body_mesh.arm_shell's convention)
@@ -221,6 +224,25 @@ def fit(A, shape, nt, extra=0.0):
         w2 = _hand_over(V, d["knee"], d["ankle"], fwd, HALF["ankle"])[:, None]
         out += M[:, col][:, None] * ((1 - w1) * thigh(V) + w1 * ((1 - w2) * shin(V) + w2 * ft(V)))
     return out
+
+
+def grow_bust(V, A, amount):
+    """The breasts grown `amount` metres forward ([body] bust); changes V. Round each breast's front (the donor's most
+    forward torso vertex on its side within 3 cm of bust_z) the torso's skin moves forward, a little outward and up,
+    fully at the front and fading to nothing BUST_RADIUS away: a smooth mound. Where the mounds meet (the cleavage) the
+    skin moves as far as the stronger one asks, not their sum, along their directions' weighted mean: straight
+    forward in the middle, so the body stays a mirror image."""
+    if not amount:
+        return
+    D, torso = A["verts"], A["member"][:, 0]
+    most, way = np.zeros(len(V)), np.zeros_like(V)
+    for sg in (1.0, -1.0):
+        near = np.flatnonzero((torso > 0.5) & (np.abs(D[:, 2] - A["bust_z"]) < 0.03) & (sg * D[:, 0] > 0.01))
+        front = V[near[np.argmin(D[near, 1])]]
+        w = torso * np.clip(1.0 - (np.linalg.norm(V - front, axis=1) / BUST_RADIUS) ** 2, 0.0, 1.0) ** 2
+        most = np.maximum(most, w)
+        way += w[:, None] * unit(np.array([0.3 * sg, -1.0, 0.1]))
+    V += float(amount) * most[:, None] * unit(way)
 
 
 def onto_seam(V, loop, nt):
@@ -501,6 +523,7 @@ def build_donor(ctx):
 
     # ---- the fitted skin, cut at the wrists
     V = fit(A, shape, nt, float(ctx.get("proportions.leg_extra") or 0.0))
+    grow_bust(V, A, float(cfg.get("bust", 0.0)))
     onto_seam(V, A["neck"], nt)
     faces, twin = A["faces"], A["mirror"]
     tris = G.triangulated(faces)

@@ -11,8 +11,9 @@ upper's own grid coordinates: u round the foot from the heel (u = 0.5 at the toe
 Spec `[sneakers]`: `shoe` (outfit_legs DEFAULTS["shoe"] keys, merged over SHOE below) and the face: `foxing` (v),
 `cap` (v at the toe, degrees round), `speckles` (count, seed), `laces` (count, v range, half_deg, width), `stripe`
 (front / back: [degrees from the toe, v] of its middle line at each end, width in v, taper), `tread` (v range of the
-ticks on the sole); `[colors.sneakers]` upper, cap, sole, lace, speckle, stripe_front, stripe_back, tread. Materials
-スニーカー (upper and collar, painted) and スニーカー底 (sole)."""
+ticks on the sole); `[colors.sneakers]` upper, cap, sole, lace, speckle, stripe_front, stripe_back, tread, ink (the
+outlines of the rubber, the stripes and the laces, and the sole's top edge). Materials スニーカー (upper and collar,
+painted) and スニーカー底 (sole)."""
 import numpy as np
 
 from .. import spec as SP
@@ -31,8 +32,8 @@ DEFAULTS = {"shoe": {}, "foxing": 0.16, "cap": {"v": 0.46, "deg": 68.0},
             "laces": {"count": 4, "v": [0.50, 0.92], "half_deg": 14.0, "width": 0.016},
             "stripe": {"front": [52.0, 0.20], "back": [172.0, 0.86], "width": 0.16, "taper": 0.35},
             "tread": {"v": [0.0, 0.45]}}
-COLORS = {"upper": "#efdeeb", "cap": "#f6f6e8", "sole": "#f6f6e8", "lace": "#6e6276", "speckle": "#a9a397",
-          "stripe_front": "#93b1f2", "stripe_back": "#c98af0", "tread": "#a8a294"}
+COLORS = {"upper": "#efdeeb", "cap": "#f6f6e8", "sole": "#f6f6e8", "lace": "#faf8f2", "speckle": "#6a645d",
+          "stripe_front": "#93b1f2", "stripe_back": "#c98af0", "tread": "#4f4a44", "ink": "#3b3540"}
 MAT_UPPER = "スニーカー"
 MAT_SOLE = "スニーカー底"
 
@@ -41,7 +42,8 @@ def face_texture(col, c, size=(1024, 256)):
     """The upper's face (h, w, 4) uint8 in its grid coordinates: x = u (0 the heel, 0.5 the toe, 1 the heel again),
     y = 1 - v (row 0 is the top line). A cream rubber foxing round the bottom (`foxing`, v) and a toe cap over the front
     (`cap`: v at the toe, degrees round), small speckles on the rubber, laces across the front, and on each side a
-    stripe running from low at the front (its colour stripe_front) back and up the heel (stripe_back)."""
+    stripe running from low at the front (its colour stripe_front) back and up the heel (stripe_back); every piece's
+    edge (the rubber's, the stripe's, each lace's) drawn in ink, as the drawing outlines them."""
     W, H = size
     u = (np.arange(W) + 0.5) / W
     v = 1.0 - (np.arange(H) + 0.5) / H
@@ -61,6 +63,7 @@ def face_texture(col, c, size=(1024, 256)):
     cap_h = cp["v"] * np.sqrt(np.clip(1.0 - (deg / cp["deg"]) ** 2, 0.0, 1.0))
     rubber = (V <= np.maximum(cap_h, c["foxing"]))
     img = np.where(rubber[..., None], col["cap"], img)
+    ink = (WR.ink_edges(inside) & ~rubber) | WR.ink_edges(rubber)
     sp = c["speckles"]
     rng = np.random.default_rng(int(sp["seed"]))
     for _ in range(int(sp["count"])):
@@ -74,11 +77,13 @@ def face_texture(col, c, size=(1024, 256)):
         vk = lc["v"][0] + (lc["v"][1] - lc["v"][0]) * (k + 0.5) / lc["count"]
         bar = (np.abs(deg) <= lc["half_deg"]) & (np.abs(V - vk - 0.012 * np.sin(deg / lc["half_deg"] * 1.6)) <= 0.5 * lc["width"])
         img = np.where(bar[..., None], col["lace"], img)
-    return WR._rgba(img)
+        ink = (ink & ~bar) | WR.ink_edges(bar)
+    return WR._rgba(np.where(ink[..., None], col["ink"], img))
 
 
 def sole_texture(col, c, size=(256, 64)):
-    """The sole wall's face: cream rubber with short tread ticks in its lower part (x = u in ticks, y = 1 - v)."""
+    """The sole wall's face: cream rubber with short tread ticks in its lower part and an ink line along its top, where
+    it meets the upper (x = u in ticks, y = 1 - v)."""
     W, H = size
     u = (np.arange(W) + 0.5) / W
     v = 1.0 - (np.arange(H) + 0.5) / H
@@ -86,7 +91,7 @@ def sole_texture(col, c, size=(256, 64)):
     tr = c["tread"]
     tick = (np.abs(U - 0.5) < 0.12) & (V >= tr["v"][0] + 0.08) & (V <= tr["v"][1])
     img = np.where(tick[..., None], col["tread"], col["sole"])
-    return WR._rgba(img)
+    return WR._rgba(np.where((V >= 0.93)[..., None], col["ink"], img))
 
 
 def _grid_uv(theta, K1):

@@ -46,7 +46,9 @@ DEFAULTS = {
               "strands": [[20.0, -14.0, 0.011], [-3.0, 9.0, 0.010], [-24.0, 13.0, 0.012]], "strand_drop": 0.006,
               "shadow": {"enabled": True, "tint": [0.60, 0.36, 0.34], "tint2": [0.82, 0.62, 0.60], "tooth": 0.005,
                          "valley": 0.004, "round": 0.30, "step": 0.0035, "above": 0.016, "off": 0.0006}},
-    "side": {"width": 0.042, "thick": 0.015, "delta": 0.002, "chin_gap": 0.0, "sway": 0.004, "turns": 1.5},
+    "side": {"width": 0.042, "thick": 0.015, "delta": 0.002, "chin_gap": 0.0, "sway": 0.004, "turns": 1.5,
+             "front": {"sides": [], "at": 62.0, "end_above_chin": -0.22, "x": 0.105, "forward": 0.10, "width": 0.050,
+                       "thick": 0.016, "sway": 0.012, "turns": 2.5, "bones": 5}},
     "back": {"count": 8, "width": 0.076, "thick": 0.018, "delta": 0.0, "end_above_chin": 0.0, "sway": 0.008, "turns": 1.5,
              "spread": 74.0, "lean": 0.0, "behind": 0.0, "tuck": 0.25},
     "ahoge": {"enabled": False, "at": [16.0, 10.0], "toward": 60.0, "height": 0.050, "reach": 0.035, "curl": 0.5,
@@ -57,6 +59,7 @@ DEFAULTS = {
     "normal_mix": 0.88,                                 # share of the smooth head-shaped proxy in the normals of a clump
     "edge_mix": 0.78,                                   # ... at the edges of a clump (so a clump has no rim of its own)
     "shade": {"z_hi": 0.0, "z_lo": -0.035},             # the proxy: a vertical axis from head centre + z_lo to + z_hi
+    "lines": {"count": 0, "strength": 0.5},             # strand lines per clump tile in the atlas, drawn like ink
     "dynamic": True,
 }
 
@@ -98,12 +101,12 @@ def hermite(p0, m0, p1, m1, n):
 
 def meridian_path(skull, vol, th0, ph0, ph_leave, *, dth=0.0, delta0=-0.006, delta1=0.0, z_end=None, drop=0.0,
                   tuck=0.0, flare=0.0, bend=0.30, step=0.010, n_att=20, margin=0.010, x_end=None, end_dir=None, min_off=0.009,
-                  lean=0.0):
+                  lean=0.0, y_end=None):
     """Centreline of a lock. Attached: on the hull (skin + volume + delta) from (th0, ph0) down to polar angle ph_leave,
     azimuth drifting by dth, `delta` easing delta0 -> delta1. Then hanging: heading relaxes towards straight down with a
     `tuck` (inward) / `flare` (outward) component, kept `margin` above the skin, until z_end (or `drop` metres). With
-    `x_end` the hanging part is a smooth Hermite curve to (x_end, y of the leave point, z_end) arriving along `end_dir`
-    (default straight down)."""
+    `x_end` the hanging part is a smooth Hermite curve to (x_end, y_end (default: y of the leave point), z_end) arriving
+    along `end_dir` (default straight down)."""
     u = np.linspace(0.0, 1.0, n_att)
     ph = ph0 + (ph_leave - ph0) * u
     th = th0 + dth * u ** 1.6
@@ -118,7 +121,7 @@ def meridian_path(skull, vol, th0, ph0, ph_leave, *, dth=0.0, delta0=-0.006, del
         return smooth_polyline(resample(P, max(int(arclen(P)[-1] / step) + 1, 5)), 1)
     if x_end is not None:
         h0 = unit(P[-1] - P[-2])
-        E = np.array([x_end, P[-1, 1], z_end])
+        E = np.array([x_end, P[-1, 1] if y_end is None else y_end, z_end])
         e = unit(np.array([0.0, 0.0, -1.0]) if end_dir is None else np.asarray(end_dir, float))
         L = float(np.linalg.norm(E - P[-1]))
         Q = hermite(P[-1], h0 * L * 0.55, E, e * L * 0.55, max(int(L / step), 6))
@@ -176,7 +179,9 @@ class HeadHair:
         self.chains = {}
         self.top_z = self.vol.max_z()
         self.z_top = self.top_z + 0.004
-        low = min(0.0, self.cfg["back"]["end_above_chin"] - 0.020, self.cfg["side"]["chin_gap"])
+        fr = self.cfg["side"]["front"]
+        low = min(0.0, self.cfg["back"]["end_above_chin"] - 0.020, self.cfg["side"]["chin_gap"],
+                  fr["end_above_chin"] if fr["sides"] else 0.0)
         self.z_bot = float(fit.chin[2]) - max(0.05, 0.03 - low)          # the lowest hair: the gradient spans it all
         span = self.z_top - self.z_bot
         self.ring_f, self.ring_w = self.cfg["ring"]["drop"] / span, self.cfg["ring"]["width"] / span
@@ -300,8 +305,9 @@ class HeadHair:
         a body whose neck widens sooner. The body ends at the neck seam, open there: measured are the clump's vertices
         below the seam and up to the gap above it, but not the ones over the neck's open top (inside the seam's ellipse:
         the head's, where the body's skin says nothing). Each vertex short of the gap lifts the path point nearest along
-        the lock, the shortest way off the skin, and hair_braids_path.relax blurs the lift along the path: the lock bends
-        smoothly over the skin and its chain, made from the path, follows. A lock already clear comes back as it was."""
+        the lock, the shortest way off the skin, or out along a garment's outward normal (the way to a garment's nearest
+        point can run in under a band's rolled edge), and hair_braids_path.relax blurs the lift along the path: the lock
+        bends smoothly over the skin and its chain, made from the path, follows. A lock already clear comes back as it was."""
         if self._body is None:
             return lk
         body, nt = self._body
@@ -332,12 +338,11 @@ class HeadHair:
 
         def away_from(sk, V, signed):
             d, q, tri, bary = sk.closest(V)
+            if not signed:                                  # a garment: the hair goes out over it, along its outward
+                return np.abs(d), sk.outward(tri, bary)     # normal (never in under a band's rolled edge)
             n = V - q
             nl = np.linalg.norm(n, axis=1, keepdims=True)
-            if not signed:
-                d = np.abs(d)
-            sg = np.sign(d)[:, None] if signed else 1.0
-            out = np.where(nl > 1e-6, sg * n / np.maximum(nl, 1e-12), sk.outward(tri, bary))
+            out = np.where(nl > 1e-6, np.sign(d)[:, None] * n / np.maximum(nl, 1e-12), sk.outward(tri, bary))
             return d, out
 
         def field(Q):
@@ -579,8 +584,33 @@ class HeadHair:
                 lk.chain = f"side{tag}"
                 self.emit(acc, lk, ch)
                 n += 1
+            fr = c["front"]
+            if ("L" if sgn > 0 else "R") in fr["sides"]:
+                n += self.front_lock(acc, fr, sgn, tag, z_leave)
         self.stats["side"] = n
         self.stats["side_bottom_z"] = z_end
+
+    def front_lock(self, acc, fr, sgn, tag, z_leave):
+        """A long lock falling from beside the face down in front of the shoulder onto the chest (`[hair.side.front]`:
+        `sides` it falls on, `at` degrees round the head, `end_above_chin`, `x` and `forward`: where its end lies, `width`,
+        `thick`, `sway`, `turns`, `bones`), on a chain of its own (横髪左2_k / 横髪右2_k). Returns 1."""
+        fit = self.fit
+        th0 = sgn * np.radians(fr["at"])
+        ph_h = float(fit.cap_phi(th0))
+        ph_leave = self.phi_at_z(th0, z_leave) or np.radians(95.0)
+        z_end = float(fit.chin[2]) + fr["end_above_chin"]
+        P = meridian_path(self.skull, self.vol, th0, 0.5 * min(ph_h, np.radians(70)), ph_leave, dth=sgn * np.radians(1.5),
+                          delta0=-0.013, delta1=self.cfg["side"]["delta"] + 0.004, z_end=z_end, x_end=sgn * fr["x"],
+                          y_end=-fr["forward"], end_dir=[0.0, -0.15, -1.0], n_att=24)
+        P = self.sway(P, fr["sway"], z_leave, z_end, fr["turns"])
+        lk = self.off_body(Lock(f"front{tag}", P, fr["width"], fr["thick"], tip="point", tip_start=0.62, tip_power=1.2,
+                                root_w=0.6, curv=9.0, layer=3, theta=th0))
+        ch = self.make_chain(f"横髪{tag}2_", lk, "hair", int(fr["bones"]), self.s_at_z(lk.path, z_leave), 0.010)
+        self.chains[f"front{tag}"] = ch
+        lk.chain = f"front{tag}"
+        self.emit(acc, lk, ch)
+        self.stats[f"front_{tag}_bottom_z"] = float(lk.path[:, 2].min())
+        return 1
 
     def back(self, acc):
         """Two layers of big rounded clumps ending in sharp points of varied length: the inner layer (a shade darker)
@@ -652,8 +682,10 @@ def build_head_hair(ctx, fit, cfg, rig, pal, layers=("cap", "crown", "bangs", "s
     acc = MeshAccum("hair_head", [hh.mat])
     for name in layers:
         getattr(hh, name)(acc)
+    ln = hh.cfg["lines"]
     atlas = TEX.make_atlas(pal, ctx.rng_for("hair.atlas"), ring_f=hh.ring_f, ring_w=hh.ring_w,
-                           ring=bool(hh.cfg["ring"]["enabled"]))
+                           ring=bool(hh.cfg["ring"]["enabled"]), lines=int(ln["count"]), line_strength=float(ln["strength"]),
+                           line_rng=ctx.rng_for("hair.lines"))
     tex = ctx.save_png("atlas", atlas)
     tn = hh.cfg["toon"]
     toon = ctx.save_png("toon_warm", TEX.toon_ramp(cfg.get("toon_shadow", TEX.toon_multiplier(ctx.get("colors.hair"))),

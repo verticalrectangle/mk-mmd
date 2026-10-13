@@ -263,7 +263,7 @@ def lip_field(P, side, cfg, up=0.0, dn=0.0, p=0.9, wx=0.0, cl=0.0, nar=0.0, pro=
     return out
 
 
-# name -> kwargs of lip_field (metres)
+# name -> kwargs of lip_field (metres); `teeth` (head_morph): how far the teeth rise with the upper lip (default 1)
 SHAPES = {
     "a": dict(up=0.0045, dn=0.0105, p=0.75, nar=0.28, cl=0.0004),
     "i": dict(up=0.0015, dn=0.0040, p=1.15, wx=0.0050, cl=0.0010),
@@ -275,4 +275,5 @@ SHAPES = {
     "mouth_down": dict(cl=-0.0024),
     "grin": dict(up=0.0008, dn=0.0022, p=1.0, wx=0.0025, cl=0.0022),
 }
-SMIRK = dict(up=0.0020, dn=0.0050, p=0.9, wx=0.0035, cl=0.0038)    # にやり２ ([head.mouth] smirk = its lean)
+# にやり２ ([head.mouth] smirk = its lean): a wide open grin, the upper lip rising off the teeth so they show
+SMIRK = dict(up=0.0045, dn=0.0095, p=0.75, wx=0.0085, cl=0.0068, teeth=0.1)

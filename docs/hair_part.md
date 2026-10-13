@@ -44,9 +44,17 @@ length, so the outline is slightly irregular.
   Long hair (to the middle of the back, `end_above_chin` -0.25): `spread` (74 degrees each side of the back) set to about 96 takes the locks round to
   behind the ears; `behind` (0) combs the side-most ones back while they are on the head, `lean` (0) bends them back as they fall, by |sin| of
   their azimuth, so they pass behind the shoulders instead of lying over them; `tuck` (0.25) pulls the falling locks in towards the back
-  (0.10 lets long hair lie on a sweater). The locks keep `BODY_GAP` off the body's skin and off every garment part built before the hair, and the
+  (0.10 lets long hair lie on a sweater). The locks keep `BODY_GAP` off the body's skin and off every garment part built before the hair (lifted
+  out along the garment's outward normal, so a lock never tucks in under a band's rolled edge), and the
   texture's root-to-tip gradient spans down to the lowest end. `[hair.ahoge] enabled` adds one springy lock standing out of the crown (`at`
   azimuth and polar angle, `toward`, `height`, `reach`, `curl`) on a chain of its own (`アホ毛1..`).
+- **A lock in front of the shoulder**: `[hair.side.front] sides` (`["L"]`, `["R"]` or both; none by default) adds a long lock falling from beside
+  the face down in front of that shoulder onto the chest (`at` 62 degrees round the head, its end `end_above_chin` -0.22, `x` 0.105 out and
+  `forward` 0.10 in front, `width`, `thick`, `sway`, `turns`), kept off the body and the garments like the back hair, on a chain of its own
+  (`横髪左2_..` / `横髪右2_..`, `bones` 5).
+- **Strand lines**: `[hair.lines] count` (0) draws that many thin dark lines on every clump tile of the atlas, each from its own height down to the
+  tips, `strength` (0.5) the darkest (a drawing's strand lines; `hair_tex.strand_lines`, from a random stream of their own, so the rest of the
+  atlas is unchanged).
 - **Side bow** (part `hair_bow`, listed after the hair): a knot and two loops on the hair's outer surface at `[hair_bow] at` (azimuth and polar
   angle from the head's centre) and two long V-cut tails on chains (`リボン横A1..`, `リボン横B1..`, kind ribbon) that hang outside the hair's
   outline and off the body and garments; `[colors.hair_bow] ribbon`.
@@ -87,9 +95,10 @@ thrown out by MMD's physics, so the build logs `WARNING hair chain <name>: <bone
 
 ## Spec (`hair.toml`)
 
-`[hair] seed, dynamic`, `[hair.volume] top front side back`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]`, `[hair.back] count width thick delta
-end_above_chin sway`, `[hair.ring] enabled drop width`, `[hair.crown]`, `[hair.cap]`, `[hair.braids] enabled ...`, `[hair.ears] enabled ...`, `[hair.tails]
-enabled ...` (`false` removes the slice). Every key has a default in `DEFAULTS` of the module that reads it (`hair_head.py`, `hair_braids.py`, `ears.py`,
+`[hair] seed, dynamic`, `[hair.volume] top front side back`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]` (`[hair.side.front]` the
+lock in front of a shoulder), `[hair.back] count width thick delta end_above_chin sway`, `[hair.ring] enabled drop width`, `[hair.lines] count
+strength`, `[hair.crown]`, `[hair.cap]`, `[hair.braids] enabled ...`, `[hair.ears] enabled ...`, `[hair.tails] enabled ...` (`false` removes the
+slice). Every key has a default in `DEFAULTS` of the module that reads it (`hair_head.py`, `hair_braids.py`, `ears.py`,
 `tails.py`). Colours: `[colors.hair]` (base shadow deep light highlight highlight_core rim toon_shadow_multiplier, and ring ring_core), `[colors.ears]`,
 `[colors.black]`.
 
