@@ -3024,9 +3024,10 @@ names, parents, weights, materials, bodies, joints).
 `[proportions.head] crown_skull` (after leg_extra): vertices, morph offsets, bones, rigid bodies and joints
 (`part.scaled`); the builders, `ctx.parts` and `Part.info` stay at the spec's own size, so every proportion the base
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
-listing it in `[model] parts`: `sweater` (off-shoulder: one rib band over the chest, the upper arms and the back that
-never rings an arm, a loose knit body and sleeves in one piece, the sleeves running into the body under the arms, that
-lie on the breasts, hang from the band and below the bust and gather into a rib
+listing it in `[model] parts`: `sweater` (off-shoulder: one rib band wrapped round the top of her body, at one height
+all round her chest, upper arms and back with her arms down, so it never stops at a shoulder, and open under each
+arm; a loose knit body and sleeves in one piece, the sleeves running into the body under the arms and sagging there,
+that lie on the breasts, hang from the band and below the bust and gather into a rib
 waistband and cuffs), `pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with
 a sneaker's settings and a painted face), `choker` (band and flower), and `hair_bow` (a bow on the side of the head with
 two tails on chains). The first three are cut out of the body's own skin (`outfit_shell.Shell`: fields on the skin such

@@ -167,23 +167,40 @@ def test_the_sweater_leaves_the_shoulders_bare_and_ends_at_the_wrists(dressed):
     assert any(b.endswith("腕") for b in w) and "上半身2" in w
 
 
-def test_the_band_is_one_piece_from_arm_to_arm(dressed):
-    """The off-shoulder band runs from one upper arm over the chest to the other, its top line rising from the middle of
-    the chest to meet the arms: the skin in front of each shoulder joint (2 to 5 cm in front of it, not yet the breast's
-    upper slope), below the top of the arm, is under the band, so the sleeves hang from the same band as the body (no
-    bare notch between chest and arm, no separate sleeves)."""
-    ctx, parts, fit = dressed
-    S = fit.S
-    sh = SH.Shell.from_part(parts["body"])
-    c = SP.merge(SW.DEFAULTS, ctx.spec.get("sweater"))
-    band = SW.fields(sh, fit, c)["band"]
-    for side in ("L", "R"):
-        arm = np.asarray(fit.L[f"arm.{side}"], float)
-        V = sh.verts
-        front = (np.abs(V[:, 0] - 0.9 * arm[0]) < 0.012) & (V[:, 1] < arm[1] - 0.02) & (V[:, 1] > arm[1] - 0.05) \
-            & (np.abs(V[:, 2] - (arm[2] - 0.045 * S)) < 0.01)
-        assert front.sum() >= 2
-        assert ((band[front] > 0.0) & (band[front] < c["band"]["height"] * S)).all(), band[front]
+def test_with_her_arms_down_the_band_is_one_level_ring(dressed):
+    """The band wraps the top of her body as a real off-shoulder sweater's folded collar does: with her arms hanging down
+    it runs round her chest, the outside of each upper arm and her back at one height (within 1 cm), so it never stops
+    at a shoulder or rises over one, and between her chest and her arms no knit stands above the band's top around it
+    (within 2.5 cm; the knit under each arm rose into a fin there while the band's line lay below the armpit). The arms
+    are hung as the skin's weights would carry them: what the arm bones carry turns about each shoulder joint until the
+    upper arm points straight down."""
+    _, parts, fit = dressed
+    m = parts["sweater"].meshes[0]
+    V = np.asarray(m.verts, float)
+    arm_w = sum(np.asarray(w, float) for b, w in m.weights.items() if OF.is_arm(b))
+    P = V.copy()
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        j, e = (np.asarray(fit.L[f"{n}.{side}"], float) for n in ("arm", "elbow"))
+        phi = -sg * np.arctan2(sg * (e[0] - j[0]), j[2] - e[2])             # brings the elbow under the joint
+        on = sg * V[:, 0] > 0.0
+        d = V[on] - j
+        hung = np.stack([j[0] + d[:, 0] * np.cos(phi) - d[:, 2] * np.sin(phi), V[on, 1],
+                         j[2] + d[:, 0] * np.sin(phi) + d[:, 2] * np.cos(phi)], 1)
+        P[on] += arm_w[on, None] * (hung - V[on])
+    rib = m.mats.index(SW.MAT_RIB)
+    R = P[np.unique([i for f, k in zip(m.faces, m.face_mat) if k == rib for i in f])]
+    R = R[R[:, 2] > float(fit.L["bust_front"][2]) - 0.05]                    # the band, not the waistband or cuffs
+    tops = [R[(np.abs(R[:, 0]) < 0.02) & (R[:, 1] < 0.0), 2].max(), R[(np.abs(R[:, 0]) < 0.02) & (R[:, 1] > 0.0), 2].max()]
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        j = np.asarray(fit.L[f"arm.{side}"], float)
+        tops.append(R[(sg * R[:, 0] > abs(j[0]) + 0.02) & (np.abs(R[:, 1] - j[1]) < 0.02), 2].max())
+    assert np.ptp(tops) < 0.01, np.round(tops, 4)
+    K = P[np.unique([i for f, k in zip(m.faces, m.face_mat) if k == m.mats.index(SW.MAT_KNIT) for i in f])]
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        j = np.asarray(fit.L[f"arm.{side}"], float)
+        for p in K[(np.abs(sg * K[:, 0] - abs(j[0])) < 0.05) & (np.abs(K[:, 1] - j[1]) < 0.05)]:
+            around = np.linalg.norm(R[:, :2] - p[:2], axis=1) < 0.025
+            assert not around.any() or p[2] < R[around, 2].max(), (side, np.round(p, 4))
 
 
 def test_the_sleeves_run_into_the_body_under_the_arms(dressed):
