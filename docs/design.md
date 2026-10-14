@@ -3042,30 +3042,29 @@ names, parents, weights, materials, bodies, joints).
 `[proportions.head] crown_skull` (after leg_extra): vertices, morph offsets, bones, rigid bodies and joints
 (`part.scaled`); the builders, `ctx.parts` and `Part.info` stay at the spec's own size, so every proportion the base
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
-listing it in `[model] parts`: `sweater` (off-shoulder: one rib band wrapped round the top of her body, at one height
-all round her chest, upper arms and back with her arms down, so it never stops at a shoulder, and open only in a slit
-right under each arm, so it runs on across the front and the back of the armpit in one piece; a loose knit body and
-sleeves in one piece, the sleeves running into the body under the arms, and as an option (off by default) a web of knit
-under each arm (`[sweater.web] side`: a wedge from where the sleeve meets her side down her side and along the sleeve's
-underside, its weights graded from her side's to the sleeve's, so it spans the gap when the arm goes up and folds away
-when it comes down),
-that lie on the breasts, hang from the band and below the bust and gather into a rib
-waistband and cuffs), `pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with
-a sneaker's settings and a painted face), `choker` (band and flower), and `hair_bow` (a bow on the side of the head with
-two tails on chains). The first three (the sweater's webs aside) are cut out of the body's own skin (`outfit_shell.Shell`: fields on the skin such
-as a height or a limb's length coordinate, clipped exactly along their level lines, moved out along the normals,
-smoothed, kept off the skin at the vertices and the triangles' centres; loose cloth is `outfit_shell.drape`d round an
-axis, coming in under the widest part above it no faster than a taper (the sweater's knit follows her figure in towards
-the waist, bridging the small of her back, not a barrel), on a finer shell, `Shell.subdivide`; the sweater's band and
-knit then span the skin's hollows, the armpits and the cleavage, where a rolled ball cannot reach, `Skin.bridge`
-with `[sweater] bridge`, the band with its own wider ball, `[sweater.band] bridge`, so over the fold where the arm meets
-the chest it stays one roll), so they carry the skin's weights and
-bend with it; their sizes are metres x S like the dress's. Colours come from `[colors.<part>]`, materials from
-`outfit_wear` (flat cloth, a toon ramp, a dark outline). They are **drawn** like the design: `outfit_ink` lays pen
-strokes on the cloth (thin dark ribbons a fraction of a millimetre above it, with its weights: the ribs of the bands
-and socks, the folds of the knit, the creases of the pants; nothing outlines the breasts; `[<part>.ink]`,
-materials セーター線, 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and laces. The hair keeps its hanging
-locks off every garment built before it (`[model] parts` order), so long hair rests on a sweater instead of inside it.
+listing it in `[model] parts`: `sweater` (off-shoulder knitwear, below), `pants` (skinny), `socks` (ribbed crew),
+`sneakers` (high-tops: the Mary-Jane's foot fitting with a sneaker's settings and a painted face), `choker` (band and
+flower), and `hair_bow` (a bow on the side of the head with two tails on chains). Pants and socks are cut out of the
+body's own skin (`outfit_shell.Shell`: fields on the skin such as a height or a limb's length coordinate, clipped exactly
+along their level lines, moved out along the normals, smoothed, kept off the skin at the vertices and the triangles'
+centres; loose cloth is `outfit_shell.drape`d round an axis, coming in under the widest part above it no faster than a
+taper), so they carry the skin's weights and bend with it. The sweater is made as knitwear is made, from separate pieces
+of even rows of stitches (lofted rings) with the thickness of knit at their edges: a folded rib band round the top of
+her body (its top line level round her chest and back, a ring across each upper arm were the arms hanging down, open
+only in a slit under each arm; its rows pulled taut round her as an elastic rib is, spanning the cleavage and the fold
+where the arm meets the chest; its columns, four to a rib, straight down her chest and back and fanning round her arms;
+rolled over at the top, a rounded lip at the bottom, ribbed in its shape), a knit body (rings round her waist's axis:
+the convex section of her torso plus ease, hanging from the bust no faster than a taper, gathered under the band and
+into the waistband) and sleeves (the convex section of each arm plus ease, sagging, puffed and gathered into the
+cuffs, folds at the elbow), ribbed waistband and cuffs. Every piece takes the weights of the skin nearest to it,
+smoothed round its rings; round her chest and back the band and the knit near it leave out the shoulder girdle's share,
+so they stay with her body when an arm moves. Sizes are metres x S like the dress's. Colours come from
+`[colors.<part>]`, materials from `outfit_wear` (a toon ramp, a dark outline; the knit's texture a stockinette, the
+bands' a rib). Pants and socks are **drawn** like the design: `outfit_ink` lays pen strokes on the cloth (thin dark
+ribbons a fraction of a millimetre above it, with its weights: the socks' ribs, the creases of the pants;
+`[<part>.ink]`, materials 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and laces. The hair
+keeps its hanging locks off every garment built before it (`[model] parts` order), so long hair rests on a sweater
+instead of inside it.
 `[body] bust` (metres, the mesh body) moves each breast's front forward as it is, keeping the donor's round shape; the
 flesh it grows follows the chest (`body_donor.chest_flesh`: the shoulder girdle's weights go to 上半身2 there), so the
 breasts keep their shape when the arms come down. `[body] bust_tip` moves each breast's tip that much more over a smaller

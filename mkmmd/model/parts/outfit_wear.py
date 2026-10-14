@@ -1,4 +1,4 @@
-"""What the garment parts cut from the skin share (outfit_shell): their colours, materials and tileable cloth textures
+"""What the garment parts share (pants, socks, the sweater): their colours, materials and tileable cloth textures
 (numpy + PIL only). A garment part reads its colours from `[colors.<part>]` over its own defaults and draws its cloth as
 flat colour with a little texture, outlined dark like a drawing: the toon ramp shades by a per-channel multiplier.
 
@@ -39,18 +39,32 @@ def _grid(size=SIZE):
     return t[None, :], t[:, None]                              # u across (x), v down (y)
 
 
-def knit(rgb, cols=10, rows=14, depth=0.05, size=SIZE, seed=3):
-    """Stockinette: columns of small V stitches, each a slightly brighter centre and darker sides (+-depth of the
-    value), a faint per-stitch variation. Tileable."""
+def knit(rgb, cols=10, rows=14, depth=0.16, size=SIZE, seed=3):
+    """Stockinette: `cols` wales across a tile and `rows` courses down it. Each stitch is a V of two rounded legs, ovals
+    in either half of the stitch leaning out at the top (`LEAN`), reaching a little into the stitches above and below so
+    the courses interlock: lit along a leg's middle (+depth/2), dark between the legs and between the wales (-depth/2),
+    a faint per-stitch variation. Tileable."""
     u, v = _grid(size)
     x = (u * cols) % 1.0
-    y = (v * rows + 0.5 * ((u * cols) // 1 % 2)) % 1.0
-    vee = np.abs(x - 0.5) * 2.0                                # 0 at the column centre, 1 at its sides
-    stitch = 1.0 - depth * (vee ** 2) - 0.5 * depth * np.abs(y - 0.5) * 2.0
+    y = (v * rows) % 1.0
+    aspect = rows / cols                                       # a stitch's height over its width, in the tile
+    light = np.zeros(np.broadcast(u, v).shape)
+    lean = np.radians(LEAN)
+    for dy in (-1.0, 0.0, 1.0):
+        for cx, sg in ((0.28, 1.0), (0.72, -1.0)):             # left leg leans left at the top, right leg right
+            px, py = x - cx, (y - (0.5 + dy)) / aspect           # in stitch widths, y down
+            c, s = np.cos(sg * lean), np.sin(sg * lean)
+            a, b = px * c - py * s, px * s + py * c              # across and along the leg
+            rho = np.hypot(a / 0.23, b / (0.62 / aspect))
+            light = np.maximum(light, np.sqrt(np.clip(1.0 - rho ** 2, 0.0, 1.0)))
     rng = np.random.default_rng(seed)
-    jitter = rng.normal(0.0, 0.012, (rows, cols))
+    jitter = rng.normal(0.0, 0.008, (rows, cols))
     jj = jitter[(v * rows).astype(int) % rows, (u * cols).astype(int) % cols]
-    return _rgba(np.asarray(rgb, float)[None, None, :] * (stitch + jj)[..., None])
+    shade = 1.0 - 0.5 * depth + depth * light + jj
+    return _rgba(np.asarray(rgb, float)[None, None, :] * shade[..., None])
+
+
+LEAN = 28.0                       # degrees a stockinette stitch's legs lean out from upright
 
 
 def rib(rgb, ribs=8, depth=0.16, size=SIZE):

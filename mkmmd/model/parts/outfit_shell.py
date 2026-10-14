@@ -1,7 +1,7 @@
 """Garments cut out of the body's own surface (numpy only: Blender-safe, no scipy): a `Shell` is a piece of the skin
 mesh (its triangles, normals and skin weights) chosen by fields on it and cut exactly along their level lines, then moved
-out along the skin's normals, relaxed into cloth and kept off the skin. Skinny pants, socks, a knit sweater and its rib
-bands are such shells: they share the skin's topology and weights, so they deform with it in every pose.
+out along the skin's normals, relaxed into cloth and kept off the skin. Skinny pants and socks are such shells: they
+share the skin's topology and weights, so they deform with it in every pose.
 
     sh = Shell.from_part(body)                       # the body part's skin, triangulated, with its weights
     sh = sh.clip(z - z_hem)                          # keep field >= 0, cut along field == 0 (new vertices on the edges)

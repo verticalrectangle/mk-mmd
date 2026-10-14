@@ -305,9 +305,10 @@ class HeadHair:
         a body whose neck widens sooner. The body ends at the neck seam, open there: measured are the clump's vertices
         below the seam and up to the gap above it, but not the ones over the neck's open top (inside the seam's ellipse:
         the head's, where the body's skin says nothing). Each vertex short of the gap lifts the path point nearest along
-        the lock, the shortest way off the skin, or out along a garment's outward normal (the way to a garment's nearest
-        point can run in under a band's rolled edge), and hair_braids_path.relax blurs the lift along the path: the lock
-        bends smoothly over the skin and its chain, made from the path, follows. A lock already clear comes back as it was."""
+        the lock, the shortest way off the skin, or out along a garment's normal turned away from the body (the way to a
+        garment's nearest point can run in under a band's rolled edge, and the inner layer of a folded band faces the
+        body), and hair_braids_path.relax blurs the lift along the path: the lock bends smoothly over the skin and its
+        chain, made from the path, follows. A lock already clear comes back as it was."""
         if self._body is None:
             return lk
         body, nt = self._body
@@ -336,10 +337,13 @@ class HeadHair:
         if skin is None and wear is None:
             return lk
 
-        def away_from(sk, V, signed):
+        def away_from(sk, V, signed, body_out=None):
             d, q, tri, bary = sk.closest(V)
-            if not signed:                                  # a garment: the hair goes out over it, along its outward
-                return np.abs(d), sk.outward(tri, bary)     # normal (never in under a band's rolled edge)
+            if not signed:                                  # a garment: the hair goes out over it, along its normal
+                out = sk.outward(tri, bary)                 # turned away from the body (never in under a band's rolled
+                if body_out is not None:                    # edge; a fold's inner layer faces the body)
+                    out = out * np.where(np.einsum("ij,ij->i", out, body_out) < 0.0, -1.0, 1.0)[:, None]
+                return np.abs(d), out
             n = V - q
             nl = np.linalg.norm(n, axis=1, keepdims=True)
             out = np.where(nl > 1e-6, np.sign(d)[:, None] * n / np.maximum(nl, 1e-12), sk.outward(tri, bary))
@@ -354,7 +358,7 @@ class HeadHair:
             V = st.verts[low]
             d, out = away_from(skin, V, True) if skin is not None else (np.full(len(V), np.inf), np.zeros_like(V))
             if wear is not None:
-                dw, ow = away_from(wear, V, False)
+                dw, ow = away_from(wear, V, False, out if skin is not None else None)
                 closer = dw < d
                 d, out = np.where(closer, dw, d), np.where(closer[:, None], ow, out)
             k = np.abs(arclen(Q)[None, :] - st.arc[low][:, None]).argmin(1)
@@ -364,7 +368,8 @@ class HeadHair:
             return sd, away
         if not (field(lk.path)[0] < BODY_GAP).any():
             return lk
-        return replace(lk, path=relax(lk.path, [(BODY_GAP, field)]))
+        return replace(lk, path=relax(lk.path, [(BODY_GAP, field)], iters=1200))   # a lock over a band's corner
+                                                                                    # needs more than the 240 rounds
 
     def make_chain(self, base, lock, kind, n_bones, s_root, radius):
         P = lock.path

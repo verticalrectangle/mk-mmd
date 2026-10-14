@@ -41,9 +41,9 @@ inside a base.
 | `[head]` | head.toml | the face: `[head.shape]` (outline), `[head.face]`, eyes, lids, brows, mouth (`[head.mouth] smirk` adds the lopsided grin にやり２, `[head.teeth]` the teeth's size and fangs), the lash drawing `[head.lash]`, `[head.lashwing]`, `[head.lashfork]` ([head_part.md](head_part.md)); the eyes' colours, the lashes' and the brows' are `[colors.eyes]`, the mouth's `[colors.mouth]` (`interior`, `tongue`, `teeth`), where eyes, brows and mouth sit is `[proportions.face]` |
 | `[hair]` | hair.toml | volume, bangs, side and back hair (long hair: `[hair.back] end_above_chin`, `spread`, `behind`, `lean`, `tuck`, `turns`), `[hair.side.front] sides` (a long lock in front of a shoulder), `[hair.lines] count` (a drawing's strand lines on every lock), `[hair.ahoge] enabled`; `[hair.braids]`, `[hair.ears]`, `[hair.tails]` switch the braids, cat ears and tails ([hair_part.md](hair_part.md)) |
 | `[outfit]` | outfit.toml | `print` (the leaf print), `shading` (`"auto"` in the girl: shadows, outlines and the ruffle's tint follow `[colors.outfit]`; `"tuned"`, the default, keeps the ones tuned for Rin's green), skirt chains, sleeve and collar physics, `[outfit.legs.ribbon] enabled` (the calf ribbon), `[colors.outfit]` the cloth and frill colours (`outfit_tex.DEFAULT_COLORS`), `[outfit.materials.<key>]` any material field (keys `dress frill frill_inner ruffle satin leg shoe sole`) |
-| other garments | (none) | parts a character lists in `[model] parts` instead of `outfit`: `sweater`, `pants`, `socks`, `sneakers`, `choker`, `hair_bow`; each has its `[<part>]` table and `[colors.<part>]` (the keys are in each module's docstring, `mkmmd/model/parts/<part>.py`); sweater, pants and socks are drawn with ink lines (`[<part>.ink]`, `[colors.<part>] ink`) |
+| other garments | (none) | parts a character lists in `[model] parts` instead of `outfit`: `sweater`, `pants`, `socks`, `sneakers`, `choker`, `hair_bow`; each has its `[<part>]` table and `[colors.<part>]` (the keys are in each module's docstring, `mkmmd/model/parts/<part>.py`); pants and socks are drawn with ink lines (`[<part>.ink]`, `[colors.<part>] ink`), the sweater's knit and ribs are in its shape and its textures |
 
-The garment parts cut from the skin (sweater, pants, socks) follow her in any pose, since they carry the skin's weights.
+The garment parts (sweater, pants, socks) follow her in any pose, since they carry the weights of the skin under them.
 List the garments before `hair` in `[model] parts` and long hair rests on them (the hair keeps off whatever was built
 before it); `hair_bow` comes after the hair it is tied on.
 
@@ -176,9 +176,10 @@ checks it.
   fitted to the skin a bone owns took the trapezius with the shoulder (a ball of 6 cm radius reaching 4 cm above the
   skin, the hair's chains inside it), so the shoulder's are as wide as its top (`body_donor.shoulder_tops`). Sharper
   creases (the armpit) need distances signed by the edge's normal, not one face's (`outfit_fit.Skin.outward`), and
-  cloth cut from the skin must not follow them in: a sweater spans the armpits and the cleavage where a rolled ball
-  cannot reach (`outfit_fit.Skin.bridge`, `[sweater] bridge`), and its band the deeper fold where the arm meets the chest
-  with a wider one (`[sweater.band] bridge`).
+  cloth must not follow them in: cloth cut from the skin follows every dip of it and reads as painted on, so the
+  sweater is lofted instead, each ring the convex section of her body or arm plus ease (it spans the armpits and the
+  cleavage as cloth does), its band's rows pulled taut round her and lifted out of the hollows where a rolled ball
+  cannot reach (`outfit_fit.Skin.bridge`, `[sweater.band] bridge`).
 - **Cut where the neighbour starts.** The body's head comes off at a level plane just under the jaw and its neck ring is
   laid onto the seam ellipse the head builds on; each forearm is cut at an edge loop just before the hand's seam and a
   strip joins it to a ring of the hand's 56 points sampled from the fitted skin.
