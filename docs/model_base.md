@@ -177,7 +177,8 @@ checks it.
   skin, the hair's chains inside it), so the shoulder's are as wide as its top (`body_donor.shoulder_tops`). Sharper
   creases (the armpit) need distances signed by the edge's normal, not one face's (`outfit_fit.Skin.outward`), and
   cloth cut from the skin must not follow them in: a sweater spans the armpits and the cleavage where a rolled ball
-  cannot reach (`outfit_fit.Skin.bridge`, `[sweater] bridge`).
+  cannot reach (`outfit_fit.Skin.bridge`, `[sweater] bridge`), and its band the deeper fold where the arm meets the chest
+  with a wider one (`[sweater.band] bridge`).
 - **Cut where the neighbour starts.** The body's head comes off at a level plane just under the jaw and its neck ring is
   laid onto the seam ellipse the head builds on; each forearm is cut at an edge loop just before the hand's seam and a
   strip joins it to a ring of the hand's 56 points sampled from the fitted skin.

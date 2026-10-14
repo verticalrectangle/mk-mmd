@@ -524,6 +524,24 @@ with [screen type](#screen-type) composited as `mk post` makes them; `--no-style
 `--no-transitions` leaves the effects out. Output goes to `<project>/.mk/look/<time>/` (outside a project
 `~/.cache/mk/look/<time>/`) unless `--out` says otherwise.
 
+### Measuring and marking a render
+
+`mk look --map` also writes `<image>.map.npz` beside each image (`mkmmd/pixmap.py`): the Blender op hands over the image's
+camera and its frame's geometry (every mesh that renders, as it renders and its mesh's own rest coordinates, in triangles with
+their object, material and polygon), and the CLI rasterises it through that camera, as Blender places it (sensor fit, lens
+shift; perspective or orthographic): at each pixel's centre ray the nearest triangle (both faces, transparent materials too),
+its exact barycentric weights and its depth. So a pixel tells its material and object, where it is in the world and on the
+model at rest, and how many centimetres it spans. `mk measure MAP` reads it: `--edges MATS --x A:B[:STEP]` (the first and last
+row of the materials per column: pixels, the size as seen and between the two surface points, in the world and at rest, and
+the runs), `--extent` (per row), `--gaps` (per row, the runs showing no surface, or none of MATS, between covered pixels: the
+space under an arm), `--at X,Y`, `--dist X,Y:X,Y` and `--where X,Y,Z` (a world point in the picture, hidden or not); a
+material it lacks is an error that lists those it has. `mk mark IMAGE` draws on any image (a render, a photo, a drawing):
+`--grid [STEP]` the image's own pixel coordinates, `--crop X0,Y0,X1,Y1 --zoom K` a close look that keeps them, `--marks
+FILE.toml` a plan (`mkmmd/marks.py`: `[[line]]` points, dashed, smooth Catmull-Rom curves, named; `[[fill]]` points or
+`between` two named lines; `[[arrow]]`, `[[circle]]`, `[[box]]`, `[[text]]`; a point is `[x, y]` in pixels or `[x, y, z]` in
+the world's metres through the image's map; a misspelt key is an error) and `--ref PHOTO` the photo beside it at the same
+height.
+
 ## Building
 
 `mk build` assembles the scene from `mk.toml` in one Blender session and saves it to `[project] blend` (`--out` saves elsewhere,
@@ -3025,18 +3043,22 @@ names, parents, weights, materials, bodies, joints).
 (`part.scaled`); the builders, `ctx.parts` and `Part.info` stay at the spec's own size, so every proportion the base
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
 listing it in `[model] parts`: `sweater` (off-shoulder: one rib band wrapped round the top of her body, at one height
-all round her chest, upper arms and back with her arms down, so it never stops at a shoulder, and open under each
-arm; a loose knit body and sleeves in one piece, the sleeves running into the body under the arms and sagging there,
+all round her chest, upper arms and back with her arms down, so it never stops at a shoulder, and open only in a slit
+right under each arm, so it runs on across the front and the back of the armpit in one piece; a loose knit body and
+sleeves in one piece, the sleeves running into the body under the arms, with a web of knit under each arm (`[sweater.web]`:
+a wedge from where the sleeve meets her side down her side and along the sleeve's underside, its weights graded from
+her side's to the sleeve's, so it spans the gap when the arm goes up and folds away when it comes down),
 that lie on the breasts, hang from the band and below the bust and gather into a rib
 waistband and cuffs), `pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with
 a sneaker's settings and a painted face), `choker` (band and flower), and `hair_bow` (a bow on the side of the head with
-two tails on chains). The first three are cut out of the body's own skin (`outfit_shell.Shell`: fields on the skin such
+two tails on chains). The first three (the sweater's webs aside) are cut out of the body's own skin (`outfit_shell.Shell`: fields on the skin such
 as a height or a limb's length coordinate, clipped exactly along their level lines, moved out along the normals,
 smoothed, kept off the skin at the vertices and the triangles' centres; loose cloth is `outfit_shell.drape`d round an
 axis, coming in under the widest part above it no faster than a taper (the sweater's knit follows her figure in towards
 the waist, bridging the small of her back, not a barrel), on a finer shell, `Shell.subdivide`; the sweater's band and
 knit then span the skin's hollows, the armpits and the cleavage, where a rolled ball cannot reach, `Skin.bridge`
-with `[sweater] bridge`), so they carry the skin's weights and
+with `[sweater] bridge`, the band with its own wider ball, `[sweater.band] bridge`, so over the fold where the arm meets
+the chest it stays one roll), so they carry the skin's weights and
 bend with it; their sizes are metres x S like the dress's. Colours come from `[colors.<part>]`, materials from
 `outfit_wear` (flat cloth, a toon ramp, a dark outline). They are **drawn** like the design: `outfit_ink` lays pen
 strokes on the cloth (thin dark ribbons a fraction of a millimetre above it, with its weights: the ribs of the bands

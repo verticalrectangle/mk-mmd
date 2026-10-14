@@ -22,8 +22,6 @@ writes) or a .pmx file. Model space throughout: metres, Z up, -Y forward, +X her
                                          a review page; mkmmd.review reads those)
 """
 import math
-import shutil
-import subprocess
 import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
@@ -31,8 +29,9 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
+from .. import fonts
 from ..core import bonemap
 from . import assemble as AS
 from . import build as BD
@@ -761,29 +760,6 @@ def measure(model, region="body", side="L", V=None, cuts=None):
 
 
 # -------------------------------------------------------------------------------------------------------------- sheets
-@lru_cache(maxsize=4)
-def _font(size=13):
-    """A font with Japanese glyphs for the labels (morph and bone names): fontconfig's choice for lang=ja, then the usual
-    macOS and Windows ones, else Pillow's default (which shows Japanese as boxes)."""
-    paths = []
-    if shutil.which("fc-match"):
-        try:
-            paths.append(subprocess.run(["fc-match", "-f", "%{file}", "sans-serif:lang=ja"], capture_output=True,
-                                        text=True, timeout=5).stdout.strip())
-        except (OSError, subprocess.SubprocessError):
-            pass
-    paths += ["/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", "C:/Windows/Fonts/meiryo.ttc", "C:/Windows/Fonts/msgothic.ttc"]
-    for p in paths:
-        try:
-            return ImageFont.truetype(p, size)
-        except OSError:
-            continue
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:                                  # Pillow < 10.1
-        return ImageFont.load_default()
-
-
 def sheet(models, region="body", side="L", views=None, poses=("rest",), size=360, ss=2):
     """(PIL image, layout dict, PIL "L" mask) of `models` (Model list) in the region's views, one row per (pose, model),
     every cell at one scale (the largest region decides it; for "body" the floor is one line), the rest pose's numbers
@@ -816,7 +792,7 @@ def sheet(models, region="body", side="L", views=None, poses=("rest",), size=360
     keys = []
     for nums in table.values():
         keys += [k for k in nums if k not in keys]
-    font = _font(13)
+    font = fonts.label_font(13)
     name_w, val_w, line_h = 190, 96, 17
     grid_w = cols * size
     width = max(grid_w, name_w + val_w * len(models) + 16)

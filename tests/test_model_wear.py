@@ -3,6 +3,7 @@ socks, sneakers and choker, on the girl base (her breasts grown as [body] bust l
 import numpy as np
 import pytest
 
+from mkmmd import pixmap as PX
 from mkmmd.model import build as BD
 from mkmmd.model import spec as SP
 from mkmmd.model.parts import outfit as OU
@@ -205,11 +206,13 @@ def test_with_her_arms_down_the_band_is_one_level_ring(dressed):
 
 def test_the_sleeves_run_into_the_body_under_the_arms(dressed):
     """An off-shoulder sweater, not a tube top with arm rings: the band goes over each upper arm and opens under it, so
-    the knit is one piece (the sleeves run into the body under the arms) and the skin straight under each shoulder joint,
-    3 cm along the arm, is under the knit, not the band."""
+    the knit is one piece (the sleeves run into the body under the arms: one piece of knit reaches both wrists and her
+    waist; the webs under the arms are pieces of their own) and the skin straight under each shoulder joint, 3 cm along
+    the arm, is under the knit, not the band."""
     ctx, parts, fit = dressed
     S = fit.S
     m = parts["sweater"].meshes[0]
+    V = np.asarray(m.verts)
     knit = [f for f, k in zip(m.faces, m.face_mat) if k == 0]
     used = np.unique([i for f in knit for i in f])
     parent = {int(i): int(i) for i in used}
@@ -222,7 +225,11 @@ def test_the_sleeves_run_into_the_body_under_the_arms(dressed):
     for f in knit:
         for j in f[1:]:
             parent[find(int(j))] = find(int(f[0]))
-    assert len({find(int(i)) for i in used}) == 1
+    roots = np.array([find(int(i)) for i in used])
+    main = roots == np.bincount(roots).argmax()
+    wrist = abs(float(fit.L["wrist.L"][0]))
+    Vm = V[used[main]]
+    assert (Vm[:, 0] > 0.8 * wrist).any() and (Vm[:, 0] < -0.8 * wrist).any() and (np.abs(Vm[:, 0]) < 0.02).any()
     sh = SH.Shell.from_part(parts["body"])
     c = SP.merge(SW.DEFAULTS, ctx.spec.get("sweater"))
     band = SW.fields(sh, fit, c)["band"]
@@ -232,6 +239,85 @@ def test_the_sleeves_run_into_the_body_under_the_arms(dressed):
         under = (sg * V[:, 0] > 0) & (np.abs(s - 0.03 * S) < 0.006) & (V[:, 2] < arm[2] - 0.02 * S) \
             & (np.abs(V[:, 1] - arm[1]) < 0.01)
         assert under.sum() >= 1 and (band[under] > c["band"]["height"] * S).all(), band[under]
+
+
+def _front_map(parts, z, x=0.0, dist=1.2, size=500):
+    """The pixel map (mkmmd.pixmap) of the dressed parts at rest from straight in front, at height z."""
+    P, T, tm, mats = [], [], [], []
+    off = 0
+    for part in parts.values():
+        for mesh in part.meshes:
+            if not len(mesh.verts):
+                continue
+            ids = [mats.index(n) if n in mats else mats.append(n) or len(mats) - 1 for n in mesh.mats]
+            for f, k in zip(mesh.faces, mesh.face_mat):
+                for j in range(1, len(f) - 1):
+                    T.append((f[0] + off, f[j] + off, f[j + 1] + off))
+                    tm.append(ids[k])
+            P.append(np.asarray(mesh.verts, float))
+            off += len(mesh.verts)
+    P = np.concatenate(P)
+    M = np.eye(4)
+    M[:3, 0], M[:3, 1], M[:3, 2], M[:3, 3] = (1, 0, 0), (0, 0, 1), (0, -1, 0), (x, -dist, z)
+    geo = {"posed": P, "rest": P, "tris": np.asarray(T), "tri_object": np.zeros(len(T), np.int32),
+           "tri_material": np.asarray(tm, np.int32), "tri_face": np.zeros(len(T), np.int32),
+           "objects": np.array(["model"]), "materials": np.array(mats)}
+    return PX.Map.make(geo, {"matrix": M.tolist(), "lens": 50.0, "sensor": [36.0, 24.0], "size": [size, size]})
+
+
+def test_the_band_runs_on_across_the_front_of_each_armpit(dressed):
+    """The band is one piece round the top of her body: seen from the front at rest, from her chest over each arm it runs
+    on across the armpit's front, with no knit showing through the middle of its depth there (a band that opened across
+    the front of the armpit would show the knit through a notch from its top to its bottom edge)."""
+    _, parts, fit = dressed
+    S = fit.S
+    arm = np.asarray(fit.L["arm.L"], float)
+    m = _front_map(parts, arm[2] - 0.05 * S)
+    band, knit = m.mask([SW.MAT_RIB, SW.MAT_INK]), m.mask(SW.MAT_KNIT)
+    _, ys, _ = m.cam.project(np.array([[0.0, -0.2, arm[2] + 0.02 * S], [0.0, -0.2, arm[2] - 0.12 * S]]))
+    rows = np.arange(int(ys[0]), int(ys[1]) + 1)                           # the collar's heights, not the waistband's
+    for sg in (1.0, -1.0):
+        xs, _, _ = m.cam.project(np.array([[sg * 0.6 * arm[0], 0.0, arm[2]], [sg * 1.2 * arm[0], 0.0, arm[2]]]))
+        shown = 0
+        for col in range(int(min(xs)), int(max(xs)) + 1):
+            hit = rows[band[rows, col]]
+            if len(hit) > 1:
+                third = (hit[-1] - hit[0]) // 3
+                shown += int(knit[hit[0] + third:hit[-1] - third + 1, col].sum())
+        assert shown == 0, (sg, shown)
+
+
+def _arm_share(mesh):
+    w = mesh.weights
+    return sum(np.asarray(v, float) for b, v in w.items() if OF.is_arm(b))
+
+
+def test_a_web_joins_each_sleeve_to_her_side_below_the_armpit(dressed):
+    """Under each arm the knit reaches from the sleeve's underside to her side below the armpit, as the sweater in the
+    photo does: seen from the front at rest, what shows halfway from the armpit's corner to the web's free edge is that
+    knit (not her side or the space beyond); along its free edge its weights go from her side's (no arm) at the side end
+    to the sleeve's (all arm) at the sleeve end, so it folds between them when the arm comes down and spans the gap when
+    it goes up."""
+    _, parts, fit = dressed
+    S = fit.S
+    info = parts["sweater"].info["web"]
+    mesh = parts["sweater"].meshes[0]
+    V = np.asarray(mesh.verts)
+    share = _arm_share(mesh)
+    arm = np.asarray(fit.L["arm.L"], float)
+    m = _front_map(parts, arm[2] - 0.08 * S)
+    for side, sg in (("L", 1.0), ("R", -1.0)):
+        corner, at_side, at_sleeve = (np.asarray(info[side][k], float) for k in ("corner", "side", "sleeve"))
+        assert corner[2] - at_side[2] > 0.06 * S                                # well below the armpit
+        middle = corner + 0.5 * (0.5 * (at_side + at_sleeve) - corner)
+        x, y, _ = m.cam.project(middle[None])
+        a = m.at(int(x[0]), int(y[0]))
+        assert a["material"] == SW.MAT_KNIT and np.linalg.norm(np.asarray(a["world"]) - middle) < 0.03 * S, (side, a)
+        edge = np.flatnonzero((np.abs(V[:, 1] - corner[1]) < 1e-9) & (sg * V[:, 0] > 0.0))   # the free edge: in the plane
+        edge = edge[np.linalg.norm(V[edge] - 0.5 * (at_side + at_sleeve), axis=1) < np.linalg.norm(at_sleeve - at_side)]
+        by = np.argsort(np.linalg.norm(V[edge] - at_side, axis=1))
+        assert len(edge) >= 8
+        assert share[edge[by[:2]]].max() < 0.2 and share[edge[by[-2:]]].min() > 0.8, (side, share[edge[by]])
 
 
 def _knit(part):

@@ -7,13 +7,16 @@ dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out 
 only [object names: hide every other mesh]; styles (default true: shots with a render-time look, `style = "silhouette"`,
 `"vector"` or `reflection`, are rendered in it, see mkmmd.blender.styles); layers {dir, demands} (the layers transitions
 and inserts need for the cut's frames, drawn per size into <dir>/<size name>/ before the views: mkmmd.blender.transition;
-the CLI composites them over the cut's images). Each image of a shot view reports `screen`: the RGBA layer of its screen
-type (<out>/<size name>/screen/<frame>.png, mkmmd.core.screentype) or None; the CLI lays it over the image last, as
-`mk post` does."""
+the CLI composites them over the cut's images); map (default false: each image also reports `map_camera`, its camera as
+mkmmd.pixmap.Camera reads it, and `map_geo`, an .npz in `out` with the geometry of its frame as it rendered, written
+once per frame: the CLI rasterises the pixel map from them and removes the file). Each image of a shot view reports
+`screen`: the RGBA layer of its screen type (<out>/<size name>/screen/<frame>.png, mkmmd.core.screentype) or None; the
+CLI lays it over the image last, as `mk post` does."""
 import math
 import os
 
 import bpy
+import numpy as np
 from mathutils import Vector
 
 from ..core import screentype as SRT
@@ -25,6 +28,68 @@ from .ops_core import _namespace
 from .runtime import op
 
 ENGINES = {"eevee": "BLENDER_EEVEE_NEXT", "workbench": "BLENDER_WORKBENCH", "cycles": "CYCLES"}
+SURFACES = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
+
+
+def _camera_info(sc):
+    """The active camera as mkmmd.pixmap.Camera reads it, at the render's size."""
+    cam, r = sc.camera, sc.render
+    cd, pct = cam.data, r.resolution_percentage / 100.0
+    return {"name": cam.name, "matrix": [list(row) for row in cam.matrix_world], "type": cd.type, "lens": cd.lens,
+            "sensor": [cd.sensor_width, cd.sensor_height], "fit": cd.sensor_fit, "shift": [cd.shift_x, cd.shift_y],
+            "ortho_scale": cd.ortho_scale, "clip_start": cd.clip_start,
+            "size": [int(r.resolution_x * pct), int(r.resolution_y * pct)]}
+
+
+def _geometry(sc, path):
+    """Write the geometry of the frame for a pixel map (mkmmd.pixmap) to `path`: every object that renders, as it renders
+    (world) and at rest (its mesh's own coordinates; NaN where a modifier changes the vertex count), in triangles with
+    their object, material and polygon."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    posed, rest, tris, tobj, tmat, tface, objects, materials = [], [], [], [], [], [], [], {}
+    off = 0
+    for ob in sc.objects:
+        if ob.type not in SURFACES or ob.hide_render:
+            continue
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        try:
+            n = len(me.vertices)
+            if not n or not len(me.polygons):
+                continue
+            co = np.empty(n * 3, np.float32)
+            me.vertices.foreach_get("co", co)
+            M = np.array(ev.matrix_world, float)
+            P = co.reshape(-1, 3).astype(float) @ M[:3, :3].T + M[:3, 3]
+            R = np.full((n, 3), np.nan, np.float32)
+            if ob.type == "MESH" and len(ob.data.vertices) == n:
+                ob.data.vertices.foreach_get("co", R.reshape(-1))
+            me.calc_loop_triangles()
+            k = len(me.loop_triangles)
+            tv, pi, mi = np.empty(k * 3, np.int32), np.empty(k, np.int32), np.empty(k, np.int32)
+            me.loop_triangles.foreach_get("vertices", tv)
+            me.loop_triangles.foreach_get("polygon_index", pi)
+            me.loop_triangles.foreach_get("material_index", mi)
+            slots = [s.material.name if s.material else "" for s in ev.material_slots] or [""]
+            ids = np.array([materials.setdefault(name, len(materials)) for name in slots], np.int32)
+            posed.append(P.astype(np.float32))
+            rest.append(R)
+            tris.append(tv.reshape(-1, 3) + off)
+            tobj.append(np.full(k, len(objects), np.int32))
+            tmat.append(ids[np.clip(mi, 0, len(ids) - 1)])
+            tface.append(pi)
+            objects.append(ob.name)
+            off += n
+        finally:
+            ev.to_mesh_clear()
+
+    def cat(parts, shape, dtype):
+        return np.concatenate(parts).astype(dtype) if parts else np.zeros(shape, dtype)
+    np.savez(path, posed=cat(posed, (0, 3), np.float32), rest=cat(rest, (0, 3), np.float32),
+             tris=cat(tris, (0, 3), np.int32), tri_object=cat(tobj, (0,), np.int32),
+             tri_material=cat(tmat, (0,), np.int32), tri_face=cat(tface, (0,), np.int32),
+             objects=np.array(objects, dtype=str), materials=np.array(list(materials), dtype=str))
+    return path
 
 
 def _facing(arm_name):
@@ -90,7 +155,7 @@ def look(args):
                 FRZ.frame_set(sc, f, freezes)
                 layers.run(f)
         looks.leave()
-    out = []
+    out, geos = [], {}
     for v in views:
         FRZ.release()                                    # a freeze's held markers back before they are looked at
         if v["kind"] == "shot":                          # restore the cut
@@ -136,9 +201,15 @@ def look(args):
                 else:
                     layer = None
                     bpy.ops.render.render(write_still=True)
-                out.append({"view": v["name"], "size": size["name"], "frame": int(f), "path": path,
-                            "camera": sc.camera.name if sc.camera else None,
-                            "screen": layer if layer and os.path.exists(layer) else None})
+                item = {"view": v["name"], "size": size["name"], "frame": int(f), "path": path,
+                        "camera": sc.camera.name if sc.camera else None,
+                        "screen": layer if layer and os.path.exists(layer) else None}
+                if args.get("map"):                      # a frozen cut frame may hold another pose than the set's
+                    key = ("cut" if v["kind"] == "shot" else "set", int(f))
+                    if key not in geos:
+                        geos[key] = _geometry(sc, os.path.join(args["out"], f".map_geo_{key[0]}_{key[1]:05d}.npz"))
+                    item.update(map_geo=geos[key], map_camera=_camera_info(sc))
+                out.append(item)
     FRZ.release()
     if looks is not None:
         looks.close()

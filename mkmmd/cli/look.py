@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 from .. import bridge
 from .. import config as CFG
 from .. import cutfx as CF
+from .. import pixmap as PX
 from .. import post as P
 from ..core import screentype as SRT
 from ..core import transition as TR
@@ -38,6 +39,11 @@ ref.jpg: each reference photo beside a rendered view at the render's height, to 
 the same angle (photo i goes with view i; one photo is repeated beside every view and one view beside every photo; a
 view is its first frame and size).
 
+Measuring: --map writes <image>.map.npz beside every image, what is at each of its pixels (material, object, the point
+in the world and on the model at rest, its depth) from the scene's own geometry seen through the image's camera; `mk
+measure` reads edges, extents, gaps, points and distances off it in pixels and centimetres, and `mk mark` draws a grid
+to read positions and a plan (lines, curves, fills, circles, labels, in pixels or world points) on the image.
+
 Examples:
   mk look --frames 200,400,600 --sheet                       # the cut, every aspect
   mk look --view front,left,back --target 'bone("head").head' --dist 0.6 --frames 300 --sheet
@@ -45,6 +51,7 @@ Examples:
   mk look --view 3q --target 'bone("elbow.L").head' --dist 0.35 --lens 60 --frames 189:189
   mk look --cam CloseUp --frames t=2:4:0.5 --strip --engine workbench
   mk look --frames 1 --view 35:12,90:8 --target '(0, 0, 0.7)' --dist 7 --ref refs/car/front_left.jpg,refs/car/side.jpg
+  mk look --frames 61 --view front --target '(0, 0, 1.07)' --dist 1.1 --lens 60 --size 1100 --map
 """
 
 
@@ -78,6 +85,8 @@ def add(sub):
     p.add_argument("--ref", action="append", metavar="PHOTO[,PHOTO...]", help="reference photos to show beside the "
                    "rendered views in ref.jpg (same height; mk ref photos fetches licensed ones)")
     p.add_argument("--guides", action="store_true", help="draw thirds and the safe area")
+    p.add_argument("--map", action="store_true", help="also write <image>.map.npz beside each image: what is at each "
+                   "pixel, for mk measure and mk mark")
     p.add_argument("--out", help="folder (default: <project>/.mk/look/<time> or ~/.cache/mk/look/<time>)")
     add_project_arg(p)
     p.set_defaults(func=run)
@@ -188,6 +197,27 @@ def side_by_side(pairs, out, label_px=14, pad=8):
     return str(out)
 
 
+def write_maps(shots):
+    """The pixel map beside each image the op handed a camera and geometry for (mkmmd.pixmap); returns their paths. The
+    geometry files are removed."""
+    geos, out = {}, []
+    for s in shots:
+        g, cam = s.pop("map_geo", None), s.pop("map_camera", None)
+        if not g or cam is None:
+            continue
+        if cam.get("type") not in ("PERSP", "ORTHO"):
+            raise UsageError(f"--map: camera {cam.get('name')!r} is {cam.get('type')}; maps take perspective or "
+                             "orthographic cameras")
+        if g not in geos:
+            with np.load(g, allow_pickle=False) as z:
+                geos[g] = {k: z[k] for k in z.files}
+        s["map"] = PX.Map.make(geos[g], cam).save(PX.map_path(s["path"]))
+        out.append(s["map"])
+    for g in geos:
+        Path(g).unlink(missing_ok=True)
+    return out
+
+
 def run(args):
     proj = get_project(args)
     blend = scene_path(args.scene, proj)
@@ -229,7 +259,7 @@ def run(args):
         if dem:
             layers = {"dir": str(out / "layers"), "demands": {str(f): items for f, items in dem.items()}}
     job = {"frames": frames, "views": views, "sizes": sizes, "engine": args.engine, "samples": args.samples,
-           "hide": args.hide, "armature": cast_arm, "styles": not args.no_styles}
+           "hide": args.hide, "armature": cast_arm, "styles": not args.no_styles, "map": args.map}
     t0 = time.time()
     scenes = [("a", blend)] + ([("b", Path(args.ab).expanduser().resolve())] if args.ab else [])
     shots = {}
@@ -283,6 +313,10 @@ def run(args):
         res["effects"] = effects                      # frames shown with their transition / insert composited
     if typed:
         res["screen_type_frames"] = typed             # frames with screen type laid over them ([[text]] with `screen`)
+    if args.map:
+        res["maps"] = write_maps(shots["a"])
+        if args.ab:
+            res["maps_b"] = write_maps(shots["b"])
     if args.ab:
         res["images_b"] = [s["path"] for s in shots["b"]]
         pairs = []

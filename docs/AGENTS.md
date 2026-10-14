@@ -188,6 +188,27 @@ Numbers miss things. `mk look --frames 200,400,600 --sheet` shows the cut in eve
 inspects a detail from all sides; `--ab OTHER.blend` pairs two scenes; `--ref` puts reference photos beside the render. Look at the images before claiming anything about how a shot
 looks: silhouettes and proportions first, surface detail second. Frames inside a transition, an insert or a glitch and frames with screen type are previewed composited; `--no-transitions` and `--no-styles` leave effects and looks out.
 
+### Measuring a render and showing a plan
+
+When the person asks for a change they judge by eye (a collar's depth, how a sleeve meets the body), measure the render
+and mark the plan on it before building, then measure the result against the same marks:
+
+```sh
+mk look build/pose.blend --frames 61 --view front --target '(0, 0, 1.07)' --dist 1.1 --lens 60 --size 1100 --map --out look/plan
+mk mark look/plan/front_sq_00061.jpg --grid                     # read positions in the image's pixels (also photos, drawings)
+mk mark look/plan/front_sq_00061.jpg --grid 25 --crop 250,175,600,675 --zoom 2      # a close look, same coordinates
+mk measure look/plan/front_sq_00061.map.npz                     # the materials seen, their pixels and boxes
+mk measure look/plan/front_sq_00061.map.npz --edges セーターリブ --x 300:900:20 --y 150:500   # a band's top and bottom, cm
+mk measure look/plan/front_sq_00061.map.npz --gaps --y 430:600:10 --x 150:480                 # the space under an arm
+mk mark look/plan/front_sq_00061.jpg --marks plan.toml --ref photo.png --out plan.png         # the plan beside the photo
+```
+
+Draw the plan from the measurements (`mk measure` gives centimetres as seen, `seen_cm`, and between surface points, `cm`, in
+the world and at rest), state sizes in centimetres on it, and show it in a review; after the build, render the same view with
+`--map` and draw the same marks file on the new image (`mk mark NEW.jpg --marks plan.toml`), then measure the result: the
+plan and the result should agree to a few pixels. A point in a marks file can be a world point (`[x, y, z]`, from `mk q` or
+`mk measure --at`); `mk measure --at X,Y` gives a pixel's point on the model at rest, which is where a builder's numbers live.
+
 ### Asking questions of a scene
 
 ```sh
