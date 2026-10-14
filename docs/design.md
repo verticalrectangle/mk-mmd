@@ -3045,9 +3045,10 @@ tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) a
 listing it in `[model] parts`: `sweater` (off-shoulder: one rib band wrapped round the top of her body, at one height
 all round her chest, upper arms and back with her arms down, so it never stops at a shoulder, and open only in a slit
 right under each arm, so it runs on across the front and the back of the armpit in one piece; a loose knit body and
-sleeves in one piece, the sleeves running into the body under the arms, with a web of knit under each arm (`[sweater.web]`:
-a wedge from where the sleeve meets her side down her side and along the sleeve's underside, its weights graded from
-her side's to the sleeve's, so it spans the gap when the arm goes up and folds away when it comes down),
+sleeves in one piece, the sleeves running into the body under the arms, and as an option (off by default) a web of knit
+under each arm (`[sweater.web] side`: a wedge from where the sleeve meets her side down her side and along the sleeve's
+underside, its weights graded from her side's to the sleeve's, so it spans the gap when the arm goes up and folds away
+when it comes down),
 that lie on the breasts, hang from the band and below the bust and gather into a rib
 waistband and cuffs), `pants` (skinny), `socks` (ribbed crew), `sneakers` (high-tops: the Mary-Jane's foot fitting with
 a sneaker's settings and a painted face), `choker` (band and flower), and `hair_bow` (a bow on the side of the head with
@@ -3067,7 +3068,10 @@ materials セーター線, 靴下線, ズボン線), and the sneakers' painted f
 locks off every garment built before it (`[model] parts` order), so long hair rests on a sweater instead of inside it.
 `[body] bust` (metres, the mesh body) moves each breast's front forward as it is, keeping the donor's round shape; the
 flesh it grows follows the chest (`body_donor.chest_flesh`: the shoulder girdle's weights go to 上半身2 there), so the
-breasts keep their shape when the arms come down.
+breasts keep their shape when the arms come down. `[body] bust_tip` moves each breast's tip that much more over a smaller
+round (`body_donor.BUST_TIP_RADII`, 3.5 to 4.5 cm): negative flattens their curve, the fullest part back while the
+chest round them stays where `bust` put it, which reads as a smaller cup in profile (about a centimetre at most: much
+more hollows the front).
 
 | Convention | |
 |---|---|

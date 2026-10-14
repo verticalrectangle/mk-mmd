@@ -4,8 +4,9 @@ bases/girl/make_body.py makes that asset from its source.
 
 Spec (`[body]` in body.toml): `source = "mesh"` and `mesh = "base:girl/body.npz"` (a relative path is taken against the
 spec's folder; a missing asset with a maker beside it is made on first use), `bust` (metres, default 0: the breasts
-grown forward, `grow_bust`), plus the procedural body's keys that still apply: skin, nails, neck_shadow, hand (the hands
-are the hand part's, welded on at the wrists), land, dims, skeleton.
+grown forward, `grow_bust`), `bust_tip` (metres, default 0: each breast's tip moved forward that much more, negative
+back, which flattens the breasts' curve), plus the procedural body's keys that still apply: skin, nails, neck_shadow,
+hand (the hands are the hand part's, welded on at the wrists), land, dims, skeleton.
 
 The fit (`fit`) takes the asset's own space to the character's; k is her neck seam's height over the donor's neck cut,
 [proportions] leg_extra left out (longer legs make no wider body):
@@ -18,9 +19,9 @@ The fit (`fit`) takes the asset's own space to the character's; k is her neck se
          `foot_length` and `foot_width`, its sole stood on her shoe's inner floor (`foot_inner_floor_z`) and its ankle on hers
   blend  every vertex takes the torso warp, its arm's and its leg's transforms by its share of each region (`membership`);
          a limb's segments hand over by smooth steps across their joints (HALF)
-Then the breasts grow by `bust` (`grow_bust`: the front of each moved forward as it is, keeping the donor's own round
-shape; the flesh it grows follows the chest, not an arm, `chest_flesh`), the neck's cut ring is
-laid onto the seam ellipse the head builds on (the skin below follows, fading over NECK_EASE),
+Then the breasts grow by `bust` and their tips by `bust_tip` (`grow_bust`: the front of each moved forward as it is,
+keeping the donor's own round shape; the flesh it grows follows the chest, not an arm, `chest_flesh`), the neck's cut
+ring is laid onto the seam ellipse the head builds on (the skin below follows, fading over NECK_EASE),
 and each forearm is cut at the asset's edge loop nearest before the hand's seam: a strip joins that loop to a ring of the
 hand's seam size sampled from the fitted forearm at the seam, and the hand is welded to that ring as to the procedural
 forearm's last ring (with the designed hand, the ring's section table comes from the fitted forearm too).
@@ -73,6 +74,7 @@ BUST_RADII = (0.060, 0.090, 0.120, 0.075)   # [body] bust: a breast's growth rea
 BUST_OUT = 0.006            # ... whose centre is this far outward of the breast's front and BUST_DROP below it
 BUST_DROP = 0.004
 BUST_TILT = 0.30            # the outer side of the growth leans outward this much (per metre forward)
+BUST_TIP_RADII = (0.035, 0.045, 0.045, 0.033)   # [body] bust_tip: a tip's own move reaches this far in, out, up and down
 GAP = 0.004                 # the forearm is cut at an edge loop at least this far before the hand's seam
 REACH = 0.06                # the forearm's section at the seam is the skin within this distance of the arm's centre line
 REF = (0.0, -1.0, 0.0)      # a forearm ring's first point faces this way (body_mesh.arm_shell's convention)
@@ -230,33 +232,51 @@ def fit(A, shape, nt, extra=0.0):
     return out
 
 
-def grow_bust(V, A, amount):
-    """The breasts grown `amount` metres forward ([body] bust); changes V and returns (n,) each vertex's share of the
-    growth (0..1). Each breast's front is the donor's most forward
+def _breast_bump(V, sg, f, radii, torso, out=0.0, drop=0.0):
+    """(n,) g = 1 - 3 s^2 + 2 s^3 of s, the squared normalised distance from a centre `out` outward of the breast's
+    front `f` (side `sg`) and `drop` below it, over an ellipse of the frontal plane (`radii`: in towards the middle, out,
+    up, down): flat on top, easing to nothing at its edge without a crease; on her front only (within 7 cm of `f`,
+    fading over 3), on the torso."""
+    r_in, r_out, r_up, r_lo = radii
+    dx, dz = sg * (V[:, 0] - f[0]) - out, V[:, 2] - (f[2] - drop)
+    s = np.clip((dx / np.where(dx > 0, r_out, r_in)) ** 2 + (dz / np.where(dz > 0, r_up, r_lo)) ** 2, 0.0, 1.0)
+    front = smoothstep(np.clip((f[1] + 0.07 - V[:, 1]) / 0.03, 0.0, 1.0))
+    return (1.0 - 3.0 * s * s + 2.0 * s ** 3) * front * torso
+
+
+def _bust_way(V):
+    """(n, 3) the way a breast grows: forward, the outer side leaning outward (BUST_TILT)."""
+    side = np.sign(V[:, 0]) * smoothstep(np.clip((np.abs(V[:, 0]) - 0.01) / 0.06, 0.0, 1.0))
+    return unit(np.stack([BUST_TILT * side, -np.ones(len(V)), np.zeros(len(V))], 1))
+
+
+def grow_bust(V, A, amount, tip=0.0):
+    """The breasts grown `amount` metres forward ([body] bust) and their tips `tip` more ([body] bust_tip); changes V and
+    returns (n,) each vertex's share of the growth (0..1). Each breast's front is the donor's most forward
     torso vertex on its side within 3 cm of bust_z; round a centre BUST_OUT outward of it and BUST_DROP below, the skin
-    of her front moves forward by amount x g over an ellipse of the frontal plane (BUST_RADII: in towards the middle,
-    out, up, down), g = 1 - 3 s^2 + 2 s^3 of s, the squared normalised distance from the centre: flat on top, so the
+    of her front moves forward by amount x g (`_breast_bump`) over BUST_RADII: flat on top, so the
     whole front of the donor's breast moves forward as it is and keeps its own round shape (it is not drawn out into a
     point), easing to nothing at the ellipse's edge without a crease. Where the two meet (the cleavage) they combine by
     a smooth max (not their sum), so the body stays a mirror image; the way is forward, the outer side leaning outward
-    (BUST_TILT)."""
-    if not amount:
+    (BUST_TILT). Then round each grown front itself the skin moves forward by tip x g over the smaller BUST_TIP_RADII:
+    a negative tip takes the breasts' fullest part back while the chest round them stays where `amount` put it (less
+    projecting, a flatter curve in profile, as a smaller cup), a positive one points them. Keep a negative tip to about
+    a centimetre: on the girl's donor with a 5 cm bust, 2 cm hollows the front (its fullest point jumps to the round's
+    edge)."""
+    if not amount and not tip:
         return np.zeros(len(V))
     D, torso = A["verts"], A["member"][:, 0]
-    r_in, r_out, r_up, r_lo = BUST_RADII
-    hs = []
+    fronts, hs = [], []
     for sg in (1.0, -1.0):
         near = np.flatnonzero((torso > 0.5) & (np.abs(D[:, 2] - A["bust_z"]) < 0.03) & (sg * D[:, 0] > 0.01))
-        tip = V[near[np.argmin(D[near, 1])]]
-        dx, dz = sg * (V[:, 0] - tip[0]) - BUST_OUT, V[:, 2] - (tip[2] - BUST_DROP)
-        s = np.clip((dx / np.where(dx > 0, r_out, r_in)) ** 2 + (dz / np.where(dz > 0, r_up, r_lo)) ** 2, 0.0, 1.0)
-        front = smoothstep(np.clip((tip[1] + 0.07 - V[:, 1]) / 0.03, 0.0, 1.0))    # her front only, not her back
-        hs.append((1.0 - 3.0 * s * s + 2.0 * s ** 3) * front * torso)
+        fronts.append(near[np.argmin(D[near, 1])])
+        hs.append(_breast_bump(V, sg, V[fronts[-1]], BUST_RADII, torso, BUST_OUT, BUST_DROP))
     h = np.minimum((hs[0] ** 4 + hs[1] ** 4) ** 0.25, 1.0)
-    side = np.sign(V[:, 0]) * smoothstep(np.clip((np.abs(V[:, 0]) - 0.01) / 0.06, 0.0, 1.0))
-    way = unit(np.stack([BUST_TILT * side, -np.ones(len(V)), np.zeros(len(V))], 1))
-    V += float(amount) * h[:, None] * way
-    return h
+    V += float(amount) * h[:, None] * _bust_way(V)
+    if tip:
+        ts = [_breast_bump(V, sg, V[i].copy(), BUST_TIP_RADII, torso) for sg, i in zip((1.0, -1.0), fronts)]
+        V += float(tip) * np.maximum(ts[0], ts[1])[:, None] * _bust_way(V)
+    return h if amount else np.zeros(len(V))
 
 
 GIRDLE = ("肩", "腕", "腕捩", "ひじ", "手捩", "手首")  # what a shoulder or an arm takes of the upper chest
@@ -556,7 +576,7 @@ def build_donor(ctx):
 
     # ---- the fitted skin, cut at the wrists
     V = fit(A, shape, nt, float(ctx.get("proportions.leg_extra") or 0.0))
-    grown = grow_bust(V, A, float(cfg.get("bust", 0.0)))
+    grown = grow_bust(V, A, float(cfg.get("bust", 0.0)), float(cfg.get("bust_tip", 0.0)))
     onto_seam(V, A["neck"], nt)
     faces, twin = A["faces"], A["mirror"]
     tris = G.triangulated(faces)

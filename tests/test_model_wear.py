@@ -26,6 +26,16 @@ def dressed(tmp_path_factory):
     return ctx, parts, OU.make_fit(ctx)
 
 
+@pytest.fixture(scope="module")
+def webbed(tmp_path_factory):
+    """The girl base in the sweater with its web under each arm switched on (it is off by default): (ctx, parts, Fit)."""
+    spec = SP.load("base:girl", ['model.parts=["body", "sweater"]', "body.bust=0.02", "sweater.web.side=0.075"])
+    ctx = BD.BuildCtx(spec, tmp_path_factory.mktemp("webbed"), seed=1)
+    parts = {p.name: p for p in BD.run(spec, ctx=ctx)}
+    ctx.part = "test"
+    return ctx, parts, OU.make_fit(ctx)
+
+
 def _grid(n=6):
     """A unit square in the z = 0 plane, n x n quads split into triangles, facing +z; weights a = x, b = 1 - x."""
     t = np.linspace(0.0, 1.0, n + 1)
@@ -292,13 +302,13 @@ def _arm_share(mesh):
     return sum(np.asarray(v, float) for b, v in w.items() if OF.is_arm(b))
 
 
-def test_a_web_joins_each_sleeve_to_her_side_below_the_armpit(dressed):
-    """Under each arm the knit reaches from the sleeve's underside to her side below the armpit, as the sweater in the
-    photo does: seen from the front at rest, what shows halfway from the armpit's corner to the web's free edge is that
-    knit (not her side or the space beyond); along its free edge its weights go from her side's (no arm) at the side end
-    to the sleeve's (all arm) at the sleeve end, so it folds between them when the arm comes down and spans the gap when
-    it goes up."""
-    _, parts, fit = dressed
+def test_a_web_joins_each_sleeve_to_her_side_below_the_armpit(webbed):
+    """Switched on, under each arm the knit reaches from the sleeve's underside to her side below the armpit, as the
+    sweater in the photo does: seen from the front at rest, what shows halfway from the armpit's corner to the web's
+    free edge is that knit (not her side or the space beyond); along its free edge its weights go from her side's (no
+    arm) at the side end to the sleeve's (all arm) at the sleeve end, so it folds between them when the arm comes down
+    and spans the gap when it goes up."""
+    _, parts, fit = webbed
     S = fit.S
     info = parts["sweater"].info["web"]
     mesh = parts["sweater"].meshes[0]

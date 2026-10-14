@@ -34,11 +34,12 @@ Where the pieces are, as fields on the skin (sizes in metres x S, S = head_tip.z
             cannot reach, the armpits and the cleavage, it lies on it instead of going in; before its smoothing, so it
             evens the spans, and again after it below the band, which the smoothing pulls back into the armpits; its
             part under the band stays behind the band; 0: off)
-  web       under each arm a wedge of knit (`web`) spans from where the sleeve meets her side down `side` metres along
-            her side and `sleeve` along the sleeve's underside, its free edge hanging `sag` of `side` below the line
-            between those ends, `depth` to the front and the back of the plane through the shoulder joint at the armpit,
-            closing to the free edge; its weights go from her side's to the sleeve's, so with the arm raised it spans the
-            gap and with it lowered it folds away between them (`side` 0: none)
+  web       an option, off by default (`side` 0): under each arm a wedge of knit (`web`) spans from where the sleeve
+            meets her side down `side` metres along her side and `sleeve` along the sleeve's underside, its free edge
+            hanging `sag` of `side` below the line between those ends, `depth` to the front and the back of the plane
+            through the shoulder joint at the armpit, closing to the free edge; its weights go from her side's to the
+            sleeve's, so with the arm raised it spans the gap and with it lowered it folds away between them (a dolman
+            sleeve's underarm; `side` 0.075 meets her side about 4 cm below the armpit with her hand on her hip)
   waistband `above_hip` (its top) over the hip joints (landmark leg.L), `height` deep, snug (`offset`), its hem rolled
   cuffs     `length` up the forearm from the wrist, `past` beyond it, snug, rolled at the hand
   ink       drawn lines (outfit_ink, `width` wide): ribs across the band, the waistband and the cuffs every `band` /
@@ -72,7 +73,7 @@ DEFAULTS = {
     "waistband": {"above_hip": 0.095, "height": 0.034, "offset": 0.006, "relax": 4},
     "cuff": {"length": 0.062, "past": 0.004, "offset": 0.006, "relax": 4},
     "ink": {"enabled": True, "width": 0.0026, "band": 0.040, "waistband": 0.040, "cuff": 0.024, "folds": True},
-    "web": {"side": 0.075, "sleeve": 0.09, "sag": 0.35, "depth": 0.03},
+    "web": {"side": 0.0, "sleeve": 0.09, "sag": 0.35, "depth": 0.03},
     "bridge": 0.045,
     "seed": 7,
 }

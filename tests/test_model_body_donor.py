@@ -205,6 +205,29 @@ def test_bust_grows_round_breasts_forward_and_nothing_else(donor, busty):
     assert (twin >= 0).all() and np.allclose(move[twin] * [-1.0, 1.0, 1.0], move, atol=1e-6)
 
 
+def test_bust_tip_takes_the_fullest_part_back_and_keeps_the_chest(busty, tmp_path):
+    """[body] bust_tip moves each breast's tip on top of the bust (negative: back): the most moved skin is the two tips,
+    alike (mirror images), back by that much; the fullest point stays where it was (no hollow with a crest round it)
+    and curves more gently there (a flatter breast in profile); nothing 5 cm or more from the tips moves, so the chest
+    round them stays where the bust put it."""
+    A = np.asarray(busty.meshes[0].verts)
+    B = np.asarray(make(tmp_path, "body.bust=0.05", "body.bust_tip=-0.01").meshes[0].verts)
+    move = B - A
+    dist = np.linalg.norm(move, axis=1)
+    assert 0.0098 < dist.max() < 0.01005 and move[np.argmax(dist), 1] > 0.0095
+    tips = [A[np.argmax(np.where(sg * A[:, 0] > 0, dist, -1.0))] for sg in (1.0, -1.0)]
+    assert tips[0][0] == pytest.approx(-tips[1][0], abs=1e-6) and tips[0][1:] == pytest.approx(tips[1][1:], abs=1e-6)
+    (front, before), (moved, after) = _front_radii(A), _front_radii(B)
+    assert np.linalg.norm((moved - front)[[0, 2]]) < 0.005, (front, moved)
+    assert after[0] > 1.5 * before[0], (before, after)
+    far = np.min([np.linalg.norm(A - t, axis=1) for t in tips], axis=0) > 0.05
+    assert (dist[far] == 0.0).all()
+    key = lambda P: [tuple(k) for k in np.round(P / 1e-5).astype(np.int64)]
+    at = {k: i for i, k in enumerate(key(A))}
+    twin = np.array([at.get(k, -1) for k in key(A * [-1.0, 1.0, 1.0])])
+    assert (twin >= 0).all() and np.allclose(move[twin] * [-1.0, 1.0, 1.0], move, atol=1e-6)
+
+
 def test_the_grown_bust_moves_with_the_chest(donor, busty):
     """The flesh [body] bust grows follows the chest, not an arm: where the skin moved a third of the bust or more no
     shoulder or arm bone has any weight (the shoulder girdle's share of the upper chest would pull a grown breast in when
