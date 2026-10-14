@@ -28,18 +28,20 @@ Model (position-based strands)
              tips; the tension that shortened a child also pulls its parent (dynamic FTL, Mueller et al. 2012: parent
              velocity -= FTL_DAMP * the child's move / dt), which keeps the swing: a strand in a 22 m/s carrier's wind is
              half as jerky (median) and four times calmer at the 95th percentile than with FTL_DAMP = 0.
-  sheets     `lateral` (0..1, default 0.5 for skirts, 0 elsewhere) ties the chains of a sheet-like family into a cloth:
-             neighbouring chains are found from the rest positions (ring_neighbours: the chains of a family ordered by
-             the angle of their roots around the skirt's axis, a ring when no slit interrupts it), the particles of the
-             same row of neighbours are held at their rest distance (a distance constraint per iteration removing
-             `lateral` of the error: the cloth stretches and bunches under contact instead of splaying apart or
-             collapsing), and the cloth between the chains, sampled like a chain's own segments at the midpoints of
-             each pair of segments, is pushed out of the shapes by the two particles of the pair (`lateral_collide`,
-             default 1): the visible surface that skinning interpolates between chains no longer sinks into a seat or a
-             thigh. A sheet also collides with the body it hangs from near its roots (`anchor_free` 0 instead of the
-             global zone, unless set per family). A midpoint skips what either chain skips and what it overlaps at
-             rest. Linked chains advance together (one thread per ring); with lateral 0 chains stay independent and
-             results are those of the uncoupled solver. Penetration (pen, worst) includes the cloth midpoints.
+  sheets     `lateral` (0..1, default 0.5 for skirts and for chains the rig ties, 0 elsewhere) ties chains into a
+             cloth: chains the rig description ties sideways (a chain's `ties`, from the joints between their bodies:
+             a row along a sleeve as well as a ring) are neighbours as tied; the other chains of a sheet-like family are
+             found from the rest positions (ring_neighbours: the chains of a family ordered by the angle of their roots
+             around the skirt's axis, a ring when no slit interrupts it). The particles of the same row of neighbours
+             are held at their rest distance (a distance constraint per iteration removing `lateral` of the error: the
+             cloth stretches and bunches under contact instead of splaying apart or collapsing), and the cloth between
+             the chains, sampled like a chain's own segments at the midpoints of each pair of segments, is pushed out of
+             the shapes by the two particles of the pair (`lateral_collide`, default 1): the visible surface that
+             skinning interpolates between chains no longer sinks into a seat or a thigh. A sheet also collides with the
+             body it hangs from near its roots (`anchor_free` 0 instead of the global zone, unless set per family). A
+             midpoint skips what either chain skips and what it overlaps at rest. Linked chains advance together (one
+             thread per ring); with lateral 0 chains stay independent and results are those of the uncoupled solver.
+             Penetration (pen, worst) includes the cloth midpoints.
   inertia    `inertia` (0..1, default 1) is the share of its anchor's motion a strand feels. Each substep first carries
              the particles, their velocities and their rest-shape targets along by the rest of the anchor's move since
              the last substep (1 - inertia of its turn about the chain's root, and of the root's shift), so the strand
@@ -72,7 +74,8 @@ Model (position-based strands)
     friction    1/s                  velocity damping while touching something
     wind_drag   1/s (default drag)   how strongly the air pushes the strand: it reaches wind_drag / drag of the air
                                      speed
-    lateral     0..1 (skirt 0.5)     tie stiffness of neighbouring chains (above); 0 = independent chains
+    lateral     0..1 (skirt 0.5)     tie stiffness of neighbouring chains (above; TIE_LATERAL for chains the rig
+                                     ties); 0 = independent chains
     lateral_collide  0 | 1           push the cloth between tied chains out of the shapes (default 1)
     anchor_free m (default global)   zone near the roots where the anchor's body is skipped; 0 for tied sheets
     inertia     0..1 (default 1)     the share of the anchor's motion the strand feels (above); 1 = all of it
@@ -138,6 +141,7 @@ REACH = 25.0 * SMOOTH                               # a shape whose surface is t
                                                     # weighs < e^-25 in the soft union: skipped by the numba kernels
 RING_GAP = 2.5                                       # neighbouring chains: roots at most this x the median gap apart
 RING_MAX_GAP = 2.2                                   # ... and at most this many radians (126 deg) apart
+TIE_LATERAL = 0.5                                    # `lateral` of chains the rig ties, when their family sets none
 BLOCK_BYTES = 48e6                                   # kinematics precomputed per block of frames: about this much memory
 
 PARAM_KEYS = ("sag", "drag", "zeta", "radius", "radius_max", "friction", "wind_drag", "lateral", "lateral_collide",
@@ -508,6 +512,15 @@ class _Model:
         s_chain = level / np.maximum(level + below, 1)
         pr = resolve_params(self.family, params)
         fam = self.family
+        # chains the rig ties sideways (rig.json `ties`): their roots' rows, as pairs
+        root_row = {self.bones[r]: k for k, r in enumerate(self.roots)}
+        self.tie_pairs = sorted({(min(a, b), max(a, b)) for c in (rig or {}).get("chains", [])
+                                 for a in [root_row.get(c.get("root"))] if a is not None
+                                 for b in (root_row.get(t) for t in c.get("ties", ())) if b is not None and b != a})
+        tied_row = np.zeros(len(self.roots), bool)
+        for a, b in self.tie_pairs:
+            tied_row[[a, b]] = True
+        user = params or {}
 
         def get(key):
             return np.array([pr[f][key] for f in fam], float)
@@ -553,6 +566,9 @@ class _Model:
         self.rr = self.rad[self.own]
         rest_W = geom.world(P, self.rest_R, self.rest_p)
         af = np.array([anchor_free if pr[f]["anchor_free"] is None else pr[f]["anchor_free"] for f in fam], float)
+        tied = tied_row[self.row]                         # a tied sheet collides with what it hangs from, unless set
+        unset_af = np.array([(user.get(f) or {}).get("anchor_free") is None for f in fam], bool)
+        af = np.where(tied & unset_af, 0.0, af)
         enable = {}
         for v in dict.fromkeys(af.tolist()):            # the zone near the root where the anchor's body is skipped
             ev = geom.enable_matrix(chains, P, rig, rest_W, radius=self.rad, use_masks=use_masks, anchor_free=v)
@@ -576,6 +592,8 @@ class _Model:
         self.anchor_rot = geom.quat_to_mat(self.src_quat[:, self.a_src].reshape(-1, 4)).reshape(F, N, 3, 3)
         # ---- lateral coupling of sheet-like families: particles of the same row of neighbouring chains are tied
         lat, latc = get("lateral"), get("lateral_collide")
+        unset_lat = np.array([(user.get(f) or {}).get("lateral") is None for f in fam], bool)
+        lat = np.where(tied & unset_lat, TIE_LATERAL, lat)
         self.chain_lists = []
         for r in self.roots:
             b = [int(r)]
@@ -585,14 +603,16 @@ class _Model:
         self.chain_of = np.zeros(N, int)
         for c, b in enumerate(self.chain_lists):
             self.chain_of[b] = c
-        ids = np.where(np.array([lat[b[0]] > 0 for b in self.chain_lists], bool))[0]
+        ids = np.where(np.array([lat[b[0]] > 0 and not tied_row[c] for c, b in enumerate(self.chain_lists)], bool))[0]
         fam_code = {f: i for i, f in enumerate(sorted(set(self.family)))}
         pairs = ring_neighbours(self.head[[self.chain_lists[c][0] for c in ids]],
                                 self.end[[self.chain_lists[c][-1] for c in ids]],
                                 [fam_code[self.family[self.chain_lists[c][0]]] for c in ids]) if len(ids) > 1 else []
+        pairs = [(int(ids[a]), int(ids[b])) for a, b in pairs] + [p for p in self.tie_pairs
+                                                                  if lat[self.chain_lists[p[0]][0]] > 0]
         la, lb = [], []
         for ca, cb in pairs:
-            A, B = self.chain_lists[ids[ca]], self.chain_lists[ids[cb]]
+            A, B = self.chain_lists[ca], self.chain_lists[cb]
             for i in range(min(len(A), len(B))):
                 la.append(A[i])
                 lb.append(B[i])

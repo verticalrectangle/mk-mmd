@@ -627,6 +627,42 @@ def test_ring_neighbours_keep_groups_apart():
     assert len(pairs) == 12 and all((a < 6) == (b < 6) for a, b in pairs)
 
 
+def row_rig(n=4, nb=2, seg=0.03, gap=0.05, ties=True):
+    """A sleeve's bag: n chains of nb bones hanging from a row of roots along x (an arm), each from an anchor of its own;
+    `ties`: each tied sideways to its neighbours in the row (rig.json `ties`, from the joints between their bodies)."""
+    bones, chains = {}, []
+    for c in range(n):
+        x = c * gap
+        bones[f"anchor{c}"] = {"head": [x, 0.0, TOP]}
+        names = [f"r{c}b{i}" for i in range(nb)]
+        for i, name in enumerate(names):
+            bones[name] = {"head": [x, 0.0, TOP - i * seg]}
+        chain = {"family": "sleeve", "root": names[0], "anchor": f"anchor{c}", "bones": names,
+                 "parents": list(range(-1, nb - 1)), "ends": [[x, 0.0, TOP - (i + 1) * seg] for i in range(nb)],
+                 "body_radius": [0.01] * nb}
+        if ties:
+            chain["ties"] = [f"r{d}b0" for d in (c - 1, c + 1) if 0 <= d < n]
+        chains.append(chain)
+    return {"bones": bones, "chains": chains, "bodies": []}
+
+
+def test_chains_the_rig_ties_are_one_sheet_along_a_row():
+    """Chains the rig ties sideways (a row under a sleeve, whose joints tie each to its neighbours) are tied bone to bone
+    along the row, though their family ties nothing by itself, and not closed into a ring nor guessed from a circle
+    (the roots lie on a line); so the end of one drags its neighbour along. Untied, the same chains know nothing of
+    each other."""
+    F = 16
+    ramp = np.zeros((F, 3))
+    ramp[:, 1] = np.linspace(0.0, 0.06, F)                                  # chain 0's anchor slides 6 cm along y
+    poses = {"anchor0": (ramp, np.tile([1.0, 0, 0, 0], (F, 1)))}
+    tied = run(ring_scene(row_rig(), F, poses=poses))
+    free = run(ring_scene(row_rig(ties=False), F, poses=poses))
+    assert sorted(map(tuple, np.sort(tied.links, axis=1).tolist())) == [(0, 2), (1, 3), (2, 4), (3, 5), (4, 6), (5, 7)]
+    assert free.links.shape == (0, 2)
+    moved = lambda res: np.linalg.norm(res.x[-1, 3] - res.x[0, 3])          # the tip of chain 1, next to chain 0
+    assert moved(free) < 1e-3 and moved(tied) > 0.005
+
+
 def test_lateral_defaults_couple_skirts_only_and_are_validated():
     assert strands.resolve_params(["skirt"])["skirt"]["lateral"] > 0
     assert all(strands.resolve_params([f])[f]["lateral"] == 0.0 for f in strands.FAMILY_DEFAULTS if f != "skirt")

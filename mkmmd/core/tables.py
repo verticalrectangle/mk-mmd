@@ -1,7 +1,7 @@
-"""The per-member tables of mk.toml, bpy-free (docs/design.md: Cast, Posing, Perform, Sim): `[pose.<cast>]`,
-`[perform.<cast>]` and `[sim.<cast>]` are named after a cast member and hold the keys their stage reads; anything else is
-a typo the stage would otherwise skip without a word. `check_section` refuses a table that names nobody and a key that is
-in no schema, naming what there is.
+"""The per-member tables of mk.toml, bpy-free (docs/design.md: Cast, Posing, Perform, Sim, Folds): `[pose.<cast>]`,
+`[perform.<cast>]`, `[sim.<cast>]` and `[folds.<cast>]` are named after a cast member and hold the keys their stage
+reads; anything else is a typo the stage would otherwise skip without a word. `check_section` refuses a table that names
+nobody and a key that is in no schema, naming what there is.
 
 A schema maps each key a stage reads to what is below it: None (anything: numbers, strings, targets, lists of numbers), a
 tuple (the keys of a table, or of every table in a list of tables, e.g. `[[pose.<cast>.drape]]` or the events of
@@ -46,7 +46,9 @@ PERFORM = {
 SIM = {k: None for k in ("families", "params", "colliders", "props", "fingers", "floor", "wind", "use_masks", "anchor_free",
                          "substeps", "settle_s", "engine")}
 
-SCHEMAS = {"pose": POSE, "perform": PERFORM, "sim": SIM}
+FOLDS = {"enabled": None, "depth": None}
+
+SCHEMAS = {"pose": POSE, "perform": PERFORM, "sim": SIM, "folds": FOLDS}
 
 
 class TableError(ValueError):

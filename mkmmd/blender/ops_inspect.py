@@ -7,10 +7,11 @@ import numpy as np
 from mathutils import Matrix
 
 from ..core import bonemap, families
+from ..core import rig as RG
 from . import scene as S
 from .runtime import op
 
-SCHEMA = 1
+SCHEMA = RG.SCHEMA
 
 # semantic expression name -> candidate morph names (PMX Japanese first, then common English names)
 MORPHS = {
@@ -159,6 +160,15 @@ def describe(root, arm, path=None, scale=0.08):
                              "head": _v(b.head_local), "tail": _v(b.tail_local), "deform": b.use_deform,
                              "helper": is_helper(b.name)}
                     for b in B}
+    for pb in arm.pose.bones:                     # helper bones: a share of another bone's rotation (or move)
+        mb = getattr(pb, "mmd_bone", None)
+        if mb is None or not (mb.has_additional_rotation or mb.has_additional_location):
+            continue
+        src = mb.additional_transform_bone
+        if src and src in B:
+            rig["bones"][pb.name]["grant"] = {"parent": src, "ratio": round(float(mb.additional_transform_influence), 6),
+                                              "rotate": bool(mb.has_additional_rotation),
+                                              "move": bool(mb.has_additional_location)}
     rig["fingers"] = {}
     for side in ("L", "R"):
         for fing, sems in bonemap.FINGERS.items():
@@ -182,18 +192,16 @@ def describe(root, arm, path=None, scale=0.08):
             dyn[r.bone] = entry
     rig["bodies"] = bodies
     joints = [o for o in bpy.data.objects if getattr(o, "mmd_type", "") == "JOINT" and o.rigid_body_constraint]
-    locked = {}
+    locked, pairs = {}, []
     for j in joints:
         c = j.rigid_body_constraint
         lim = [abs(getattr(c, f"limit_ang_{a}_{s}", 0.0)) for a in "xyz" for s in ("lower", "upper")]
-        b2 = None
-        for side in ("object2", "object1"):
-            ob = getattr(c, side, None)
-            if ob is not None and getattr(ob, "mmd_type", "") == "RIGID_BODY":
-                b2 = ob.mmd_rigid.bone
-                break
-        if b2:
-            locked[b2] = max(lim) < 1e-6
+        ends = [ob.mmd_rigid.bone for ob in (c.object1, c.object2)
+                if ob is not None and getattr(ob, "mmd_type", "") == "RIGID_BODY"]
+        if ends:
+            locked[ends[-1]] = max(lim) < 1e-6
+        if len(ends) == 2 and ends[0] in dyn and ends[1] in dyn:
+            pairs.append(ends)
     chains = []
     roots = [b for b in dyn if not (B[b].parent and B[b].parent.name in dyn)]
     for r in sorted(roots):
@@ -218,6 +226,16 @@ def describe(root, arm, path=None, scale=0.08):
         chains.append({"family": fam, "root": r, "anchor": anc.name if anc else None, "bones": order,
                        "parents": parent_idx, "ends": ends, "branching": bool(branching), "body_radius": radii,
                        "locked_joints": sum(1 for n in order if locked.get(n)), "length": round(span, 4)})
+    root_of = {b: c["root"] for c in chains for b in c["bones"]}
+    ties = {}
+    for a, b in pairs:                            # a joint between bodies of two chains ties them sideways
+        ra, rb = root_of.get(a), root_of.get(b)
+        if ra and rb and ra != rb:
+            ties.setdefault(ra, set()).add(rb)
+            ties.setdefault(rb, set()).add(ra)
+    for c in chains:
+        if c["root"] in ties:
+            c["ties"] = sorted(ties[c["root"]])
     rig["chains"] = chains
     # ---- morphs
     keys = []

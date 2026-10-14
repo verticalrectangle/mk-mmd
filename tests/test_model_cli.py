@@ -154,4 +154,6 @@ def test_mannequin_end_to_end_with_blender(tmp_path, capsys):
     for f in ("mq.pmx", "mq.blend", "mq.rig.json", "build.json", "tex/mannequin_skin.png"):
         assert (d / f).exists(), f
     rj = json.loads((d / "mq.rig.json").read_text(encoding="utf-8"))
-    assert rj["schema"] == 1 and rj["map"]["head"] and rj["morphs"]["blink"] == "まばたき"
+    assert rj["schema"] == 2 and rj["map"]["head"] and rj["morphs"]["blink"] == "まばたき"
+    assert rj["bones"][rj["map"]["eye.L"]]["grant"] == {"parent": rj["map"]["eyes"], "ratio": 1.0, "rotate": True,
+                                                        "move": False}                 # a helper bone's grant

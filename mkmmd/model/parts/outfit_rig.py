@@ -4,6 +4,8 @@ Same conventions as the hair part (PMX collision groups 0..15): the body's stati
 themselves; dynamic chain bodies of the outfit live in groups 7 (ribbons), 9 (skirt), 10 (sleeves), 11 (collar), the
 first body of every chain in group 8 which also ignores group 0 (a root never fights the body it hangs from, exactly the
 pairs mk's strand solver skips near a chain root). All dynamic groups ignore each other."""
+import itertools
+
 import numpy as np
 
 from ..part import Bone, Joint, RigidBody
@@ -13,13 +15,15 @@ GROUPS = {"ribbon": 7, "skirt": 9, "sleeve": 10, "coat": 11}
 ROOT_GROUP = 8
 DYNAMIC = (4, 5, 6, 7, 8, 9, 10, 11)
 
-# per kind: mass, damping (lin, ang), friction, swing limits about the two bend axes (rad), twist (rad), spring
+# per kind: mass, damping (lin, ang), friction, swing limits about the two bend axes (rad), twist (rad), spring; `tie`:
+# the sideways joints between neighbouring chains (Rig.tie): their swing (rad), stretch (x their length) and springs
 PHYSICS = {
     "skirt": dict(mass=0.25, damp=(0.93, 0.95), friction=0.45, swing=(0.85, 0.30), twist=0.10, spring=(10.0, 10.0, 6.0)),
     "ribbon": dict(mass=0.12, damp=(0.90, 0.93), friction=0.30, swing=(0.70, 0.70), twist=0.40, spring=(2.0, 2.0, 1.0)),
     "sleeve": dict(mass=0.10, damp=(0.92, 0.94), friction=0.35, swing=(0.70, 0.40), twist=0.15, spring=(8.0, 8.0, 4.0)),
     "coat": dict(mass=0.10, damp=(0.92, 0.94), friction=0.35, swing=(0.45, 0.30), twist=0.10, spring=(10.0, 10.0, 5.0)),
 }
+TIE = dict(swing=0.6, stretch=0.25, spring_move=(10.0, 10.0, 10.0), spring_rot=(4.0, 4.0, 4.0))
 
 
 def euler_xyz(R):
@@ -134,6 +138,33 @@ class Rig:
                     rot_lo=(-sx, -sy, -tw), rot_hi=(sx, sy, tw), spring_rot=(kx, ky, kz)))
             prev = names[k]
         return names
+
+    def tie(self, chains, closed=False, physics=None):
+        """Sideways joints between the bodies of neighbouring chains (`chains`: lists of bone names in order along a row,
+        or round a ring with `closed`), bone k of one to bone k of the next: MMD moves them as one sheet, and the rig
+        description lists them as each chain's `ties` (mk's strand solver then holds the chains at their distance).
+        Returns the joints' names."""
+        tp = dict(TIE)
+        tp.update(physics or {})
+        heads = {b.name: np.asarray(b.head, float) for b in self.bones}
+        tails = {b.name: np.asarray(b.tail, float) for b in self.bones}
+        bodies = {rb.name for rb in self.bodies}
+        pairs = list(itertools.pairwise(chains)) + ([(chains[-1], chains[0])] if closed and len(chains) > 2 else [])
+        out = []
+        for ca, cb in pairs:
+            for a, b in zip(ca, cb):
+                if a not in bodies or b not in bodies:
+                    continue
+                pa, pb = 0.5 * (heads[a] + tails[a]), 0.5 * (heads[b] + tails[b])
+                d = float(np.linalg.norm(pb - pa))
+                st, sw = tp["stretch"] * d, tp["swing"]
+                out.append(f"J_{a}_{b}")
+                self.joints.append(Joint(
+                    name=out[-1], a=a, b=b, location=tuple(float(x) for x in (pa + pb) / 2),
+                    rotation=euler_xyz(frame_z(pb - pa, tails[a] - heads[a])), move_lo=(-st, -st, -st),
+                    move_hi=(st, st, st), rot_lo=(-sw, -sw, -sw), rot_hi=(sw, sw, sw),
+                    spring_move=tuple(tp["spring_move"]), spring_rot=tuple(tp["spring_rot"])))
+        return out
 
 
 def ring_weights(theta, z, names, z_nodes, z_top, w_top, columns):

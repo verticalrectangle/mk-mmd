@@ -40,7 +40,24 @@ only in their colour:
              of her hips, `thick`, ribbed (`rib`, `rib_depth`), its hem rolled to the inside and its top a lip the knit
              goes in under
   cuffs      `length` up the forearm from the wrist, `past` beyond it, the same make as the waistband
-  seed       the folds' draw
+  helpers    a helper bone at each elbow (左ひじ補助, turning `elbow` of the elbow's bend) and each shoulder (左腕補助,
+             `shoulder` of the upper arm's turn): the knit and ribs the joint's two sides share go to it (`peak` of
+             their shared weight; mkmmd.model.helpers), so a bent elbow or a raised arm keeps the sleeve round instead
+             of pinching it; 0 leaves the helper out
+  chains     under each sleeve a row of `upper` short chains along the upper arm and one of `fore` along the forearm
+             (bones 左袖下1_1, 左袖下1_2 ...: family sleeve, two bones from her arm's skin down to the lowest point of
+             the sleeve's bag, capsules `radius` thick), ending `gap` before the band, the elbow and the cuff, each tied
+             sideways to its neighbours (joints in the PMX, `ties` in the rig description): the bag under the sleeve
+             goes to them (`peak` of it straight under the arm, none at her skin), so it hangs and swings where MMD's
+             physics or mk's solver ([sim] families "sleeve") moves them; `enabled` false leaves them out
+  folds      shapes a joint angle drives (morphs in panel "other", the rig description's `folds`, mkmmd.core.folds):
+             セーター肘左/右 the crook of the elbow bunching into ridges as it bends (25 to 115 degrees), セーター腕上げ
+             左/右 the sleeve's top bunching by the shoulder and the knit standing out over the armpit as the arm rises
+             (75 to 150 degrees from hanging), セーター腕前左/右 diagonal folds across her back as the arm reaches
+             forward, セーター前屈 ridges across her front above the waistband as she leans forward, セーター捻り左/右
+             diagonal folds round her sides as her chest turns on her hips; `depth` scales them all, `enabled` false
+             leaves them out (mk keys them from her pose in its folds stage; in MMD they are sliders)
+  seed       the draw of the knit's own pleats, drape and gathers
 
 Sizes are metres x S (S = head_tip.z / 1.7 with leg_extra left out). Every piece carries the weights of the skin nearest
 to it, smoothed round its rings over `spread` metres (band, body), so the sweater moves with her in any pose; on her
@@ -50,14 +67,16 @@ sleeves) and rib (the band, waistband and cuffs). Materials セーター (knit) 
 outlined dark."""
 import numpy as np
 
+from .. import helpers as HP
 from .. import skin as SK
 from .. import spec as SP
 from ..build import builder
-from ..part import Part
+from ..part import Morph, Part
 from . import outfit as OU
 from . import outfit_fit as OF
 from . import outfit_geo as G
 from . import outfit_ink as INK
+from . import outfit_rig as ORIG
 from . import outfit_shell as SH
 from . import outfit_wear as WR
 
@@ -78,6 +97,9 @@ DEFAULTS = {
     "waistband": {"above_hip": 0.095, "height": 0.034, "offset": 0.004, "thick": 0.005, "rib": 0.008,
                   "rib_depth": 0.0010},
     "cuff": {"length": 0.062, "past": 0.004, "offset": 0.004, "thick": 0.005, "rib": 0.007, "rib_depth": 0.0008},
+    "helpers": {"elbow": 0.5, "shoulder": 0.5, "peak": 0.8},
+    "chains": {"enabled": True, "upper": 4, "fore": 3, "radius": 0.007, "gap": 0.03, "peak": 1.0},
+    "folds": {"enabled": True, "depth": 1.0},
     "seed": 7,
 }
 COLORS = {"knit": "#e7a7eb", "rib": "#9f75b0"}
@@ -490,6 +512,101 @@ def edge_gathers(rings, dirs, skin_field, h, count, depth, fade, rng):
     return rings + dirs * (a * waves(G.ring_theta(M), count, rng)[None, :])[..., None]
 
 
+# ---------------------------------------------------------------- fold shapes (rig description: folds)
+FOLD_NAMES = {"elbow": ("セーター肘", "sweater elbow"), "raise": ("セーター腕上げ", "sweater arm up"),
+              "forward": ("セーター腕前", "sweater arm forward"), "lean": ("セーター前屈", "sweater lean"),
+              "twist": ("セーター捻り", "sweater twist")}
+
+
+def _ridges(x, pitch, sharp=2.0):
+    """0..1 ridges every `pitch` along x (1 on a crest, 0 in the wide trough between: cloth folds bunch in crests)."""
+    return (0.5 + 0.5 * np.cos(TAU * np.asarray(x, float) / pitch)) ** sharp
+
+
+def sleeve_folds(fit, c, side, jp, rings, dirs, ss):
+    """{morph: offsets (K, M, 3)} of one sleeve's fold shapes: the elbow's crook bunching into ridges across it as the
+    elbow bends, the back of the elbow pulled smooth; the top of the sleeve bunching by the shoulder and the bag under
+    the arm standing out (over the armpit) as the arm rises."""
+    S, d0 = fit.S, float(c["folds"]["depth"])
+    M = rings.shape[1]
+    _, _, U, V, _ = arm_frames(fit, side, ss)
+    th = G.ring_theta(M)
+    s_el = float(np.linalg.norm(np.asarray(fit.L[f"elbow.{side}"], float) - np.asarray(fit.L[f"arm.{side}"], float)))
+    crook, outer = np.clip(np.cos(th), 0.0, 1.0) ** 1.5, np.clip(-np.cos(th), 0.0, 1.0) ** 1.5
+    env = np.exp(-((ss - s_el) / (0.045 * S)) ** 2)[:, None]
+    elbow = S * d0 * env * (crook[None, :] * (0.006 * _ridges(ss - s_el, 0.018 * S)[:, None] + 0.002) - 0.0015 * outer)
+    phi_down = np.arctan2(-V[:, 2], -U[:, 2])
+    hang = 0.5 * (1.0 + np.cos(th[None, :] - phi_down[:, None]))
+    near = np.exp(-((ss - ss[0]) / (0.07 * S)) ** 2)[:, None]
+    raise_ = S * d0 * near * (0.004 * (1.0 - hang) ** 2 * _ridges(ss - ss[0], 0.02 * S)[:, None] + 0.004 * hang ** 2)
+    name = {k: f"{v[0]}{jp}" for k, v in FOLD_NAMES.items()}
+    return {name["elbow"]: elbow[..., None] * dirs, name["raise"]: raise_[..., None] * dirs}
+
+
+def body_folds(fit, c, rings, dirs, z_wb):
+    """{morph: offsets (K, M, 3)} of the knit body's fold shapes: by each armpit the knit standing out as that arm
+    rises; diagonal folds across her back from the armpit as an arm reaches forward; ridges across her front above the
+    waistband as she leans forward; diagonal folds round her sides as she twists."""
+    S, d0 = fit.S, float(c["folds"]["depth"])
+    M = rings.shape[1]
+    th = G.ring_theta(M)
+    zs = rings[:, :, 2].mean(1)
+    z_pit = float(fit.L["arm.L"][2]) - c["body"]["pit_drop"] * S
+    z_bust = float(fit.L["bust_front"][2]) if fit.L.has("bust_front") else float(zs[len(zs) // 3])
+    r = np.linalg.norm(rings[..., :2] - rings[..., :2].mean(1, keepdims=True), axis=2).mean()
+    front, back = np.clip(np.cos(th), 0.0, 1.0) ** 1.5, np.clip(-np.cos(th), 0.0, 1.0)
+    by_pit = np.exp(-((zs - z_pit) / (0.04 * S)) ** 2)[:, None]
+    out = {}
+    for side, jp, sg in (("L", "左", 1.0), ("R", "右", -1.0)):
+        at_side = np.clip(sg * np.sin(th), 0.0, 1.0)
+        out[f"{FOLD_NAMES['raise'][0]}{jp}"] = S * d0 * 0.004 * by_pit * (at_side ** 4)[None, :]
+        q = (zs[:, None] - z_pit) + 0.6 * r * (np.pi / 2.0 - np.arccos(np.clip(sg * np.sin(th), -1.0, 1.0)))[None, :]
+        band = np.exp(-((zs - (z_pit - 0.04 * S)) / (0.05 * S)) ** 2)[:, None]
+        out[f"{FOLD_NAMES['forward'][0]}{jp}"] = S * d0 * 0.008 * band * (back * at_side)[None, :] * _ridges(q, 0.03 * S)
+    above = np.clip((zs - z_wb) / (0.10 * S), 0.0, 1.0)
+    lean_env = (G.smoothstep(np.clip(above * 5.0, 0.0, 1.0)) * (1.0 - G.smoothstep(np.clip((above - 0.6) / 0.4, 0, 1))))
+    out[FOLD_NAMES["lean"][0]] = S * d0 * 0.005 * (lean_env * _ridges(zs - z_wb, 0.025 * S))[:, None] * front[None, :]
+    mid = np.clip((zs - z_wb) / max(z_bust - 0.02 * S - z_wb, 1e-6), 0.0, 1.0)
+    tw_env = (np.sin(np.pi * mid) ** 1.5)[:, None] * (np.abs(np.sin(th)) ** 0.7)[None, :]
+    for jp, sg in (("左", 1.0), ("右", -1.0)):
+        q = (zs[:, None] - z_wb) + sg * 0.5 * r * th[None, :]
+        out[f"{FOLD_NAMES['twist'][0]}{jp}"] = S * d0 * 0.0045 * tw_env * _ridges(q, 0.04 * S)
+    return {k: v[..., None] * dirs for k, v in out.items()}
+
+
+def fold_drivers(fit, bones):
+    """The rig description's `folds` entries of the sweater's shapes (core.folds drivers, PMX bone names; `bones` the
+    body's, by name): how far the elbow bends, the arm rises from hanging, the arm reaches forward, she leans forward and
+    her chest turns on her hips. The lean and the turn read the top chest bone, so a lean spread over the spine counts
+    whole; the lean's angle is measured from forward square to that bone at rest, so standing straight reads 90 degrees
+    whichever way a skeleton tips its chest bone."""
+    out = []
+    chest = "上半身2" if "上半身2" in bones else "上半身"
+    b = bones[chest]
+    up = G.unit(np.asarray(b.tail if b.tail is not None else bones[b.tail_bone].head, float) - np.asarray(b.head, float))
+    ahead = np.array([0.0, -1.0, 0.0])
+    fwd = G.unit(ahead - (ahead @ up) * up)
+    for side, jp in (("L", "左"), ("R", "右")):
+        arm, elbow = (np.asarray(fit.L[f"{n}.{side}"], float) for n in ("arm", "elbow"))
+        out += [{"morph": f"{FOLD_NAMES['elbow'][0]}{jp}", "piece": "sweater",
+                 "driver": {"kind": "angle", "bone": f"{jp}ひじ", "ref": f"{jp}腕",
+                            "dir": [float(x) for x in G.unit(elbow - arm)], "from": 25.0, "to": 115.0}},
+                {"morph": f"{FOLD_NAMES['raise'][0]}{jp}", "piece": "sweater",
+                 "driver": {"kind": "angle", "bone": f"{jp}腕", "ref": chest, "dir": [0.0, 0.0, -1.0], "from": 75.0,
+                            "to": 150.0}},
+                {"morph": f"{FOLD_NAMES['forward'][0]}{jp}", "piece": "sweater",
+                 "driver": {"kind": "angle", "bone": f"{jp}腕", "ref": chest, "dir": [0.0, -1.0, 0.0], "from": 75.0,
+                            "to": 25.0}}]
+    out.append({"morph": FOLD_NAMES["lean"][0], "piece": "sweater",
+                "driver": {"kind": "angle", "bone": chest, "ref": "下半身", "dir": [float(x) for x in fwd], "from": 84.0,
+                           "to": 60.0}})
+    for jp, sg in (("左", 1.0), ("右", -1.0)):
+        out.append({"morph": f"{FOLD_NAMES['twist'][0]}{jp}", "piece": "sweater",
+                    "driver": {"kind": "twist", "bone": chest, "ref": "下半身", "axis": [0.0, 0.0, 1.0],
+                               "from": 8.0 * sg, "to": 40.0 * sg}})
+    return out
+
+
 # ---------------------------------------------------------------- along an arm
 def arm_frames(fit, side, ss):
     """(points, unit tangents, frames u (towards her front) and v, the arm's length shoulder -> wrist) along the arm's
@@ -520,9 +637,10 @@ def _arm_hull(arm_skin, pts, U, V, M, S, rmax=0.08):
 
 
 def sleeve(fit, c, side, arm_skin, skin_field, rng, M):
-    """(rings (K, M, 3), their outward directions) of one sleeve along the arm into the cuff, before the band: from the
-    first ring that lies wholly under the band's top line (its top hidden under the band, its underside inside the
-    body's knit), so no knit is above that line where her shoulders are bare."""
+    """(rings (K, M, 3), their outward directions, the arc lengths of the rings along the arm (K,) and the arm's own skin
+    radii round them (K, M)) of one sleeve along the arm into the cuff, before the band: from the first ring that lies
+    wholly under the band's top line (its top hidden under the band, its underside inside the body's knit), so no knit
+    is above that line where her shoulders are bare."""
     S = fit.S
     sl, cf = c["sleeve"], c["cuff"]
     arm_len = arm_frames(fit, side, np.zeros(1))[4]
@@ -562,7 +680,79 @@ def sleeve(fit, c, side, arm_skin, skin_field, rng, M):
     R = R + sl["elbow_fold"] * S * bumps[:, None] * crook[None, :]
     tuck = G.smoothstep(np.clip(1.0 - (s_end - ss) / (0.012 * S), 0.0, 1.0))[:, None]
     R = (1.0 - tuck) * R + tuck * (H + (cf["offset"] - 0.001) * S)          # in under the cuff
-    return pts[:, None, :] + dirs * R[..., None], dirs
+    return pts[:, None, :] + dirs * R[..., None], dirs, ss, H
+
+
+def sleeve_chains(fit, c, side, jp, rings, ss, H, rig, find_body, have):
+    """Rows of short chains hanging under one sleeve (module docstring: chains), one row along the upper arm and one
+    along the forearm, each chain tied sideways to its neighbours; returns {bone: (K, M)} the share of the sleeve's
+    rings (K, M, 3) each chain bone takes (the rest keeps the skin's weights), or {} when the chains are off."""
+    ch, S = c["chains"], fit.S
+    if not ch["enabled"]:
+        return {}
+    K, M = rings.shape[:2]
+    pts, _, U, V, _ = arm_frames(fit, side, ss)
+    th = G.ring_theta(M)
+    phi_down = np.arctan2(-V[:, 2], -U[:, 2])
+    hang = 0.5 * (1.0 + np.cos(th[None, :] - phi_down[:, None]))              # 1 straight under the arm
+    bag = G.smoothstep(np.clip((hang - 0.5) / 0.45, 0.0, 1.0))
+    s_el = float(np.linalg.norm(np.asarray(fit.L[f"elbow.{side}"], float) - np.asarray(fit.L[f"arm.{side}"], float)))
+    gap = ch["gap"] * S
+    rows = (("upper", ss[0] + gap, s_el - gap, next(b for b in (f"{jp}腕捩", f"{jp}腕") if b in have), f"{jp}腕"),
+            ("fore", s_el + gap, ss[-1] - gap, f"{jp}ひじ", f"{jp}ひじ"))
+    share = {}
+    n_row = 0
+    for key, s0, s1, anchor, body_bone in rows:
+        count = int(ch[key])
+        if count < 1 or s1 <= s0:
+            continue
+        n_row += 1
+        at = np.linspace(s0, s1, count)
+        step = (s1 - s0) / max(count - 1, 1)
+        body = find_body(body_bone) if find_body else None
+        names = []
+        for i, s in enumerate(at):
+            k = int(np.argmin(np.abs(ss - s)))
+            j = int(np.argmin(rings[k, :, 2]))                                # the bag's lowest point on this ring
+            tip = rings[k, j] + np.array([0.0, 0.0, -0.002 * S])
+            d_out = G.unit(rings[k, j] - pts[k])
+            pivot = pts[k] + d_out * H[k, j]                                 # on her arm's skin above it
+            mid = 0.5 * (pivot + tip)
+            base = f"{jp}袖下{n_row}_{i + 1}"
+            chain = [f"{base}_1", f"{base}_2"]
+            rig.chain(chain, [pivot, mid, tip], anchor, "sleeve", ch["radius"] * S,
+                      anchor_body=body.name if body is not None else None, x_hint=G.unit(pts[min(k + 1, K - 1)] - pts[k]),
+                      name_en=[f"Sleeve{side}{n_row}_{i + 1}_1", f"Sleeve{side}{n_row}_{i + 1}_2"],
+                      dynamic=body is not None)
+            names.append(chain)
+            # the vertices it carries: along the arm a hat over the neighbouring chains (none past the row's ends),
+            # round the ring the bag under the arm, down the chain from nothing at her skin to all of it
+            along = np.clip(1.0 - np.abs(ss - s) / step, 0.0, 1.0) if count > 1 else \
+                np.clip(1.0 - np.abs(ss - s) / gap, 0.0, 1.0)
+            if i == 0 and count > 1:
+                along = np.where(ss < s, np.clip(1.0 - (s - ss) / gap, 0.0, 1.0), along)
+            if i == count - 1 and count > 1:
+                along = np.where(ss > s, np.clip(1.0 - (ss - s) / gap, 0.0, 1.0), along)
+            down = np.clip(((rings - pivot) @ G.unit(tip - pivot)) / max(float(np.linalg.norm(tip - pivot)), 1e-6),
+                           0.0, 1.0)
+            w = float(ch["peak"]) * along[:, None] * bag * G.smoothstep(np.clip(down / 0.4, 0.0, 1.0))
+            share[chain[0]] = share.get(chain[0], 0.0) + w * (1.0 - down)
+            share[chain[1]] = share.get(chain[1], 0.0) + w * down
+        if len(names) > 1 and all(rb_name in {rb.name for rb in rig.bodies} for rb_name in names[0]):
+            rig.tie(names)
+    return share
+
+
+def with_chains(W, share):
+    """Weights {bone: (n,)} with the chain bones' `share` ({bone: (n,)}) taken from the rest in proportion."""
+    if not share:
+        return W
+    tot = sum(np.asarray(s, float).reshape(-1) for s in share.values())
+    keep = 1.0 - np.minimum(tot, 1.0)
+    out = {b: np.asarray(w, float) * keep for b, w in W.items()}
+    for b, s in share.items():
+        out[b] = out.get(b, 0.0) + np.asarray(s, float).reshape(-1)
+    return out
 
 
 # ---------------------------------------------------------------- ribbed bands
@@ -711,8 +901,9 @@ def _axis_points(rings, centre_y):
     return np.concatenate([np.zeros_like(rings[..., :1]), np.full_like(rings[..., :1], centre_y), rings[..., 2:3]], -1)
 
 
-def sweater(fit, body_part, cfg, soup):
-    """Build the sweater into `soup` (material 0 knit, 1 rib). Returns info: the band's top height at the middle of her
+def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
+    """Build the sweater into `soup` (material 0 knit, 1 rib), its sleeves' chains into `rig` (an outfit_rig.Rig; none:
+    no chains) anchored on the bodies `find_body(bone)` gives. Returns info: the band's top height at the middle of her
     front, the waistband's top, the closest each piece comes to the skin, and the pieces' vertex counts."""
     c = SP.merge(DEFAULTS, cfg)
     S = fit.S
@@ -761,18 +952,28 @@ def sweater(fit, body_part, cfg, soup):
     kr = edge_gathers(kr, kd, skin_field, h, bd["gathers"], bd["gather_depth"] * S, bd["gather_fade"] * S, rng)
     kr = under_band(kr.reshape(-1, 3), skin_field, fit, c).reshape(kr.shape)
     kr = fit.conform(kr, bd["gap"] * S)
-    soup.add(under_the_band(_patch(kr, _circ_u(kr, WR.TILE), _rib_v(kr), 0, "body", _axis_points(kr, centre_y), fit,
-                                   donors, "上半身", _body_mix(kr, skin_field, h, drop), spread=c["body"]["spread"] * S)))
+    body_patch = under_the_band(_patch(kr, _circ_u(kr, WR.TILE), _rib_v(kr), 0, "body", _axis_points(kr, centre_y), fit,
+                                       donors, "上半身", _body_mix(kr, skin_field, h, drop),
+                                       spread=c["body"]["spread"] * S))
+    if c["folds"]["enabled"]:
+        body_patch.m = {k: d.reshape(-1, 3) for k, d in body_folds(fit, c, kr, kd, z_wb).items()}
+    soup.add(body_patch)
     pieces["body"] = kr
     # ---- sleeves and cuffs
     for side, pre in (("L", "左"), ("R", "右")):
-        sr, sd = sleeve(fit, c, side, arm_skin, skin_field, rng, 64)
+        sr, sd, s_ring, h_arm = sleeve(fit, c, side, arm_skin, skin_field, rng, 64)
         sl = c["sleeve"]
         sr = edge_gathers(sr, sd, skin_field, h, sl["gathers"], sl["gather_depth"] * S, sl["gather_fade"] * S, rng)
         sr = under_band(sr.reshape(-1, 3), skin_field, fit, c).reshape(sr.shape)
         sr = fit.conform(sr, c["body"]["gap"] * S)
-        soup.add(under_the_band(_patch(sr, _circ_u(sr, WR.TILE), _rib_v(sr), 0, f"sleeve_{side}", sr - sd * 0.02 * S, fit,
-                                       donors, f"{pre}腕")))
+        sleeve_patch = under_the_band(_patch(sr, _circ_u(sr, WR.TILE), _rib_v(sr), 0, f"sleeve_{side}",
+                                             sr - sd * 0.02 * S, fit, donors, f"{pre}腕"))
+        if rig is not None:
+            share = sleeve_chains(fit, c, side, pre, sr, s_ring, h_arm, rig, find_body, fit.bone_names)
+            sleeve_patch.w = with_chains(sleeve_patch.w, share)
+        if c["folds"]["enabled"]:
+            sleeve_patch.m = {k: d.reshape(-1, 3) for k, d in sleeve_folds(fit, c, side, pre, sr, sd, s_ring).items()}
+        soup.add(sleeve_patch)
         pieces[f"sleeve_{side}"] = sr
         per = float(np.linalg.norm(np.diff(sr[-1], axis=0), axis=1).sum())
         cr = cuff(fit, c, side, arm_skin, 4 * max(8, round(per / (c["cuff"]["rib"] * S))))
@@ -791,16 +992,53 @@ def sweater(fit, body_part, cfg, soup):
     return info
 
 
+SIDES = (("L", "左"), ("R", "右"))
+
+
+def joint_helpers(fit, soup, c, parents):
+    """The helper bones at each elbow and shoulder (module docstring: helpers), each riding its joint bone's parent
+    (`parents`: bone -> parent of the skeleton), and the weights of every piece in `soup` the joint's two sides share
+    given to them. Returns the bones."""
+    hc, have = c["helpers"], fit.bone_names
+    bones = []
+    for side, jp in SIDES:
+        upper = tuple(b for b in (f"{jp}腕", f"{jp}腕捩", *(f"{jp}腕捩{i}" for i in (1, 2, 3))) if b in have)
+        lower = tuple(b for b in (f"{jp}ひじ", f"{jp}手捩", *(f"{jp}手捩{i}" for i in (1, 2, 3))) if b in have)
+        girdle = tuple(b for b in ("上半身", "上半身2", "上半身3", f"{jp}肩P", f"{jp}肩", f"{jp}肩C") if b in have)
+        arm, elbow, wrist = (np.asarray(fit.L[f"{n}.{side}"], float) for n in ("arm", "elbow", "wrist"))
+        for key, joint, head, toward, above, below in (("elbow", f"{jp}ひじ", elbow, wrist, upper, lower),
+                                                        ("shoulder", f"{jp}腕", arm, elbow, girdle, upper)):
+            if float(hc[key]) <= 0.0:
+                continue
+            name = f"{joint}補助"
+            tail = head + G.unit(toward - head) * 0.03 * fit.S
+            bones.append(HP.helper_bone(name, joint, parents[joint], head, tail, ratio=float(hc[key]),
+                                        name_en=f"{key} helper_{side}"))
+            for p in soup.patches:
+                if p.w:
+                    p.w = HP.helper_weights(p.w, above, below, name, peak=float(hc["peak"]))
+    return bones
+
+
 @builder("sweater", needs=("body",))
 def build(ctx):
     cfg = SP.merge(DEFAULTS, ctx.cfg)
     fit = OU.make_fit(ctx)
     col = WR.colours(ctx, "sweater", COLORS)
     soup = G.Soup("sweater", [MAT_KNIT, MAT_RIB])
-    info = sweater(fit, ctx.need("body"), cfg, soup)
+    body = ctx.need("body")
+    rig = ORIG.Rig()
+    info = sweater(fit, body, cfg, soup, rig, ctx.find_body)
+    bones = joint_helpers(fit, soup, cfg, {b.name: b.parent for b in body.bones})
     mats = [WR.material(ctx, MAT_KNIT, "knit", col["knit"], WR.knit(col["knit"]), shadow=(0.82, 0.74, 0.88)),
             WR.material(ctx, MAT_RIB, "rib", col["rib"], WR.rib(col["rib"]), shadow=(0.78, 0.72, 0.86))]
     mesh = soup.mesh()
+    info["chains"] = sum(1 for b in rig.bones if b.name.endswith("_1"))
+    english = {f"{jp_}{jp}": f"{en} {side}" for jp_, en in FOLD_NAMES.values() for side, jp in SIDES}
+    english.update({jp_: en for jp_, en in FOLD_NAMES.values()})
+    morphs = [Morph(n, "other", english.get(n, n)) for n in mesh.morphs]
+    layers = {"folds": fold_drivers(fit, {b.name: b for b in body.bones})} if cfg["folds"]["enabled"] else {}
     ctx.log(f"band top {info['band_top_z']:.3f} m on the chest, waistband top {info['z_waistband']:.3f} m, closest to "
-            f"the skin {info['min_gap'] * 1000:.1f} mm")
-    return Part("sweater", meshes=[mesh], materials=[m for m in mats if m.name in mesh.mats], info=info)
+            f"the skin {info['min_gap'] * 1000:.1f} mm, {info['chains']} chains under the sleeves, {len(morphs)} folds")
+    return Part("sweater", meshes=[mesh], materials=[m for m in mats if m.name in mesh.mats], bones=bones + rig.bones,
+                morphs=morphs, bodies=rig.bodies, joints=rig.joints, info=info, rig=layers)

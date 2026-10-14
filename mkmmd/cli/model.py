@@ -13,6 +13,7 @@ import numpy as np
 
 from .. import bridge
 from .. import config as CFG
+from ..core import rig as RG
 from ..model import assemble as AS
 from ..model import build as BD
 from ..model import partcache as PC
@@ -549,7 +550,12 @@ def run_build(args):
         report["verify"] = {"ok": not v["problems"], "problems": v["problems"], "numbers": v["numbers"]}
         ok = ok and not v["problems"]
     if "rig" in res:
-        rig = res["rig"]
+        try:
+            rig = RG.merge(res["rig"], asm.layers)
+        except ValueError as e:
+            report.update(ok=False, stage="rig", error=str(e))
+            finish(report)
+            return CHECK_FAILED
         rig_path = out / f"{name}.rig.json"
         tmp_rig = rig_path.with_name(f".{rig_path.name}.{os.getpid()}.tmp")
         tmp_rig.write_text(json.dumps(rig, ensure_ascii=False, indent=1), encoding="utf-8")

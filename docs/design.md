@@ -233,9 +233,23 @@ names are the Blender names mmd_tools gives on import (left/right prefixes becom
 PMX name. Positions are in armature space (metres at the import scale); body geometry is in its bone's rest frame, so it
 follows the bone wherever the model is placed and posed.
 
+It is one data model in layers (`mkmmd/core/rig.py`). The import describes the first five from any PMX; `mk model` adds
+the last two, which a PMX cannot hold, from what its part builders declare (`Part.rig`, PMX bone names, translated when
+rig.json is written):
+
+| Layer | Keys | What it is | Read by |
+|---|---|---|---|
+| identity | `schema` `source` `scale` `comment` `kind` `quirks` `stats` | the file, its import scale, what it is | registry, reports |
+| skeleton | `map` `missing` `missing_required` `bones` `fingers` `measure` | bones, semantic names; a helper bone's `grant` | cast, pose, motion, perform, checks |
+| colliders | `bodies` | rigid bodies, their geometry in the bone's rest frame | sim, checks, cables |
+| dynamics | `chains` | the bones dynamic bodies move; a chain's `ties`: the chains it is tied to sideways | sim, checks |
+| morphs | `morphs` `morph_list` | shape keys and morph panels | perform, sing, moves |
+| folds | `folds` | shapes a joint angle drives | the folds stage |
+| cloth | `cloth` | a garment's simulation copy | the cloth stage |
+
 ```jsonc
 {
-  "schema": 1,
+  "schema": 2,
   "source": {"path": "...pmx", "sha1": "...", "name_j": "...", "name_e": "..."},
   "scale": 0.08,
   "comment": "the PMX comment (author notes), first 4000 characters",
@@ -243,14 +257,16 @@ follows the bone wherever the model is placed and posed.
   "map": {"head": "頭", "wrist.R": "手首.R", "index2.L": "人指２.L", ...},   // semantic -> Blender bone
   "missing": ["upper_body3", ...], "missing_required": [],                  // standard bones not found
   "bones": {"頭": {"jp": "頭", "parent": "首", "head": [x, y, z], "tail": [x, y, z], "deform": true,
-                  "helper": false}, ...},                                    // helper: mmd_tools _dummy_/_shadow_
+                  "helper": false},                                          // helper: mmd_tools _dummy_/_shadow_
+            "腕捩1.L": {..., "grant": {"parent": "腕捩.L", "ratio": 0.25, "rotate": true, "move": false}}, ...},
   "fingers": {"index.L": ["人指１.L", "人指２.L", "人指３.L", "人差指先.L"], ...},
   "bodies": [{"name": "...", "bone": "頭", "shape": "sphere", "size": [..], "type": 0, "group": 0,
               "no_collide": [1, 2], "loc": [..], "quat": [..],
               "geom": {"kind": "sphere", "c": [..], "R": 0.1}}, ...],       // capsule: a b R; box: M half
   "chains": [{"family": "back_hair", "root": "後髪1", "anchor": "頭", "bones": ["後髪1", ...],
               "parents": [-1, 0, ...], "ends": [[x, y, z], ...], "body_radius": [0.072, ...],
-              "branching": false, "locked_joints": 14, "length": 1.009}],
+              "branching": false, "locked_joints": 14, "length": 1.009,
+              "ties": ["後髪2"]}],                                             // only when joints tie it to others
   "morphs": {"blink": "まばたき", "a": "あ", "i": "い", "smile_eyes": "笑い", ...},   // semantic -> morph
   "morph_list": [{"name": "まばたき", "panel": "eye", "kind": "vertex", "shape_key": true}, ...],
   "measure": {"top": 1.71, "eye_height": 1.32, "upper_arm": 0.21, "forearm": 0.17, "hand": 0.17,
@@ -260,12 +276,24 @@ follows the bone wherever the model is placed and posed.
 }
 ```
 
+A bone with a `grant` is a helper bone: it takes `ratio` of its grant parent's rotation (`rotate`) or move (`move`) on top
+of its own, as PMX does it (twist bones spreading a forearm's roll, D bones, the helper bones a garment puts at a joint).
+
 A chain is every bone driven by a dynamic rigid body, grouped from each root that hangs from a non-simulated bone
 (the anchor). `ends` are the rest segment ends: the head of the simulated child, or for a leaf its tail when the
 chain is connected (mmd_tools gives unconnected bones a default 0.08 m tail, so then the leaf continues its chain's
-last direction). `length` runs along the bone heads. Families come from bone names (`bangs`, `side_hair`, `back_hair`,
-`twintail`, `braid`, `hair`, `ears`, `tail`, `skirt`, `ribbon`, `breasts`, `sleeve`, `coat`, `accessory`, `other`); projects
-tune the secondary-motion solver per family (see [Sim](#sim)).
+last direction). `length` runs along the bone heads. `ties` lists the chains a joint between their bodies ties this one
+to (a skirt's or a sleeve's sideways joints: the chains make one sheet). Families come from bone names (`bangs`,
+`side_hair`, `back_hair`, `twintail`, `braid`, `hair`, `ears`, `tail`, `skirt`, `ribbon`, `breasts`, `sleeve`, `coat`,
+`accessory`, `other`); projects tune the secondary-motion solver per family (see [Sim](#sim)).
+
+`folds` (mk-built models whose parts sculpt them) lists shapes a joint angle drives: `{"morph": "セーター肘左",
+"piece": "sweater", "driver": {...}}`, the morph a vertex morph of the model, the driver one of `mkmmd.core.folds`'
+kinds: `{"kind": "angle", "bone", "ref", "dir": [x, y, z], "from", "to"}` (the angle in degrees between the bone's
+direction and `dir`, armature space at rest, carried by `ref`: an elbow's bend, an arm raised from hanging) or
+`{"kind": "twist", "bone", "ref", "axis", "from", "to"}` (the bone's signed turn relative to `ref` about `axis`: a waist
+twisting). The shape's weight runs from 0 at `from` to 1 at `to` (smoothstep). The [folds stage](#folds) keys them from the
+final pose of every frame; in MMD they are plain sliders.
 
 **Semantic names** (`mkmmd/core/bonemap.py`, matched on the PMX name after NFKC normalisation): single bones `root`,
 `view_center`, `center`, `groove`, `waist`, `lower_body`, `upper_body`, `upper_body2`, `upper_body3`, `neck`, `head`,
@@ -570,6 +598,7 @@ member or the camera cannot be used by a stage that runs before them):
 | text | `[[text]]` | type on set and prop surfaces, lyric type, handwriting, screen type | [Text](#text) |
 | keys | `[[key]]` | keys on set, prop and object properties | [Keys](#keys) |
 | sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys | [Sim](#sim) |
+| folds | `[folds.<cast>]` | the fold shapes a joint angle drives (rig.json `folds`), keyed from the final pose | [Folds](#folds) |
 | save | | the `.blend` | |
 | bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras, the meshes, what the glb cannot carry as Blender evaluates it on each frame, and what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
 
@@ -1459,7 +1488,7 @@ too, except those of the simulated bones (they move with the hair), and a chain 
 | `radius_max` | metres, the cap of `radius` |
 | `friction` | 1/s: velocity damping while touching something |
 | `wind_drag` | 1/s: how strongly the air pushes the strand, it reaches `wind_drag / drag` of the air speed (default `drag`) |
-| `lateral` | 0..1, the tie stiffness of neighbouring chains of a sheet-like family (default 0.5 for `skirt`, 0 elsewhere): a skirt's chains are tied to their neighbours in a ring found from their roots' rest positions (a slit breaks the ring), the cloth between them is kept out of seats and thighs; 0 = independent chains |
+| `lateral` | 0..1, the tie stiffness of neighbouring chains (default 0.5 for `skirt` and for chains the rig ties, 0 elsewhere): chains whose rig.json `ties` join them (the joints between their bodies: a row under a sleeve as well as a ring) are tied to those neighbours; a skirt's other chains are tied to their neighbours in a ring found from their roots' rest positions (a slit breaks the ring); the cloth between them is kept out of seats and thighs; 0 = independent chains |
 | `lateral_collide` | 0 or 1: push the cloth between tied chains out of the shapes (default 1) |
 | `anchor_free` | metres: the family's own zone near the roots (default the stage's; 0 for a tied sheet, which then also collides with the body it hangs from) |
 | `inertia` | 0..1, the share of its anchor's motion the strand feels (default 1, all of it): each substep first carries the strand along by the rest, as a game engine's inertia scale does. For moves faster than cloth could follow: a 145 degree spin in four frames flares a skirt over her waist at 1, half as far at 0.5; 0 carries the strand rigidly and only gravity, the air and contacts move it |
@@ -1542,6 +1571,15 @@ plug). The plug follows the jack on every frame and the cord leaves it along the
 pose stage hung it. The first frame is held for 2 s so the cord settles into its own shape, and the curve's control points are
 keyed on every frame (LINEAR), replacing the hook. The report has `cables`: per prop `points`, `length_m`, `segment_mm`,
 `stretch_pct_max`, `body_pen_mm_max`, `floor_pen_mm_max`, `seconds`.
+
+### Folds
+
+The folds stage keys the fold shapes a cast member's rig declares (rig.json `folds`, [Model description](#model-description-rigjson)):
+for every frame of the build it reads the driving bones' rotations in the armature's own space (a model spinning in the
+world turns no fold), works out each driver's angle (`mkmmd.core.folds`) and keys the shape's weight LINEAR on the morph
+sliders. It runs after sim, when every bone has its final keys. A member whose rig has folds gets them without a table;
+`[folds.<cast>]` takes `enabled = false` (none of them) and `depth` (scales every weight, default 1). The report has per
+member `folds` and `keyed`: the most of each shape any frame shows.
 
 ## Placement
 
@@ -3058,13 +3096,20 @@ the convex section of her torso plus ease, hanging from the bust no faster than 
 into the waistband) and sleeves (the convex section of each arm plus ease, sagging, puffed and gathered into the
 cuffs, folds at the elbow), ribbed waistband and cuffs. Every piece takes the weights of the skin nearest to it,
 smoothed round its rings; round her chest and back the band and the knit near it leave out the shoulder girdle's share,
-so they stay with her body when an arm moves. Sizes are metres x S like the dress's. Colours come from
-`[colors.<part>]`, materials from `outfit_wear` (a toon ramp, a dark outline; the knit's texture a stockinette, the
-bands' a rib). Pants and socks are **drawn** like the design: `outfit_ink` lays pen strokes on the cloth (thin dark
-ribbons a fraction of a millimetre above it, with its weights: the socks' ribs, the creases of the pants;
-`[<part>.ink]`, materials 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and laces. The hair
-keeps its hanging locks off every garment built before it (`[model] parts` order), so long hair rests on a sweater
-instead of inside it.
+so they stay with her body when an arm moves, and a helper bone at each elbow and shoulder (`[sweater.helpers]`,
+`mkmmd.model.helpers`) takes what the joint's two sides share, so a bent elbow keeps the sleeve round and a raised arm
+spreads the cloth at the armpit instead of parting it. Under each sleeve rows of short chains, tied sideways to their
+neighbours (`[sweater.chains]`, family `sleeve`), carry the bag of cloth hanging under the arm: MMD's physics or mk's
+solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. Fold shapes (`[sweater.folds]`) bunch the knit as
+her joints turn (the crook of a bending elbow, the shoulder as an arm rises, her back as an arm reaches forward, above the
+waistband as she leans, her sides as she twists): mk's [folds stage](#folds) keys them from her pose, MMD has them as
+sliders. Sizes are metres x S like the dress's. Colours
+come from `[colors.<part>]`, materials from `outfit_wear` (a toon ramp, a dark outline; the knit's texture a
+stockinette, the bands' a rib). Pants and socks are **drawn** like the design: `outfit_ink` lays pen strokes on the
+cloth (thin dark ribbons a fraction of a millimetre above it, with its weights: the socks' ribs, the creases of the
+pants; `[<part>.ink]`, materials 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and
+laces. The hair keeps its hanging locks off every garment built before it (`[model] parts` order), so long hair rests
+on a sweater instead of inside it.
 `[body] bust` (metres, the mesh body) moves each breast's front forward as it is, keeping the donor's round shape; the
 flesh it grows follows the chest (`body_donor.chest_flesh`: the shoulder girdle's weights go to 上半身2 there), so the
 breasts keep their shape when the arms come down. `[body] bust_tip` moves each breast's tip that much more over a smaller
@@ -3087,10 +3132,14 @@ more hollows the front).
 semi-standard skeleton with IK, twist bones with fixed axes, fingers with local axes, eyes with grants, semantic names;
 the module docstring lists the landmarks), `geo` (loft, sweep, tube, ribbon, revolve, spheres, surfaces, merge, weld,
 normals, `capsule_between`, `euler_for_axis`), `skin` (chain weights with smooth joint blends, envelope weights,
-transfer from body meshes for garments, ramps), `tex` (antialiased UV-space canvas, gradients, toon ramps, sphere maps,
-noise, atlas), `subdiv` (Catmull-Clark with creases as sparse operators). `Mesh.subsurf` applies it before export: the
-surface equals Blender's Subdivision modifier (boundary "all", linear UVs) to 1e-7 and UVs, weights and morph offsets
-are carried through the operators. `mkmmd/model/parts/mannequin.py` uses all of it and is the fixture of the framework.
+transfer from body meshes for garments, ramps), `helpers` (a helper bone at a joint that turns a share of the joint's
+rotation by a grant, and the weights the joint's two sides share given to it, so a bent elbow or a raised arm keeps a
+garment round instead of pinching it: the sweater has one at each elbow and shoulder), `tex` (antialiased UV-space
+canvas, gradients, toon ramps, sphere maps, noise, atlas), `subdiv` (Catmull-Clark with creases as sparse operators).
+`Mesh.subsurf` applies it before export: the surface equals Blender's Subdivision modifier (boundary "all", linear UVs) to
+1e-7 and UVs, weights and morph offsets are carried through the operators. `mkmmd/model/parts/mannequin.py` uses all of
+it and is the fixture of the framework. A part's rig layers a PMX cannot hold (fold shapes, cloth copies) go in
+`Part.rig` and reach rig.json through the build ([Model description](#model-description-rigjson)).
 
 **Assembly** (`mkmmd.model.assemble`, `pmx_io`): bones go parents first (grant parents too); a PMX vertex per unique
 (position, UV, normal); custom `Mesh.normals` as given, else angle-weighted normals split along `Mesh.sharp` edges (a

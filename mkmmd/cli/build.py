@@ -7,7 +7,7 @@ from .. import bridge
 from .common import add_project_arg, emit, get_project, UsageError
 
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
-          "sim", "save", "bake"]
+          "sim", "folds", "save", "bake"]
 BUILDING = STAGES[:-2]                     # what --until and --skip name; save and bake follow
 
 HELP = """Build the project's scene from mk.toml in one Blender session and save it to [project] blend.
@@ -26,6 +26,7 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   text      [[text]]                  type on surfaces, lyric type, handwriting, screen type
   keys      [[key]]                   keys on set, prop and object properties
   sim       [sim.<cast>]              hair, ears, tails, skirts solved outside Blender and baked to keys
+  folds     [folds.<cast>]            fold shapes a joint angle drives (rig.json folds), keyed from the final pose
   save                                the .blend
   bake                                <blend>.bake/: the clip for the site's scene viewer (docs/design.md: The site),
                                       every frame's bones, morphs, objects, visibility and shot cameras, and the meshes

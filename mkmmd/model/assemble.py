@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..core import rig as RG
 from . import pmx_io as X
 from .part import Bone
 
@@ -35,6 +36,7 @@ class Assembled:
     stats: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
     scale: float = 0.08
+    layers: dict = field(default_factory=dict)         # the parts' rig layers a PMX cannot hold (core.rig.collect)
 
     def save_expected(self, prefix):
         """Write `<prefix>.npz` (arrays) and `<prefix>.json` (names, bones, bodies, joints) for the Blender-side
@@ -700,6 +702,13 @@ def assemble(parts, name="model", scale=0.08, comment="", name_en="", subdivide=
                     "rot_hi": [float(x) for x in j.rot_hi], "spring_move": _f(j.spring_move),
                     "spring_rot": _f(j.spring_rot)} for p in parts for j in p.joints],
     }
+    layers = RG.collect(parts)
+    for f in layers.get("folds", []):
+        if f["morph"] not in morph_index:
+            raise ValueError(f"fold {f['morph']!r}: no such morph in the model")
+        for k in ("bone", "ref"):
+            if f["driver"].get(k) and f["driver"][k] not in bone_index:
+                raise ValueError(f"fold {f['morph']!r}: driver {k} {f['driver'][k]!r} is not a bone of the model")
     return Assembled(pmx=model, textures=list(tex_names), bone_index=bone_index, morph_index=morph_index,
                      material_index=mat_index, body_index=body_index, expected=expected, meta=meta, stats=stats,
-                     warnings=warnings, scale=scale)
+                     warnings=warnings, scale=scale, layers=layers)

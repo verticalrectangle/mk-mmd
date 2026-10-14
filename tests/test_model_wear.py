@@ -4,7 +4,10 @@ import numpy as np
 import pytest
 
 from mkmmd import pixmap as PX
+from mkmmd.core import folds as FD
+from mkmmd.model import assemble as AS
 from mkmmd.model import build as BD
+from mkmmd.model import lab as LAB
 from mkmmd.model import skin as SK
 from mkmmd.model import spec as SP
 from mkmmd.model.parts import outfit as OU
@@ -25,6 +28,18 @@ def dressed(tmp_path_factory):
     parts = {p.name: p for p in BD.run(spec, ctx=ctx)}
     ctx.part = "test"
     return ctx, parts, OU.make_fit(ctx)
+
+
+@pytest.fixture(scope="module")
+def posable(dressed, tmp_path_factory):
+    """The dressed girl as one model the lab can pose (mkmmd.model.lab: its bones, grants and weights as in the PMX)."""
+    asm = AS.assemble(list(dressed[1].values()), name="girl", scale=0.08)
+    return LAB.from_pmx(asm.pmx, tmp_path_factory.mktemp("posable"), 0.08, "girl")
+
+
+def _turned(model, bone, R):
+    """The model's points with the one bone turned by R (its local rotation; its children and helpers follow)."""
+    return model.skin(model.V, model.N, model.matrices({model.bones.index(bone): R}))[0]
 
 
 def _grid(n=6):
@@ -213,6 +228,116 @@ def test_with_her_arms_down_the_band_is_one_level_ring(dressed):
             Q = m_.points(xs, ys)
             near = np.linalg.norm(Q[:, :2] - at[:2], axis=1) < 0.06
             assert not near.any() or Q[near, 2].max() < min(tops), (side, eye, Q[near, 2].max(), min(tops))
+
+
+def test_a_bent_elbow_keeps_the_sleeve_round(posable):
+    """Bent 110 degrees, each sleeve keeps its round at the elbow, as a sleeve does (the helper bone there turns half the
+    bend): at the joint the outside of the bend stays at least 85 % as far from the elbow as it was at rest (skinned
+    between the upper arm and the forearm alone it fell to 56 %, the sleeve flattened into a hinge)."""
+    m = posable
+    ids = np.unique(m.T[m.tri_mat == m.mat_names.index(SW.MAT_KNIT)])
+    for jp in ("左", "右"):
+        a, e, w = (m.heads[m.bones.index(f"{jp}{n}")] for n in ("腕", "ひじ", "手首"))
+        R = LAB.rot(np.cross(w - e, (0.0, -1.0, 0.0)), 110.0)            # the forearm comes forward
+        P = _turned(m, f"{jp}ひじ", R)
+        up, fore = LAB.unit(a - e), LAB.unit(R @ (w - e))
+        inner, axis = LAB.unit(up + fore), LAB.unit(np.cross(up, fore))
+
+        def reach(Q, way, plane, e=e):
+            d = Q[ids] - e
+            at = (np.abs(d @ plane) < 0.006) & (np.linalg.norm(d, axis=1) < 0.12)
+            return float((d[at] @ way).max())
+        rest = reach(m.V, LAB.unit(np.cross(axis, w - e)), LAB.unit(w - e))
+        bent = reach(P, -inner, LAB.unit(np.cross(axis, inner)))
+        assert bent > 0.85 * rest, (jp, bent, rest)
+
+
+def test_a_raised_arm_keeps_her_armpit_covered(posable):
+    """Raised 90 degrees out to her side, an arm shows little of the skin under it between the sleeve and the body (the
+    helper bone at the shoulder turns half the arm's turn, so the cloth there spreads instead of the band and the knit
+    parting): seen from in front, from behind and from her side, under 1000 pixels of that skin show (3300 did)."""
+    m = posable
+    keep = [m.mat_names.index(n) for n in ("skin", SW.MAT_KNIT, SW.MAT_RIB)]
+    on = np.isin(m.tri_mat, keep)
+    for jp, sg in (("左", 1.0), ("右", -1.0)):
+        j = m.heads[m.bones.index(f"{jp}腕")]
+        P = _turned(m, f"{jp}腕", LAB.rot((0.0, -1.0, 0.0), sg * 90.0))
+        geo = {"posed": P, "rest": m.V, "tris": m.T[on], "tri_object": np.zeros(int(on.sum()), np.int32),
+               "tri_material": np.searchsorted(keep, m.tri_mat[on]).astype(np.int32),
+               "tri_face": np.zeros(int(on.sum()), np.int32), "objects": np.array(["model"]),
+               "materials": np.array(["skin", SW.MAT_KNIT, SW.MAT_RIB])}
+        at = j + np.array([-sg * 0.01, 0.0, -0.07])
+        shown = 0
+        for eye in ((sg * 0.12, -0.35, -0.12), (sg * 0.12, 0.35, -0.12), (sg * 0.35, 0.0, -0.2)):
+            mp = PX.Map.make(geo, {"matrix": _look_at(at + np.array(eye), at).tolist(), "lens": 50.0,
+                                   "sensor": [36.0, 24.0], "size": [400, 400]})
+            ys, xs = np.nonzero(mp.mask(["skin"]))
+            Q, Qr = mp.points(xs, ys), mp.points(xs, ys, rest=True)
+            shown += int(((np.linalg.norm(Q - at, axis=1) < 0.06) & (Qr[:, 2] < j[2] - 0.035)
+                          & (sg * Qr[:, 0] > abs(j[0]) - 0.04)).sum())
+        assert shown < 1000, (jp, shown)
+
+
+def test_the_sleeves_bag_hangs_from_its_chains(posable):
+    """Under each sleeve a row of chains along the upper arm and one along the forearm carry the bag of cloth hanging
+    under the arm, so it swings where physics moves them: with every chain turned 40 degrees about the arm, the bag's
+    bottom moves more than 8 mm (the middle of each row), while the sleeve on top of the arm does not move at all."""
+    m = posable
+    ids = np.unique(m.T[m.tri_mat == m.mat_names.index(SW.MAT_KNIT)])
+    for jp in ("左", "右"):
+        a, e, w = (m.heads[m.bones.index(f"{jp}{n}")] for n in ("腕", "ひじ", "手首"))
+        roots = {row: [n for n in m.bones if n.startswith(f"{jp}袖下{row}_") and n.endswith("_1")] for row in (1, 2)}
+        assert len(roots[1]) >= 3 and len(roots[2]) >= 3, roots
+        rots = {m.bones.index(n): LAB.rot(LAB.unit(e - a) if row == 1 else LAB.unit(w - e), 40.0)
+                for row, names in roots.items() for n in names}
+        moved = np.linalg.norm(m.skin(m.V, m.N, m.matrices(rots))[0] - m.V, axis=1)[ids]
+        for p, q in ((a, e), (e, w)):
+            along, mid = LAB.unit(q - p), 0.5 * (p + q)
+            rel = m.V[ids] - mid
+            perp = rel - np.outer(rel @ along, along)
+            near = (np.abs(rel @ along) < 0.25 * np.linalg.norm(q - p)) & (np.linalg.norm(perp, axis=1) < 0.08)
+            h = perp @ LAB.unit(np.array([0.0, 0.0, 1.0]) - along * along[2])         # up, square to the arm
+            bottom, top = near & (h < 0.6 * h[near].min()), near & (h > 0.6 * h[near].max())
+            assert np.median(moved[bottom]) > 0.008 and moved[top].max() < 0.0005, (jp, np.median(moved[bottom]),
+                                                                                    moved[top].max())
+
+
+def test_the_fold_shapes_bunch_the_cloth_out(dressed, posable):
+    """Every fold shape the sweater declares (one per joint angle that drives it, in the rig description) bunches its
+    knit outward, in ridges standing out of the cloth: each lifts some of it more than 2 mm along the knit's outward
+    normal, and none sinks any of it more than 2 mm into the sweater (the back of a bending elbow drawing taut is the
+    most it may pull in)."""
+    _, parts, _ = dressed
+    m = posable
+    folds = parts["sweater"].rig["folds"]
+    assert len({f["morph"] for f in folds}) == 9 and all(f["morph"] in m.morphs for f in folds)
+    for f in {f["morph"] for f in folds}:
+        idx, d = m.morphs[f]
+        out = np.einsum("ij,ij->i", d, m.N[idx])
+        assert out.max() > 0.002 and out.min() > -0.002, (f, out.max(), out.min())
+
+
+def test_the_elbow_fold_shows_as_the_elbow_bends(dressed, posable):
+    """The fold in the crook of each elbow follows its driver: none with the arm straight, raised or not, nearly all of it
+    with the elbow bent 100 degrees; and it moves only the sleeve round the elbow (within 9 cm of it)."""
+    _, parts, _ = dressed
+    m = posable
+    folds = [f for f in parts["sweater"].rig["folds"] if f["morph"].startswith(SW.FOLD_NAMES["elbow"][0])]
+    dirs = {n: LAB.unit(m.tails[i] - m.heads[i]) for i, n in enumerate(m.bones)}
+    for f in folds:
+        jp = f["morph"][-1]
+        _, e, w = (m.heads[m.bones.index(f"{jp}{n}")] for n in ("腕", "ひじ", "手首"))
+        poses = [{}, {f"{jp}腕": LAB.rot((0.0, -1.0, 0.0), (1.0 if jp == "左" else -1.0) * 80.0)},
+                 {f"{jp}ひじ": LAB.rot(np.cross(w - e, (0.0, -1.0, 0.0)), 100.0)}]
+        got = []
+        for p in poses:
+            G = m.matrices({m.bones.index(b): R for b, R in p.items()})
+            D = {n: G[i][:3, :3][None] for i, n in enumerate(m.bones)}
+            got.append(float(FD.weights([f], D, dirs)[f["morph"]][0]))
+        assert got[0] == got[1] == 0.0 and got[2] > 0.9, (f["morph"], got)
+        idx, d = m.morphs[f["morph"]]
+        moved = m.V[idx[np.linalg.norm(d, axis=1) > 0.0002]]
+        assert np.linalg.norm(moved - e, axis=1).max() < 0.09
 
 
 def test_the_band_opens_under_each_arm(dressed):

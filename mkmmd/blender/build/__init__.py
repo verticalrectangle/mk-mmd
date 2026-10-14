@@ -14,6 +14,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   text     [[text]] kinetic type on set and prop surfaces: fitted, palette-coloured, typewriter and keyed numbers
   keys     [[key]] keys on set, prop and object properties (fog, flashes, steam, visibility)
   sim      secondary motion (hair, ears, tails, skirts) solved outside Blender, baked to keys
+  folds    fold shapes a joint angle drives (rig.json folds), keyed from the final pose on every frame
   save     the .blend
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python, cached by a hash of their inputs."""
 import hashlib
@@ -30,7 +31,7 @@ from ..runtime import CTX, op
 
 TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
-          "sim", "save", "bake"]
+          "sim", "folds", "save", "bake"]
 
 
 class BuildError(RuntimeError):

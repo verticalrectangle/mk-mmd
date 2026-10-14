@@ -131,10 +131,12 @@ class Patch:
     w: dict = None                # bone -> (n,) weights
     mat: int = 0                  # index into the mats of the Soup's mesh
     tag: str = ""
+    m: dict = None                # morph name -> (n, 3) vertex offsets
 
     def copy(self):
         return Patch(self.v.copy(), list(self.f), None if self.uv is None else self.uv.copy(),
-                     None if self.w is None else {k: np.array(x) for k, x in self.w.items()}, self.mat, self.tag)
+                     None if self.w is None else {k: np.array(x) for k, x in self.w.items()}, self.mat, self.tag,
+                     None if self.m is None else {k: np.array(x) for k, x in self.m.items()})
 
 
 def face_normals(v, faces):
@@ -192,7 +194,8 @@ def orient_outward(p, inside):
 
 
 def join(patches, mat=None):
-    """Concatenate patches (vertex indices shifted). Weights are zero-filled where a patch lacks a bone."""
+    """Concatenate patches (vertex indices shifted). Weights and morph offsets are zero-filled where a patch lacks a bone
+    or a morph."""
     patches = [p for p in patches if p is not None and len(p.f)]
     v, f, uv, off = [], [], [], 0
     wl = []
@@ -200,24 +203,34 @@ def join(patches, mat=None):
         v.append(p.v)
         f += [tuple(i + off for i in face) for face in p.f]
         uv.append(p.uv if p.uv is not None else np.zeros((sum(len(x) for x in p.f), 2)))
-        wl.append((off, len(p.v), p.w))
+        wl.append((off, len(p.v), p.w, p.m))
         off += len(p.v)
     V = np.vstack(v) if v else np.zeros((0, 3))
-    W = None
-    if any(w is not None for _, _, w in wl):
+    W = Mo = None
+    if any(w is not None for _, _, w, _ in wl):
         W = {}
-        for o, n, w in wl:
+        for o, n, w, _ in wl:
             for b, arr in (w or {}).items():
                 if b not in W:
                     W[b] = np.zeros(off)
                 W[b][o:o + n] = arr
-    return Patch(V, f, np.vstack(uv) if uv else np.zeros((0, 2)), W, patches[0].mat if mat is None and patches else (mat or 0))
+    if any(m for _, _, _, m in wl):
+        Mo = {}
+        for o, n, _, m in wl:
+            for k, arr in (m or {}).items():
+                if k not in Mo:
+                    Mo[k] = np.zeros((off, 3))
+                Mo[k][o:o + n] = arr
+    return Patch(V, f, np.vstack(uv) if uv else np.zeros((0, 2)), W,
+                 patches[0].mat if mat is None and patches else (mat or 0), m=Mo)
 
 
 def transform_patch(p, M=None, t=None):
     q = p.copy()
     if M is not None:
         q.v = q.v @ np.asarray(M, float).T
+        if q.m:
+            q.m = {k: d @ np.asarray(M, float).T for k, d in q.m.items()}
     if t is not None:
         q.v = q.v + np.asarray(t, float)
     return q
@@ -508,7 +521,7 @@ class Soup:
         if patch is None or not len(patch.f):
             return patch
         if mat is not None:
-            patch = Patch(patch.v, patch.f, patch.uv, patch.w, mat, patch.tag)
+            patch = Patch(patch.v, patch.f, patch.uv, patch.w, mat, patch.tag, patch.m)
         self.patches.append(patch)
         return patch
 
@@ -519,9 +532,9 @@ class Soup:
     def mesh(self, weld=1e-6, require_weights=True, cap=4):
         P = join(self.patches)
         fmat = np.concatenate([np.full(len(p.f), p.mat, int) for p in self.patches]) if self.patches else np.zeros(0, int)
-        verts, faces, uv, W = P.v, P.f, P.uv, P.w
+        verts, faces, uv, W, Mo = P.v, P.f, P.uv, P.w, P.m
         if weld:
-            verts, faces, uv, fmat, W = _weld(verts, faces, uv, fmat, W, weld)
+            verts, faces, uv, fmat, W, Mo = _weld(verts, faces, uv, fmat, W, weld, Mo)
         faces, uv, fmat = _drop_slivers(verts, faces, uv, fmat)
         weights = {}
         if W is not None:
@@ -533,7 +546,8 @@ class Soup:
         used = sorted(set(int(m) for m in fmat))
         remap = {m: i for i, m in enumerate(used)}
         return Mesh(self.name, verts, [tuple(f) for f in faces], np.asarray(uv, float),
-                    np.array([remap[int(m)] for m in fmat], int), [self.mats[m] for m in used], weights)
+                    np.array([remap[int(m)] for m in fmat], int), [self.mats[m] for m in used], weights,
+                    morphs=dict(Mo or {}))
 
 
 def _drop_slivers(verts, faces, uv, fmat, eps=1e-10):
@@ -568,15 +582,16 @@ def _drop_slivers(verts, faces, uv, fmat, eps=1e-10):
     return nf, (np.vstack(nuv) if nuv else np.zeros((0, 2))), np.array(nm, int)
 
 
-def _weld(verts, faces, uv, fmat, W, tol):
-    """Merge vertices closer than tol (quantised; weights of merged vertices are averaged) and collapse faces that
-    repeat a vertex (a quad with two merged corners becomes a triangle; fewer than 3 distinct corners: dropped)."""
+def _weld(verts, faces, uv, fmat, W, tol, Mo=None):
+    """Merge vertices closer than tol (quantised; weights and morph offsets of merged vertices are averaged) and collapse
+    faces that repeat a vertex (a quad with two merged corners becomes a triangle; fewer than 3 distinct corners:
+    dropped)."""
     key = np.round(verts / tol).astype(np.int64)
     _, inv = np.unique(key, axis=0, return_inverse=True)
     inv = np.asarray(inv).reshape(-1)
     nv_count = int(inv.max()) + 1 if len(inv) else 0
     if nv_count == len(verts):
-        return verts, faces, uv, fmat, W
+        return verts, faces, uv, fmat, W, Mo
     cnt = np.bincount(inv, minlength=nv_count).astype(float)
     nv = np.zeros((nv_count, 3))
     np.add.at(nv, inv, verts)
@@ -588,6 +603,13 @@ def _weld(verts, faces, uv, fmat, W, tol):
             acc = np.zeros(nv_count)
             np.add.at(acc, inv, a)
             nW[b] = acc / cnt
+    nMo = None
+    if Mo:
+        nMo = {}
+        for k, d in Mo.items():
+            acc = np.zeros((nv_count, 3))
+            np.add.at(acc, inv, d)
+            nMo[k] = acc / cnt[:, None]
     nf, nuv, nm = [], [], []
     k = 0
     for fi, f in enumerate(faces):
@@ -602,4 +624,4 @@ def _weld(verts, faces, uv, fmat, W, tol):
         nf.append(tuple(out))
         nuv.append(cuv[keep])
         nm.append(fmat[fi])
-    return nv, nf, (np.vstack(nuv) if nuv else np.zeros((0, 2))), np.array(nm, int), nW
+    return nv, nf, (np.vstack(nuv) if nuv else np.zeros((0, 2))), np.array(nm, int), nW, nMo

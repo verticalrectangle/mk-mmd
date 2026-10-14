@@ -129,6 +129,8 @@ class Part:
     joints: list = field(default_factory=list)
     frames: dict = field(default_factory=dict)  # display frame name -> bone names
     info: dict = field(default_factory=dict)    # anything the next builders may query (landmarks, surfaces, sizes)
+    rig: dict = field(default_factory=dict)     # rig description layers a PMX cannot hold (mkmmd.core.rig: folds,
+                                                # cloth): {layer: [entry, ...]}, PMX bone names
 
 
 def check(part):
@@ -172,8 +174,9 @@ def check(part):
 
 def scaled(part, k):
     """A copy of `part` made `k` times bigger about the origin (the floor under the figure): vertices, morph offsets,
-    bones, rigid bodies (sizes and places) and joints (places and travel limits). Angles, masses, springs, materials and
-    `info` (what the builders told each other, in the units they built in) stay as they are."""
+    bones, rigid bodies (sizes and places), joints (places and travel limits) and the points of its cloth copies. Angles,
+    masses, springs, materials, fold drivers and `info` (what the builders told each other, in the units they built in)
+    stay as they are."""
     k = float(k)
 
     def pt(p):
@@ -184,4 +187,8 @@ def scaled(part, k):
     bones = [replace(b, head=pt(b.head), tail=pt(b.tail)) for b in part.bones]
     bodies = [replace(rb, size=pt(rb.size), location=pt(rb.location)) for rb in part.bodies]
     joints = [replace(j, location=pt(j.location), move_lo=pt(j.move_lo), move_hi=pt(j.move_hi)) for j in part.joints]
-    return replace(part, meshes=meshes, bones=bones, bodies=bodies, joints=joints)
+    rig = dict(part.rig)
+    if rig.get("cloth"):
+        rig["cloth"] = [dict(c, points={n: np.asarray(a, float) * k for n, a in c.get("points", {}).items()})
+                        for c in rig["cloth"]]
+    return replace(part, meshes=meshes, bones=bones, bodies=bodies, joints=joints, rig=rig)
