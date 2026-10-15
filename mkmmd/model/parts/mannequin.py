@@ -4,7 +4,8 @@
                    analytic weights (incl. twist bones, fingers, toes), a head with eyes (両目/左目/右目), a mouth and
                    the morphs まばたき ウィンク ウィンク右 あ 笑い 照れ, and static rigid bodies hugging the surfaces
   mannequin_hair   a 3-bone 前髪 chain (sheet mesh, dynamic bodies, joints to the head body)
-  mannequin_skirt  two 2-bone スカート chains (front, back), a revolved skirt, dynamic bodies and joints
+  mannequin_skirt  two 2-bone スカート chains (front, back), a revolved skirt, dynamic bodies and joints, and a cloth
+                   copy of the skirt (mkmmd.model.cloth) held at its waist ring, colliding with the hips and thighs
 
     [model]
     parts = ["mannequin", "mannequin_hair", "mannequin_skirt"]       # any subset: hair and skirt need the body
@@ -15,10 +16,12 @@ import math
 
 import numpy as np
 
+from .. import cloth as CL
 from .. import geo, skin, tex
 from .. import skeleton as SK
 from ..build import builder
 from ..part import Bone, Joint, Material, Morph, Part, RigidBody
+from . import outfit_fit as OF
 
 HEIGHT = 1.5
 HEAD_C = np.array([0.0, -0.005, 1.35])
@@ -349,5 +352,18 @@ def build_skirt(ctx):
     mesh = sk.to_mesh("skirt", mats=["skirt"], weights=w)
     mat = Material("skirt", diffuse=(0.9, 0.35, 0.45, 1.0), ambient=(0.5, 0.25, 0.3), double_sided=True,
                    toon=_toon(ctx, "toon_skirt", "#c07a8e"))
+    rings = v.reshape(len(profile), -1, 3)[::-1]                       # revolve's blocks, bottom up: waist first
+    g = CL.ring_grid(rings, 1)
+    W = {}
+    for b, a in w.items():                                             # the chains' share hangs from the hips
+        b = "下半身" if b.startswith("スカート") else b
+        W[b] = W.get(b, 0.0) + np.asarray(a).reshape(len(profile), -1)[::-1].reshape(-1)[g.index]
+    pins = (np.arange(len(rings))[:, None] == 0).repeat(rings.shape[1], 1).reshape(-1)[g.index].astype(float)
+    quads = CL.facing_out(g.verts, g.quads, np.repeat(rings.mean(1), rings.shape[1], 0)[g.index])
+    body = OF.Skin.from_meshes(root.meshes)
+    z = body.verts[:, 2]
+    collider = CL.skin_collider(body, ((z > 0.45) & (z < 0.95))[body.tris].any(1), 0.002)
+    cloth = CL.copy("skirt", ["skirt"], [{"verts": g.verts, "quads": quads, "pins": pins, "weights": W}], collider,
+                    {"hold": 0.05})                                     # a skirt swings
     return Part("mannequin_skirt", meshes=[mesh], materials=[mat], bones=bones, bodies=bodies, joints=joints,
-                frames={"スカート": [b.name for b in bones]})
+                frames={"スカート": [b.name for b in bones]}, rig={"cloth": [cloth]})

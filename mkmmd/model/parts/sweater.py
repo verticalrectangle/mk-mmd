@@ -57,6 +57,12 @@ only in their colour:
              forward, セーター前屈 ridges across her front above the waistband as she leans forward, セーター捻り左/右
              diagonal folds round her sides as her chest turns on her hips; `depth` scales them all, `enabled` false
              leaves them out (mk keys them from her pose in its folds stage; in MMD they are sliders)
+  cloth      a copy of the knit body and sleeves for mk build's cloth stage (the rig description's `cloth`,
+             mkmmd.model.cloth): every `every`-th ring and column, held under the band, inside the waistband and the
+             cuffs and along each piece's top ring, the sleeves held toward their shape at least `sleeve_hold` and
+             colliding with nothing (a sleeve rides an arm that moves faster than cloth can follow), with the skin of
+             her torso set in `inset` to collide with; mass, tension, shear, bending, air, quality, distance and hold
+             are the knit as cloth (the stage's keys, docs/design.md: Cloth); `enabled` false leaves the copy out
   seed       the draw of the knit's own pleats, drape and gathers
 
 Sizes are metres x S (S = head_tip.z / 1.7 with leg_extra left out). Every piece carries the weights of the skin nearest
@@ -67,6 +73,7 @@ sleeves) and rib (the band, waistband and cuffs). Materials セーター (knit) 
 outlined dark."""
 import numpy as np
 
+from .. import cloth as CL
 from .. import helpers as HP
 from .. import skin as SK
 from .. import spec as SP
@@ -100,6 +107,8 @@ DEFAULTS = {
     "helpers": {"elbow": 0.5, "shoulder": 0.5, "peak": 0.8},
     "chains": {"enabled": True, "upper": 4, "fore": 3, "radius": 0.007, "gap": 0.03, "peak": 1.0},
     "folds": {"enabled": True, "depth": 1.0},
+    "cloth": {"enabled": True, "every": 2, "inset": 0.002, "sleeve_hold": 0.9, "mass": 0.3, "tension": 10.0,
+              "shear": 5.0, "bending": 0.5, "air": 1.0, "quality": 10, "distance": 0.003, "hold": 0.3},
     "seed": 7,
 }
 COLORS = {"knit": "#e7a7eb", "rib": "#9f75b0"}
@@ -933,10 +942,17 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
     k0 = face_rows("band", rings).start * rings.shape[1]
     face_w = {b: w[k0:k0 + face.size // 3] for b, w in band_patch.w.items()}
 
+    def held(P):                                 # how much the band holds knit at P: all under it, none half a drop below
+        return 1.0 - G.smoothstep(np.clip((skin_field.near(P)[1]["band"] - (h - drop * 0.25)) / (drop * 0.5), 0.0, 1.0))
+
     def under_the_band(p):                       # knit the band covers moves with the band, letting go below its edge
-        t = 1.0 - G.smoothstep(np.clip((skin_field.near(p.v)[1]["band"] - (h - drop * 0.25)) / (drop * 0.5), 0.0, 1.0))
-        p.w = carry(p.w, p.v, face, face_w, t)
+        p.w = carry(p.w, p.v, face, face_w, held(p.v))
         return p
+
+    def pins(rings, inside):                     # the cloth copy's pins: under the band, `inside` (K, M), the top ring
+        P = np.maximum(held(rings.reshape(-1, 3)).reshape(rings.shape[:2]), inside)
+        P[0] = 1.0
+        return P
     # ---- the waistband, then the knit body going in under it
     wb_rings, wb_top, info["z_waistband"] = waistband(fit, c, centre_y)
     soup.add(_patch(wb_rings, _rib_u(wb_rings), _rib_v(wb_rings), 1, "waistband",
@@ -959,6 +975,8 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
         body_patch.m = {k: d.reshape(-1, 3) for k, d in body_folds(fit, c, kr, kd, z_wb).items()}
     soup.add(body_patch)
     pieces["body"] = kr
+    z_in = info["z_waistband"] - 0.012 * S                   # the knit is held inside the waistband below its lip,
+    cloth = {"body": (kr, pins(kr, 1.0 - G.smoothstep(np.clip((kr[..., 2] - z_in) / (0.03 * S), 0.0, 1.0))))}   # 3 cm
     # ---- sleeves and cuffs
     for side, pre in (("L", "左"), ("R", "右")):
         sr, sd, s_ring, h_arm = sleeve(fit, c, side, arm_skin, skin_field, rng, 64)
@@ -975,6 +993,9 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
             sleeve_patch.m = {k: d.reshape(-1, 3) for k, d in sleeve_folds(fit, c, side, pre, sr, sd, s_ring).items()}
         soup.add(sleeve_patch)
         pieces[f"sleeve_{side}"] = sr
+        s_in = arm_frames(fit, side, s_ring)[4] - c["cuff"]["length"] * S + 0.006 * S   # held inside the cuff past it,
+        cloth[f"sleeve_{side}"] = (sr, pins(sr, np.broadcast_to(                        # letting go over 4 cm above
+            G.smoothstep(np.clip((s_ring - s_in) / (0.04 * S) + 1.0, 0.0, 1.0))[:, None], sr.shape[:2])))
         per = float(np.linalg.norm(np.diff(sr[-1], axis=0), axis=1).sum())
         cr = cuff(fit, c, side, arm_skin, 4 * max(8, round(per / (c["cuff"]["rib"] * S))))
         soup.add(_patch(cr, _rib_u(cr), _rib_v(cr), 1, f"cuff_{side}",
@@ -988,7 +1009,8 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
         d = fit.skin.closest(P)[0]
         shown = skin_field.near(P)[1]["band"] > h if k in ("body", "sleeve_L", "sleeve_R") else np.ones(len(P), bool)
         gaps[k] = float(d[shown].min())
-    info.update(min_gap=min(gaps.values()), gaps=gaps, verts={k: int(np.prod(r.shape[:2])) for k, r in pieces.items()})
+    info.update(min_gap=min(gaps.values()), gaps=gaps, verts={k: int(np.prod(r.shape[:2])) for k, r in pieces.items()},
+                cloth=cloth)
     return info
 
 
@@ -1020,6 +1042,37 @@ def joint_helpers(fit, soup, c, parents):
     return bones
 
 
+def cloth_copy(fit, c, soup, held, chains, info):
+    """The sweater's cloth copy (mkmmd.model.cloth; module docstring: cloth): its knit body and sleeves at every
+    `every`-th ring and column, with the knit's weights there (a sleeve chain's share given to the bone the chain hangs
+    from, `chains` {chain bone: that bone}: the cloth hangs there instead), held by `held` ({piece: (rings, pins)}:
+    under the band, inside the waistband and the cuffs, along each piece's top); the skin of her torso from below the
+    waistband to over the band's top, set in `inset` (not her arms: a sleeve keeps its ease round an arm by its hold,
+    and an arm faster than cloth would leave a sleeve's cloth caught on its far side)."""
+    cc, S = c["cloth"], fit.S
+    patches = {p.tag: p for p in soup.patches}
+    pieces = []
+    for tag, (rings, pin) in held.items():
+        g = CL.ring_grid(rings, int(cc["every"]))
+        W = {}
+        for b, w in patches[tag].w.items():
+            b = chains.get(b, b)
+            W[b] = W.get(b, 0.0) + w[g.index]
+        q = CL.facing_out(g.verts, g.quads, np.repeat(rings.mean(1), rings.shape[1], 0)[g.index])
+        sleeve = tag.startswith("sleeve")                   # rides an arm faster than cloth: held, colliding with nothing
+        pieces.append({"verts": g.verts, "quads": q, "pins": np.asarray(pin, float).reshape(-1)[g.index], "weights": W,
+                       "holds": cc["sleeve_hold"] if sleeve else 0.0, "collides": not sleeve})
+    sk = fit.skin
+    names = list(sk.weights)
+    dom = np.array(names)[np.argmax(np.stack([sk.weights[b] for b in names], 1), 1)]
+    torso = ~np.array([OF.is_arm(b) or OF.is_leg(b) or OF.is_head(b) or b == "首" for b in dom])
+    z = sk.verts[:, 2]
+    keep = torso & (z > info["z_waistband"] - c["waistband"]["height"] * S - 0.02 * S) & (z < info["band_top_z"] + 0.02 * S)
+    collider = CL.skin_collider(sk, keep[sk.tris].all(1), cc["inset"] * S)
+    settings = {k: v for k, v in cc.items() if k not in ("enabled", "every", "inset", "sleeve_hold")}
+    return CL.copy("sweater", [MAT_KNIT], pieces, collider, settings)
+
+
 @builder("sweater", needs=("body",))
 def build(ctx):
     cfg = SP.merge(DEFAULTS, ctx.cfg)
@@ -1029,6 +1082,7 @@ def build(ctx):
     body = ctx.need("body")
     rig = ORIG.Rig()
     info = sweater(fit, body, cfg, soup, rig, ctx.find_body)
+    held = info.pop("cloth")
     bones = joint_helpers(fit, soup, cfg, {b.name: b.parent for b in body.bones})
     mats = [WR.material(ctx, MAT_KNIT, "knit", col["knit"], WR.knit(col["knit"]), shadow=(0.82, 0.74, 0.88)),
             WR.material(ctx, MAT_RIB, "rib", col["rib"], WR.rib(col["rib"]), shadow=(0.78, 0.72, 0.86))]
@@ -1038,7 +1092,16 @@ def build(ctx):
     english.update({jp_: en for jp_, en in FOLD_NAMES.values()})
     morphs = [Morph(n, "other", english.get(n, n)) for n in mesh.morphs]
     layers = {"folds": fold_drivers(fit, {b.name: b for b in body.bones})} if cfg["folds"]["enabled"] else {}
+    if cfg["cloth"]["enabled"]:
+        parent = {b.name: b.parent for b in rig.bones}
+        hung = {}
+        for b, a in parent.items():                          # each chain bone -> the bone its chain hangs from
+            while a in parent:
+                a = parent[a]
+            hung[b] = a
+        layers["cloth"] = [cloth_copy(fit, cfg, soup, held, hung, info)]
     ctx.log(f"band top {info['band_top_z']:.3f} m on the chest, waistband top {info['z_waistband']:.3f} m, closest to "
-            f"the skin {info['min_gap'] * 1000:.1f} mm, {info['chains']} chains under the sleeves, {len(morphs)} folds")
+            f"the skin {info['min_gap'] * 1000:.1f} mm, {info['chains']} chains under the sleeves, {len(morphs)} folds"
+            + (f", a cloth copy of {len(layers['cloth'][0]['pins'])} vertices" if "cloth" in layers else ""))
     return Part("sweater", meshes=[mesh], materials=[m for m in mats if m.name in mesh.mats], bones=bones + rig.bones,
                 morphs=morphs, bodies=rig.bodies, joints=rig.joints, info=info, rig=layers)

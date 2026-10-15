@@ -3,9 +3,11 @@
 [folds.<cast>] keys (all optional: a member whose rig has folds gets them without a table)
   enabled = true    false: no fold shapes for this member (they stay at 0)
   depth = 1.0       scales every fold's weight
-A member whose rig has no folds is left alone. The stage runs after sim, when every bone that drives a fold has its
-final keys; the driving bones' rotations are read in the armature's own space (a model spinning in the world turns no
-fold), and the weights are keyed LINEAR on the morph sliders (the bound placeholder, or the meshes)."""
+A member whose rig has no folds is left alone, and so is a fold on a piece the cloth stage simulates for the member
+(its `piece` a cloth copy's name: the cloth makes its own folds there). The stage runs after sim, when every bone that
+drives a fold has its final keys; the driving bones' rotations are read in the armature's own space (a model spinning in
+the world turns no fold), and the weights are keyed LINEAR on the morph sliders (the bound placeholder, or the
+meshes)."""
 import bpy
 import numpy as np
 
@@ -13,6 +15,7 @@ from ...core import folds as FD
 from ...solvers import geom
 from .. import keys as K
 from .. import scene as S
+from . import cloth as CL
 
 
 def _mat(m):
@@ -44,6 +47,12 @@ def run(ctx):
         if not spec.get("enabled", True):
             out[name] = {"skipped": "enabled = false"}
             continue
+        cloth = set(CL.simulated(ctx, name, m))
+        left = sorted({f["morph"] for f in folds if f.get("piece") in cloth})
+        folds = [f for f in folds if f.get("piece") not in cloth]
+        if not folds:
+            out[name] = {"left_to_cloth": left}
+            continue
         bones = sorted({f["driver"][k] for f in folds for k in ("bone", "ref")})
         missing = [b for b in bones if b not in m.arm.data.bones]
         if missing:
@@ -61,6 +70,6 @@ def run(ctx):
             vals = np.clip(np.asarray(w, float) * depth, 0.0, 1.0)
             if K.key_morph(holders, morph, frames, [float(v) for v in vals], interp="LINEAR"):
                 keyed[morph] = round(float(vals.max()), 3)
-        out[name] = {"folds": len(folds), "keyed": keyed}
+        out[name] = {"folds": len(folds), "keyed": keyed, **({"left_to_cloth": left} if left else {})}
         ctx.log("folds", name, f"{len(keyed)} shapes keyed, most of each: {keyed}")
     return out

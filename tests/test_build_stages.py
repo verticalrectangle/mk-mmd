@@ -1157,3 +1157,60 @@ def test_mk_s_own_renderer_draws_the_vector_look_as_blender_does_and_leaves_blen
     for f, img in mine.items():                                  # measured: 0.05 to 0.11 % off by more than 8 levels
         off = np.abs(img - np.asarray(Image.open(d / f"{f:05d}.png").convert("RGB"), int)).max(-1) > 8
         assert off.mean() < 0.003, (f, off.mean())
+
+
+# ---------------------------------------------------------------- cloth
+@pytest.fixture(scope="module")
+def skirted(tmp_path_factory):
+    """The mannequin in its skirt, whose cloth copy (rig.json `cloth`, mq.cloth.npz) the cloth stage simulates."""
+    d = tmp_path_factory.mktemp("skirted")
+    (d / "m.toml").write_text('[model]\nname = "mq"\nparts = ["mannequin", "mannequin_skirt"]\n'
+                              f'out = "{d / "out"}"\n', encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        MAIN.main(["model", "build", str(d / "m.toml"), "--no-cache"])
+    assert e.value.code == 0
+    return d / "out" / "mq.pmx", d / "out" / "mq.rig.json"
+
+
+SPIN = """[pose.mq]
+feet = "floor"
+[perform.mq]
+step_turn = [{{ t = 0.2, deg = {deg} }}]
+[cloth.mq]
+"""
+
+
+def test_a_simulated_skirt_lags_a_spin_its_faces_on_the_cloth_and_a_rebuild_reuses_it(tmp_path, skirted, capsys):
+    """The cloth stage simulates the skirt's cloth copy in the world: as she spins, its hem trails her hips (it turns
+    less than the waist ring held on them), and the skirt's faces follow the cloth on every frame. A rebuild with the
+    same motion reuses the simulation; another spin runs it again."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    def build(deg):
+        (tmp_path / "mk.toml").write_text(HEAD + f'\n[[cast]]\nname = "mq"\npmx = "{skirted[0]}"\nrig = "{skirted[1]}"\n\n'
+                                          + SPIN.format(deg=deg), encoding="utf-8")
+        code, out = cli(["build", "--project", str(tmp_path), "--skip", "sim"], capsys)
+        assert code == 0, out.get("error")
+        return out["stages"]["cloth"]["mq"]["skirt"]
+    rep = build(180)
+    assert not rep["cached"] and rep["pen_mm"] < 5.0 and rep["stretch_pct"] < 60.0, rep
+    (skirt, n), = rep["follows"].items()
+    expr = ('[[list(v.co) for v in o.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh().vertices] '
+            f'for o in (bpy.data.objects["{skirt}"], bpy.data.objects["{skirt}_cloth"])]')
+    code, q = cli(["q", str(tmp_path / "build" / "t.blend"), expr, "--frames", "36:50:2", "--project", str(tmp_path)],
+                  capsys)                                         # the turn starts at t 0.2 (frame 37)
+    assert code == 0, q
+    faces, cloth = (np.array([v[i] for v in q["values"]]) for i in (0, 1))        # her armature's space
+    assert faces.shape[1] == n
+    assert max(cKDTree(c).query(f)[0].max() for f, c in zip(faces, cloth)) < 1e-4  # the skirt's faces are on the cloth
+    z = cloth[0, :, 2]
+    waist, hem = np.abs(z - z.max()) < 1e-3, np.abs(z - z.min()) < 1e-3
+    centre = cloth[:, waist].mean(1, keepdims=True)
+    a = np.unwrap(np.arctan2(*(cloth - centre)[..., [1, 0]].transpose(2, 0, 1)), axis=0)
+    turned = np.degrees(a - a[0])                                                    # since just before the turn
+    trail = np.abs(turned[:, hem].mean(1) - turned[:, waist].mean(1))
+    assert trail[0] == 0.0 and trail[1:].max() > 3.0, trail                       # measured: 5.3 degrees at frame 40
+    again = build(180)
+    assert again["cached"] and again["key"] == rep["key"] and again["pen_mm"] == rep["pen_mm"]
+    assert not build(90)["cached"]

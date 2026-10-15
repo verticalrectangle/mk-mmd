@@ -31,6 +31,7 @@ lacks means the model has none of it."""
 
 SCHEMA = 2
 MODEL_LAYERS = ("folds", "cloth")       # the layers `mk model` adds (a PMX cannot hold them)
+CLOTH_ARRAYS = ("sim_faces", "pins", "holds", "collides", "sim_weights", "collide_faces", "collide_weights")   # + points
 
 
 def blender_names(rig):
@@ -70,6 +71,20 @@ def merge(rig, layers):
         if entries:
             out[layer] = [RENAME[layer](e, names) for e in entries]
     return out
+
+
+def cloth_split(rig, file):
+    """(`rig` with its cloth entries' arrays left out, {"<cloth>.<array>": array}) for writing rig.json and `file`
+    (<model>.cloth.npz beside the PMX): each entry keeps `file` and the names of its arrays (`arrays`); its `points`
+    (sim, collide) and CLOTH_ARRAYS go to the file."""
+    arrays, entries = {}, []
+    for e in rig.get("cloth") or []:
+        e = dict(e)
+        mine = {f"{e['name']}.{k}": a for k, a in (e.pop("points", None) or {}).items()}
+        mine.update({f"{e['name']}.{k}": e.pop(k) for k in CLOTH_ARRAYS if k in e})
+        arrays.update(mine)
+        entries.append(dict(e, file=file, arrays=sorted(mine)))
+    return (dict(rig, cloth=entries) if entries else rig), arrays
 
 
 def collect(parts):

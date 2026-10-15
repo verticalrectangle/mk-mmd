@@ -129,6 +129,11 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   poses and performance.
 - **Folds** ([Folds](design.md#folds)): a model whose rig.json has fold shapes (an mk-built garment's crook of the elbow, the knit bunching
   as she leans or twists) gets them keyed from her pose with no table; `[folds.<cast>] depth` scales them, `enabled = false` turns them off.
+- **Cloth** ([Cloth](design.md#cloth)): a model whose rig.json has a cloth copy (an mk-built garment: the sweater's knit) is simulated with
+  Blender's cloth when the scene says `[cloth.<cast>]` (an empty table will do), and then its fold shapes and the chains it replaces are left
+  to it (take `sleeve` out of the sim's families). It costs about 0.1 s a frame for the sweater, once: a rebuild of the same motion reuses
+  it. Read the report's `pen_mm` (how deep the cloth went into her and on which frame) and `lag_mm`, and look at that frame; `hold` keeps
+  the cloth closer to its shape when a move is too fast for it, `mk build --skip cloth` is the fast loop for everything else.
 - **Worn props** (a guitar on its strap, [Playing a worn guitar](design.md#playing-a-worn-guitar)): `wear = "rin"` on the prop, `grip = "guitar:neck"` and
   `grip = "guitar:strum"` on the hands, `strum = {...}` in `perform`; check `strum`, `prop_body` and the arm `contact`.
 

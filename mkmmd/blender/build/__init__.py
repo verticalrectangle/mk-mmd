@@ -15,6 +15,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   keys     [[key]] keys on set, prop and object properties (fog, flashes, steam, visibility)
   sim      secondary motion (hair, ears, tails, skirts) solved outside Blender, baked to keys
   folds    fold shapes a joint angle drives (rig.json folds), keyed from the final pose on every frame
+  cloth    garments' cloth copies (rig.json cloth) simulated with Blender's cloth, their faces following it
   save     the .blend
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python, cached by a hash of their inputs."""
 import hashlib
@@ -31,7 +32,7 @@ from ..runtime import CTX, op
 
 TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
-          "sim", "folds", "save", "bake"]
+          "sim", "folds", "cloth", "save", "bake"]
 
 
 class BuildError(RuntimeError):
@@ -45,6 +46,7 @@ class Member:
         self.root = self.arm = None
         self.meshes = []
         self.rig = None
+        self.pmx = None             # the model file the cast stage imported
         self.base = {}              # world-axis base rotations (bone -> Quaternion) the pose stage keyed
         self.ik = {}                # side -> (target empty, pole empty)
         self.seat = None            # world seat frame used by the pose stage
@@ -63,6 +65,7 @@ class Ctx:
         self.start = int(sc.get("start", max(1, self.frame0 - int(3 * self.fps))))
         self.settle = int(sc.get("settle_frames", 24))           # rest -> base pose over these pre-roll frames
         self.cache = job["args"].get("cache") or os.path.join(self.root, ".mk", "cache")
+        self.out = job["args"].get("out")                         # where the save stage writes the .blend
         self.python = job["config"].get("python")
         self.assets = job["config"].get("assets")
         self.cast = {}

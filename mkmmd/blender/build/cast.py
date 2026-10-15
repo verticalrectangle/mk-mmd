@@ -146,7 +146,7 @@ def run(ctx):
         root.location = Vector(spec.get("at", (0.0, 0.0, 0.0)))
         root.rotation_euler = Euler((0.0, 0.0, math.radians(float(spec.get("yaw", 0.0)))))
         m = Member(name, spec)
-        m.root, m.arm, m.meshes, m.rig = root, arm, meshes, rig
+        m.root, m.arm, m.meshes, m.rig, m.pmx = root, arm, meshes, rig, pmx
         ctx.cast[name] = m
         if rig and rig.get("source", {}).get("sha1") and rig["source"].get("path") and \
                 os.path.abspath(rig["source"]["path"]) != os.path.abspath(pmx):

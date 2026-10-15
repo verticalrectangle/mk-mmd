@@ -295,6 +295,19 @@ direction and `dir`, armature space at rest, carried by `ref`: an elbow's bend, 
 twisting). The shape's weight runs from 0 at `from` to 1 at `to` (smoothstep). The [folds stage](#folds) keys them from the
 final pose of every frame; in MMD they are plain sliders.
 
+`cloth` (mk-built models whose parts make a garment's simulation copy, `mkmmd.model.cloth`) lists one entry per garment:
+`{"name": "sweater", "materials": ["セーター"], "bones": [...], "settings": {...}, "file": "carly.cloth.npz", "sha1": "...",
+"arrays": ["sweater.sim", ...]}`. Its arrays are in `<model>.cloth.npz` beside the PMX (`mk model build` writes it; a file
+whose sha1 is not the entry's is refused): `<name>.sim` the simulated cloth's vertices (model space at rest) and
+`.sim_faces` its quads, `.pins` (0..1, where the garment is attached: 1 holds a vertex where its weights carry it, the
+cloth under a band, and the faces there keep their skin's motion; 0 leaves it free), `.holds` (the least the free cloth
+is held toward where its weights carry it: a sleeve rides an arm faster than cloth can follow), `.collides` (0 or 1:
+whether it collides with the body; a sleeve does not, or an arm crossing her chest would push it off), `.sim_weights`
+(vertex x `bones`: where the armature carries it), and `.collide`, `.collide_faces`,
+`.collide_weights` (the skin under the garment, set in a little). `materials` are the render materials whose faces follow
+the simulated cloth, `settings` the garment's cloth (the keys of [Cloth](#cloth)). The [cloth stage](#cloth) simulates
+it; MMD has the PMX's own chains and fold shapes.
+
 **Semantic names** (`mkmmd/core/bonemap.py`, matched on the PMX name after NFKC normalisation): single bones `root`,
 `view_center`, `center`, `groove`, `waist`, `lower_body`, `upper_body`, `upper_body2`, `upper_body3`, `neck`, `head`,
 `eyes`; and, with the suffix `.L` / `.R`, `eye`, `shoulder_p`, `shoulder`, `shoulder_c`, `arm`, `arm_twist`, `arm_twist1..3`,
@@ -599,6 +612,7 @@ member or the camera cannot be used by a stage that runs before them):
 | keys | `[[key]]` | keys on set, prop and object properties | [Keys](#keys) |
 | sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys | [Sim](#sim) |
 | folds | `[folds.<cast>]` | the fold shapes a joint angle drives (rig.json `folds`), keyed from the final pose | [Folds](#folds) |
+| cloth | `[cloth.<cast>]` | garments' cloth copies (rig.json `cloth`) simulated with Blender's cloth, the garment's faces following it | [Cloth](#cloth) |
 | save | | the `.blend` | |
 | bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras, the meshes, what the glb cannot carry as Blender evaluates it on each frame, and what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
 
@@ -1579,7 +1593,54 @@ for every frame of the build it reads the driving bones' rotations in the armatu
 world turns no fold), works out each driver's angle (`mkmmd.core.folds`) and keys the shape's weight LINEAR on the morph
 sliders. It runs after sim, when every bone has its final keys. A member whose rig has folds gets them without a table;
 `[folds.<cast>]` takes `enabled = false` (none of them) and `depth` (scales every weight, default 1). The report has per
-member `folds` and `keyed`: the most of each shape any frame shows.
+member `folds` and `keyed`: the most of each shape any frame shows. A fold on a piece the cloth stage simulates for the
+member (its `piece` the name of a cloth copy) is left to the cloth, and the report lists those (`left_to_cloth`).
+
+### Cloth
+
+The cloth stage simulates the cloth copies a cast member's rig declares (rig.json `cloth`,
+[Model description](#model-description-rigjson)) with Blender's cloth, and the garment's faces follow the simulated
+cloth. It runs after sim and folds, when every bone has its final keys, for a member with a `[cloth.<cast>]` table (an
+empty one will do):
+
+| Key | Meaning |
+|---|---|
+| `enabled` | false: no cloth for this member (default true) |
+| `pieces` | the copies to simulate, by name (default every one the rig declares) |
+| `quality` | Blender's cloth steps a frame (8; the sweater's 10) |
+| `mass` | kg a vertex of the copy (0.3) |
+| `tension`, `shear`, `bending` | stiffness against stretching and squashing, shearing and bending (10, 5, 0.5) |
+| `air` | air damping (1) |
+| `distance` | metres the cloth keeps off the skin it collides with (0.003) |
+| `hold` | 0..1: how much the free cloth is held where the armature carries it, each vertex at least its copy's `holds` (the sweater's 0.3, its sleeves' 0.9: it keeps its shape and swings and lags on it; near 0 the cloth goes where gravity and the body put it, as a skirt that swings) |
+| `grip` | how hard what is held is pulled back there (Blender's pin stiffness, 1) |
+| `cache` | false: simulate again though a simulation of the same inputs is cached (default true) |
+
+The garment brings its own values (rig.json `settings`, e.g. `[sweater.cloth]`); the table's win. For each copy the stage
+makes `<root>_<name>_cloth`: the copy skinned to the armature, its pinned vertices following their skin and the others
+held by the larger of the copy's `holds` (the sweater's sleeves', `[sweater.cloth] sleeve_hold`) and `hold`, colliding
+with the copy's skin (skinned too; single sided, so cloth found inside goes back out along the skin's normal), Blender's
+cloth baked from the build's first frame to its last with its rest shape taken from her skin on every frame (Dynamic
+Mesh: the cloth keeps the garment's ease in any pose and adds its own motion to it). The frames go to
+`<cache>/cloth/<key>.pc2` (the key hashes the copy, its settings, the frames and, on every frame, where each bone that
+carries it is in the world, so a rebuild with the same motion reuses them) and beside the .blend to
+`<blend>.cloth/<cast>.<name>.pc2`, which a Mesh Cache modifier plays on the cloth: the saved scene holds no physics. The
+model's faces of the copy's `materials` move to a mesh of their own, `<root>_<name>`, bound to the cloth (Surface Deform,
+the cloth triangulated) on the first frame; each of its vertices follows the cloth as much as the copy near it is free
+(the vertex group `mk_cloth`), so what a band holds keeps its skin's motion exactly. Fold shapes on a simulated piece are
+left to the cloth; leave the chains it replaces (the sweater's `sleeve`) out of `[sim.<cast>] families`.
+`mk build --skip cloth` is the fast loop.
+
+The report has per member and copy `seconds` and `per_frame_ms` (what the simulation costs), `cached`, `pen_mm` and
+`pen_frame` (the deepest the free cloth goes into the skin it collides with over the clip, and on which frame),
+`pen_over_2mm` (the share of the free cloth's vertex-frames deeper than 2 mm), `lag_mm` (how far the free cloth trails
+where the armature alone would carry it: most of it, p99 and the most), `jerk_mm` (the largest change of a free vertex's
+frame-to-frame motion over the clip) beside `jerk_pinned_mm` (the same for the pinned ones, which move as her skin does,
+so more than theirs is the cloth's own jump), `stretch_pct` (the most an edge with a free end stretches beyond where the
+armature carries it),
+`verts`, `faces`, `collide_faces`, `settings`, `key`, `pc2` and `follows` (the mesh that follows the cloth and its vertex
+count). That mesh is too big for the bake to hold frame by frame in all but short clips: the site's scene viewer then
+goes without it and `mk render --engine mk` draws those shots in Blender (the bake report's `not_by_frame` says so).
 
 ## Placement
 
@@ -3103,7 +3164,10 @@ neighbours (`[sweater.chains]`, family `sleeve`), carry the bag of cloth hanging
 solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. Fold shapes (`[sweater.folds]`) bunch the knit as
 her joints turn (the crook of a bending elbow, the shoulder as an arm rises, her back as an arm reaches forward, above the
 waistband as she leans, her sides as she twists): mk's [folds stage](#folds) keys them from her pose, MMD has them as
-sliders. Sizes are metres x S like the dress's. Colours
+sliders. A cloth copy of the knit body and sleeves (`[sweater.cloth]`, `mkmmd.model.cloth`: every other ring and
+column, held under the band, inside the waistband and the cuffs, the sleeves held toward their shape, with the skin of
+her torso to collide with) lets mk's [cloth stage](#cloth) simulate the knit instead. Sizes are metres x S like the
+dress's. Colours
 come from `[colors.<part>]`, materials from `outfit_wear` (a toon ramp, a dark outline; the knit's texture a
 stockinette, the bands' a rib). Pants and socks are **drawn** like the design: `outfit_ink` lays pen strokes on the
 cloth (thin dark ribbons a fraction of a millimetre above it, with its weights: the socks' ribs, the creases of the
@@ -3134,8 +3198,10 @@ the module docstring lists the landmarks), `geo` (loft, sweep, tube, ribbon, rev
 normals, `capsule_between`, `euler_for_axis`), `skin` (chain weights with smooth joint blends, envelope weights,
 transfer from body meshes for garments, ramps), `helpers` (a helper bone at a joint that turns a share of the joint's
 rotation by a grant, and the weights the joint's two sides share given to it, so a bent elbow or a raised arm keeps a
-garment round instead of pinching it: the sweater has one at each elbow and shoulder), `tex` (antialiased UV-space
-canvas, gradients, toon ramps, sphere maps, noise, atlas), `subdiv` (Catmull-Clark with creases as sparse operators).
+garment round instead of pinching it: the sweater has one at each elbow and shoulder), `cloth` (a garment's simulation
+copy for the cloth stage: a coarse grid off lofted rings, pins, the skin under it to collide with), `tex` (antialiased
+UV-space canvas, gradients, toon ramps, sphere maps, noise, atlas), `subdiv` (Catmull-Clark with creases as sparse
+operators).
 `Mesh.subsurf` applies it before export: the surface equals Blender's Subdivision modifier (boundary "all", linear UVs) to
 1e-7 and UVs, weights and morph offsets are carried through the operators. `mkmmd/model/parts/mannequin.py` uses all of
 it and is the fixture of the framework. A part's rig layers a PMX cannot hold (fold shapes, cloth copies) go in
@@ -3162,7 +3228,8 @@ unweighted vertices, missing UVs, unused vertices; the parts' findings, `[hair] 
 semantic bones missing, morph map (semantic -> morph), chain families with bone counts, bodies and measurements. Files in
 the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk look <name>.blend --view front,3q
 --target "bone('head').head" --dist 1.2` works), `<name>.rig.json` (what `mk inspect` writes; pass it as `rig =` to a
-`[[cast]]` with `pmx =`), `build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
+`[[cast]]` with `pmx =`), `<name>.cloth.npz` (the arrays of rig.json's `cloth`, when a part makes a cloth copy),
+`build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
 `--no-export` only runs and checks the builders, into `<out>/no_export/` (an exported model's files stay as they are).
 **Part cache** (`mkmmd.model.partcache`, in `~/.cache/mk/model_parts`): a part is reused, with its textures and its log
 lines, while all it read is unchanged: the code (the package's .py files and the bases' files, by size and time), its

@@ -340,6 +340,59 @@ def test_the_elbow_fold_shows_as_the_elbow_bends(dressed, posable):
         assert np.linalg.norm(moved - e, axis=1).max() < 0.09
 
 
+def test_the_sweater_s_cloth_copy_is_held_at_its_bands_and_hangs_free_between(dressed):
+    """The knit's cloth copy (mkmmd.model.cloth) is held where the sweater is: under the band on her chest, where the
+    body goes in under the waistband and the sleeves into the cuffs; free between (her waist, her elbows), so the cloth
+    stage can let it hang and swing; the sleeves held toward their shape more than the body and colliding with nothing
+    (a sleeve rides an arm that moves faster than cloth can follow; caught between an arm and her chest it would be
+    pushed off), the body colliding. Its goal is the knit's skin weights, the sleeve chains' share given back to the
+    arm (the cloth hangs instead of them), every vertex's summing to 1."""
+    _, parts, fit = dressed
+    info, c = parts["sweater"].info, parts["sweater"].rig["cloth"][0]
+    V, P, W = c["points"]["sim"], c["pins"], c["sim_weights"]
+    torso = np.abs(V[:, 0]) < 0.10
+    chest = torso & (V[:, 1] < -0.05) & (V[:, 2] > info["band_top_z"] - 0.035) & (V[:, 2] < info["band_top_z"])
+    waist = torso & (V[:, 2] > info["z_waistband"] + 0.04) & (V[:, 2] < info["band_top_z"] - 0.10)
+    hem = torso & (V[:, 2] < V[torso, 2].min() + 0.003)
+    assert V[hem, 2].max() < info["z_waistband"]                          # the body's last ring is inside the waistband
+    for name, want, held in (("chest", chest, True), ("waist", waist, False), ("into the waistband", hem, True)):
+        assert want.sum() > 20 and ((P[want] > 0.9) if held else (P[want] < 0.05)).all(), (name, P[want].min(),
+                                                                                            P[want].max())
+    for side in ("L", "R"):
+        elbow = np.linalg.norm(V - np.asarray(fit.L[f"elbow.{side}"]), axis=1) < 0.04
+        dw = np.linalg.norm(V - np.asarray(fit.L[f"wrist.{side}"]), axis=1)
+        end = dw < dw.min() + 0.01                                          # the sleeve's last ring, in the cuff
+        assert elbow.sum() > 10 and (P[elbow] < 0.05).all()
+        assert dw.min() < SW.DEFAULTS["cuff"]["length"] and end.sum() > 10 and (P[end] > 0.9).all(), (side, dw.min())
+    sleeves = np.abs(V[:, 0]) > 0.16                                        # her arms, away from her body
+    assert np.allclose(c["holds"][sleeves], SW.DEFAULTS["cloth"]["sleeve_hold"]) and (c["holds"][waist] == 0).all()
+    assert not c["collides"][sleeves].any() and c["collides"][waist].all()
+    assert not [b for b in c["bones"] if "袖下" in b] and np.allclose(W.sum(1), 1.0, atol=1e-5)
+
+
+def test_the_sweater_s_cloth_copy_lies_on_its_knit_at_any_size_and_starts_clear_of_what_it_collides_with(dressed):
+    """The cloth copy's vertices are points of the knit itself, also once the part is scaled (a character's [model]
+    height), or the knit bound to it would jump at the first frame; at rest the free cloth stands at least the cloth's
+    `distance` off what it collides with (or it pops off the body when the simulation starts), and that collider lies
+    inside her skin, set in by `inset`."""
+    from scipy.spatial import cKDTree
+
+    from mkmmd.model import part as PT
+    _, parts, fit = dressed
+    for k in (1.0, 1.07):
+        sw = PT.scaled(parts["sweater"], k)
+        c, m = sw.rig["cloth"][0], sw.meshes[0]
+        knit = np.unique(np.concatenate([f for f, i in zip(m.faces, m.face_mat) if m.mats[i] == SW.MAT_KNIT]))
+        d = cKDTree(m.verts[knit]).query(c["points"]["sim"])[0]
+        assert d.max() < 1e-6, (k, d.max())
+    c = parts["sweater"].rig["cloth"][0]
+    collide = OF.Skin(c["points"]["collide"], c["collide_faces"])
+    gap = collide.closest(c["points"]["sim"][(c["pins"] < 0.5) & (c["collides"] > 0)])[0]
+    assert gap.min() > c["settings"]["distance"], gap.min()
+    depth = fit.skin.closest(c["points"]["collide"])[0]
+    assert depth.max() < -0.5 * SW.DEFAULTS["cloth"]["inset"], depth.max()
+
+
 def test_the_band_opens_under_each_arm(dressed):
     """An off-shoulder sweater, not a tube top with arm rings: the band goes over each upper arm and opens in a slit
     under it, so the skin straight under each shoulder joint, 3 cm along the arm, lies below the band's depth, and the

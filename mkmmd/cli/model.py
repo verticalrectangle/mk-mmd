@@ -1,5 +1,6 @@
 """mk model: build an original character model from a spec (part builders in code -> PMX -> rig.json -> review .blend)."""
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -38,7 +39,8 @@ Examples:
   mk look <out>/<name>.blend --view front,3q --target "bone('head').head" --dist 1.2 --frames 1
   mk model info model.toml                               # what would be built, in which order
 
-Output files in <out>: <name>.pmx, tex/*.png, <name>.blend, <name>.rig.json, build.json (the printed report).
+Output files in <out>: <name>.pmx, tex/*.png, <name>.blend, <name>.rig.json, build.json (the printed report), and
+<name>.cloth.npz when a part makes a cloth copy (the arrays of rig.json's `cloth`).
 """
 
 NEW_HELP = """Start a character from a model base shipped with mk (mkmmd/model/bases/): writes DIR/model.toml, whose
@@ -429,6 +431,7 @@ def rig_report(rig):
         "morph_map": rig["morphs"], "morphs_unmapped": [m["name"] for m in rig["morph_list"] if m["name"] not in mapped],
         "chain_families": fams, "bodies": rig["stats"]["bodies"], "dynamic_bodies": rig["stats"]["dynamic_bodies"],
         "joints": rig["stats"]["joints"], "measure": rig["measure"], "quirks": rig["quirks"], "kind": rig.get("kind"),
+        "folds": len(rig.get("folds") or []), "cloth": [c["name"] for c in rig.get("cloth") or []],
     }
 
 
@@ -557,6 +560,17 @@ def run_build(args):
             finish(report)
             return CHECK_FAILED
         rig_path = out / f"{name}.rig.json"
+        rig, cloth = RG.cloth_split(rig, f"{name}.cloth.npz")
+        cloth_path = out / f"{name}.cloth.npz"
+        if cloth:                                   # the arrays first: rig.json names their file and its sha1
+            tmp_npz = cloth_path.with_name(f".{cloth_path.name}.{os.getpid()}.tmp.npz")
+            np.savez_compressed(tmp_npz, **cloth)
+            sha = hashlib.sha1(tmp_npz.read_bytes()).hexdigest()
+            rig["cloth"] = [dict(e, sha1=sha) for e in rig["cloth"]]
+            os.replace(tmp_npz, cloth_path)
+            report["cloth_npz"] = str(cloth_path)
+        else:
+            cloth_path.unlink(missing_ok=True)       # an earlier build's copy that nothing makes any more
         tmp_rig = rig_path.with_name(f".{rig_path.name}.{os.getpid()}.tmp")
         tmp_rig.write_text(json.dumps(rig, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp_rig, rig_path)
