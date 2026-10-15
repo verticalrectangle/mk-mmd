@@ -361,6 +361,10 @@ def run(ctx):
             mc.cache_format, mc.filepath, mc.frame_start = "PC2", pc2, float(ctx.start)
             tri = sim.modifiers.new("faces", "TRIANGULATE")       # what the knit binds to: triangles, always valid,
             tri.quad_method = "FIXED"                             # split the same way on every frame
+            # the cloth a tenth of a millimetre off the knit it carries: the copy's corners are knit points, and one
+            # lying exactly on a cloth corner breaks Surface Deform's weights
+            off = sim.modifiers.new("off", "DISPLACE")
+            off.strength, off.mid_level = 1e-4, 0.0
             sim.hide_render = True
             sim.display_type = "WIRE"
             parts = separate(m, set(e["materials"]), piece)

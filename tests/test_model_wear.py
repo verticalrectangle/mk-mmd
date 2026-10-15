@@ -359,7 +359,7 @@ def test_the_sweater_s_cloth_copy_is_held_at_its_bands_and_hangs_free_between(dr
         assert want.sum() > 20 and ((P[want] > 0.9) if held else (P[want] < 0.05)).all(), (name, P[want].min(),
                                                                                             P[want].max())
     for side in ("L", "R"):
-        elbow = np.linalg.norm(V - np.asarray(fit.L[f"elbow.{side}"]), axis=1) < 0.04
+        elbow = np.linalg.norm(V - np.asarray(fit.L[f"elbow.{side}"]), axis=1) < 0.05
         dw = np.linalg.norm(V - np.asarray(fit.L[f"wrist.{side}"]), axis=1)
         end = dw < dw.min() + 0.01                                          # the sleeve's last ring, in the cuff
         assert elbow.sum() > 10 and (P[elbow] < 0.05).all()

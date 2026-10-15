@@ -1203,7 +1203,7 @@ def test_a_simulated_skirt_lags_a_spin_its_faces_on_the_cloth_and_a_rebuild_reus
     assert code == 0, q
     faces, cloth = (np.array([v[i] for v in q["values"]]) for i in (0, 1))        # her armature's space
     assert faces.shape[1] == n
-    assert max(cKDTree(c).query(f)[0].max() for f, c in zip(faces, cloth)) < 1e-4  # the skirt's faces are on the cloth
+    assert max(cKDTree(c).query(f)[0].max() for f, c in zip(faces, cloth)) < 5e-4  # the skirt's faces are on the cloth
     z = cloth[0, :, 2]
     waist, hem = np.abs(z - z.max()) < 1e-3, np.abs(z - z.min()) < 1e-3
     centre = cloth[:, waist].mean(1, keepdims=True)

@@ -127,7 +127,8 @@ def _lift(Q, cons):
 
 def relax(P, cons, iters=240, ksm=9, tol=3e-4):
     """P displaced by the smooth field D that lifts it off every constraint: the lift accumulates in D, which is blurred
-    each round so the braid stays a smooth curve (a few unblurred rounds at the end make the clearance exact)."""
+    each round so the braid stays a smooth curve (up to 60 unblurred rounds at the end make the clearance exact, even
+    for a lock whose blurred lift stalls where two surfaces meet, as a band's corner over a sleeve)."""
     D = np.zeros_like(P)
     w = np.hanning(ksm + 2)[1:-1]
     w = w / w.sum()
@@ -139,7 +140,7 @@ def relax(P, cons, iters=240, ksm=9, tol=3e-4):
         D = D + push
         Dp = np.concatenate([np.repeat(D[:1], pad, 0), D, np.repeat(D[-1:], pad, 0)], 0)
         D = np.stack([np.convolve(Dp[:, k], w, mode="valid") for k in range(3)], -1)
-    for _ in range(12):
+    for _ in range(60):
         push, worst = _lift(P + D, cons)
         if worst < 1e-5:
             break

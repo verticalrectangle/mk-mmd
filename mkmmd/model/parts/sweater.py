@@ -55,8 +55,9 @@ only in their colour:
              左/右 the sleeve's top bunching by the shoulder and the knit standing out over the armpit as the arm rises
              (75 to 150 degrees from hanging), セーター腕前左/右 diagonal folds across her back as the arm reaches
              forward, セーター前屈 ridges across her front above the waistband as she leans forward, セーター捻り左/右
-             diagonal folds round her sides as her chest turns on her hips; `depth` scales them all, `enabled` false
-             leaves them out (mk keys them from her pose in its folds stage; in MMD they are sliders)
+             diagonal folds round her sides as her chest turns on her hips; `depth` scales their bunching (not the
+             back of a bending elbow drawn taut), `enabled` false leaves them out (mk keys them from her pose in its
+             folds stage; in MMD they are sliders)
   cloth      a copy of the knit body and sleeves for mk build's cloth stage (the rig description's `cloth`,
              mkmmd.model.cloth): every `every`-th ring and column, held under the band, inside the waistband and the
              cuffs and along each piece's top ring, the sleeves held toward their shape at least `sleeve_hold` and
@@ -97,16 +98,16 @@ DEFAULTS = {
              "taper_back": 0.30, "blouse": 0.008, "blouse_height": 0.05, "pleats": 22, "pleat_depth": 0.004,
              "drape": 0.004, "inside": 0.3, "drop": 0.035, "gap": 0.003, "spread": 0.02, "gathers": 36,
              "gather_depth": 0.0025, "gather_fade": 0.03, "pit_drop": 0.06, "pit_ease": 0.012},
-    "sleeve": {"ease": [[0.0, 0.009], [0.35, 0.010], [0.6, 0.012], [0.85, 0.015], [1.0, 0.016]], "sag": 0.008,
+    "sleeve": {"ease": [[0.0, 0.009], [0.35, 0.010], [0.6, 0.012], [0.85, 0.015], [1.0, 0.016]], "sag": 0.016,
                "puff": 0.004, "pleats": 9, "pleat_depth": 0.0025, "gather": 0.06, "elbow_fold": 0.0025,
                "elbow_at": [-0.012, 0.012], "gathers": 11, "gather_depth": 0.003, "gather_fade": 0.04,
-               "start_depth": 0.006, "underarm": 0.03},
+               "start_depth": 0.006, "underarm": 0.045},
     "waistband": {"above_hip": 0.095, "height": 0.034, "offset": 0.004, "thick": 0.005, "rib": 0.008,
                   "rib_depth": 0.0010},
     "cuff": {"length": 0.062, "past": 0.004, "offset": 0.004, "thick": 0.005, "rib": 0.007, "rib_depth": 0.0008},
     "helpers": {"elbow": 0.5, "shoulder": 0.5, "peak": 0.8},
     "chains": {"enabled": True, "upper": 4, "fore": 3, "radius": 0.007, "gap": 0.03, "peak": 1.0},
-    "folds": {"enabled": True, "depth": 1.0},
+    "folds": {"enabled": True, "depth": 2.0},
     "cloth": {"enabled": True, "every": 2, "inset": 0.002, "sleeve_hold": 0.9, "mass": 0.3, "tension": 10.0,
               "shear": 5.0, "bending": 0.5, "air": 1.0, "quality": 10, "distance": 0.003, "hold": 0.3},
     "seed": 7,
@@ -543,7 +544,7 @@ def sleeve_folds(fit, c, side, jp, rings, dirs, ss):
     s_el = float(np.linalg.norm(np.asarray(fit.L[f"elbow.{side}"], float) - np.asarray(fit.L[f"arm.{side}"], float)))
     crook, outer = np.clip(np.cos(th), 0.0, 1.0) ** 1.5, np.clip(-np.cos(th), 0.0, 1.0) ** 1.5
     env = np.exp(-((ss - s_el) / (0.045 * S)) ** 2)[:, None]
-    elbow = S * d0 * env * (crook[None, :] * (0.006 * _ridges(ss - s_el, 0.018 * S)[:, None] + 0.002) - 0.0015 * outer)
+    elbow = S * env * (d0 * crook[None, :] * (0.006 * _ridges(ss - s_el, 0.018 * S)[:, None] + 0.002) - 0.0015 * outer)
     phi_down = np.arctan2(-V[:, 2], -U[:, 2])
     hang = 0.5 * (1.0 + np.cos(th[None, :] - phi_down[:, None]))
     near = np.exp(-((ss - ss[0]) / (0.07 * S)) ** 2)[:, None]
