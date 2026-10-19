@@ -625,6 +625,22 @@ def test_the_knit_lies_on_the_breasts_and_follows_her_waist_in_loosely(dressed):
     assert np.ptp(K[at & (np.abs(K[:, 0]) < 0.2), 0]) < 1.2 * np.ptp(B[waist, 0])
 
 
+def test_the_knit_curves_in_under_the_breasts_before_it_hangs(dressed):
+    """Straight under each breast's fullest point the knit's front comes in towards her ribs faster just under the bust
+    (1 to 5 cm below it) than lower down (9 to 13 cm, where it hangs at her waist's ease), at least 1.3 times as fast: it
+    curves in under her breasts, then hangs. Falling straight from the bust (as fast as lower down, or slower) it made
+    one flat panel down to the waistband that read as a hard V."""
+    _, parts, fit = dressed
+    S = fit.S
+    K = _knit(parts["sweater"])
+    for f in _breast_fronts(parts, fit):
+        col = np.abs(K[:, 0] - f[0]) < 0.008 * S
+        y = [K[col & (np.abs(K[:, 2] - (f[2] - b * S)) < 0.004 * S), 1].min() for b in (0.01, 0.05, 0.09, 0.13)]
+        under, lower = (y[1] - y[0]) / (0.04 * S), (y[3] - y[2]) / (0.04 * S)
+        assert f[2] - 0.13 * S > parts["sweater"].info["z_waistband"] + 0.05 * S   # lower down is above the blouse
+        assert under > 0.1 and under > 1.3 * lower, (under, lower)
+
+
 @pytest.mark.parametrize("name", ["pants", "socks"])
 def test_drawn_lines_lie_just_outside_what_they_are_drawn_on(dressed, name):
     """Every pen stroke of a garment lies a fraction of a millimetre outside its cloth: never inside it, where it cannot

@@ -21,6 +21,8 @@ only in their colour:
              waist's middle: each the convex section of her torso (the cloth spans her cleavage and the small of her
              back) `ease_*` off it (front, side, back), hanging from what is above it, coming in no faster than
              `taper_*` (so it falls from the bust and the shoulder blades instead of following her in at the waist),
+             except that under the bust its front may come in as fast as `taper_under`, easing to `taper_front` over
+             `under_bust` below the bust's fullest point (it curves in under her breasts before it hangs),
              under each arm standing `pit_ease` more off her side from `pit_drop` below the shoulder joint up (an
              armhole sits below the armpit), a `blouse` over the waistband (its fullest a third of `blouse_height` up),
              gathered into it in `pleats` soft folds `pleat_depth` deep, and a few long folds from the bust down
@@ -95,6 +97,7 @@ DEFAULTS = {
              "reach": 0.050, "fade": 0.025, "bridge": 0.10, "smooth": 12, "offset": 0.012,
              "edge": 0.003, "rib": 0.009, "rib_depth": 0.0010, "spread": 0.03, "turn_smooth": 300},
     "body": {"ease_front": 0.008, "ease_side": 0.010, "ease_back": 0.008, "taper_front": 0.18, "taper_side": 0.40,
+             "taper_under": 1.2, "under_bust": 0.12,
              "taper_back": 0.30, "blouse": 0.008, "blouse_height": 0.05, "pleats": 22, "pleat_depth": 0.004,
              "drape": 0.004, "inside": 0.3, "drop": 0.035, "gap": 0.003, "spread": 0.02, "gathers": 36,
              "gather_depth": 0.0025, "gather_fade": 0.03, "pit_drop": 0.06, "pit_ease": 0.012},
@@ -488,11 +491,15 @@ def body(fit, c, centre_y, z_top, z_wb, wb_inner, rng, M):
         H.append(r)
         last = r
     H = np.array(H)
+    z_bust = float(fit.L["bust_front"][2]) if fit.L.has("bust_front") else float(zs[len(zs) // 3])
+    # just under the bust the front may come in faster: the knit curves in under her breasts, then hangs
+    under = 1.0 - G.smoothstep(np.clip((z_bust - zs) / (bd["under_bust"] * S), 0.0, 1.0))
     R = np.zeros_like(H)
     for k in range(len(zs)):                     # it hangs from what is above it, coming in no faster than the taper
         R[k] = H[k] + ease * S
         if k:
-            R[k] = np.maximum(R[k], R[k - 1] - taper * (zs[k - 1] - zs[k]))
+            t_k = taper + (bd["taper_under"] - bd["taper_front"]) * front * under[k]
+            R[k] = np.maximum(R[k], R[k - 1] - t_k * (zs[k - 1] - zs[k]))
     R = circ_smooth(row_smooth(R, 3), 4)
     # under each arm the knit falls from lower down (a sweater's armhole sits below the armpit), standing off her side
     z_pit = float(fit.L["arm.L"][2]) - bd["pit_drop"] * S
@@ -506,7 +513,6 @@ def body(fit, c, centre_y, z_top, z_wb, wb_inner, rng, M):
     R = (1.0 - tuck) * R + tuck * (wb_r[None, :] - 0.002 * S)               # in under the rib
     gather = np.clip(1.0 - above, 0.0, 1.0) ** 1.6 * (1.0 - tuck[:, 0])
     R = R + bd["pleat_depth"] * S * gather[:, None] * waves(th, bd["pleats"], rng)[None, :]
-    z_bust = float(fit.L["bust_front"][2]) if fit.L.has("bust_front") else float(zs[len(zs) // 3])
     hang = np.clip((z_bust - zs) / max(z_bust - z_wb, 1e-6), 0.0, 1.0) ** 1.2 * (1.0 - tuck[:, 0])
     R = R + bd["drape"] * S * hang[:, None] * waves(th, 7, rng, spread=2)[None, :]
     rings = np.array([np.array([0.0, centre_y, z]) + dirs * R[k][:, None] for k, z in enumerate(zs)])

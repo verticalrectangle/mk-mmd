@@ -3153,22 +3153,22 @@ her body (its top line level round her chest and back, a ring across each upper 
 only in a slit under each arm; its rows pulled taut round her as an elastic rib is, spanning the cleavage and the fold
 where the arm meets the chest; its columns, four to a rib, straight down her chest and back and fanning round her arms;
 rolled over at the top, a rounded lip at the bottom, ribbed in its shape), a knit body (rings round her waist's axis:
-the convex section of her torso plus ease, hanging from the bust no faster than a taper, gathered under the band and
-into the waistband) and sleeves (the convex section of each arm plus ease, sagging, puffed and gathered into the
-cuffs, folds at the elbow), ribbed waistband and cuffs. Every piece takes the weights of the skin nearest to it,
-smoothed round its rings; round her chest and back the band and the knit near it leave out the shoulder girdle's share,
-so they stay with her body when an arm moves, and a helper bone at each elbow and shoulder (`[sweater.helpers]`,
-`mkmmd.model.helpers`) takes what the joint's two sides share, so a bent elbow keeps the sleeve round and a raised arm
-spreads the cloth at the armpit instead of parting it. Under each sleeve rows of short chains, tied sideways to their
-neighbours (`[sweater.chains]`, family `sleeve`), carry the bag of cloth hanging under the arm: MMD's physics or mk's
-solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. Fold shapes (`[sweater.folds]`) bunch the knit as
-her joints turn (the crook of a bending elbow, the shoulder as an arm rises, her back as an arm reaches forward, above the
-waistband as she leans, her sides as she twists): mk's [folds stage](#folds) keys them from her pose, MMD has them as
-sliders. A cloth copy of the knit body and sleeves (`[sweater.cloth]`, `mkmmd.model.cloth`: every other ring and
-column, held under the band, inside the waistband and the cuffs, the sleeves held toward their shape, with the skin of
-her torso to collide with) lets mk's [cloth stage](#cloth) simulate the knit instead. Sizes are metres x S like the
-dress's. Colours
-come from `[colors.<part>]`, materials from `outfit_wear` (a toon ramp, a dark outline; the knit's texture a
+the convex section of her torso plus ease, hanging from the bust no faster than a taper but curving in under the bust
+first, gathered under the band and into the waistband) and sleeves (the convex section of each arm plus ease, sagging,
+puffed and gathered into the cuffs, folds at the elbow), ribbed waistband and cuffs. Every piece takes the weights of
+the skin nearest to it, smoothed round its rings; round her chest and back the band and the knit near it leave out the
+shoulder girdle's share, so they stay with her body when an arm moves, and a helper bone at each elbow and shoulder
+(`[sweater.helpers]`, `mkmmd.model.helpers`) takes what the joint's two sides share, so a bent elbow keeps the sleeve
+round and a raised arm spreads the cloth at the armpit instead of parting it. Under each sleeve rows of short chains,
+tied sideways to their neighbours (`[sweater.chains]`, family `sleeve`), carry the bag of cloth hanging under the arm:
+MMD's physics or mk's solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. Fold shapes
+(`[sweater.folds]`) bunch the knit as her joints turn (the crook of a bending elbow, the shoulder as an arm rises, her
+back as an arm reaches forward, above the waistband as she leans, her sides as she twists): mk's [folds stage](#folds)
+keys them from her pose, MMD has them as sliders. A cloth copy of the knit body and sleeves (`[sweater.cloth]`,
+`mkmmd.model.cloth`: every other ring and column, held under the band, inside the waistband and the cuffs, the sleeves
+held toward their shape, with the skin of her torso to collide with) lets mk's [cloth stage](#cloth) simulate the knit
+instead. Sizes are metres x S like the dress's. Colours come from `[colors.<part>]`, materials from `outfit_wear` (a
+toon ramp, a dark outline; the knit's texture a
 stockinette, the bands' a rib). Pants and socks are **drawn** like the design: `outfit_ink` lays pen strokes on the
 cloth (thin dark ribbons a fraction of a millimetre above it, with its weights: the socks' ribs, the creases of the
 pants; `[<part>.ink]`, materials 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and
