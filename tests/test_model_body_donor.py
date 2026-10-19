@@ -239,6 +239,44 @@ def test_the_grown_bust_moves_with_the_chest(donor, busty):
     assert girdle[grown].max() < 1e-6, girdle[grown].max()
 
 
+def _arm_hanging(part, deg=45.0):
+    """(rest verts, verts with the left arm swung `deg` further down about its joint, the joint, the triangles): the
+    arm's bones turn rigidly about the shoulder joint, the rest stay, each vertex moved by its weight on the arm."""
+    m = part.meshes[0]
+    V = np.asarray(m.verts, float)
+    J = np.asarray(next(b for b in part.bones if b.name == "左腕").head, float)
+    arm = sum((np.asarray(w, float) for b, w in m.weights.items()
+               if b.startswith("左") and any(k in b for k in ("腕", "ひじ", "手", "指"))), np.zeros(len(V)))
+    a = np.radians(deg)
+    R = np.array([[np.cos(a), 0.0, np.sin(a)], [0.0, 1.0, 0.0], [-np.sin(a), 0.0, np.cos(a)]])   # her left side down
+    F = np.array([(f[0], f[i], f[i + 1]) for f in m.faces for i in range(1, len(f) - 1)])
+    return V, V + arm[:, None] * ((V - J) @ R.T + J - V), J, F
+
+
+def test_her_shoulders_stay_round_with_her_arm_hanging(donor):
+    """Her arm swung down to hanging (45 degrees below its rest) leaves the shoulder round: its top, between her neck
+    and the shoulder joint, rises at most 9 mm, and the skin over the shoulder folds no more sharply than at rest (plus
+    3 degrees). Skin there half on the arm's bone swung up like the far end of a lever: the top rose 14 mm into a
+    peak, folded at 50 degrees where the rest pose has 33."""
+    V, P, J, F = _arm_hanging(donor)
+    top = (V[:, 0] > J[0] - 0.05) & (V[:, 0] < J[0] - 0.005) & (np.abs(V[:, 1] - J[1]) < 0.05) & (V[:, 2] > J[2] - 0.03)
+    assert top.sum() > 30 and (P[top, 2] - V[top, 2]).max() < 0.009, (P[top, 2] - V[top, 2]).max()
+    faces_of = {}
+    for i, t in enumerate(F):
+        for p, q in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+            faces_of.setdefault((min(p, q), max(p, q)), []).append(i)
+    pairs = np.array([f for f in faces_of.values() if len(f) == 2])
+    c = V[F].mean(1)
+    near = (np.linalg.norm(c - J, axis=1) < 0.07) & (c[:, 2] > J[2] - 0.01) & (c[:, 0] > 0.03)
+    pairs = pairs[near[pairs[:, 0]] & near[pairs[:, 1]]]
+
+    def sharpest(X):
+        n = np.cross(X[F[:, 1]] - X[F[:, 0]], X[F[:, 2]] - X[F[:, 0]])
+        n /= np.linalg.norm(n, axis=1, keepdims=True)
+        return np.degrees(np.arccos(np.clip((n[pairs[:, 0]] * n[pairs[:, 1]]).sum(1), -1.0, 1.0))).max()
+    assert len(pairs) > 50 and sharpest(P) < sharpest(V) + 3.0, (sharpest(P), sharpest(V))
+
+
 DIGIT_END = {"index": ("index3", "左人指３"), "middle": ("middle3", "左中指３"), "ring": ("ring3", "左薬指３"),
              "little": ("little3", "左小指３"), "thumb": ("thumb2", "左親指２")}
 

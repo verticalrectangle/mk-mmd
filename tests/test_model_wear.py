@@ -174,8 +174,10 @@ def test_the_sweater_leaves_the_shoulders_bare_and_ends_at_the_wrists(dressed):
     V = np.asarray(parts["sweater"].meshes[0].verts)
     for side, sg in (("L", 1.0), ("R", -1.0)):
         sh, arm, elbow, wrist = (np.asarray(fit.L[f"{n}.{side}"], float) for n in ("shoulder", "arm", "elbow", "wrist"))
-        # the top of the shoulder between the neck and the arm joint is bare
-        near = (np.abs(V[:, 0] - 0.5 * (sh[0] + arm[0])) < 0.02) & (np.abs(V[:, 1] - sh[1]) < 0.04)
+        # the top of the shoulder between the neck and the arm joint is bare (up to 5 mm short of the joint: at the joint
+        # the band starts round the arm, its top 6 to 7 mm below the joint's height in front of it)
+        u = sg * V[:, 0]
+        near = (u > sg * 0.5 * (sh[0] + arm[0]) - 0.02) & (u < sg * arm[0] - 0.005) & (np.abs(V[:, 1] - sh[1]) < 0.04)
         assert not (near & (V[:, 2] > arm[2] - 0.01)).any()
         # nothing on the hand: past the wrist along the forearm only the cuff's few millimetres
         ax = (wrist - elbow) / np.linalg.norm(wrist - elbow)

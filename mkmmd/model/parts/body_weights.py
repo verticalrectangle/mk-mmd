@@ -52,7 +52,9 @@ def spine_weights(shape, z, x, bones):
         jp = SIDE_JP[side]
         on_side = x * sx > 0.0
         u = np.abs(x)
-        # shoulder girdle: 肩 takes the trapezius and the top of the shoulder, 腕 a share near the arm root
+        # shoulder girdle: 肩 takes the trapezius and the top of the shoulder, 腕 a share near the arm root (outboard of
+        # the joint only: an arm swinging down lifts whatever turns with it inboard of its joint, as a lever, and skin
+        # half on 腕 over the top of the shoulder rose into a peak; that share goes to 肩 instead)
         sh, ar = L[f"shoulder.{side}"], L[f"arm.{side}"]
         f_lat = smoothstep((u - (abs(sh[0]) - 0.012)) / max(abs(ar[0]) - abs(sh[0]) + 0.012, 1e-3))
         f_z = smoothstep((z - (ub2 + 0.03)) / 0.06)
@@ -60,6 +62,8 @@ def spine_weights(shape, z, x, bones):
         f_sh = 0.80 * f_lat * f_z * away
         d = np.linalg.norm(np.stack([u - abs(ar[0]), z - ar[2]], 1), axis=1)
         f_arm = 0.75 * np.exp(-(d / 0.066) ** 2) * away
+        outboard = smoothstep((u - (abs(ar[0]) - 0.040)) / 0.035)       # 0 from 4 cm inboard of the joint, 1 by 5 mm
+        f_sh, f_arm = f_sh + f_arm * (1.0 - outboard), f_arm * outboard
         tot = f_sh + f_arm
         take = np.clip(tot, 0.0, 0.92)
         share = np.where(tot > 1e-9, f_sh / np.maximum(tot, 1e-9), 0.0)
