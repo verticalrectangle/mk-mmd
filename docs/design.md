@@ -3180,9 +3180,11 @@ breasts keep their shape when the arms come down. `[body] bust_tip` moves each b
 round (`body_donor.BUST_TIP_RADII`, 3.5 to 4.5 cm): negative flattens their curve, the fullest part back while the
 chest round them stays where `bust` put it, which reads as a smaller cup in profile (about a centimetre at most: much
 more hollows the front).
-Over the top of each shoulder the skin inboard of the shoulder joint follows the shoulder girdle (肩), not the arm
-(`body_weights.spine_weights`): an arm swinging down lifts whatever turns with it inboard of its joint, like the far end
-of a lever, so skin shared with the arm there rose into a peak when her arms hung down.
+Over the top of each shoulder the skin inboard of the shoulder joint keeps only half of the arm's share, the rest going
+to the shoulder girdle (肩) (`body_weights.spine_weights`): an arm swinging down lifts whatever turns with it inboard of
+its joint, like the far end of a lever, so with all of that share the top of the shoulder rose into a peak when her arms
+hung down; with none of it, the skin between what turns with the arm and what stays sank into a groove at the front of
+the shoulder that the light missed (a dark patch).
 
 | Convention | |
 |---|---|

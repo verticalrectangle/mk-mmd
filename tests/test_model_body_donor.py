@@ -277,6 +277,38 @@ def test_her_shoulders_stay_round_with_her_arm_hanging(donor):
     assert len(pairs) > 50 and sharpest(P) < sharpest(V) + 3.0, (sharpest(P), sharpest(V))
 
 
+def test_the_front_of_her_shoulder_keeps_its_light_with_her_arm_hanging(donor):
+    """Her right arm held as the pose stage holds an arm hanging at her side (swung down and rolled about its length:
+    82.9 degrees about the axis below, measured on a built scene), the skin over the front of her shoulder, from the
+    joint to 4.5 cm in towards her neck, keeps the review studio's key light (in front of her left, above): its darkest
+    tenth faces the light at 0.06 or more (0.29 at rest). With none of the arm's share inboard of the joint that skin
+    sank into a groove between what turns with the arm and what stays, and its darkest tenth fell to 0.02: a dark
+    patch on her shoulder; with all of it there (the peak's weights) to -0.08."""
+    m = donor.meshes[0]
+    V = np.asarray(m.verts, float)
+    J = np.asarray(next(b for b in donor.bones if b.name == "右腕").head, float)
+    arm = sum((np.asarray(w, float) for b, w in m.weights.items()
+               if b.startswith("右") and any(k in b for k in ("腕", "ひじ", "手", "指"))), np.zeros(len(V)))
+    a, t = np.array([0.630, -0.457, 0.628]) / np.linalg.norm([0.630, -0.457, 0.628]), np.radians(82.9)
+    K = np.array([[0.0, -a[2], a[1]], [a[2], 0.0, -a[0]], [-a[1], a[0], 0.0]])
+    R = np.eye(3) + np.sin(t) * K + (1.0 - np.cos(t)) * K @ K
+    P = V + arm[:, None] * ((V - J) @ R.T + J - V)
+    F = np.array([(f[0], f[i], f[i + 1]) for f in m.faces for i in range(1, len(f) - 1)])
+
+    def normals(X):
+        fn = np.cross(X[F[:, 1]] - X[F[:, 0]], X[F[:, 2]] - X[F[:, 0]])
+        N = np.zeros_like(X)
+        for k in range(3):
+            np.add.at(N, F[:, k], fn)
+        return N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+    N0, N1 = normals(V), normals(P)
+    key = np.array([2.5, -4.0, 3.0]) / np.linalg.norm([2.5, -4.0, 3.0])          # mkmmd/blender/model/studio.py: key
+    front = ((V[:, 0] > J[0]) & (V[:, 0] < J[0] + 0.045) & (V[:, 2] > J[2] - 0.015) & (V[:, 2] < J[2] + 0.03)
+             & (V[:, 1] < J[1] - 0.005) & (N0[:, 1] < -0.2))
+    assert front.sum() > 30 and np.percentile(N0[front] @ key, 10) > 0.2
+    assert np.percentile(N1[front] @ key, 10) > 0.06, np.percentile(N1[front] @ key, 10)
+
+
 DIGIT_END = {"index": ("index3", "左人指３"), "middle": ("middle3", "左中指３"), "ring": ("ring3", "左薬指３"),
              "little": ("little3", "左小指３"), "thumb": ("thumb2", "左親指２")}
 
