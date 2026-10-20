@@ -309,6 +309,64 @@ def test_the_front_of_her_shoulder_keeps_its_light_with_her_arm_hanging(donor):
     assert np.percentile(N1[front] @ key, 10) > 0.06, np.percentile(N1[front] @ key, 10)
 
 
+def _ring_radii(parts, a, b, f, on):
+    """For the vertices `on` within 8 mm of the plane across the line a-b at fraction f of the first part: their mean
+    distance from that line in each part, and how many there are."""
+    d = (b - a) / np.linalg.norm(b - a)
+    out = []
+    for i, part in enumerate(parts):
+        V = np.asarray(part.meshes[0].verts, float) - a
+        t = V @ d
+        if i == 0:
+            near = on & (np.abs(t - f * np.linalg.norm(b - a)) < 0.008)
+        out.append(float(np.linalg.norm(V[near] - t[near, None] * d, axis=1).mean()))
+    return out, int(near.sum())
+
+
+def test_upper_arm_broadens_the_upper_arms_and_leaves_the_forearms(donor, tmp_path):
+    """[body] upper_arm = [1.25, 1.1] broadens each upper arm by its girth factor (1.25 at the shoulder, 1.1 at the
+    elbow, linear between) wherever the skin is wholly the arm's (from half way down: a ring there grows by 1.17, at
+    two thirds by 1.15, at four fifths by 1.13); nearer the shoulder, where the skin shares the torso's fit, it still
+    grows (a third of the way down by more than 1.08). The joints stay, and the forearm half way down is as it was."""
+    broad = make(tmp_path, "body.upper_arm=[1.25, 1.1]")
+    head = lambda part, n: np.asarray(next(b for b in part.bones if b.name == n).head, float)
+    assert all(np.allclose(head(broad, n), head(donor, n)) for n in ("左腕", "左ひじ", "左手首"))
+    W = donor.meshes[0].weights
+    on_arm = sum(np.asarray(w, float) for b, w in W.items() if b.startswith("左") and b[1:] in ("腕", "腕捩")) > 0.95
+    on_fore = sum(np.asarray(w, float) for b, w in W.items() if b.startswith("左") and b[1:] in ("ひじ", "手捩")) > 0.95
+    sh, el, wr = head(donor, "左腕"), head(donor, "左ひじ"), head(donor, "左手首")
+    ratio = {}
+    for f in (1 / 3, 0.55, 2 / 3, 0.8):
+        (r0, r1), n = _ring_radii((donor, broad), sh, el, f, on_arm)
+        assert n >= 12, (f, n)
+        ratio[f] = r1 / r0
+    assert all(abs(ratio[f] - (1.25 - 0.15 * f)) < 0.025 for f in (0.55, 2 / 3, 0.8)), ratio
+    assert ratio[1 / 3] > 1.08, ratio
+    (r0, r1), n = _ring_radii((donor, broad), el, wr, 0.5, on_fore)
+    assert n >= 12 and abs(r1 / r0 - 1.0) < 0.005, r1 / r0
+
+
+def test_the_skins_toon_step_sits_where_toon_edge_and_toon_soft_put_it(tmp_path):
+    """[body.skin] toon_edge and toon_soft place the skin's toon ramp's step into the shade and set its width (the
+    ramp's rows run from the lit white at the top to the shade at the bottom, as MMD reads it): with 0.40 and 0.25 the
+    rows are white down to 0.525 of the height from the bottom and the shade (toon_shadow_multiplier) from 0.275 down,
+    so a wide soft step; the default (0.5, 0.10) steps sharply between 0.55 and 0.45."""
+    from PIL import Image
+
+    for ov, (lit_from, shade_to) in (((), (0.55, 0.45)),
+                                     (("body.skin.toon_edge=0.40", "body.skin.toon_soft=0.25"), (0.525, 0.275))):
+        out = tmp_path / f"toon{len(ov)}"
+        out.mkdir()
+        part = make(out, "body.skin.toon_shadow_multiplier=[0.8, 0.6, 0.5]", *ov)
+        img = np.asarray(Image.open(out / part.materials[0].toon).convert("RGB"), float)[:, 0] / 255.0
+        h = len(img)
+        v = 1.0 - (np.arange(h) / (h - 1))                          # 1 at the top row, 0 at the bottom row
+        white = (img > 0.995).all(1)
+        shade = np.abs(img - [0.8, 0.6, 0.5]).max(1) < 0.005
+        assert white[v > lit_from + 0.02].all() and not white[v < lit_from - 0.04].any(), (ov, v[white].min())
+        assert shade[v < shade_to - 0.02].all() and not shade[v > shade_to + 0.04].any(), (ov, v[shade].max())
+
+
 DIGIT_END = {"index": ("index3", "左人指３"), "middle": ("middle3", "左中指３"), "ring": ("ring3", "左薬指３"),
              "little": ("little3", "左小指３"), "thumb": ("thumb2", "左親指２")}
 

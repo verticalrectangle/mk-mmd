@@ -5,8 +5,10 @@ bases/girl/make_body.py makes that asset from its source.
 Spec (`[body]` in body.toml): `source = "mesh"` and `mesh = "base:girl/body.npz"` (a relative path is taken against the
 spec's folder; a missing asset with a maker beside it is made on first use), `bust` (metres, default 0: the breasts
 grown forward, `grow_bust`), `bust_tip` (metres, default 0: each breast's tip moved forward that much more, negative
-back, which flattens the breasts' curve), plus the procedural body's keys that still apply: skin, nails, neck_shadow,
-hand (the hands are the hand part's, welded on at the wrists), land, dims, skeleton.
+back, which flattens the breasts' curve), `upper_arm` (default 1: the upper arms' girth at the shoulder, times the
+donor's, easing to the donor's at the elbow; or [at the shoulder, at the elbow]), plus the procedural body's keys that
+still apply: skin, nails, neck_shadow, hand (the hands are the hand part's, welded on at the wrists), land, dims,
+skeleton.
 
 The fit (`fit`) takes the asset's own space to the character's; k is her neck seam's height over the donor's neck cut,
 [proportions] leg_extra left out (longer legs make no wider body):
@@ -128,13 +130,21 @@ def load(path):
 
 
 # ---------------------------------------------------------------- the fit
-def _segment_map(a_d, b_d, a_h, b_h, across):
+def _segment_map(a_d, b_d, a_h, b_h, across, girth=(1.0, 1.0)):
     """p -> a_h + R S (p - a_d): S stretches along the donor's segment a_d-b_d to her length and scales by `across`
-    across it, R turns it (the least turn) onto her segment a_h-b_h."""
+    across it, times `girth` (at a_d, at b_d; linear between, held beyond the ends), R turns it (the least turn) onto
+    her segment a_h-b_h."""
     d = unit(b_d - a_d)
-    s = float(np.linalg.norm(b_h - a_h) / np.linalg.norm(b_d - a_d))
-    A = _turn(b_d - a_d, b_h - a_h) @ (across * np.eye(3) + (s - across) * np.outer(d, d))
-    return lambda P: a_h + (P - a_d) @ A.T
+    n = float(np.linalg.norm(b_d - a_d))
+    s = float(np.linalg.norm(b_h - a_h)) / n
+    R = _turn(b_d - a_d, b_h - a_h)
+
+    def f(P):
+        Q = np.asarray(P, float) - a_d
+        t = Q @ d
+        g = across * (girth[0] + (girth[1] - girth[0]) * np.clip(t / n, 0.0, 1.0))
+        return a_h + (g[:, None] * (Q - t[:, None] * d) + s * t[:, None] * d) @ R.T
+    return f
 
 
 def _turn(a, b):
@@ -192,9 +202,10 @@ def foot_map(V, on_foot, d, ankle, toe_end, foot):
     return lambda P: ankle + (P - d["ankle"]) @ A.T
 
 
-def fit(A, shape, nt, extra=0.0):
+def fit(A, shape, nt, extra=0.0, upper_arm=(1.0, 1.0)):
     """(n, 3) the asset's vertices in the character's space (module docstring): `shape` her body_shape.Shape, `nt` her
-    neck seam (body_mesh.neck_top), `extra` her [proportions] leg_extra."""
+    neck seam (body_mesh.neck_top), `extra` her [proportions] leg_extra, `upper_arm` the upper arms' girth (at the
+    shoulder, at the elbow) over the donor's."""
     J, L, V, M = A["joints"], shape.land, A["verts"], A["member"]
     ring = V[A["neck"]]
     rx_d, ry_d = 0.5 * float(np.ptp(ring[:, 0])), 0.5 * float(np.ptp(ring[:, 1]))
@@ -215,7 +226,7 @@ def fit(A, shape, nt, extra=0.0):
         d = {n: J[n] * np.array([sg, 1.0, 1.0]) for n in JOINTS}
         h = lambda n: np.asarray(L[f"{n}.{side}"], float)
         # arm
-        up = _segment_map(d["shoulder"], d["elbow"], h("arm"), h("elbow"), k)
+        up = _segment_map(d["shoulder"], d["elbow"], h("arm"), h("elbow"), k, upper_arm)
         fore = _segment_map(d["elbow"], d["wrist"], h("elbow"), h("wrist"), k)
         w = _hand_over(V, d["shoulder"], d["elbow"], d["wrist"], HALF["elbow"])[:, None]
         out += M[:, 1 if sg > 0 else 2][:, None] * ((1 - w) * up(V) + w * fore(V))
@@ -575,7 +586,9 @@ def build_donor(ctx):
     nails = cfg.get("nails", True)
 
     # ---- the fitted skin, cut at the wrists
-    V = fit(A, shape, nt, float(ctx.get("proportions.leg_extra") or 0.0))
+    ua = cfg.get("upper_arm", 1.0)
+    ua = (float(ua), 1.0) if isinstance(ua, (int, float)) else (float(ua[0]), float(ua[1]))
+    V = fit(A, shape, nt, float(ctx.get("proportions.leg_extra") or 0.0), upper_arm=ua)
     grown = grow_bust(V, A, float(cfg.get("bust", 0.0)), float(cfg.get("bust_tip", 0.0)))
     onto_seam(V, A["neck"], nt)
     faces, twin = A["faces"], A["mirror"]
@@ -663,7 +676,8 @@ def build_donor(ctx):
     if cfg.get("claws"):
         tex = body_tex.claw_fade(tex, hand_l, shape.land["wrist.L"], cfg["claws"])
     tex_name = ctx.save_png("skin", tex)
-    toon_name = ctx.save_png("skin_toon", body_tex.toon_ramp(pal, look["mult"]))
+    toon_name = ctx.save_png("skin_toon", body_tex.toon_ramp(pal, look["mult"], edge=look["toon_edge"],
+                                                             soft=look["toon_soft"]))
     mats, mat_names = skin_materials(ctx, cfg, look, tex_name, toon_name)
     normals = _normals(verts, faces, nt)
     mesh = Mesh("body", verts=verts, faces=faces, uv=np.concatenate(uvs, 0), face_mat=face_mat, mats=mat_names,

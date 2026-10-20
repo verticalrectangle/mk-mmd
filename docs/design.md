@@ -3185,6 +3185,11 @@ to the shoulder girdle (肩) (`body_weights.spine_weights`): an arm swinging dow
 its joint, like the far end of a lever, so with all of that share the top of the shoulder rose into a peak when her arms
 hung down; with none of it, the skin between what turns with the arm and what stays sank into a groove at the front of
 the shoulder that the light missed (a dark patch).
+`[body] upper_arm` (the mesh body) scales the upper arms' girth over the donor's, `[at the shoulder, at the elbow]`
+(linear between, one number for the shoulder with the elbow left at 1): the arm keeps its joints and length and the
+forearm stays; where the skin shares the torso's fit, near the shoulder, it grows less. `[body.skin] toon_edge` and
+`toon_soft` set where on the skin's toon ramp the step into `toon_shadow_multiplier` starts (0.5) and how wide it is
+(0.10): a wider step and a lighter multiplier keep the shade the same skin in softer light instead of a patch.
 
 | Convention | |
 |---|---|

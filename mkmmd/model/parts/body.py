@@ -6,7 +6,9 @@ The hands have their own design (body_hand.DESIGN), or come from a hand mesh ass
 joints are made from it, not read from the landmarks.
 
 `[body]` keys (all optional):
-  skin           {base, shade, blush, nail}  hex colours (default: [colors.skin] of the spec)
+  skin           {base, shade, blush, nail}  hex colours (default: [colors.skin] of the spec); and the toon ramp:
+                 toon_shadow_multiplier (the shade, times the lit colour), toon_edge (0.5: where on the ramp the shade
+                 starts), toon_soft (0.10: how wide the step into it is; wider reads as the same skin in softer light)
   nails          true | false | "#rrggbb"    nail plates on the fingertips (default true, pale pink); a colour paints them
   claws          {color, start, full, point} the hands fade into `color` (default "#412543") from `start` to `full` of the
                  way from the wrist to the fingertips (body_tex.claw_fade; procedural and mesh bodies), and `point` metres
@@ -113,6 +115,7 @@ def skin_look(ctx, cfg):
     sk = cfg.get("skin") or {}
     return dict(cfg=skin_cfg, pal=body_tex.palette(skin_cfg),
                 mult=np.array(sk.get("toon_shadow_multiplier", body_tex.DEFAULT_TOON), float),
+                toon_edge=float(sk.get("toon_edge", 0.5)), toon_soft=float(sk.get("toon_soft", 0.10)),
                 ambient=tuple(float(x) for x in sk.get("ambient", SKIN_AMBIENT)),
                 specular=tuple(float(x) for x in sk.get("specular", (0.0, 0.0, 0.0))),
                 shininess=float(sk.get("shininess", 0.0)), flush=float(sk.get("flush", body_tex.FLUSH)),
@@ -215,7 +218,7 @@ def build(ctx):
     if cfg.get("claws"):
         hand = next(s for s in shells if s.name == "hand_L")
         tex = body_tex.claw_fade(tex, hand, shape.land["wrist.L"], cfg["claws"])
-    toon = body_tex.toon_ramp(look["pal"], look["mult"])
+    toon = body_tex.toon_ramp(look["pal"], look["mult"], edge=look["toon_edge"], soft=look["toon_soft"])
     tex_name = ctx.save_png("skin", tex)
     toon_name = ctx.save_png("skin_toon", toon)
     mats, mat_names = skin_materials(ctx, cfg, look, tex_name, toon_name)
