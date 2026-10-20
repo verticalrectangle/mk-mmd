@@ -37,6 +37,7 @@ degrees (see [Conventions](#conventions)).
 - [Timeline](#timeline)
 - [Cache](#cache)
 - [Characters (mk model)](#characters-mk-model)
+- [VRM (mk model vrm)](#vrm-mk-model-vrm)
 - [Briefs (mk brief)](#briefs-mk-brief)
 - [Reviews (mk review)](#reviews-mk-review)
 - [The site (mk site, mkmmd/site)](#the-site-mk-site-mkmmdsite)
@@ -3236,10 +3237,12 @@ prints JSON: per-part numbers (meshes, vertices, faces, bones, materials, morphs
 unweighted vertices, missing UVs, unused vertices; the parts' findings, `[hair] WARNING ...`; spec keys no part read,
 `[spec] WARNING ...`), the assembled model's counts, timings, `verify`, and `rig`: required
 semantic bones missing, morph map (semantic -> morph), chain families with bone counts, bodies and measurements. Files in
-the output folder: `<name>.pmx`, `tex/*.png`, `<name>.blend` (studio lights; `mk look <name>.blend --view front,3q
---target "bone('head').head" --dist 1.2` works), `<name>.rig.json` (what `mk inspect` writes; pass it as `rig =` to a
-`[[cast]]` with `pmx =`), `<name>.cloth.npz` (the arrays of rig.json's `cloth`, when a part makes a cloth copy),
-`build.json`. `--only` builds those parts and what they need into `<out>/only_<parts>/`;
+the output folder: `<name>.pmx`, `tex/*.png`, `<name>.vrm` (mk's own model file, VRM 1.0: [VRM](#vrm-mk-model-vrm); written
+right after the PMX, without Blender; `[vrm] enabled = false` leaves it out, `--only` builds write none),
+`<name>.blend` (studio lights; `mk look <name>.blend --view front,3q --target "bone('head').head" --dist 1.2` works),
+`<name>.rig.json` (what `mk inspect` writes; pass it as `rig =` to a `[[cast]]` with `pmx =`), `<name>.cloth.npz` (the
+arrays of rig.json's `cloth`, when a part makes a cloth copy), `build.json`. `--only` builds those parts and what they
+need into `<out>/only_<parts>/`;
 `--no-export` only runs and checks the builders, into `<out>/no_export/` (an exported model's files stay as they are).
 **Part cache** (`mkmmd.model.partcache`, in `~/.cache/mk/model_parts`): a part is reused, with its textures and its log
 lines, while all it read is unchanged: the code (the package's .py files and the bases' files, by size and time), its
@@ -3255,7 +3258,8 @@ optionally key/fill/rim suns) so sheets of several models compare side by side.
 [--set K=V] [--label NAME] [--out SHEET.png]` (`mkmmd.model.lab`, no Blender) looks at specs (built and assembled
 in-process, so it sees the PMX a build writes) and .pmx files: a sheet with one row per (pose, model), every cell at one
 scale (bodies on one floor line), posed with each model's own weights through the bone tree (rotation grants followed:
-D bones, twists); poses are rest, relaxed, curled, fist, spread, arms_down, tpose (upper arms and forearms level), sit,
+D bones, twists); poses are rest, relaxed, curled, fist, spread, arms_down, tpose (VRM's T-pose: `lab.tpose_rotations`,
+[VRM](#vrm-mk-model-vrm)), sit,
 or any morph name (`--no-cache`: build every part of a spec again; see the part cache). Under the cells, the
 rest pose's numbers in mm (heights, widths, lengths, and girths cut across the skin: the innermost closed loop round a
 point on the skeleton, hidden skin included, so clothes never count; an open cut through a skirt or a frill encloses
@@ -3272,15 +3276,78 @@ material is a primitive with its texture (PNG), BLEND when its texture or diffus
 the PMX says so; `--region head` writes the head's subtree alone, so a viewer frames the face. It prints the model's
 numbers as JSON (names, height, counts, morphs by panel, the poses its bones allow; `--info` writes nothing). Exit
 codes as everywhere: 1 when a check or verification fails. A build never deletes the previous files first, because other
-projects may be casting the
-PMX at that moment: the PMX and rig.json are replaced atomically when ready, textures are overwritten in place (stale ones
-removed after the PMX is written), `.mk/build.lock` makes two builds into one folder take turns, and `build.json` reads
-`{"ok": false, "stage": "running"}` until the build ends (failures are kept there too).
+projects may be casting the PMX at that moment: the PMX, the VRM and rig.json are replaced atomically when ready, textures
+are overwritten in place (stale ones removed after the PMX is written), `.mk/build.lock` makes two builds into one folder
+take turns, and `build.json` reads `{"ok": false, "stage": "running"}` until the build ends (failures are kept there too).
 
 Blender note: a Blender session that resets the add-on preferences (a script started with `--factory-startup` that
 touches add-ons) can delete mmd_tools' bundled opencc wheel, and every PMX import then fails with "bpy.ops.mmd_tools.
 import_model could not be found"; use another config folder (`BLENDER_USER_CONFIG`) for such scripts. `mk doctor --fix`
 restores the wheel and `mk model build` repairs and retries on its own.
+
+## VRM (`mk model vrm`)
+
+mk's own model file is VRM 1.0 (glTF 2.0 with the VRM consortium's extensions), written beside the PMX: `mk model build`
+writes `<name>.vrm` right after the PMX, and `mk model vrm MODEL [--out F.vrm] [--set K=V] [--unit U]` writes one for any
+.pmx (with the rig.json and .cloth.npz beside it, when there are, for the folds and the cloth copy) or a spec, built
+in-process. `mkmmd.model.vrm` (numpy, scipy, Pillow; no Blender) reads the PMX as the lab does and writes one file,
+textures inside. Any VRM app reads it; the review page shows a .vrm as it is (its own viewer: the mesh in its rest pose).
+
+- **Rest pose**: VRM's T-pose (`lab.tpose_rotations`, VRM 1.0 tpose.md): each upper arm, forearm and hand straight out
+  along X and level, the palm down (a roll the hand needs goes to the forearm's twist bone, so the wrist does not wring),
+  the four fingers straight along the hand, the thumb straight and level 45 degrees forward with its nail turned forward
+  and in, the feet turned to point straight forward. The model is posed with its own weights and grants and that pose is
+  the rest: no node keeps a rotation, the vertices, normals and morph offsets are the posed ones (an offset turned by its
+  vertex's blended rotation), an IK bone sits where its target went. glTF's axes: +Y up, facing +Z, her left +X.
+- **Humanoid**: the semantic bones (core.bonemap) under VRM's names; the hips are the lowest bone both the spine and the
+  legs hang from (MMD's 腰), the legs' D bones in place of the legs' when a model has them; a bone that breaks VRM's
+  order (it must hang from the humanoid bone VRM puts above it) is left out with a `[vrm]` warning.
+- **Expressions**: VRM's presets from MMD's standard morphs by semantic name (`vrm.PRESETS`, core.bonemap.MORPHS: happy
+  笑い + にこり + 口角上げ, angry, sad, relaxed, surprised, aa..oh あいうえお, blink まばたき, blinkLeft ウィンク and
+  blinkRight ウィンク右); every other vertex and group morph a custom expression of its PMX name; a material morph's
+  colour and edge as material colour binds. Fold shapes are in none (MK_rig drives them). Every vertex morph is a morph
+  target (sparse), named in `mesh.extras.targetNames`.
+- **Look-at**: the eye bones, from between the eyes, `[vrm.look]` degrees at most each way; **first person**: auto.
+- **Springs** (VRMC_springBone): a spring per physics chain (the bones dynamic rigid bodies move, from a root hanging
+  from one they do not; a branch is its own spring), ended by a node at its last bone's tail so the last bone swings
+  too; stiffness, gravity and drag by the chain's family (core.families, `[vrm.springs.<family>]`), each joint's hit
+  radius its rigid body's. Colliders: the static rigid bodies on their bones (a box becomes the capsule along its longest
+  side), one collider group per PMX collision group; a spring collides with the groups its bodies do. VRM springs cannot
+  tie chains sideways (MK_rig keeps the ties).
+- **Constraints** (VRMC_node_constraint): a rotation constraint per PMX rotation grant onto a bone the humanoid does not
+  drive (a helper bone at the elbow, an eye highlight), weight its ratio; a grant from both eyes (両目) comes from the
+  eye on the bone's side, which VRM's look-at turns. Grants onto humanoid bones, moving grants and ratios outside 0..1
+  are MK_rig's.
+- **Materials** (VRMC_materials_mtoon): MMD's lit colour saturate(ambient + 0.6 x diffuse) (its default light) times
+  the texture; the shade that times the toon ramp's darkest row, its step where the ramp's is (MMD reads row
+  0.5 - 0.5 N.L of the ramp: a step v up from its bottom, w wide between 10 and 90 %, is shadingShift 1 - 2v and
+  shadingToony 1 - 1.25w); flat without a toon ramp; an additive sphere map the matcap; the edge the outline (screen
+  ratio `[vrm] outline` per unit of edge size, its colour, unlit); BLEND with depth writes where the texture or alpha is
+  see-through, as MMD draws. A shared toon (toon01..10) is approximated.
+- **MK_rig** (mk's extension, `extensions.MK_rig`): what VRM cannot hold, nodes by index, positions in the T-pose in
+  glTF's axes: `source` (the PMX's names and comment), `rest.pmx_rest` (each turned bone's local rotation, as a
+  quaternion, that takes the VRM's rest back to the PMX's rest pose), `bones` (PMX names, English names, tails, flags,
+  fixed and local axes), `ik`, `grants` (every PMX grant, why one is not a constraint), `morphs` (every PMX morph: its
+  target, or a bone, UV, flip or impulse morph's offsets), `materials` (the PMX material numbers), `physics` (every rigid
+  body and joint), `chains` (each spring's family and the springs it is tied to sideways), `folds` (rig.json's fold
+  shapes with their morph targets, the drivers' directions turned into the T-pose with their reference bone, so they
+  measure the same angles), `cloth` (each cloth copy, its points skinned into the T-pose by their own weights, its
+  arrays as buffer views in the binary chunk), `frames` (the display frames).
+
+`[vrm]` (all optional; an unknown key is an error, and mk model build reads the table itself, so the parts' unread-key
+report leaves it alone):
+
+| Key | Meaning |
+|---|---|
+| `enabled` | false: no .vrm |
+| `[vrm.meta]` | VRM's meta: `name` (default the model's), `version`, `authors` (default `["unknown"]`), `copyrightInformation`, `contactInformation`, `references`, `licenseUrl` (the VRM Public License 1.0), and the permissions, most restrictive by default: `avatarPermission` onlyAuthor, `commercialUsage` personalNonProfit, `creditNotation` required, `modification` prohibited, `allowRedistribution` and the `allow*Usage` keys false |
+| `outline` | MToon outline width per unit of PMX edge size, a ratio of the screen height (0.0016) |
+| `[vrm.look]` | `inner`, `outer`, `up`, `down`: degrees the eyes turn at most (10) |
+| `[vrm.springs.<family>]` | `stiffness`, `gravity`, `drag` of a chain family's springs (`vrm.SPRINGS`) |
+| `[vrm.expressions]` | `<preset> = [[morph, weight], ...]`: a PMX or semantic morph name, in place of `vrm.PRESETS`' |
+
+Checked with the Khronos glTF validator (no errors, no warnings) and the VRM schemas, and loaded by three-vrm (the
+reference runtime) in Chromium: humanoid, expressions, springs swinging and settling, constraints, MToon.
 
 ## Briefs (`mk brief`)
 
@@ -3344,10 +3411,11 @@ ask, text, images, models, music, recommended, tag; `[[question.option]]` id, la
 `preselect = true` a question the answers file has nothing for starts on its recommended option, so Send alone takes
 the agent's picks (a treatment); an answer the person gave stays theirs. A tag is a short label beside the question
 ("my idea": the agent's own ideas in a treatment), read back with the answers. Images are paths beside the
-review (PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a .glb, a model file Blender imports,
-or a .pmx) or `{label, spec, parts, set}`, with pose (default tpose), morph and region applied by `mk model glb`; music is
-a project folder or `{project, from, to}`: the project's music timeline (below) under the question, over that span of
-the clip. `mk review check` names every problem at once; `mk review open NAME.review.toml [--where right|down|tab]
+review (PNG, JPEG, WebP, GIF; others become previews); a model is `{label, file}` (a .glb or a .vrm, shown as it is; a
+model file Blender imports; or a .pmx) or `{label, spec, parts, set}`, with pose (default tpose), morph and region
+applied by `mk model glb`; music is a project folder or `{project, from, to}`: the project's music timeline (below)
+under the question, over that span of the clip. `mk review check` names every problem at once; `mk review open
+NAME.review.toml [--where right|down|tab]
 [--wait [--timeout S]]` checks it, starts (or keeps) `NAME.answers.json` and opens it as a page of the site (below), with
 `--wait` returning when the person presses Send, with the answers; `mk review answers` prints the answers with their
 options' labels, what is still open, the marks and the views kept from the 3D viewer.

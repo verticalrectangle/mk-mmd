@@ -385,9 +385,106 @@ def _below(d):
     return math.degrees(math.atan2(-d[2], abs(d[0])))
 
 
+def between(a, b):
+    """The least rotation (3x3) taking direction `a` onto direction `b`."""
+    a, b = unit(a), unit(b)
+    v = np.cross(a, b)
+    s, c = float(np.linalg.norm(v)), float(a @ b)
+    if s < 1e-9:
+        if c > 0:
+            return np.eye(3)
+        return rot(np.cross(a, (1.0, 0.0, 0.0) if abs(a[0]) < 0.9 else (0.0, 1.0, 0.0)), 180.0)
+    return rot(v, math.degrees(math.atan2(s, c)))
+
+
+def _roll(v, to, axis):
+    """Degrees about `axis` (right hand) that take v's part across the axis onto `to`'s."""
+    axis = unit(axis)
+    p, q = v - (v @ axis) * axis, to - (to @ axis) * axis
+    if np.linalg.norm(p) < 1e-9 or np.linalg.norm(q) < 1e-9:
+        return 0.0
+    p, q = unit(p), unit(q)
+    return math.degrees(math.atan2(float(np.cross(p, q) @ axis), float(p @ q)))
+
+
+def tpose_rotations(model):
+    """{bone: 3x3} local rotations of VRM's T-pose (the rest pose a VRM keeps; VRM 1.0, tpose.md), both sides: each
+    upper arm, forearm and hand straight out along X and level, the palm down (a roll the hand needs goes to the
+    forearm's twist bone, so the wrist does not wring); the four fingers straight along the hand; the thumb straight
+    and level, 45 degrees forward of the hand, its nail turned out to face forward and in (its pad is on the
+    THUMB_TOWARDS side); each foot turned about the vertical to point straight forward. The shoulders, the legs and
+    the head stay as they are."""
+    out, par, H = {}, model.parents, model.heads
+    front, down = np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, -1.0])
+
+    def glob(b):                                       # a bone's rotation in model space, its ancestors' included
+        chain = []
+        while b >= 0:
+            chain.append(b)
+            b = int(par[b])
+        R = np.eye(3)
+        for i in reversed(chain):
+            if i in out:
+                R = R @ out[i]
+        return R
+
+    def turn(b, R):                                    # turn bone b (and what hangs from it) by R in model space
+        P = glob(int(par[b]))
+        out[b] = P.T @ R @ P @ out.get(b, np.eye(3))
+
+    def chain_pts(side, finger):
+        ids = [model.sem.get(f"{c}.{side}") for c in bonemap.FINGERS[finger]]
+        if any(i is None for i in ids[:3]):
+            return None, None
+        return ids[:3], [H[i] for i in ids[:3]] + [H[ids[3]] if ids[3] is not None else model.tails[ids[2]]]
+
+    for side in ("L", "R"):
+        def s(n, side=side):
+            return model.sem.get(f"{n}.{side}")
+        X = np.array([1.0 if side == "L" else -1.0, 0.0, 0.0])
+        an, toe = s("ankle"), s("toe")
+        if an is not None and toe is not None:
+            d = glob(an) @ (H[toe] - H[an])
+            d[2] = 0.0
+            if np.linalg.norm(d) > 1e-6:
+                turn(an, between(d, front))
+        arm, el, wr = s("arm"), s("elbow"), s("wrist")
+        if arm is None or el is None:
+            continue
+        turn(arm, between(glob(arm) @ (H[el] - H[arm]), X))
+        if wr is None:
+            continue
+        turn(el, between(glob(el) @ (H[wr] - H[el]), X))
+        if None in (s("middle1"), s("index1"), s("little1")):
+            continue
+        a, r, n = hand_axes(model, side)
+        Q = glob(wr)
+        roll = _roll(between(Q @ a, X) @ Q @ n, down, X)
+        if abs(roll) > 1e-3:
+            turn(s("wrist_twist") if s("wrist_twist") is not None else wr, rot(X, roll))
+        turn(wr, between(glob(wr) @ a, X))
+        for f in ("index", "middle", "ring", "little"):
+            ids, pts = chain_pts(side, f)
+            for k, b in enumerate(ids or ()):
+                if np.linalg.norm(pts[k + 1] - pts[k]) > 1e-6:
+                    turn(b, between(glob(b) @ (pts[k + 1] - pts[k]), X))
+        ids, pts = chain_pts(side, "thumb")
+        if ids:
+            T, nail_to = unit(X + front), unit(-X + front)
+            pad = unit(THUMB_TOWARDS[0] * r + THUMB_TOWARDS[1] * n)
+            for k, b in enumerate(ids):
+                if np.linalg.norm(pts[k + 1] - pts[k]) > 1e-6:
+                    turn(b, between(glob(b) @ (pts[k + 1] - pts[k]), T))
+                if k == 0:
+                    turn(b, rot(T, _roll(-(glob(b) @ pad), nail_to, T)))
+    return out
+
+
 def pose_rotations(model, name):
     """{bone: 3x3} local rotations of a POSES pose, both sides. arms_down lowers the upper arms to ARMS_DOWN_DEG below
-    horizontal; tpose raises them to horizontal and straightens the elbows so the forearms run on level with them."""
+    horizontal; tpose is VRM's T-pose (`tpose_rotations`)."""
+    if name == "tpose":
+        return tpose_rotations(model)
     out = {}
     for side in ("L", "R"):
         sgn = 1.0 if side == "L" else -1.0
@@ -395,16 +492,11 @@ def pose_rotations(model, name):
             if model.sem.get(f"wrist.{side}") is None:
                 continue
             out.update(_finger_rotations(model, side, *HAND_POSES[name]))
-        elif name in ("arms_down", "tpose"):
+        elif name == "arms_down":
             i, e = model.sem.get(f"arm.{side}"), model.sem.get(f"elbow.{side}")
             if i is None or e is None:
                 continue
-            target = ARMS_DOWN_DEG if name == "arms_down" else 0.0
-            below = _below(model.heads[e] - model.heads[i])
-            out[i] = rot((0.0, 1.0, 0.0), sgn * (target - below))      # both turn about the forward axis, so the
-            w = model.sem.get(f"wrist.{side}")                       # elbow's turn adds to the arm's
-            if name == "tpose" and w is not None:
-                out[e] = rot((0.0, 1.0, 0.0), sgn * (below - _below(model.heads[w] - model.heads[e])))
+            out[i] = rot((0.0, 1.0, 0.0), sgn * (ARMS_DOWN_DEG - _below(model.heads[e] - model.heads[i])))
         elif name == "sit":
             for b, deg in ((f"leg.{side}", -90.0), (f"knee.{side}", 90.0)):
                 if model.sem.get(b) is not None:

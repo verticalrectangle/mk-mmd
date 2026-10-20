@@ -30,8 +30,8 @@ IDLE_S = 3 * 3600
 MAX_BODY = 64 << 20
 CHUNK = 1 << 20
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-         ".json": "application/json", ".glb": "model/gltf-binary", ".png": "image/png", ".jpg": "image/jpeg",
-         ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml",
+         ".json": "application/json", ".glb": "model/gltf-binary", ".vrm": "model/gltf-binary", ".png": "image/png",
+         ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml",
          ".flac": "audio/flac", ".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".ogg": "audio/ogg",
          ".mp4": "video/mp4", ".bin": "application/octet-stream"}
 

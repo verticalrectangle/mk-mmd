@@ -82,6 +82,7 @@ def dig(d, dotted, default=None):
 
 BASES = Path(__file__).parent / "bases"
 BASE_PREFIX = "base:"
+COMMAND_TABLES = ("model", "vrm")   # top-level tables mk model build reads itself (no part): never reported unread
 
 
 def bases():
@@ -297,7 +298,7 @@ def unread(spec, tables=None, bases=False):
     a key, else the number of keys under a table nothing in was read (reported once as a whole; empty tables are not, and
     a table made only of tables, like [colors], is never whole: its tables are reported). Only the author's keys count:
     those a model base set are left out (the bases keep keys for features a character may switch on) unless `bases`.
-    `tables`: only these top-level tables (default: all but [model], which the command line reads)."""
+    `tables`: only these top-level tables (default: all but COMMAND_TABLES, which the command line reads and checks)."""
     seen = spec._reads.seen
     touched = {p[:i] for p in seen for i in range(1, len(p))}           # tables something below was read from
     origin = getattr(spec, "origin", {})
@@ -308,7 +309,7 @@ def unread(spec, tables=None, bases=False):
 
     def walk(t, top):
         for k, v in dict.items(t):
-            if top and (k == "model" or (tables is not None and k not in tables)):
+            if top and (k in COMMAND_TABLES or (tables is not None and k not in tables)):
                 continue
             p = t._paths[k]
             if not isinstance(v, Watched):

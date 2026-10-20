@@ -25,7 +25,7 @@ _FLOAT, _UINT = 5126, 5125              # glTF component types
 _ARRAY, _ELEMENTS = 34962, 34963        # bufferView targets
 
 
-def _image(path):
+def png(path):
     """(PNG bytes, see-through) of the texture at `path`; formats other than PNG are converted."""
     p = Path(path)
     with Image.open(p) as im:
@@ -41,7 +41,7 @@ def _image(path):
         return buf.getvalue(), see
 
 
-class _Bin:
+class Bin:
     """The BIN chunk: 4-byte aligned views, as glTF asks."""
 
     def __init__(self):
@@ -76,7 +76,7 @@ def write(path, model, V, N, name=None, extras=None, keep=None):
     remap[used] = np.arange(len(used))
     V = np.asarray(V, float)[used] @ AXES.T
     N = np.asarray(N, float)[used] @ AXES.T
-    binary, accessors = _Bin(), []
+    binary, accessors = Bin(), []
 
     def accessor(arr, kind, target, ctype=_FLOAT, minmax=False):
         a = {"bufferView": binary.view(np.ascontiguousarray(arr).tobytes(), target), "componentType": ctype,
@@ -102,7 +102,7 @@ def write(path, model, V, N, name=None, extras=None, keep=None):
         path_m = model.textures[m]
         if path_m is not None and Path(path_m).is_file():
             if path_m not in by_path:
-                data, img_see = _image(path_m)
+                data, img_see = png(path_m)
                 images.append({"bufferView": binary.view(data), "mimeType": "image/png", "name": Path(path_m).name})
                 textures.append({"sampler": 0, "source": len(images) - 1})
                 by_path[path_m] = (len(textures) - 1, img_see)
@@ -130,11 +130,16 @@ def write(path, model, V, N, name=None, extras=None, keep=None):
     blob = binary.bytes()
     doc["buffers"] = [{"byteLength": len(blob)}]
     doc["bufferViews"] = binary.views
-    js = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    js += b" " * ((-len(js)) % 4)
-    out = struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(js) + 8 + len(blob))
-    out += struct.pack("<I4s", len(js), b"JSON") + js + struct.pack("<I4s", len(blob), b"BIN\0") + blob
+    out = pack(doc, blob)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_bytes(out)
     return {"vertices": int(len(V)), "triangles": int(sum(a["count"] for a in accessors[3:] if a["type"] == "SCALAR")) // 3,
             "materials": len(materials), "images": len(images), "bytes": len(out)}
+
+
+def pack(doc, blob):
+    """The .glb bytes of the glTF JSON `doc` and its binary chunk `blob` (4-byte aligned, `Bin.bytes`)."""
+    js = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    js += b" " * ((-len(js)) % 4)
+    out = struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(js) + 8 + len(blob))
+    return out + struct.pack("<I4s", len(js), b"JSON") + js + struct.pack("<I4s", len(blob), b"BIN\0") + blob

@@ -277,13 +277,14 @@ def run_checks(site, query, body):
 
 def review(site, query, body):
     """The review as the page draws it: RV.show, each picture with its URL, each model with its id and kind (glb: a
-    file as it is; convert: a model file Blender turns into a .glb; build: posed by `mk model glb`), the marks."""
+    binary glTF, .glb or .vrm, as it is; convert: a model file Blender turns into a .glb; build: posed by `mk model
+    glb`), the marks."""
     r = _call(RV.show, _review_path(site, query))
     _allow_review(site, r)
     for img in _images(r):
         img["url"] = file_url(img["show"])
     for m in _models(r):
-        m["kind"] = ("glb" if m["open"].lower().endswith(".glb") else "convert") if m.get("open") else "build"
+        m["kind"] = ("glb" if m["open"].lower().endswith(RV.AS_IS) else "convert") if m.get("open") else "build"
         m.pop("glb", None)
     r["marks"] = RV._read_json(r["marks_file"]) or {"images": []}
     r["views"] = [{**v, "url": file_url(v["path"])} for v in RV.views(r["path"])]
@@ -513,9 +514,9 @@ def _model_entry(site, query):
 
 
 def _model_glb(site, m):
-    """The model's .glb: a .glb file as it is, any other model file turned into one by Blender, a .pmx or a spec posed
-    by `mk model glb`; built ones are cached by command and source (`<cache>/site/models`)."""
-    if m.get("open") and m["open"].lower().endswith(".glb"):
+    """The model's .glb: a binary glTF (.glb, .vrm) as it is, any other model file turned into one by Blender, a .pmx
+    or a spec posed by `mk model glb`; built ones are cached by command and source (`<cache>/site/models`)."""
+    if m.get("open") and m["open"].lower().endswith(RV.AS_IS):
         return Path(m["open"])
     key = hashlib.sha1(json.dumps([m.get("glb") or ["convert", m["open"]], _source_stamp(m)]).encode()).hexdigest()[:20]
     out = cache() / "models" / f"{key}.glb"

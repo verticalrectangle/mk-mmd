@@ -15,10 +15,10 @@ NAME.review.toml
   [[question.option]]  id (required, as a question's, unique in its question), label (required), text, images, models
   images  paths relative to the review file (PNG, JPEG, WebP, GIF; others are shown as PNG previews). A lab sheet
           (`mk model lab`: its .json beside it) is measured: lines drawn over it come back in mm.
-  models  {label, file}: a model file (MODEL_FILES: a .glb as it is, the others turned into one) or a .pmx, posed by
-          `mk model glb`; or {label, spec, parts, set}: a spec (model.toml, base:NAME) built in-process. pose (default
-          tpose), morph (a list of NAME or NAME=WEIGHT) and region (default body; head, hand, foot, arm, leg with side L
-          or R: only that part, framed up close) apply to .pmx and spec models.
+  models  {label, file}: a model file (MODEL_FILES: a binary glTF, .glb or .vrm, as it is, the others turned into
+          one) or a .pmx, posed by `mk model glb`; or {label, spec, parts, set}: a spec (model.toml, base:NAME) built
+          in-process. pose (default tpose), morph (a list of NAME or NAME=WEIGHT) and region (default body; head, hand,
+          foot, arm, leg with side L or R: only that part, framed up close) apply to .pmx and spec models.
   music   a project folder (or its mk.toml), or {project, from, to}: the project's music timeline under the question
           (its audio, beats, hits, words, shots and effects; `from` and `to` in clip seconds show that span)
 
@@ -44,8 +44,9 @@ TAG_MAX = 24                                            # characters in a questi
 SHOWN = {".png", ".jpg", ".jpeg", ".webp", ".gif"}      # what a browser draws
 MAX_SIDE = 4096                                         # ... at most this many pixels a side
 PREVIEW_SIDE = 2048
-MODEL_FILES = {".glb", ".gltf", ".obj", ".stl", ".ply", ".fbx", ".usd", ".usdz", ".usda", ".usdc"}
-# a .glb is viewed as it is; the others are turned into one by Blender's own importers (mkmmd.site.models)
+MODEL_FILES = {".glb", ".vrm", ".gltf", ".obj", ".stl", ".ply", ".fbx", ".usd", ".usdz", ".usda", ".usdc"}
+AS_IS = (".glb", ".vrm")    # binary glTF (a VRM is one) is viewed as it is; the others are turned into a .glb by
+                            # Blender's own importers (mkmmd.site.api)
 
 
 class ReviewError(ValueError):

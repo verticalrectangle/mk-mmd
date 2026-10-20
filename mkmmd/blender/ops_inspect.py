@@ -13,39 +13,6 @@ from .runtime import op
 
 SCHEMA = RG.SCHEMA
 
-# semantic expression name -> candidate morph names (PMX Japanese first, then common English names)
-MORPHS = {
-    "blink": ["まばたき", "瞬き", "blink"],
-    "wink_l": ["ウィンク", "ウインク", "wink"],
-    "wink_r": ["ウィンク右", "ウインク右", "wink_r", "wink right"],
-    "wink2_l": ["ウィンク２", "ウィンク2", "ウインク２"],
-    "wink2_r": ["ｳｨﾝｸ２右", "ウィンク２右", "ウィンク2右"],
-    "smile_eyes": ["笑い", "smile"],
-    "a": ["あ", "a"], "i": ["い", "i"], "u": ["う", "u"], "e": ["え", "e"], "o": ["お", "o"],
-    "a2": ["あ２", "あ2"], "n": ["ん"],
-    "cheerful": ["にこり", "にっこり", "cheerful"],
-    "serious": ["真面目", "serious"],
-    "troubled": ["困る", "troubled"],
-    "angry": ["怒り", "angry"],
-    "sad": ["悲しみ", "悲しい", "sad"],
-    "surprised": ["びっくり", "surprised"],
-    "brow_up": ["上", "眉上"], "brow_down": ["下", "眉下"],
-    "jito": ["じと目", "ジト目"],
-    "calm": ["なごみ"],
-    "hau": ["はぅ"],
-    "star_eyes": ["星目"],
-    "heart_eyes": ["はぁと", "ハート目", "ハート"],
-    "pupils_small": ["瞳小"],
-    "mouth_smile": ["口角上げ", "にやり", "∧"],
-    "mouth_down": ["口角下げ"],
-    "mouth_wide": ["口横広げ"],
-    "omega": ["ω", "ω□"],
-    "tongue": ["ぺろっ", "てへぺろ"],
-    "blush": ["照れ", "赤面", "頬染め"],
-    "tears": ["涙"],
-    "pale": ["青ざめ", "青ざめる"],
-}
-
 MEASURE_PAIRS = {
     "upper_arm": ("arm", "elbow"),
     "forearm": ("elbow", "wrist"),
@@ -249,14 +216,7 @@ def describe(root, arm, path=None, scale=0.08):
             for m in getattr(mr, coll, []):
                 panel[m.name] = {"panel": getattr(m, "category", "OTHER").lower(), "kind": coll[:-7]}
     all_morphs = list(dict.fromkeys(keys + list(panel)))
-    norm_index = {bonemap.norm(n).lower(): n for n in all_morphs}
-    rig["morphs"] = {}
-    for sem, cands in MORPHS.items():
-        for c in cands:
-            hit = norm_index.get(bonemap.norm(c).lower())
-            if hit:
-                rig["morphs"][sem] = hit
-                break
+    rig["morphs"] = bonemap.morph_map(all_morphs)
     rig["morph_list"] = [{"name": n, **panel.get(n, {"panel": "other", "kind": "vertex"}), "shape_key": n in keys}
                          for n in all_morphs]
     # ---- measurements (rest pose, metres)

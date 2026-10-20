@@ -155,6 +155,7 @@ ask = "Anything else?"
 def test_model_entries_become_commands_mk_accepts(tmp_path):
     (tmp_path / "m.pmx").write_bytes(b"")
     (tmp_path / "ready.glb").write_bytes(b"")
+    (tmp_path / "her.vrm").write_bytes(b"")
     f = write(tmp_path / "models.review.toml", """
 [review]
 title = "Models"
@@ -162,11 +163,12 @@ title = "Models"
 id = "q"
 ask = "Which?"
 models = [{ label = "pmx", file = "m.pmx", pose = "arms_down", morph = ["笑い=0.5"] },
-          { label = "glb", file = "ready.glb" },
+          { label = "glb", file = "ready.glb" }, { label = "vrm", file = "her.vrm" },
           { label = "spec", spec = "base:girl", parts = ["head"], set = ["head.lash.width=0.007"], pose = "rest", region = "head" }]
 """)
-    pmx, ready, spec = RV.load(f)["questions"][0]["models"]
+    pmx, ready, vrm, spec = RV.load(f)["questions"][0]["models"]
     assert ready == {"label": "glb", "open": str((tmp_path / "ready.glb").resolve())}     # the viewer opens it as is
+    assert vrm == {"label": "vrm", "open": str((tmp_path / "her.vrm").resolve())}         # a VRM is a binary glTF too
     parser = build_parser()
     a = parser.parse_args(pmx["glb"])
     assert (a.func.__name__, a.pose, a.morph) == ("run_glb", "arms_down", ["笑い=0.5"])

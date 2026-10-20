@@ -39,8 +39,23 @@ Examples:
   mk look <out>/<name>.blend --view front,3q --target "bone('head').head" --dist 1.2 --frames 1
   mk model info model.toml                               # what would be built, in which order
 
-Output files in <out>: <name>.pmx, tex/*.png, <name>.blend, <name>.rig.json, build.json (the printed report), and
-<name>.cloth.npz when a part makes a cloth copy (the arrays of rig.json's `cloth`).
+Output files in <out>: <name>.pmx, tex/*.png, <name>.vrm (mk's own model file, VRM 1.0: see mk model vrm; [vrm]
+enabled = false leaves it out; not for --only builds), <name>.blend, <name>.rig.json, build.json (the printed report),
+and <name>.cloth.npz when a part makes a cloth copy (the arrays of rig.json's `cloth`).
+"""
+
+VRM_HELP = """Write a model as VRM 1.0, mk's own model file (docs/design.md: VRM): the PMX's mesh, bones, weights, morphs
+and textures in VRM's T-pose rest, with its humanoid bones, expressions, look-at, spring bones (its physics chains and
+colliders), rotation constraints (its helper bones) and MToon materials (its toon look), and mk's extension MK_rig for
+what VRM cannot hold (IK, the rigid bodies, the chains' ties, the fold shapes, the cloth copy, the PMX names and the
+turns back to its rest pose). No Blender. mk model build writes <name>.vrm beside the PMX; this writes one for any
+.pmx (with the rig.json and .cloth.npz beside it when there are) or for a spec, built in-process. The spec's [vrm]
+table: meta (licence, permissions, authors), springs, look, outline, expressions (docs/design.md: VRM). Prints a
+report as JSON.
+
+Examples:
+  mk model vrm ~/mk-assets/models/carly/carly.pmx           # carly.vrm beside it
+  mk model vrm base:girl --out /tmp/girl.vrm
 """
 
 NEW_HELP = """Start a character from a model base shipped with mk (mkmmd/model/bases/): writes DIR/model.toml, whose
@@ -200,6 +215,15 @@ def add(sub):
     gl.add_argument("--out", metavar="FILE.glb", help="where to write it (default: ./<model>-<pose>.glb)")
     gl.add_argument("--info", action="store_true", help="print the model's numbers only")
     gl.set_defaults(func=run_glb)
+    vr = ss.add_parser("vrm", help="a model as VRM 1.0, mk's own model file (mk model build writes one beside the PMX)",
+                       description=VRM_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    vr.add_argument("model", metavar="MODEL", help="a .pmx (its rig.json beside it adds folds and cloth) or a spec")
+    vr.add_argument("--out", metavar="FILE.vrm", help="where to write it (default: beside the .pmx; a spec's [model] out)")
+    vr.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
+                    help="override a spec value (TOML syntax, repeatable): vrm.meta.authors=['me']")
+    vr.add_argument("--no-cache", action="store_true", help="build every part of a spec again (see mk model build)")
+    vr.add_argument("--unit", type=float, default=0.08, help="metres per PMX unit of a .pmx (default: 0.08)")
+    vr.set_defaults(func=run_vrm)
 
 
 def _lab_parts(args):
@@ -317,6 +341,34 @@ def run_glb(args):
                                                          "region": args.region})
     emit({**rep, "out": str(out.resolve()), "pose": args.pose, "pose_applied": args.pose in rep["poses"],
           "morphs_applied": morphs, "glb": glb, "seconds": round(time.time() - t0, 1)})
+    return 0
+
+
+def run_vrm(args):
+    from ..model import vrm as VRM
+    t0 = time.time()
+    src = Path(args.model).expanduser()
+    try:
+        if args.model.lower().endswith(".pmx"):
+            if not src.is_file():
+                raise ValueError(f"{src} does not exist")
+            rig = src.with_name(f"{src.stem}.rig.json")
+            layers = VRM.rig_layers(rig) if rig.is_file() else None
+            out = Path(args.out).expanduser() if args.out else src.with_suffix(".vrm")
+            rep = VRM.write(out, pmx_io.read(src), src.parent, args.unit, layers=layers, cfg=VRM.config(None),
+                            name=src.stem)
+        else:
+            spec = SP.load(args.model, args.overrides)
+            cfg = SP.model_cfg(spec)
+            vcfg = VRM.config(spec)
+            out = Path(args.out).expanduser() if args.out else cfg["out"] / f"{cfg['name']}.vrm"
+            with tempfile.TemporaryDirectory(prefix="mk_vrm_") as tmp:
+                built = BD.run(spec, tex_dir=Path(tmp) / AS.TEX_DIR, cache=None if args.no_cache else PC.PartCache())
+                asm = AS.assemble(built, name=cfg["name"], scale=cfg["scale"])
+                rep = VRM.write(out, asm.pmx, tmp, cfg["scale"], layers=asm.layers, cfg=vcfg, name=cfg["name"])
+    except (SP.SpecError, BD.BuildError, ValueError) as e:
+        raise UsageError(f"{args.model}: {e}")
+    emit({**rep, "seconds": round(time.time() - t0, 1)})
     return 0
 
 
@@ -447,6 +499,11 @@ def _lock(path):
 def run_build(args):
     t_all = time.time()
     spec, cfg, only = _load(args)
+    from ..model import vrm as VRM
+    try:
+        vcfg = VRM.config(spec)
+    except SP.SpecError as e:
+        raise UsageError(str(e))
     name = cfg["name"]
     out = Path(args.out).expanduser() if args.out else cfg["out"]
     if only and not args.out:
@@ -528,6 +585,20 @@ def run_build(args):
     report["pmx"] = str(pmx_path)
     report["pmx_mb"] = round(pmx_path.stat().st_size / 1e6, 2)
     report["warnings"] += asm.warnings
+
+    # ---- 2b. the VRM beside it, mk's own model file (docs/design.md: VRM)
+    if not only:
+        vrm_path = out / f"{name}.vrm"
+        if vcfg["enabled"]:
+            t0 = time.time()
+            try:
+                report["vrm"] = VRM.write(vrm_path, asm.pmx, out, cfg["scale"], layers=asm.layers, cfg=vcfg, name=name)
+                report["warnings"] += [f"[vrm] {w}" for w in report["vrm"].pop("warnings")]
+            except ValueError as e:
+                report["warnings"].append(f"[vrm] not written: {e}")
+            report["seconds"]["vrm"] = round(time.time() - t0, 2)
+        else:
+            vrm_path.unlink(missing_ok=True)            # an earlier build's, which this spec no longer wants
 
     # ---- 3. Blender: import back, verify, describe, review blend
     t0 = time.time()

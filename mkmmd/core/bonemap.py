@@ -79,6 +79,39 @@ FINGERS = {
     "little": ["little1", "little2", "little3", "little_tip"],
 }
 
+# semantic expression name -> candidate morph names (PMX Japanese first, then common English names)
+MORPHS = {
+    "blink": ["まばたき", "瞬き", "blink"],
+    "wink_l": ["ウィンク", "ウインク", "wink"],
+    "wink_r": ["ウィンク右", "ウインク右", "wink_r", "wink right"],
+    "wink2_l": ["ウィンク２", "ウィンク2", "ウインク２"],
+    "wink2_r": ["ｳｨﾝｸ２右", "ウィンク２右", "ウィンク2右"],
+    "smile_eyes": ["笑い", "smile"],
+    "a": ["あ", "a"], "i": ["い", "i"], "u": ["う", "u"], "e": ["え", "e"], "o": ["お", "o"],
+    "a2": ["あ２", "あ2"], "n": ["ん"],
+    "cheerful": ["にこり", "にっこり", "cheerful"],
+    "serious": ["真面目", "serious"],
+    "troubled": ["困る", "troubled"],
+    "angry": ["怒り", "angry"],
+    "sad": ["悲しみ", "悲しい", "sad"],
+    "surprised": ["びっくり", "surprised"],
+    "brow_up": ["上", "眉上"], "brow_down": ["下", "眉下"],
+    "jito": ["じと目", "ジト目"],
+    "calm": ["なごみ"],
+    "hau": ["はぅ"],
+    "star_eyes": ["星目"],
+    "heart_eyes": ["はぁと", "ハート目", "ハート"],
+    "pupils_small": ["瞳小"],
+    "mouth_smile": ["口角上げ", "にやり", "∧"],
+    "mouth_down": ["口角下げ"],
+    "mouth_wide": ["口横広げ"],
+    "omega": ["ω", "ω□"],
+    "tongue": ["ぺろっ", "てへぺろ"],
+    "blush": ["照れ", "赤面", "頬染め"],
+    "tears": ["涙"],
+    "pale": ["青ざめ", "青ざめる"],
+}
+
 # the bones any standard MMD model is expected to have (semi-standard ones such as upper_body2 or the twist bones
 # are optional and reported as missing, not as errors)
 REQUIRED = ["center", "lower_body", "upper_body", "neck", "head"] + [
@@ -128,6 +161,18 @@ def build_map(bones):
                 if hit:
                     out[f"{stem}.{side}"] = hit
                     break
+    return out
+
+
+def morph_map(names):
+    """Semantic expression name -> morph name, for the model's morph names (MORPHS' candidates in order, matched
+    NFKC-normalised and case-blind; of two names that normalise alike the later one)."""
+    index = {norm(n).lower(): n for n in names}
+    out = {}
+    for sem, cands in MORPHS.items():
+        hit = next((index[norm(c).lower()] for c in cands if norm(c).lower() in index), None)
+        if hit:
+            out[sem] = hit
     return out
 
 

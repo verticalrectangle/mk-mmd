@@ -2,6 +2,7 @@
 tree (children, rotation grants, finger curls on both hands), one scale across models, girths on the skin under a
 sleeve, and a red line on a screenshot of a sheet read back in millimetres."""
 import json
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -121,20 +122,38 @@ def test_fingers_curl_into_the_palm_and_spread_on_both_hands(girl):
         assert gap[1] > gap[0] + 0.01, side
 
 
-def test_t_pose_lays_both_arms_out_level_and_leaves_the_legs(girl):
+def test_t_pose_is_vrms_rest_pose(girl):
+    """The T-pose is VRM's (VRM 1.0, tpose.md): each upper arm, forearm and hand straight out along X and level, the
+    palm down; the four fingers straight along the hand; the thumb straight and level, 45 degrees forward of the hand,
+    its nail facing forward and in; both feet pointing straight forward. The thighs, shins and head stay."""
     G = girl.matrices(LAB.pose_rotations(girl, "tpose"))
 
     def head(name):
         b = girl.sem[name]
         return (G[b] @ np.r_[girl.heads[b], 1.0])[:3]
+
+    def deg(a, b):
+        return float(np.degrees(np.arccos(np.clip(LAB.unit(a) @ LAB.unit(b), -1.0, 1.0))))
+    front = np.array([0.0, -1.0, 0.0])
     for side, out in (("L", 1.0), ("R", -1.0)):
-        a, e, w = (head(f"{k}.{side}") for k in ("arm", "elbow", "wrist"))
-        assert abs(LAB._below(e - a)) < 0.05 and abs(LAB._below(w - e)) < 0.05, side   # upper arm and forearm level
-        assert out * (w - a)[0] > 0.9 * np.linalg.norm(w - a), side                   # straight out to her side
-    rest, _ = girl.deform()
-    tpose, _ = girl.deform("tpose")
-    legs = np.isin(girl.dominant, sorted(girl.subtree(girl.sem["leg.L"]) | girl.subtree(girl.sem["leg.R"])))
-    assert np.abs(tpose[legs] - rest[legs]).max() < 1e-9
+        X = np.array([out, 0.0, 0.0])
+        chain = [f"{k}.{side}" for k in ("arm", "elbow", "wrist", "middle1")]
+        for f in ("index", "middle", "ring", "little"):
+            chain_f = [f"{f}{k}.{side}" for k in (1, 2, 3)] + [f"{f}_tip.{side}"]
+            assert all(deg(head(b) - head(a), X) < 0.1 for a, b in pairwise(chain_f)), (side, f)
+        assert all(deg(head(b) - head(a), X) < 0.1 for a, b in pairwise(chain)), side
+        thumb = [f"thumb{k}.{side}" for k in (0, 1, 2)] + [f"thumb_tip.{side}"]
+        assert all(deg(head(b) - head(a), X + front) < 0.1 for a, b in pairwise(thumb)), side
+        _, r, n = LAB.hand_axes(girl, side)
+        assert deg(G[girl.sem[f"wrist.{side}"]][:3, :3] @ n, (0.0, 0.0, -1.0)) < 0.1, side          # palm down
+        T = LAB.unit(X + front)
+        nail = -(G[girl.sem[f"thumb0.{side}"]][:3, :3] @ LAB.unit(LAB.THUMB_TOWARDS[0] * r + LAB.THUMB_TOWARDS[1] * n))
+        assert deg(nail - (nail @ T) * T, -X + front) < 0.1, side
+        foot = head(f"toe.{side}") - head(f"ankle.{side}")
+        assert deg(foot * [1.0, 1.0, 0.0], front) < 0.1, side
+        for b in (f"knee.{side}", f"ankle.{side}"):
+            assert np.abs(head(b) - girl.heads[girl.sem[b]]).max() < 1e-12, b
+    assert np.abs(head("head") - girl.heads[girl.sem["head"]]).max() < 1e-12
 
 
 def test_side_by_side_cells_share_one_scale_and_floor():
