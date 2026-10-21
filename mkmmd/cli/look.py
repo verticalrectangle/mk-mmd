@@ -12,6 +12,7 @@ from .. import cutfx as CF
 from .. import framefx as FF
 from .. import pixmap as PX
 from .. import post as P
+from ..core import cast as CN
 from ..core import screentype as SRT
 from ..core import transition as TR
 from ..ref.photos import ascii_text
@@ -244,7 +245,7 @@ def run(args):
     refs = ref_paths(args.ref, proj) if args.ref else []
     cast_arm = None
     if args.cast or (proj and len(proj.cast) == 1):
-        cast_arm = proj.cast_member(args.cast).get("armature") if proj else None
+        cast_arm = CN.armature_name(proj.cast_member(args.cast)) if proj else None
     views = []
     for c in args.cam or []:
         views.append({"name": c, "kind": "camera", "camera": c})

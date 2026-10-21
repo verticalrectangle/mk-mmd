@@ -749,6 +749,61 @@ def test_a_hand_let_go_follows_the_arm_strip_and_the_ik_holds_it_before_and_afte
     assert np.linalg.norm(before - wrist["strip"][0]) > 0.1                    # ... though the strip is raising the arm
 
 
+def test_a_strip_eases_in_and_out_over_its_blends(make, capsys):
+    """`blend_in` / `blend_out` ramp a strip's influence: halfway through each the arm is partway between where it hangs
+    and the motion's pose, and between them it is the motion's; without them it snaps in and out (a dance that stops for
+    a pose must not jump)."""
+    vmd = make.root / "arm.vmd"
+    up = (0.0, 0.0, 0.4226, 0.9063)                                            # the arm raised 50 deg
+    _vmd(vmd, {"左腕": [(0, up), (60, up)]})
+    strip = 'start = 0.5\nfrom = 0\nto = 30\nextend = "none"\n'               # frames 46-76: its own frames only
+    wrist = {}
+    for run, blends in (("snap", ""), ("ease", "blend_in = 0.4\nblend_out = 0.4\n")):
+        code, out = make(FREE.format(vmd=vmd, moves=strip + blends), until="motion")
+        assert code == 0, out.get("error")
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames",
+                       "40,52,61,70,82", "--project", str(make.root)], capsys)   # before, in, held, out, after
+        wrist[run] = [np.array(v) for v in q["values"]]
+    rest, full = wrist["snap"][0], wrist["snap"][2]
+    assert np.linalg.norm(full - rest) > 0.1
+    assert np.linalg.norm(wrist["snap"][1] - full) < 2e-3 and np.linalg.norm(wrist["snap"][3] - full) < 2e-3
+    before, ease_in, held, ease_out, after = wrist["ease"]
+    assert np.linalg.norm(before - rest) < 2e-3 and np.linalg.norm(after - rest) < 2e-3
+    assert np.linalg.norm(held - full) < 2e-3
+    for w in (ease_in, ease_out):
+        assert 0.2 < np.linalg.norm(w - rest) / np.linalg.norm(full - rest) < 0.8
+
+
+def test_a_strip_that_extends_forward_holds_its_last_pose_after_it_and_nothing_before_it(make, capsys):
+    """`extend = "forward"` keeps a strip's last pose after it and leaves the frames before it alone ("hold" keeps its
+    first pose before it too, "none" neither), and a later entry plays over an earlier one: a dance paused between two
+    strips, the later picking up where the earlier stopped."""
+    vmd = make.root / "arm.vmd"
+    down, up, half = (0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.4226, 0.9063), (0.0, 0.0, 0.2164, 0.9763)    # 0, 50, 25 deg
+    _vmd(vmd, {"左腕": [(0, up), (30, half), (60, down)]})
+    strip = 'start = 0.5\nfrom = 0\nto = 30\nextend = "{}"\n'                  # frames 46-76: raised, then half way
+    got = {}
+    for extend in ("none", "hold", "forward"):
+        code, out = make(FREE.format(vmd=vmd, moves=strip.format(extend)), until="motion")
+        assert code == 0, out.get("error")
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "40,76,85",
+                       "--project", str(make.root)], capsys)                    # before it, its last frame, after it
+        got[extend] = [np.array(v) for v in q["values"]]
+    rest = got["none"][0]
+    assert np.linalg.norm(got["none"][2] - rest) < 2e-3                        # "none": nothing before or after
+    assert np.linalg.norm(got["hold"][0] - rest) > 0.05                        # "hold": raised before it
+    before, end, after = got["forward"]
+    assert np.linalg.norm(end - rest) > 0.05
+    assert np.linalg.norm(before - rest) < 2e-3 and np.linalg.norm(after - end) < 2e-3
+    later = strip.format("forward") + f'\n[[motion.mq]]\nvmd = "{vmd}"\nbones = "arms"\nstart = 1.5\nfrom = 60\nto = 61\n' \
+                                      'extend = "forward"\n'                    # frames 76-77: down, held after
+    code, out = make(FREE.format(vmd=vmd, moves=later), until="motion")
+    assert code == 0, out.get("error")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "85",
+                   "--project", str(make.root)], capsys)
+    assert np.linalg.norm(np.array(q["values"][0]) - rest) < 2e-3            # the later entry wins
+
+
 MIC_LEAN = """[pose.mq]
 feet = "floor"
 

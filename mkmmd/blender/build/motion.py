@@ -11,8 +11,10 @@
                        ("arms": shoulders, arms, elbows, wrists and their twist bones, not the fingers)
   morphs = true        also play the VMD's facial keys
   blend_in, blend_out  seconds; influence ramps on the strip
-  extend = "hold"      "hold": the strip's first and last poses stay before and after it; "none": it acts on its own
-                       frames only
+  extend = "hold"      "hold": the strip's first and last poses stay before and after it; "forward": only its last pose
+                       stays, after it (a dance paused between two strips, the later one picking up where it stopped);
+                       "none": it acts on its own frames only
+Each entry is a track of its own, a later entry's above an earlier one's (where both play, the later one wins).
 Strips play in a track under the active action: pose / perform keys win where both key a bone, except on a member with a
 hand a `free` move lets go, whose own keys compose with its strips (the action's blend type is Combine: a walk strip's
 arm swing under the pose stage's forearm pre-bend, which goes with the IK)."""
@@ -34,7 +36,7 @@ LOWER = {"center", "groove", "waist", "lower_body", "leg", "knee", "ankle", "toe
          "leg_ik_parent", "leg_d", "knee_d", "ankle_d", "toe_ex", "waist_cancel"}
 ARMS = {"shoulder_p", "shoulder", "shoulder_c", "arm", "arm_twist", "elbow", "wrist_twist", "wrist"}   # not the fingers
 GROUPS = {"upper": UPPER, "lower": LOWER, "arms": ARMS}
-EXTEND = {"hold": "HOLD", "none": "NOTHING"}
+EXTEND = {"hold": "HOLD", "forward": "HOLD_FORWARD", "none": "NOTHING"}
 
 
 def _vmd_path(ctx, ref):
@@ -125,10 +127,10 @@ def nla_strip(id_data, action, start, scale=1.0, src_start=None, src_end=None, t
         s.action_frame_end = src_end
     s.scale = scale
     s.frame_start_ui = start                   # exact (fractional) start, duration kept
+    s.use_auto_blend = False                   # before the blends: turning auto-blend off zeroes them (Blender 4.2)
     s.blend_in, s.blend_out = blend_in, blend_out
     s.blend_type = "REPLACE"
-    s.extrapolation = EXTEND[extend]           # "hold": its first and last poses before and after it; "none": nothing
-    s.use_auto_blend = False
+    s.extrapolation = EXTEND[extend]           # "hold": first and last poses before and after; "forward": the last after
     return s
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from .. import bridge
 from .. import config as CFG
 from ..cache import Cache, key as cache_key
+from ..core import cast as CN
 from ..core import jsonx
 from ..project import ProjectError
 from .common import CHECK_FAILED, add_project_arg, emit, get_project, scene_path, UsageError
@@ -173,7 +174,7 @@ def _armature(args, proj):
         if proj is None:
             raise UsageError("--cast needs a project (mk.toml); pass --armature instead")
         try:
-            return proj.cast_member(args.cast).get("armature") or None
+            return CN.armature_name(proj.cast_member(args.cast))
         except ProjectError as e:
             raise UsageError(str(e))
     return None

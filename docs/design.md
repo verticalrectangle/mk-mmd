@@ -1237,12 +1237,17 @@ to some bones (`[motion.<cast>]` with a single table works too). Each entry make
 | `bones` | which bones the motion drives: `"all"` (default), `"upper"` (spine, neck, head, eyes, shoulders, arms with their twist bones, wrists, fingers), `"lower"` (center, groove, waist, lower body, legs, knees, ankles, toes and the leg and toe IK bones), `"arms"` (shoulders, arms, elbows, wrists and their twist bones, not the fingers) or a list of these groups and semantic or Blender names. Hair, skirt and the root bone belong to no group |
 | `morphs` | also play the VMD's facial keys (default true) |
 | `blend_in`, `blend_out` | seconds the strip's influence ramps in and out (default 0) |
-| `extend` | `"hold"` (default): the strip's first and last poses stay before and after it; `"none"`: it acts on its own frames only |
+| `extend` | `"hold"` (default): the strip's first and last poses stay before and after it; `"forward"`: only its last pose stays, after it; `"none"`: it acts on its own frames only. A later entry's track is above an earlier one's, so where both play the later one wins |
 
 A walk VMD gives a walking character natural arms where mk's own walk (`[perform.<cast>] walk`, its `arms` an IK swing) reads
 stiff: let both hands go with `free` moves over each run of steps, and play the walk's `bones = ["arms", "upper_body",
 "upper_body2"]` there with `extend = "none"`, its cycle scaled to two of the character's steps and its left heel strike on
 her own left steps (a VMD walk in place keeps the legs, the feet and the travel mk's).
+
+A dance that stops with the music and picks up again: play stretches of one choreography as entries whose source ranges follow
+on (each `from` the `to` of the entry before), each with `extend = "forward"`. Between two of them she holds the pose the dance
+stopped in, and the next starts from that very pose, so nothing jumps or slides; let a hand go with `free` over the stretches
+(and over the stops, for a hand that stays in the frozen pose) and give the other a pose move on a stop.
 
 ```toml
 [[motion.rin]]
@@ -1254,7 +1259,7 @@ bones = "lower"
 blend_in = 0.2
 ```
 
-The strips use extrapolation Hold: the motion's first pose holds before `start`, its last after it ends. Bones that `[pose]` or
+By default (`extend = "hold"`) the motion's first pose holds before `start` and its last after it ends. Bones that `[pose]` or
 `[perform]` key win over the motion (the active action plays on top of the strips): `pose` keys the spine, neck and head
 always, the pelvis with `sit` or `hips`, the arms with a `hands` table, the legs with `feet`; `perform` keys the spine, neck, head
 and eyes on every frame. Give a member that has both a motion and those tables `bones = "lower"` or a list of the bones the
