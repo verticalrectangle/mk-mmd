@@ -372,7 +372,8 @@ class Clearance(Metric):
 class FootSlide(Metric):
     name = "foot_slide"
     doc = ("Feet sliding while planted: horizontal speed of ankles/toes on frames where they rest near the floor "
-           "and barely move vertically. Value: the 95th percentile speed in mm per frame over planted frames.")
+           "and barely move vertically. Value: the 95th percentile speed in mm per frame over planted frames. Speeds "
+           "are taken between consecutive frames only, so `frames` may have gaps (the stops of a dance, say).")
     args = {"cast": "cast member (or armature)", "points": "bones (default ankle.L ankle.R toe.L toe.R)",
             "floor": "floor height (m, default 0)", "tolerance": "how far above its rest height a point still "
                                                                  "counts as planted (m, default 0.015)"}
@@ -391,13 +392,19 @@ class FootSlide(Metric):
         floor = float(args.get("floor", 0.0))
         tol = float(args.get("tolerance", 0.015))
         hz = rest_w[:, 2] - floor
+        f = np.asarray(frames)
+        adjacent = np.diff(f) == 1                              # a gap in `frames` is not a frame's motion
+        runs = np.split(np.arange(len(f)), np.flatnonzero(~adjacent) + 1)
         out, worst, at = {}, 0.0, None
         for j, n in enumerate(names):
             z = pos[:, j, 2] - floor
-            vz = np.abs(np.gradient(z)) * 1000.0
+            vz = np.zeros(len(z))
+            for r in runs:
+                if len(r) > 1:
+                    vz[r] = np.abs(np.gradient(z[r])) * 1000.0
             planted = (z < hz[j] + tol) & (vz < 2.0)
             h = np.linalg.norm(np.diff(pos[:, j, :2], axis=0), axis=1) * 1000.0
-            pl = planted[1:] & planted[:-1]
+            pl = planted[1:] & planted[:-1] & adjacent
             if pl.sum() < 3:
                 out[n] = {"planted_frames": int(pl.sum())}
                 continue

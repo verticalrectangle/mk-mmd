@@ -454,7 +454,7 @@ ways in; `mk check --list` prints every metric's arguments and default limits. M
 | `jitter` | median jerk / median speed of chain points in the head's frame | calm hair < 0.5; Bullet hair on a seated model ~1.4; the detail has `jerk_p95_mm`, and a `static` note when a chain barely moves (the ratio is then float32 noise: judge by `jerk_p95_mm`) |
 | `contact` | largest distance (mm) between two points (expressions or tracks) where `when` holds | `component = "z"` for a signed axis difference |
 | `penetration` | deepest chain point inside a body or collider (mm) | measured on the baked bones, i.e. what renders, with each chain's own radius; reports the frame, the bone and the shape (`body:<bone>` for the model's own bodies) |
-| `foot_slide` | 95th percentile horizontal speed of planted feet (mm/frame) | |
+| `foot_slide` | 95th percentile horizontal speed of planted feet (mm/frame) | between consecutive frames only: `frames` with gaps (a dance's stops) are measured run by run |
 | `joint_limits` | worst excess over a limit (deg) | elbow fold-through and in-plane hyperextension, knees, wrists, neck, spine; limits calibrated on professional MMD dances; sideways elbow bends are not flagged (MMD rigs treat the elbow as a ball joint) |
 | `framing` | smallest margin to each output's safe area | per output through the active camera; matches Blender's projection; fractions of the frame, negative = outside the safe area |
 | `occlusion` | largest share of subject points hidden from the camera | ray casts; the subject's own meshes do not count |

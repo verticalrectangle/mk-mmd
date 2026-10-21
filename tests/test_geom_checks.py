@@ -176,6 +176,35 @@ def test_contact_uses_mask_and_skips_missing_track_values(tmp_path):
     assert value == pytest.approx(500.0) and detail["median"] == pytest.approx(2.0)
 
 
+class FeetData:
+    """Ankle tracks (F, n, 3) as Data.bones and Data.arm_world give them to foot_slide; at rest the ankles stand where
+    they do on the first frame."""
+    def __init__(self, pos):
+        self.pos = np.asarray(pos, float)
+
+    def bones(self, arm, names, frames):
+        W = np.tile(np.eye(4), (len(frames), self.pos.shape[1], 1, 1))
+        W[..., :3, 3] = self.pos
+        rest = np.tile(np.eye(4), (self.pos.shape[1], 1, 1))
+        rest[:, :3, 3] = self.pos[0]
+        return W, rest, ["ankle.L", "ankle.R"][:self.pos.shape[1]]
+
+    def arm_world(self, arm, frames):
+        return np.tile(np.eye(4), (len(frames), 1, 1))
+
+
+def test_foot_slide_measures_consecutive_frames_only():
+    """Two runs of frames with a gap between them: the left foot stands still in each but somewhere else in the second
+    (it stepped in the frames not asked for), the right one slides 5 mm a frame. Only the slide counts."""
+    frames = list(range(10, 20)) + list(range(40, 50))
+    left = [[0.1 if f < 40 else 0.4, 0.0, 0.095] for f in frames]
+    right = [[-0.1, 0.005 * f, 0.095] for f in frames]
+    value, detail = motion.FootSlide().compute({}, None, FeetData(np.stack([left, right], 1)), frames,
+                                               {"arm": "a", "pts": ["ankle.L", "ankle.R"]})
+    assert value == pytest.approx(5.0) and detail["at_frame"] in frames
+    assert detail["ankle.L"]["max_mm_per_frame"] == 0.0 and detail["ankle.R"]["max_mm_per_frame"] == pytest.approx(5.0)
+
+
 # ---------------------------------------------------------------- framing projection
 def test_projection_follows_sensor_fit():
     cam = {"world": np.eye(4)[None], "lens": np.array([50.0]), "sensor": np.array([[36.0, 24.0]]),
