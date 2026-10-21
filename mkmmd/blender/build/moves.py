@@ -1,11 +1,12 @@
 """moves: `[[move.<cast>]]` (docs/design.md: Moves) compiled by mkmmd.core.moves into the tables the pose and perform stages
 read: the hand keys into `[pose.<cast>.hands.L/R] keys` (places as `{cast, point}` targets, the goals riding the chest so
-leans, tilts and sways carry them), lean, tilt, turn and head keys, twitches and expressions into `[perform.<cast>]`. Runs at the start
-of the pose stage. The landmarks the places are built from come from the member's rest pose in its root's frame, the beats
-from the project's timeline (audio/timeline.json), and the hands are kept off the member's own body and clothes: the
-distance the compiler measures is to every face of its meshes in the rest pose that belongs to neither arm, nor to a chain
-of hair, ears, a tail or ribbons that the sim moves (those make way for a hand, colliding with its fingers and palm, so
-long hair at her sides does not push a hanging hand out). A skirt is clothes: a hand stays outside it."""
+leans, tilts and sways carry them) with the `ik` keys of a hand a `free` move lets go, lean, tilt, turn and head keys,
+twitches and expressions into `[perform.<cast>]`. Runs at the start of the pose stage. The landmarks the places are built
+from come from the member's rest pose in its root's frame, the beats from the project's timeline (audio/timeline.json),
+and the hands are kept off the member's own body and clothes: the distance the compiler measures is to every face of its
+meshes in the rest pose that belongs to neither arm, nor to a chain of hair, ears, a tail, a skirt or ribbons that the
+sim moves (those make way for a hand, colliding with its fingers and palm, so long hair or a skirt at her sides does not
+push a hanging hand out)."""
 import json
 import math
 import os
@@ -24,7 +25,7 @@ from . import sim as SIM
 MOUTH = (0.0, -0.06, 0.012)                 # the mouth from the head bone's head (an MMD head sits on the neck's top)
 EYES = (0.0, -0.05, 0.07)                   # the eyes from there, for a rig without eye bones
 ARM = ("arm", "arm_twist", "elbow", "wrist_twist", "wrist", "thumb", "index", "middle", "ring", "little")
-YIELD = FAM.HAIR_FAMILIES | {"ears", "tail", "ribbon"}   # chains that make way for a hand when the sim moves them
+YIELD = FAM.HAIR_FAMILIES | {"ears", "tail", "skirt", "ribbon"}   # chains that make way for a hand when the sim moves them
 
 
 def marks(m):
@@ -107,8 +108,8 @@ def body_clearance(m, soft=()):
 
 
 def soft_bones(ctx, name, m):
-    """The bones of member `name`'s loose chains the sim moves (YIELD: hair, ears, a tail, ribbons): they make way for a
-    hand."""
+    """The bones of member `name`'s loose chains the sim moves (YIELD: hair, ears, a tail, a skirt, ribbons): they make
+    way for a hand."""
     fams = set(SIM.families(ctx, name, m)) & YIELD
     return {b for c in m.rig["chains"] if c["family"] in fams for b in c["bones"]} if fams else set()
 
@@ -143,10 +144,12 @@ def apply(ctx):
             if not keys:
                 continue
             hand = pose.setdefault("hands", {}).setdefault(side, {})
-            if any(k in hand for k in ("at", "keys", "grip", "rest")):
+            if any(k in hand for k in ("at", "keys", "grip", "rest", "ik")):
                 raise BuildError(f"[pose.{name}.hands.{side}] places that hand and [[move.{name}]] moves it")
             hand["keys"] = [dict(k, at={"cast": name, "point": k["at"]}) for k in keys]
             hand.setdefault("ride", f"cast:{name}.{chest}")
+            if side in res["ik"]:
+                hand["ik"] = res["ik"][side]
         perf = ctx.data.setdefault("perform", {}).setdefault(name, {})
         for key in MV.BODY:
             if res[key]:
@@ -157,6 +160,7 @@ def apply(ctx):
             if res[key]:
                 perf[key] = list(perf.get(key) or []) + res[key]
         out[name] = {"moves": len(entries), "hand_keys": {s: len(k) for s, k in res["hands"].items() if k},
+                     "free": {s: len(k) // 4 for s, k in res["ik"].items()},
                      "expressions": len(res["expressions"]), "twitches": len(res["twitch"]), "places": res["places"]}
         ctx.log("moves", name, json.dumps({k: v for k, v in out[name].items() if k != "places"}))
     return out

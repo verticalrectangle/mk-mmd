@@ -457,6 +457,23 @@ def _rest_point(p, u, h):
     return p.world(u["a"]).lerp(p.world(u["b"]), float(h.get("along", 0.5)))      # an edge: a point along it
 
 
+def _ik_shares(ctx, name, side, ik, f0, f1):
+    """(frames, shares) of a hand's arm IK: none at the pre-roll's start, all of it from the settle's end (f1) on, or as
+    much as the hand's `ik` keys say ([[t, share], ...]: clip seconds and shares 0..1, eased between keys and held
+    outside them; the share at the settle's end is the one the settle reaches)."""
+    if ik is None:
+        return [f0, f1], [0.0, 1.0]
+    where = f"pose.{name}.hands.{side}.ik"
+    if not isinstance(ik, list) or not ik or not all(isinstance(k, (list, tuple)) and len(k) == 2 for k in ik):
+        raise BuildError(f"{where}: expected [[t, share], ...] (clip seconds, shares 0..1)")
+    ts, vs = [float(k[0]) for k in ik], [float(k[1]) for k in ik]
+    if any(not 0.0 <= v <= 1.0 for v in vs) or any(b < a for a, b in zip(ts, ts[1:])):
+        raise BuildError(f"{where}: shares are 0..1 and the keys in time order")
+    frames = [ctx.frame(t) for t in ts]
+    later = [(f, v) for f, v in zip(frames, vs) if f > f1]
+    return [f0, f1] + [f for f, _ in later], [0.0, float(np.interp(f1, frames, vs))] + [v for _, v in later]
+
+
 def _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1):
     """[(frame, IK goal matrix)] of a hand without a grip: lying on an edge or plane, at a point, or moving keys."""
     mats = []
@@ -980,12 +997,17 @@ def run(ctx):
                 rots.append(tuple(Ml.to_quaternion()))
             K.key_vec(tgt, "location", frames, locs, interp=interp)
             K.key_vec(tgt, "rotation_quaternion", frames, K.continuous(rots), interp=interp)
-            for bone, cname in cons:                       # the rig takes over from the rest pose over the settle
-                c = arm.pose.bones[bone].constraints[cname]
+            ik_fr, ik_share = _ik_shares(ctx, name, side, h.get("ik"), f0, f1)
+            for bone, cname in cons:                       # the rig takes over from the rest pose over the settle, as
+                c = arm.pose.bones[bone].constraints[cname]  # much of it as the hand's `ik` keys give from then on
                 full = c.influence
-                K.key_prop(arm, f'pose.bones["{bone}"].constraints["{cname}"].influence', [f0, f1], [0.0, full])
+                K.key_prop(arm, f'pose.bones["{bone}"].constraints["{cname}"].influence', ik_fr,
+                           [full * s for s in ik_share])
                 c.influence = full
-            K.key_bone_quats(arm, fore, [f0, f1], [(1, 0, 0, 0), tuple(bend)], interp="BEZIER")
+            K.key_bone_quats(arm, fore, ik_fr, [tuple(Quaternion().slerp(bend, s)) for s in ik_share], interp="BEZIER")
+            if h.get("ik") is not None:                    # a hand let go follows the member's strips (a walk's arm
+                arm.animation_data.action_blend_type = "COMBINE"   # swing), which compose with its own keys (the
+                info.setdefault("ik", {})[side] = len(h["ik"])     # pre-bend goes with the IK)
             fp = h.get("fingers")
             if grip:
                 seq, prev = [(f1, grip["bones"])], grip["bones"]

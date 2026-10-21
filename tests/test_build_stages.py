@@ -4,6 +4,7 @@ KeyError / AttributeError, and the behaviours that were wrong (a car's pitch, `f
 per-output tables). The cast is a mannequin made by `mk model build` (about a second). Skipped without Blender."""
 import json
 import os
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -705,6 +706,47 @@ def test_a_move_holds_its_place_to_its_end_then_the_hand_goes_home_and_a_posed_h
     assert np.linalg.norm(after - before) < 0.01                                         # then went home
     code, out = make(MOVES.format(extra="\n[pose.mq.hands.L]\nat = [0.3, -0.2, 1.0]\n"), until="pose")
     assert code == 3 and "[pose.mq.hands.L] places that hand and [[move.mq]] moves it" in out["error"]
+
+
+FREE = """[pose.mq]
+feet = "floor"
+
+[[motion.mq]]
+vmd = "{vmd}"
+bones = "arms"
+{moves}"""
+
+
+def _vmd(path, keys):
+    """Write a VMD of bone keys {PMX bone name: [(frame, quaternion x y z w in MMD's axes)]}, linear between them."""
+    interp = bytes([20] * 8 + [107] * 8) * 4
+    recs = [(n, f, q) for n, ks in keys.items() for f, q in ks]
+    out = b"Vocaloid Motion Data 0002".ljust(30, b"\0") + b"mq".ljust(20, b"\0") + struct.pack("<I", len(recs))
+    for n, f, q in recs:
+        out += n.encode("shift_jis").ljust(15, b"\0") + struct.pack("<I7f", f, 0.0, 0.0, 0.0, *q) + interp
+    path.write_bytes(out + struct.pack("<4I", 0, 0, 0, 0))
+
+
+def test_a_hand_let_go_follows_the_arm_strip_and_the_ik_holds_it_before_and_after(make, capsys):
+    """A `free` move eases the arm IK off over its span, so a VMD strip of the arms (a walk's swing) drives the arm there,
+    the pose stage's own forearm key composing with the strip; before and after it the IK holds the hand at its rest
+    place though the strip goes on (it holds its pose over the whole clip)."""
+    vmd = make.root / "arm.vmd"
+    up, fold = (0.0, 0.0, 0.4226, 0.9063), (0.0, 0.6428, 0.0, 0.766)          # the arm raised 50 deg, the elbow bent 80
+    _vmd(vmd, {"左腕": [(0, up), (60, up)], "左ひじ": [(0, fold), (60, fold)]})
+    moves = ('\n[[move.mq]]\nname = "rest"\nhand = "L"\nplace = "rest"\n'
+             '\n[[move.mq]]\nname = "free"\nt = 0.5\ndur = 1.0\nhand = "L"\n')
+    wrist = {}
+    for run, extra in (("strip", ""), ("free", moves)):
+        code, out = make(FREE.format(vmd=vmd, moves=extra), until="motion")
+        assert code == 0, out.get("error")
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "40,61,85",
+                       "--project", str(make.root)], capsys)                    # t 0.3 (held), 1.0 (let go), 1.8 (held)
+        wrist[run] = [np.array(v) for v in q["values"]]
+    before, free, after = wrist["free"]
+    assert np.linalg.norm(free - wrist["strip"][1]) < 2e-3                     # let go: the strip's arm, elbow and all
+    assert np.linalg.norm(after - before) < 5e-3                               # held at the rest place on both sides ...
+    assert np.linalg.norm(before - wrist["strip"][0]) > 0.1                    # ... though the strip is raising the arm
 
 
 MIC_LEAN = """[pose.mq]

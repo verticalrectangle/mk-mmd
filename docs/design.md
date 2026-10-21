@@ -994,6 +994,7 @@ in over the settle.
 | `lift` | `rest`: metres above the surface along its normal (default 0.03; 0 for a `grip = "rest"`) |
 | `keys` | `[{t, at, dir, palm, fingers}]`: moving targets, `t` in clip seconds, Bezier between the keys; `dir` and `palm` default to the hand's own; a key's `fingers` (as the hand's `fingers`) are reached at its time and eased between the keys that have them, from the hand's own at the end of the settle. With `at` that pose holds until the first key; without it the first key's target is the hand's from the start. A neck grip's keys are `{t, fret, chord, move}` instead |
 | `ride` | the goal follows something. `"<object>"` (a steering wheel, `"car_wheel"`): the goal is parented to it. `"cast:<name>.<bone>"` (this character's own name; the chest is `cast:rin.upper_body2`): goal and pole are bone-parented to that bone, their keys computed from the world goal with the bone as it stands in the settled pose, so clasped hands follow every `lean`, `turn`, `tilt` and sway and never part; a bone of an arm is refused. Targets and `keys` are read as world points of the first frame (object) or of the settled pose (bone). A hand on a guitar's `neck` or `strum` point rides the prop's root by default |
+| `ik` | `[[t, share], ...]`: clip seconds and shares 0..1 of the arm IK (with the hand's copied rotation and the forearm's pre-bend) after the settle, eased between the keys and held outside them (default all of it); where it is under 1 the arm follows its [motion](#motion) strips. The moves stage writes it for a hand a `free` move lets go ([Moves](#moves)) |
 | `fingers` | a finger preset (`flat`, `relaxed`, `curled`, `fist`, `point`) or a table `{index = [a, b, c], middle, ring, little, thumb, spread}` of curls in degrees per joint (a finger left out stays straight) and `spread`, degrees the fingers fan apart in the plane of the palm (the index by `spread`, the ring 0.6 and the little finger 1.2 times as far, the thumb 0.8 times away from the index; negative closes them; or `{finger: deg}`) for this hand (replaced by a grip's solved rotations) |
 | `grip` | the hand holds something: `"prop:use"` (a `use.grip` point of a prop; `"prop"` alone when it has one) or `"rest"` (with `rest`). A solver finds the finger rotations and the hand's frame on the prop ([Grips](#grips)); the wrist goal and the fingers are keyed from it, replacing `at`, `rest` and `fingers`. Not combinable with `keys`, except the `keys` of a `neck` grip |
 
@@ -1169,6 +1170,7 @@ leaves it at the mic and plays with the other hand only, except `hands_up` and `
 | `over_shoulder` | a pose: a look back over the shoulder of the move's `hand` side, the upper body turned 25 degrees and the head 45 more that way; `calm`, a small smile. Shoot it from behind her |
 | `hand_hip` | a pose: the hand on the hip, the elbow out, the head tilted toward it and the body leaning a little away; `smile_eyes`, `mouth_smile` |
 | `finger_gun` | a pose: the arm out ahead at the height of the eyes, the hand a finger gun (index out, the thumb up, the rest curled), leaning in 6 degrees, the head tilted toward it, winking the other eye; `mouth_smile`. Read from a three-quarter view: straight on, the hand stands in front of her face |
+| `free` | lets the hand go for the span to whatever else drives the arm (a walk VMD's swing; below) |
 | `face` | only its `morph` |
 
 The four poses (`hair_flip`, `over_shoulder`, `hand_hip`, `finger_gun`) are written for the left hand and mirrored for the right:
@@ -1185,18 +1187,24 @@ natural:
   A place with something in the fist (a mic, a hammer) aims it instead: its hand continues the forearm as far as a fist round
   a handle pointing that way allows (the mic at the mouth: the forearm rises to a fist under the lips).
 - **The skin.** The build measures the distance to every face of the member's meshes in the rest pose that belongs to neither
-  arm: its body and clothes, but not the hair, ear, tail and ribbon chains its `[sim.<cast>]` table simulates (those make way
-  for a hand, colliding with its fingers and palm, so long hair at her sides does not push a hanging hand out from the body).
-  A skirt is clothes, simulated or not: a hand stays outside it, since one inside would shove it up. The hand (a box the size
-  of the model's hand and of its finger shape) comes in from outside and stops where it first comes within its margin: an
-  arm held out swings in round the shoulder (so it stays in reach; a hanging hand ends against a wide skirt), a hand by the
-  body comes in straight. `chest_pat` and `ears` end on the surface (3 mm), every other place stays where it was written
-  unless that is closer than 12 mm to the body or inside it. Coming from outside, a hand never ends inside clothes or hair
-  that does not move.
+  arm: its body and clothes, but not the hair, ear, tail, skirt and ribbon chains its `[sim.<cast>]` table simulates (those
+  make way for a hand, colliding with its fingers and palm, so long hair or a skirt at her sides does not push a hanging hand
+  out from the body). The hand (a box the size of the model's hand and of its finger shape) comes in from outside and stops
+  where it first comes within its margin: an arm held out swings in round the shoulder (so it stays in reach; a hanging hand
+  ends against a wide skirt the sim does not move), a hand by the body comes in straight. `chest_pat` and `ears` end on the
+  surface (3 mm), every other place stays where it was written unless that is closer than 12 mm to the body or inside it.
+  Coming from outside, a hand never ends inside clothes or hair that does not move.
+
+A `free` move lets its hand go for the span: the arm IK (with the hand's copied rotation and the forearm's pre-bend) eases off
+over 0.25 s and back on, and in between the arm follows whatever else drives it, a [motion](#motion) strip of the arms (a
+walk's swing, below); the hand's goal waits at its rest place meanwhile, so the hand comes back from there. The moves stage
+writes the hand's `ik` keys ([Posing](#posing)), and a member with a hand let go has its own keys composed with its strips
+(its action blends with Combine, so the pose stage's forearm key adds to the strip's elbow instead of replacing it). A hand
+that rests at the mic is never let go.
 
 Faces of the same morph closer than 0.12 s are held through. The pose report has `moves` per member (`moves`, `hand_keys` per
-side, `expressions`, `twitches`, and `places`: per side and place, `moved_mm`, how far the approach kept the hand out, and
-`wrist_deg`, the wrist's bend).
+side, `free` spans per side, `expressions`, `twitches`, and `places`: per side and place, `moved_mm`, how far the approach
+kept the hand out, and `wrist_deg`, the wrist's bend).
 
 ```toml
 [[move.len]]
@@ -1226,9 +1234,15 @@ to some bones (`[motion.<cast>]` with a single table works too). Each entry make
 | `scale` | time scale of the strip: 2 plays at half speed (default 1) |
 | `retime` | `"beats"`: the motion's own beat (`core.vmd.tempo_phase`, a comb filter over 70-180 bpm of the bone motion) is scaled to the song's beat period and the first motion beat at or after `from` lands on the song beat nearest to where it would fall with `from` at `start`. Needs `timeline`; replaces `scale` |
 | `timeline` | with `retime`: the timeline JSON whose `beats` are used (default `audio/timeline.json`; a missing file stops the build naming `motion.<cast>[i]`) |
-| `bones` | which bones the motion drives: `"all"` (default), `"upper"` (spine, neck, head, eyes, shoulders, arms with their twist bones, wrists, fingers), `"lower"` (center, groove, waist, lower body, legs, knees, ankles, toes and the leg and toe IK bones) or a list of semantic or Blender names. Hair, skirt and the root bone belong to neither group |
+| `bones` | which bones the motion drives: `"all"` (default), `"upper"` (spine, neck, head, eyes, shoulders, arms with their twist bones, wrists, fingers), `"lower"` (center, groove, waist, lower body, legs, knees, ankles, toes and the leg and toe IK bones), `"arms"` (shoulders, arms, elbows, wrists and their twist bones, not the fingers) or a list of these groups and semantic or Blender names. Hair, skirt and the root bone belong to no group |
 | `morphs` | also play the VMD's facial keys (default true) |
 | `blend_in`, `blend_out` | seconds the strip's influence ramps in and out (default 0) |
+| `extend` | `"hold"` (default): the strip's first and last poses stay before and after it; `"none"`: it acts on its own frames only |
+
+A walk VMD gives a walking character natural arms where mk's own walk (`[perform.<cast>] walk`, its `arms` an IK swing) reads
+stiff: let both hands go with `free` moves over each run of steps, and play the walk's `bones = ["arms", "upper_body",
+"upper_body2"]` there with `extend = "none"`, its cycle scaled to two of the character's steps and its left heel strike on
+her own left steps (a VMD walk in place keeps the legs, the feet and the travel mk's).
 
 ```toml
 [[motion.rin]]

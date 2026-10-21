@@ -386,6 +386,29 @@ def test_a_hand_on_the_hip_comes_in_from_the_side_and_rests_on_the_body():
     assert pt[0] > 0.1 and pt[2] < MARKS["chest"][2]                         # on her own side, below the chest
 
 
+# ---------------------------------------------------------------- letting a hand go
+def test_a_free_hand_lets_its_ik_go_over_the_span_and_eases_it_back_in_time_for_the_next_move():
+    """While a free move lets the hand go (a walk strip swings the arm) its IK share eases from all to none and back over
+    FREE_EASE, and the goal waits at the rest place, so the hand comes back from there to its next move."""
+    es = [{"name": "free", "t": 1.0, "dur": 2.0, "hand": "L"}, {"name": "point", "t": 4.0, "dur": 0.5, "hand": "L"}]
+    out = MV.compile(es, MARKS)
+    E = MV.FREE_EASE
+    assert out["ik"] == {"L": [[1.0, 1.0], [1.0 + E, 0.0], [3.0 - E, 0.0], [3.0, 1.0]]}       # the right hand is not let go
+    home = MV.resolve("rest", "L", MARKS)[0]
+    during = [k for k in out["hands"]["L"] if 1.0 <= k["t"] <= 3.0]
+    assert during and all(k["at"] == near(home) for k in during)                                # the goal waits at rest
+    assert next(k for k in out["hands"]["L"] if k["t"] == 4.0)["at"] == near(MV.resolve("point", "L", MARKS)[0])
+
+
+def test_free_spans_that_touch_are_one_and_a_short_one_eases_over_half_its_length():
+    assert MV.ik_keys([(2.0, 3.0), (1.0, 2.0)]) == [[1.0, 1.0], [1.25, 0.0], [2.75, 0.0], [3.0, 1.0]]
+    assert MV.ik_keys([(1.0, 1.3)]) == [[1.0, 1.0], [1.15, 0.0], [1.15, 0.0], [1.3, 1.0]]
+    with pytest.raises(MV.MoveError, match="holds the mic"):
+        MV.compile([{"name": "rest", "hand": "R", "place": "mic"}, {"name": "free", "t": 1.0, "hand": "R"}], MARKS)
+    with pytest.raises(MV.MoveError, match="two moves at once"):
+        MV.compile([{"name": "free", "t": 1.0, "dur": 2.0, "hand": "L"}, {"name": "point", "t": 2.0, "hand": "L"}], MARKS)
+
+
 @pytest.mark.parametrize("entries, marks, frag", [
     ([{"name": "moonwalk", "t": 1.0}], MARKS, "no such move"),
     ([{"name": "point", "t": 1.0, "speed": 2}], MARKS, "expected {name, t"),

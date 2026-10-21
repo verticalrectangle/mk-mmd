@@ -7,10 +7,15 @@
   scale = 1.0          time scale; or retime = "beats" with timeline = "audio/timeline.json" (the default): the motion's own beat
                        (core.vmd.tempo_phase) is scaled to the song's beat period and its phase snapped to the nearest
                        song beat after `start`
-  bones = "all" | "upper" | "lower" | [semantic or Blender names]   which bones the motion drives
+  bones = "all" | "upper" | "lower" | "arms" | [groups, semantic or Blender names]   which bones the motion drives
+                       ("arms": shoulders, arms, elbows, wrists and their twist bones, not the fingers)
   morphs = true        also play the VMD's facial keys
   blend_in, blend_out  seconds; influence ramps on the strip
-Strips play in a track under the active action (pose / perform keys win where both key a bone)."""
+  extend = "hold"      "hold": the strip's first and last poses stay before and after it; "none": it acts on its own
+                       frames only
+Strips play in a track under the active action: pose / perform keys win where both key a bone, except on a member with a
+hand a `free` move lets go, whose own keys compose with its strips (the action's blend type is Combine: a walk strip's
+arm swing under the pose stage's forearm pre-bend, which goes with the IK)."""
 import json
 import os
 
@@ -27,6 +32,9 @@ UPPER = {"upper_body", "upper_body2", "upper_body3", "neck", "head", "eyes", "ey
          "little"}
 LOWER = {"center", "groove", "waist", "lower_body", "leg", "knee", "ankle", "toe", "leg_ik", "toe_ik",
          "leg_ik_parent", "leg_d", "knee_d", "ankle_d", "toe_ex", "waist_cancel"}
+ARMS = {"shoulder_p", "shoulder", "shoulder_c", "arm", "arm_twist", "elbow", "wrist_twist", "wrist"}   # not the fingers
+GROUPS = {"upper": UPPER, "lower": LOWER, "arms": ARMS}
+EXTEND = {"hold": "HOLD", "none": "NOTHING"}
 
 
 def _vmd_path(ctx, ref):
@@ -85,17 +93,17 @@ def _group(sem):
 
 
 def mask_action(act, arm, which):
-    """A copy of `act` keeping only the fcurves of the chosen bones."""
+    """A copy of `act` keeping only the fcurves of the chosen bones: "all", a group (GROUPS: "upper", "lower", "arms")
+    or a list of groups and bone names (semantic, Blender or PMX)."""
     if which == "all":
         return act
     inv = {b: _group(sem) for sem, b in S.semantic_map(arm).items()}
-    if isinstance(which, str):
-        groups = UPPER if which == "upper" else LOWER if which == "lower" else None
-        if groups is None:
-            raise BuildError(f"bones = {which!r}: all, upper, lower or a list")
-        keep = {b for b, stem in inv.items() if stem in groups}
-    else:
-        keep = {S.resolve_bone(arm, n) for n in which}
+    names = [which] if isinstance(which, str) else list(which)
+    if isinstance(which, str) and which not in GROUPS:
+        raise BuildError(f"bones = {which!r}: all, {', '.join(GROUPS)} or a list")
+    keep = set()
+    for n in names:
+        keep |= {b for b, stem in inv.items() if stem in GROUPS[n]} if n in GROUPS else {S.resolve_bone(arm, n)}
     new = act.copy()
     new.name = f"{act.name}_{which if isinstance(which, str) else 'sel'}"
     for fc in list(new.fcurves):
@@ -106,7 +114,7 @@ def mask_action(act, arm, which):
 
 
 def nla_strip(id_data, action, start, scale=1.0, src_start=None, src_end=None, track="motion", blend_in=0.0,
-              blend_out=0.0):
+              blend_out=0.0, extend="hold"):
     ad = id_data.animation_data or id_data.animation_data_create()
     tr = ad.nla_tracks.get(track) or ad.nla_tracks.new()
     tr.name = track
@@ -119,7 +127,7 @@ def nla_strip(id_data, action, start, scale=1.0, src_start=None, src_end=None, t
     s.frame_start_ui = start                   # exact (fractional) start, duration kept
     s.blend_in, s.blend_out = blend_in, blend_out
     s.blend_type = "REPLACE"
-    s.extrapolation = "HOLD"
+    s.extrapolation = EXTEND[extend]           # "hold": its first and last poses before and after it; "none": nothing
     s.use_auto_blend = False
     return s
 
@@ -168,14 +176,18 @@ def run(ctx):
                 scale = float(it.get("scale", 1.0))
                 start = ctx.frame(float(it.get("start", 0.0)))
             act_m = mask_action(act, m.arm, it.get("bones", "all"))
+            extend = it.get("extend", "hold")
+            if extend not in EXTEND:
+                raise BuildError(f"motion.{name}[{i}] extend = {extend!r}: {' or '.join(EXTEND)}")
             bi, bo = float(it.get("blend_in", 0.0)) * ctx.fps, float(it.get("blend_out", 0.0)) * ctx.fps
             s = nla_strip(m.arm, act_m, start, scale, src_from, src_to, track=f"motion{i}", blend_in=bi,
-                          blend_out=bo)
+                          blend_out=bo, extend=extend)
             info["strip"] = [round(s.frame_start, 2), round(s.frame_end, 2)]
             if mact is not None and it.get("morphs", True):
                 for mm in S.morph_holders(m.arm):
                     if mm.data.shape_keys:
-                        nla_strip(mm.data.shape_keys, mact, start, scale, src_from, src_to, track=f"morph{i}")
+                        nla_strip(mm.data.shape_keys, mact, start, scale, src_from, src_to, track=f"morph{i}",
+                                  extend=extend)
                 info["morphs"] = True
             out.setdefault(name, []).append(info)
             ctx.log("motion", name, json.dumps(info, ensure_ascii=False))

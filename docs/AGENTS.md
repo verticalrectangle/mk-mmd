@@ -115,8 +115,10 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   A character that turns round uses `step_turn` (the head, chest and hips in turn, the feet stepping), not a `[[key]]` on its root's
   rotation: that spins it like a figure on a turntable. A character in the air (a jump, a blast; its height keyed on the root) gets
   `air`, so its legs tuck and reach down to land instead of hanging straight, and a `crouch` before it to brace.
-  A strut is `walk = {steps, cross = 1, sway = 0.035, arms = 0.1}` (the feet on one line, the hips over the foot that is down); give both
-  hands a `rest` move so the arms swing. A zero-g moment is `[sim.<cast>] gravity` eased out over a beat or two (`[[t, 1], [t + 0.4,
+  A strut is `walk = {steps, cross = 1, sway = 0.035}` (the feet on one line, the hips over the foot that is down). For arms that
+  swing like a person's, not a robot's, let both hands go with `free` moves over each run of steps and play a walk VMD's arms there
+  (`[[motion.<cast>]] bones = ["arms", "upper_body", "upper_body2"], extend = "none"`, its cycle scaled to two steps and its left heel
+  strike on her left steps; [Motion](design.md#motion)); `walk.arms` (an IK swing) reads stiff. A zero-g moment is `[sim.<cast>] gravity` eased out over a beat or two (`[[t, 1], [t + 0.4,
   0]]`), not cut to 0 on one frame: a sudden cut flings the hair.
   Group and material morphs (vowels with a tongue bone, a blush) are keyed like any other: the cast stage binds the model's morph sliders
   (`bound_morphs` in its report).
@@ -128,7 +130,7 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   The poses `hair_flip`, `over_shoulder`, `hand_hip` and `finger_gun` hold a body and head attitude too (mirrored for the right hand): put
   one on a dead stop of the music, between two walks, and shoot it from the side it reads from. A `hair_flip`'s hand runs
   through the hair: with long simulated hair watch it in motion before keeping it (a lock can fly out like a whip). The hands
-  come in from outside and stop at the body and clothes (simulated hair makes way; a skirt does not, so hands stay outside it),
+  come in from outside and stop at the body and clothes (simulated hair and a simulated skirt make way),
   and wrists stay within 60 degrees of the forearm: the pose report's
   `moves.places` says how far each place was kept out and how much its wrist bends. A hand travels between places at a human pace
   and the build refuses a move it cannot reach in time (it says how long the trip takes): a few gestures, each held, read better
