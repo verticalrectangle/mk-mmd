@@ -9,6 +9,15 @@
 
 ## Doing
 
+- [ ] Vertical Rectangle's cover: Reisen as This Is Happening #video #you
+    Miy's Reisen in James Murphy's jump from LCD Soundsystem's This Is Happening: a square still, black and white, VERTICAL RECTANGLE / MK-MMD in the cover's cyan type (~/Videos/mkmmd_cover; Miy's terms cleared by you). New in mk: a `sweep` set (a studio's seamless paper), `[[cast]] materials` (her tie black), `[pose] lift` (her feet off the ground), `[[cloth.<cast>.make]]` (a cloth copy made from a model's own faces), stills and `[post] screen = "over"`, a collider capsule given by its points, and `[post] keep` (her red eyes the one colour).
+    - [x] the cover: her jump and pose from the upright photo, two lights, the camera rolled like the cover; your framing and the closer copy, her loafers and black tie, her hand turned and her arm along your line
+    - [x] her blazer as cloth, open a little as you asked; then her regular outfit, your call when the cloth collided
+    - [x] the hair off the blazer (your question): two capsules over her chest, where her PMX has no body, riding 上半身2; the lock that cut into the lapel by the pocket lies on it now
+    - [x] her eyes in colour, the rest black and white: `[post] keep = { cast = "reisen", materials = ["瞳"], saturation = 1.5 }`; the hair over an eye keeps it from colour as it hides it
+    - [x] tests that fail on their bugs (21 planted bugs, each caught); docs (design.md: Colliders, Sets, Cast, Posing, Cloth, Post); full suite 2964 passed; Model A unchanged; commit f793979, pushed
+    - [ ] your look at the finals: out/mkmmd_cover_1x1.png and out/mkmmd_cover_close.png
+
 - [ ] Briefs: a song, its lyrics and what you want, line by line #site #you
     A new video starts from a brief. `mk brief new DIR --song FILE` makes the project and opens its Brief tab, the first tab of the project's page: choose the part of the song, paste its lyrics, time the words, then write what you want per line or group of lines (with pictures, and whether a part comes back the same or bigger) and for the video as a whole. Send gets it to the agent, who answers in Reviews with a treatment: your wishes, the shots, extras tagged as the agent's ideas, deeper questions with the agent's picks already chosen.
     - [x] the brief (mkmmd/brief.py), `mk brief new` and `show`, the site's routes
