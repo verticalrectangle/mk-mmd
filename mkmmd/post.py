@@ -7,6 +7,9 @@ display space (0..1, sRGB as rendered through the view transform).
                                       the picture, laid on before the screen type (Streaks)
   contrast = 1.10, pivot = 0.60       midtone contrast around a pivot
   saturation = 1.06
+  keep = {cast = "<name>", materials = ["瞳"], saturation = 1.0}   those materials of a cast member keep their colour
+                                      (their own saturation) where they are seen: a black-and-white picture with her eyes
+                                      in colour (mkmmd.core.keep; the mask `keep/<frame>.png` mk render draws)
   split = {shadows = "iris", highlights = "gold", amount = 0.06}   split toning toward palette slots
   floor = "base", toe = 0.12          the darkest colour allowed: luminance below floor + toe is lifted smoothly into
                                       that band and tinted toward the floor colour, so nothing in the frame is black
@@ -96,6 +99,7 @@ class Grade:
         fl = self.spec.get("floor", "base")
         self.floor = np.array(srgb(resolve(fl, palette)), np.float32) if fl else None
         self.toe = float(self.spec.get("toe", 0.12))
+        self.keep_sat = float((self.spec.get("keep") or {}).get("saturation", 1.0))
         sp = self.spec.get("split")
         self.split = None
         if sp:
@@ -109,7 +113,9 @@ class Grade:
                         float(hl.get("threshold", 0.72)),
                         np.array(srgb(resolve(hl.get("tint", "rose"), palette)), np.float32))
 
-    def __call__(self, img, i=0):
+    def __call__(self, img, i=0, keep=None):
+        """The graded frame `img` (float RGB, display space), `i` its index (the grain cycles); `keep` (h, w) in 0..1, the
+        mask of `[post] keep`, gives its share of the picture the kept saturation instead of the grade's."""
         s = self.spec
         img = img.astype(np.float32)
         if self.hal:
@@ -122,7 +128,10 @@ class Grade:
             gl = (glow @ Y_W)[..., None] * tint * 0.6 + glow * 0.4
             img = 1 - (1 - img) * (1 - strength * gl)            # screen
         y0 = (img @ Y_W)[..., None]
-        img = y0 + (img - y0) * float(s.get("saturation", 1.06))
+        sat = float(s.get("saturation", 1.06))
+        if keep is not None:
+            sat = (sat + (self.keep_sat - sat) * np.clip(keep, 0.0, 1.0))[..., None]
+        img = y0 + (img - y0) * sat
         pv = float(s.get("pivot", 0.60))
         img = pv + (img - pv) * float(s.get("contrast", 1.10))
         if self.split:

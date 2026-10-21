@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .. import bridge
+from ..core import cast as CN
+from ..core import keep as KP
 from ..core import transition as TR
 from .common import RUNTIME, add_project_arg, cut_plan, emit, get_project, parse_frames, UsageError
 
@@ -114,6 +116,13 @@ def run(args):
         cfg["engine"] = None                               # Blender's frames: the scene's own engine
     plan = None if args.no_styles or args.no_transitions else cut_plan(proj)
     demands = TR.demands(plan, frames) if TR.has_effects(plan) else {}
+    try:
+        keep = KP.spec(proj.data.get("post"), proj.cast)
+    except ValueError as e:
+        raise UsageError(str(e)) from None
+    if keep:                                               # the mask of where those materials are seen: keep/<frame>.png
+        keep = {"armature": CN.armature_name(next(c for c in proj.cast if c.get("name") == keep["cast"])),
+                "materials": keep["materials"]}
     need_mb = 0.0
     for o in outs:
         d = frames_dir(proj, args.preset, o.name)
@@ -160,7 +169,8 @@ def run(args):
         d = frames_dir(proj, args.preset, o.name)
         mine = set(mk_frames[o.name])
         left = [f for f in frames if f not in mine and f"{f:05d}" not in on_disk(d)]
-        if mk and not left and not demands and not (doc.get("screen", 0) > 0 and mine):
+        no_keep = keep is not None and any(not (d / KP.rel(f)).exists() for f in frames)
+        if mk and not left and not demands and not no_keep and not (doc.get("screen", 0) > 0 and mine):
             return []
         n, mk_list = max(1, args.jobs), sorted(mine)
         with ThreadPoolExecutor(max_workers=n) as ex:
@@ -168,7 +178,7 @@ def run(args):
             for k in range(n):
                 job = {"frames": frames, "out": str(d), "size": list(o.size), "aspect": o.name,
                        "styles": not args.no_styles, "demands": {str(f): items for f, items in demands.items()},
-                       "mk": mk_list, "mk_layers": mk_list[k::n], **cfg}
+                       "mk": mk_list, "mk_layers": mk_list[k::n], "keep": keep, **cfg}
                 futs.append(ex.submit(bridge.run, "render_frames", job, proj.blend, proj, 3600 * 12, False))
                 if k < n - 1:
                     time.sleep(8)                          # stagger loading
@@ -194,6 +204,8 @@ def run(args):
             report[o.name]["engines"] = {"mk": len(mk_frames[o.name]), "blender": len(frames) - len(mk_frames[o.name])}
             report[o.name]["shots"] = drawn["shots"][o.name]
             report[o.name]["screen_layers"] = sum(r.get("screen_layers", 0) for r in res)
+        if keep:
+            report[o.name]["keep_layers"] = sum(r.get("keep_layers", 0) for r in res)
         if demands:
             report[o.name]["layers"] = {"drawn": sum(r.get("layers", 0) for r in res),
                                         "pending": len(TR.pending_items(d, demands))}

@@ -4,11 +4,13 @@
   sit = "prop:seat" | {hip, facing, floor_z, pelvis_deg, back_deg}   place the hips on a seat (root follows
         the prop); without sit the model stands where the cast stage put it
   sit_offset = [x, y, z]      slides the hip point on the seat (metres, in the seat prop's frame): sit further forward
-  feet = "seat" | "floor" | "prop:feet" | {L = [x, y, z|nan], R = [...]}      ankle targets (leg IK); z omitted / nan =
-        the model's own ankle height above the floor; a foot may also be a target reference (`{cast = "name", point =
-        [x, y, 0]}`: only x and y count), so a standing pose written in the character's own frame moves with it.
+  feet = "seat" | "floor" | "prop:feet" | {L = [x, y], R = [...]}      ankle targets (leg IK) at the model's own ankle
+        height; a foot may also be a target reference (`{cast = "name", point = [x, y, 0]}`: only x and y count), so a
+        standing pose written in the character's own frame moves with it.
         Seated, "seat" (the default) is the seat prop's own feet and "floor" puts the feet in front of the knees;
         standing, "floor" keeps the feet on the floor under the hips (what no `feet` does too) and "seat" is an error
+  lift = {L = m, R = m}       each ankle goal that far above its rest height, eased in like the feet (with or without
+        `feet`): a foot kicked up, both off the ground with `hips.shift` raised as far (a jump caught at its top)
   lean, turn (deg)            upper body forward lean / turn toward the model's left, on top of the seat's back angle
   lean_share, turn_share = 0.6   the share of each that `upper_body` takes (`upper_body2` takes the rest)
   hips = {shift = [x, y, z], roll = deg, yaw = deg}   the pelvis of a standing or seated body, eased in over the settle: `shift`
@@ -850,8 +852,13 @@ def run(ctx):
             raise BuildError(f"pose.{name}.feet = \"seat\" is the feet of the seat the character sits on, and there is no `sit`: "
                              f"write feet = \"floor\" (standing: the feet stay on the floor under the hips), \"prop:feet\" or "
                              f"{{L = [x, y], R = [x, y]}}")
-        if feet:
-            if feet == "seat" or feet == "floor":
+        lift = spec.get("lift") or {}
+        if not isinstance(lift, dict) or set(lift) - {"L", "R"}:
+            raise BuildError(f"pose.{name}.lift = {lift!r}: {{L = m, R = m}}, how far above its rest height each ankle goes")
+        if feet or lift:
+            if not feet:
+                pts = {"L": None, "R": None}
+            elif feet == "seat" or feet == "floor":
                 fd = None
                 if seat and seat["prop"] is not None and feet == "seat":
                     for key in (seat["use"].get("name"), None):     # the seat's own feet, else the only feet
@@ -876,17 +883,17 @@ def run(ctx):
                 ik = smap.get(f"leg_ik.{s}")
                 if not ik:
                     continue
-                if pts[s] is None and seat is None:    # standing on `floor`: the foot stays where the model stands, under the hips
+                rise = float(lift.get(s, 0.0))
+                if pts[s] is None and seat is None and not rise:  # standing on `floor`: the foot stays under the hips
                     continue
                 rest = _world_head(arm, ik)
-                if pts[s] is None:                     # in front of the knee, legs as relaxed as the seat allows
+                if pts[s] is None and seat is not None:          # in front of the knee, legs as relaxed as the seat allows
                     knee_fwd = seat["hip"] - back * (rest - _world_head(arm, smap[f"leg.{s}"])).length * 0.55
                     side_off = lat * (0.1 if s == "L" else -0.1)
                     tgt = Vector((knee_fwd.x + side_off.x, knee_fwd.y + side_off.y, 0.0))
                 else:
-                    tgt = pts[s]
-                z_rest = rest.z
-                goal = Vector((tgt.x, tgt.y, z_rest))
+                    tgt = pts[s] if pts[s] is not None else rest
+                goal = Vector((tgt.x, tgt.y, rest.z + rise))        # the model's own ankle height, `lift` above it
                 K.key_bone_locs(arm, ik, [f0, f1], [(0, 0, 0), tuple(goal - rest)])
                 m.base["feet"][s] = goal - rest
         for s, deg in (spec.get("toes") or {}).items():          # foot yaw about the vertical through the ankle (L and R)

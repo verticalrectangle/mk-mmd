@@ -19,7 +19,7 @@ HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers")
 HAND["wobble"] = ("deg", "tau", "seed")
 
 POSE = {
-    "sit": ("hip", "facing", "floor_z", "pelvis_deg", "back_deg"), "sit_offset": None, "feet": SIDES,
+    "sit": ("hip", "facing", "floor_z", "pelvis_deg", "back_deg"), "sit_offset": None, "feet": SIDES, "lift": SIDES,
     "hips": ("shift", "roll", "yaw"), "toes": SIDES, "lean": None, "turn": None, "lean_share": None, "turn_share": None,
     "head": ("pitch", "yaw", "roll", "neck"), "hands": {s: HAND for s in SIDES}, "fingers": SIDES,
     "drape": ("chain", "dirs", "scale"),
@@ -51,6 +51,8 @@ FOLDS = {"enabled": None, "depth": None}
 
 CLOTH = {k: None for k in ("enabled", "pieces", "quality", "mass", "tension", "shear", "bending", "air", "distance", "hold",
                            "grip", "cache")}
+CLOTH["make"] = {**{k: None for k in ("name", "materials", "collide", "trims", "inset", "reach", "thick", "gap")},
+                 "pin": ("above", "fade"), "sleeves": ("hold", "collides"), "open": ("deg", "below", "fade")}
 
 SCHEMAS = {"pose": POSE, "perform": PERFORM, "sim": SIM, "folds": FOLDS, "cloth": CLOTH}
 

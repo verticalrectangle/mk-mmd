@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from mkmmd import config as CFG
@@ -394,6 +395,161 @@ def test_sim_floor_true_is_the_ground_at_zero_not_one_metre(make):
     assert code == 0 and out["stages"]["sim"]["mq"]["floor_z"] == 0.25
     code, out = make("[sim.mq]\nfloor = \"ground\"\n")
     assert code == 3 and "[sim.mq] floor = 'ground'" in out["error"]
+
+
+
+BANGS = ("前髪1", "前髪2", "前髪3")
+
+
+def _bangs_and_head(make, capsys):
+    """Per frame (40, 60, 90): the bangs' points (the three heads and the tip) in the world, and the head's motion from
+    rest (4x4: a point of the model's rest space -> where it is now)."""
+    expr = (f"[[list(bone(n).head) for n in {BANGS!r}] + [list(bone({BANGS[-1]!r}).tail)], "
+            "[list(r) for r in bone('head').matrix @ arm().data.bones[bone('head').name].matrix_local.inverted()]]")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "40,60,90", "--project", str(make.root)],
+                  capsys)
+    assert code == 0, q
+    return [(np.array(v[0]), np.array(v[1])) for v in q["values"]]
+
+
+def test_a_capsule_given_by_its_points_rides_its_bone_and_holds_the_bangs_out(make, mannequin, capsys):
+    """[sim.<cast>] colliders `{type = "capsule", bone, a, b, R}`: the segment a-b of the model's rest space, riding on
+    the bone (a shape where no two bones span it: a chest under a lapel). One laid across the forehead through the
+    bangs' middle joint, on the head, pushes the bangs out of it on every frame, wherever the head has turned; a and b
+    read in another space would put it elsewhere and leave them where they hang."""
+    code, out = make('[sim.mq]\nfamilies = ["bangs"]\n')
+    assert code == 0, out.get("error")
+    shapes = out["stages"]["sim"]["mq"]["colliders"]
+    free = _bangs_and_head(make, capsys)
+    rig = json.loads(mannequin[1].read_text(encoding="utf-8"))
+    mid = np.array(next(b["head"] for b in rig["bones"].values() if b.get("jp") == BANGS[1]))
+    a, b, R = mid - [0.04, 0.0, 0.0], mid + [0.04, 0.0, 0.0], 0.01
+    code, out = make('[sim.mq]\nfamilies = ["bangs"]\ncolliders = [{ type = "capsule", bone = "頭", '
+                     f'a = {a.round(5).tolist()}, b = {b.round(5).tolist()}, R = {R}, tag = "brow" }}]\n')
+    assert code == 0, out.get("error")
+    assert out["stages"]["sim"]["mq"]["colliders"] == shapes + 1
+    held = _bangs_and_head(make, capsys)
+    for (P0, _), (P, M) in zip(free, held):
+        A, B = (M @ np.append(a, 1.0))[:3], (M @ np.append(b, 1.0))[:3]
+        t = np.clip((P - A) @ (B - A) / ((B - A) @ (B - A)), 0.0, 1.0)
+        gap = np.linalg.norm(P - (A + t[:, None] * (B - A)), axis=1)
+        assert gap.min() > R - 5e-4, gap                                   # all of the bangs outside it
+        assert np.linalg.norm(P[1] - P0[1]) > 0.004, (P[1], P0[1])         # the middle joint was pushed out
+
+
+
+KEPT = """[pose.mq]
+feet = "floor"
+
+[[shot]]
+name = "face"
+from = 0.0
+to = 2.0
+at = [0.0, -0.9, 1.36]
+look = [0.0, 0.0, 1.36]
+lens = 50
+
+[[light]]
+name = "sun"
+kind = "sun"
+power = 3.0
+at = [1.0, -3.0, 3.0]
+look = [0.0, 0.0, 1.3]
+
+[post]
+saturation = 0.0
+"""
+
+
+def test_the_keep_mask_is_where_the_kept_material_is_seen_and_the_frame_renders_as_it_did(make, capsys):
+    """[post] keep: `mk render` draws `keep/<frame>.png` beside each frame, the share of each pixel the kept materials
+    show, linear. The eyes' mask and the skin's never add up to more than the whole of a pixel (the eyes stand in front
+    of the face and every other material hides what it covers; a rim is shared between them), the frame rendered right
+    after the pass is the one rendered without keep (the scene is left as it was), and a material the model does not
+    have is refused with the ones it has."""
+    from PIL import Image
+    d = make.root / "renders" / "draft" / "16x9"
+
+    def render(keep):
+        code, out = make(KEPT + (f'keep = {{ cast = "mq", materials = ["{keep}"] }}\n' if keep else ""))
+        assert code == 0, out.get("error")
+        for p in sorted(d.rglob("*.png"), reverse=True) if d.exists() else ():
+            p.unlink()
+        code, rep = cli(["render", "--project", str(make.root), "--output", "16x9", "--frames", "40"], capsys)
+        if code:
+            return code, rep
+        frame = np.asarray(Image.open(d / "00040.png").convert("RGB"), int)
+        mask = np.asarray(Image.open(d / "keep" / "00040.png").convert("L"), float) / 255 if keep else None
+        return frame, mask
+
+    seen, eyes = render("eye")
+    _, skin = render("skin")
+    assert (eyes > 0.5).sum() > 20 and (skin > 0.5).sum() > 20 * (eyes > 0.5).sum()
+    assert (eyes + skin).max() <= 1.03                       # never more of a pixel between them than all of it
+    plain, _ = render(None)
+    assert plain[skin > 0.5].mean() > 50 and np.abs(seen - plain).max() <= 2     # a lit face, as it was
+    code, rep = render("eyes")
+    assert code == 3 and "has no material eyes" in rep["error"] and "eye" in rep["error"].split("it has")[1]
+
+
+
+def test_a_sweep_is_a_floor_that_curves_up_into_a_wall_both_facing_the_subject(make, capsys):
+    """`kind = "sweep"`, a photo studio's paper: the floor lies on z = 0 from y = -depth to the curve and faces up, the
+    curve rises into the wall at y = radius, which faces the subject (toward -y); the set stands at `at`. An unknown key
+    is an error that lists the known ones."""
+    code, out = make('[[set]]\nname = "paper"\nkind = "sweep"\nat = [0.0, 1.0, 0.0]\nwidth = 4.0\ndepth = 3.0\n'
+                     'height = 2.5\nradius = 0.8\n', until="sets", with_cast=False)
+    assert code == 0, out.get("error")
+    expr = ('[[list(o.matrix_world @ p.center) + list((o.matrix_world.to_3x3() @ p.normal).normalized()) '
+            'for p in o.data.polygons] for o in [bpy.data.objects["paper_sweep"]]][0]')
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "31", "--project", str(make.root)], capsys)
+    assert code == 0, q
+    P = np.array(q["values"][0])
+    c, n = P[:, :3], P[:, 3:]
+    floor, wall = c[:, 2] < 1e-6, c[:, 2] > 0.8 + 1e-3
+    assert floor.any() and wall.any()
+    assert np.allclose(n[floor], [0, 0, 1], atol=1e-6) and np.allclose(n[wall], [0, -1, 0], atol=1e-6)
+    assert np.allclose(c[floor, 1], 1.0 - 3.0 / 2)                           # the floor: y from at - depth to the curve
+    assert np.allclose(c[wall, 1], 1.0 + 0.8) and c[:, 2].max() < 2.5
+    assert ((n[:, 1] <= 1e-6) & (n[:, 2] >= -1e-6)).all()                    # every face turned to the subject
+    code, out = make('[[set]]\nname = "paper"\nkind = "sweep"\nradius = 0.8\ncurve = 1\n', until="sets", with_cast=False)
+    assert code == 3 and "unknown keys ['curve']" in out["error"] and "'radius'" in out["error"]
+
+
+def test_cast_materials_colour_tint_and_hide_the_model_s_own_materials(make, capsys):
+    """`[[cast]] materials = {<PMX name> = {color | tint | hide}}`: `color` makes the material that flat colour (its
+    texture off, ambient 0.4 of it), `tint` multiplies its colours, `hide` draws it no more; a name the model does not
+    have is an error that lists the ones it has."""
+    code, out = make("", until="cast", cast='materials = { skin = { color = "#ff0000" }, eye = { tint = "#808080" }, '
+                                             'shirt = { hide = true } }')
+    assert code == 0, out.get("error")
+    expr = ('{m.mmd_material.name_j: [list(m.mmd_material.diffuse_color), list(m.mmd_material.ambient_color), '
+            'm.mmd_material.alpha, m.node_tree.nodes["mmd_shader"].inputs["Base Tex Fac"].default_value] '
+            'for m in bpy.data.materials if m.mmd_material.name_j in ("skin", "eye", "shirt", "mouth")}')
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "31", "--project", str(make.root)], capsys)
+    assert code == 0, q
+    got = q["values"][0]
+    assert got["skin"][0] == pytest.approx([1.0, 0.0, 0.0]) and got["skin"][1] == pytest.approx([0.4, 0.0, 0.0])
+    assert got["skin"][3] == 0.0 and got["eye"][3] == 1.0                         # the colour's texture is off
+    grey = ((0x80 / 255 + 0.055) / 1.055) ** 2.4                                   # #808080 in linear
+    assert got["eye"][0] == pytest.approx([grey] * 3, abs=1e-4)                    # the eye's white diffuse, tinted
+    assert got["shirt"][2] == 0.0 and got["mouth"][2] == 1.0
+    code, out = make("", until="cast", cast='materials = { skn = { hide = true } }')
+    assert code == 3 and "no material 'skn'" in out["error"] and "'skin'" in out["error"]
+
+
+def test_lift_raises_an_ankle_above_its_rest_height_and_leaves_the_other_foot_down(make, capsys):
+    """`[pose.<cast>] lift = {L = m}` (a foot kicked up in a jump): the left ankle ends that far above where it stands at
+    rest, eased in over the settle; the right foot, with no lift, stays where it was."""
+    code, out = make('[pose.mq]\nfeet = "floor"\nlift = { L = 0.15 }\n', until="pose")
+    assert code == 0, out.get("error")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "[list(bone(b).head) for b in ('ankle.L', 'ankle.R')]",
+                   "--frames", "1,40", "--project", str(make.root)], capsys)
+    assert code == 0, q
+    (l0, r0), (l1, r1) = (np.array(v) for v in q["values"][0]), (np.array(v) for v in q["values"][1])
+    assert l1[2] - l0[2] == pytest.approx(0.15, abs=0.005) and np.abs(r1 - r0).max() < 0.005
+    code, out = make('[pose.mq]\nlift = { left = 0.15 }\n', until="pose")
+    assert code == 3 and "'left'" in out["error"] and "L, R" in out["error"]
 
 
 # ---------------------------------------------------------------- vehicles
@@ -1214,6 +1370,47 @@ def test_a_simulated_skirt_lags_a_spin_its_faces_on_the_cloth_and_a_rebuild_reus
     again = build(180)
     assert again["cached"] and again["key"] == rep["key"] and again["pen_mm"] == rep["pen_mm"]
     assert not build(90)["cached"]
+
+
+
+MADE = """[cloth.mq]
+pieces = ["made"]
+hold = 0.05
+[[cloth.mq.make]]
+name = "made"
+materials = ["skirt"]
+collide = ["skin", "shirt"]                 # the body under it: the shirt covers her hips
+pin = {{ above = 0.87, fade = 0.03 }}
+"""
+
+
+def test_a_cloth_copy_made_from_the_skirt_s_own_faces_is_pinned_at_the_waist_and_lags_a_spin(tmp_path, skirted, capsys):
+    """`[[cloth.<cast>.make]]` makes the cloth copy from the model's own faces (a model that brings none, mkmmd.core.garment):
+    here the skirt's, its rig copy left out. The copy is pinned above `pin.above` (the waist ring), its rendered faces lie
+    on the cloth on every frame, and as she spins the hem trails the waist."""
+    from scipy.spatial import cKDTree
+    (tmp_path / "mk.toml").write_text(HEAD + f'\n[[cast]]\nname = "mq"\npmx = "{skirted[0]}"\nrig = "{skirted[1]}"\n\n'
+                                      + SPIN.format(deg=180).replace("[cloth.mq]\n", "") + MADE.format(), encoding="utf-8")
+    code, out = cli(["build", "--project", str(tmp_path), "--skip", "sim"], capsys)
+    assert code == 0, out.get("error")
+    rep = out["stages"]["cloth"]["mq"]["made"]
+    assert set(out["stages"]["cloth"]["mq"]) == {"made"} and rep["made"]["pinned"] > 0 and rep["pen_mm"] < 5.0, rep
+    (skirt, n), = rep["follows"].items()
+    expr = ('[[list(v.co) for v in o.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh().vertices] '
+            f'for o in (bpy.data.objects["{skirt}"], bpy.data.objects["{skirt}_cloth"])]')
+    code, q = cli(["q", str(tmp_path / "build" / "t.blend"), expr, "--frames", "36:50:2", "--project", str(tmp_path)],
+                  capsys)
+    assert code == 0, q
+    faces, cloth = (np.array([v[i] for v in q["values"]]) for i in (0, 1))
+    assert faces.shape[1] == n
+    assert max(cKDTree(c).query(f)[0].max() for f, c in zip(faces, cloth)) < 5e-4      # its faces are on the cloth
+    z = cloth[0, :, 2]
+    waist, hem = np.abs(z - z.max()) < 1e-3, np.abs(z - z.min()) < 1e-3
+    centre = cloth[:, waist].mean(1, keepdims=True)
+    a = np.unwrap(np.arctan2(*(cloth - centre)[..., [1, 0]].transpose(2, 0, 1)), axis=0)
+    turned = np.degrees(a - a[0])
+    trail = np.abs(turned[:, hem].mean(1) - turned[:, waist].mean(1))
+    assert trail[1:].max() > 3.0, trail
 
 
 WALK = """[pose.mq]

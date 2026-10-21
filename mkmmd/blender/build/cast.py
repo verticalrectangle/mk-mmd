@@ -3,7 +3,9 @@
 [[cast]] keys: name, asset (registry slug) or pmx (path), rig (path; default the registry's), armature (name to give
 the armature; default "<Name>_arm"), at [x, y, z], yaw (deg; 0 = facing -Y), parent (object the model rides on),
 physics: "mk" (default: no Bullet; chains come from rig.json and the sim stage solves them), "bullet" (keep the
-author's rigid bodies), "none" (no secondary motion: no Bullet, and the sim stage leaves the member out).
+author's rigid bodies), "none" (no secondary motion: no Bullet, and the sim stage leaves the member out),
+materials: {"<PMX material name>" = {color | tint | hide}} (`paint`: a colour of the model changed in the scene, the
+model file untouched).
 
 A model with group, bone, material or UV morphs (vowels made of a mouth shape and a tongue bone, a blush that is a
 material) has its morph sliders bound (`bind_morphs`), so every morph is keyed the same way, on the root's
@@ -16,6 +18,7 @@ import bpy
 from mathutils import Euler, Vector
 
 from ...core import cast as CN
+from ...core import palette as PAL
 from . import BuildError, Member, collection, link
 
 SKIP_TYPES = ("RIGID_BODY", "JOINT", "TEMPORARY", "RIGID_GRP_OBJ", "JOINT_GRP_OBJ", "TEMPORARY_GRP_OBJ")
@@ -120,6 +123,58 @@ def relink_textures(meshes, folder):
     return fixed, missing
 
 
+def material_name(mat):
+    """A model material's PMX name (mmd_tools keeps it as `name_j`; Blender's own name may carry a .001 suffix)."""
+    mm = getattr(mat, "mmd_material", None)
+    return getattr(mm, "name_j", "") or mat.name
+
+
+def paint(name, meshes, spec, palette):
+    """`[[cast]] materials`: {PMX material name: {color | tint | hide}} applied to the model's own materials in the scene.
+    `color` (a palette slot or #hex) makes the material that flat colour (its texture dropped; its toon and sphere kept:
+    MMD lights it as ambient + 0.6 x diffuse, so diffuse is the colour and ambient 0.4 of it), `tint` multiplies its
+    diffuse and ambient colours (the texture's painted detail stays), `hide = true` draws it no more (alpha 0). Returns
+    {name: what was done}; a name the model lacks or an unknown key is an error that lists what there is."""
+    if not spec:
+        return {}
+    mats = {}
+    for ob in meshes:
+        for slot in ob.material_slots:
+            if slot.material is not None:
+                mats.setdefault(material_name(slot.material), slot.material)
+    out = {}
+    for pmx_name, ch in spec.items():
+        mat = mats.get(pmx_name)
+        if mat is None:
+            raise BuildError(f"cast {name!r}: materials: no material {pmx_name!r} (the model has {sorted(mats)})")
+        if not isinstance(ch, dict) or not ch or set(ch) - {"color", "tint", "hide"}:
+            raise BuildError(f"cast {name!r}: materials.{pmx_name} = {ch!r}: give color, tint or hide")
+        if sum(k in ch for k in ("color", "tint")) > 1:
+            raise BuildError(f"cast {name!r}: materials.{pmx_name}: color or tint, not both")
+        mm = mat.mmd_material
+        done = []
+        try:
+            if "color" in ch:
+                c = PAL.linear(PAL.resolve(str(ch["color"]), palette))
+                mm.diffuse_color, mm.ambient_color = c, tuple(0.4 * x for x in c)
+                shader = mat.node_tree.nodes.get("mmd_shader") if mat.use_nodes else None
+                if shader is not None and "Base Tex Fac" in shader.inputs:
+                    shader.inputs["Base Tex Fac"].default_value = 0.0
+                done.append(f"color {ch['color']}")
+            if "tint" in ch:
+                c = PAL.linear(PAL.resolve(str(ch["tint"]), palette))
+                mm.diffuse_color = tuple(a * b for a, b in zip(mm.diffuse_color, c))
+                mm.ambient_color = tuple(a * b for a, b in zip(mm.ambient_color, c))
+                done.append(f"tint {ch['tint']}")
+        except KeyError as e:
+            raise BuildError(f"cast {name!r}: materials.{pmx_name}: {e.args[0]}") from None
+        if ch.get("hide"):
+            mm.alpha = 0.0
+            done.append("hidden")
+        out[pmx_name] = ", ".join(done) or "unchanged"
+    return out
+
+
 def run(ctx):
     coll = collection("Cast")
     out = {}
@@ -152,8 +207,11 @@ def run(ctx):
                 os.path.abspath(rig["source"]["path"]) != os.path.abspath(pmx):
             ctx.log(f"cast {name}: rig.json was made from {rig['source']['path']}, the model is {pmx}")
         fixed, missing = relink_textures(meshes, os.path.dirname(pmx))
+        painted = paint(name, meshes, spec.get("materials"), ctx.palette)
         bound = bind_morphs(root, coll)
         out[name] = {"armature": arm.name, "meshes": len(meshes), "physics": physics, "rig": bool(rig),
                      "textures_relinked": fixed, "textures_missing": missing, "bound_morphs": bound}
+        if painted:
+            out[name]["materials"] = painted
         ctx.log("cast", name, arm.name)
     return out

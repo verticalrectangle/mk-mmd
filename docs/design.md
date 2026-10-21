@@ -217,7 +217,7 @@ tracks/<name>.json      reference data only the project can compute (below)
 refs/<set>/             reference photos for modelling (mk ref photos)
 ref/<set>.json          measurements of reference clips (mk ref measure)
 build/<name>.blend      mk build
-renders/<preset>/<output>/<frame>.png   mk render (+ plate/ matte/ back/ point/ screen/ layers)
+renders/<preset>/<output>/<frame>.png   mk render (+ plate/ matte/ back/ point/ screen/ keep/ layers)
 out/<name>_<output>[_<preset>].mp4      mk post
 .mk/                    cache and look output (not kept in git)
 ```
@@ -410,6 +410,7 @@ a `tag` (default: the object, bone or type) that names it in reports.
 | `{type = "sphere", object = O, c?, R?}` | on O |
 | `{type = "ring", object = O, radius, tube, segments?}` | a torus about O's local Z (a steering wheel), as `segments` (16) capsules |
 | `{type = "capsule", bone = B, to = B2, R, armature?}` | from B's head to B2's head, riding on B |
+| `{type = "capsule", bone = B, a, b, R, armature?}` | segment a-b (metres, the model's space at rest: x her left, -y front, z up), riding on B: a shape where her skeleton has no two bones to span (over her chest, under a lapel) |
 | `{type = "fingers", radius = {thumb, index, middle, ring, little, palm}?, sides?, armature?}` | every finger segment and three palm capsules (wrist to index1, middle1, little1); radii in metres (0.010 0.009 0.009 0.0085 0.008 and 0.016 for the palm) |
 | `{type = "floor", z}` | the ground plane |
 | `{type = "prop", prop}` | every collider of a prop's card, as the sim stage uses them (stored on the prop's root when the scene is saved) |
@@ -666,6 +667,7 @@ Colours are palette slot names or `#hex` (and `"slot:slot:t"` mixes two); builde
 | `hills` | layered ridges on the horizon: curtains round `center` (x, y) at each layer's `distance`, rolling ridge lines up to `height` (`seed`, `rough` 0..1), an `arc` = [from, to] degrees (azimuth from +X toward +Y) that can leave a city's direction open; flat colours (`color`, "base") pulled toward the horizon haze by `haze` (rising with distance), so they read as silhouettes whatever lights the scene |
 | `cafe_room` | the rainy corner café: a window with rain and fog, the street behind it, lightning rigs, a pendant lamp, the room lights; its animatable state is custom properties on the set root |
 | `bedroom_80s` | an 80s bedroom at night: striped wallpaper, parquet, trim, a door, a window with a half-raised venetian blind and a lit city behind it, a neon tube; a shell only, the furniture is props |
+| `sweep` | a photo studio's seamless paper: the floor from y = -`depth` to the curve, a cove of `radius` up into a wall at y = `radius` that stands to `height`, `width` along x (8, 6, 4 and 1.2 m), `color` ("base"), `rough` (0.8), `segments` of the cove (24); every face turned to the subject, who stands in front of the cove (toward -y, the camera further); `use.surface` `wall`, `use.look` `centre`. An unknown key is an error that lists the known ones |
 
 **`night_sky`** keys (all optional): `zenith` ("base"), `dome` ("surface"), `horizon` (the haze colour the other night sets fade
 distant things into), `band` (4 degrees); `stars` (`{density 4 per 100 square degrees, size 0.07, brightness 1.0, fade [3, 18],
@@ -889,6 +891,7 @@ the targets `cast:<name>` and `{cast = "<name>", point}`, and a check's `cast = 
 | `yaw` | degrees about Z; 0 faces -Y, positive turns toward +X (default 0) |
 | `parent` | name of an object the model rides on; `at` and `yaw` are then in its frame |
 | `physics` | `"mk"` (default): import without Bullet, so the chains move only where a `[sim.<name>]` table solves them. `"none"`: the same import, and the member is left out of `[sim]` even when it has a table (no secondary motion; the sim report says `skipped`). `"bullet"`: keep the author's rigid bodies and joints (Blender's rigid-body simulation then moves them; give the member no `[sim.<name>]`). Any other word is an error |
+| `materials` | `{<PMX material> = {color \| tint \| hide}}`: changes the model's own materials in the scene (the file stays as it is). `color` (a palette slot or `#hex`) makes the material that flat colour: its texture off, its toon and sphere kept, the diffuse the colour and the ambient 0.4 of it (MMD lights it as ambient + 0.6 x diffuse); `tint` multiplies its diffuse and ambient colours (the texture's detail stays); `hide = true` draws it no more (alpha 0). A name the model lacks, an unknown key or both `color` and `tint` is an error that lists what there is; the cast report says per member what was done |
 
 ```toml
 [[cast]]
@@ -943,6 +946,7 @@ and positive `head.roll` tips the head toward its left shoulder.
 | `sit` | `"prop:seat"`: a `use.sit` point of a prop (`"prop"` alone when it has one), or a table `{hip, facing, floor_z, pelvis_deg, back_deg}` in world coordinates. The root goes to the seat's floor point (`floor_z`; in the prop's frame for a card) facing `facing` (default `[0, -1, 0]`, flattened to the horizontal) and is parented to the prop, so the character rides it and `[[cast]] at` and `yaw` are replaced; the midpoint of the hip joints goes to `hip`. `pelvis_deg` (default 6) tips the pelvis back, which brings the thighs forward; `back_deg` (default 0) is the backrest's recline, the upper body leans back by it and `lean` adds to it. A card's `seat_z` and `back_tilt_deg` are not read |
 | `sit_offset` | `[x, y, z]` metres: slides the hip point on the seat, in the seat prop's frame (the world's for a `sit` table): sit further forward |
 | `feet` | ankle targets for the leg IK (a model without `leg_ik` bones ignores them). `"seat"` (default when seated): the seat prop's `use.feet` point of the seat's own name, else its only one (`L` and `R` as `[x, y, z]` in the prop's frame); a seat without one, and `"floor"`, put the feet in front of the knees (0.55 of the leg's length ahead of the hip, 0.1 m either side). Standing (no `sit`), `"floor"` keeps the feet where the model stands, on the floor under the hips (what no `feet` does too), and `"seat"` is an error that says so. `"prop:feet"`: another prop's `use.feet` point. A table `{L, R}` gives both feet as world `[x, y]` or any [target](#targets): `{cast = "rin", point = [x, y, 0]}` writes a standing pose in the character's own frame, so it moves with the character. Only x and y count: the ankle keeps the model's own height above the floor |
+| `lift` | `{L = m, R = m}`: each ankle's goal that far above its rest height, eased in over the settle like the feet (with or without `feet`): a foot kicked up, or both off the ground with `hips.shift` raised as far (a jump caught at its top). Any other key raises |
 | `hips` | `{shift = [x, y, z], roll, yaw}`: moves and turns the pelvis of a standing or seated body, eased in over the settle and on top of what a seat asks for. `shift` is in metres in the character's own frame (x its left, y behind, z up): a drop bends the knees and the leg IK keeps the feet on `feet`. `roll` degrees drops the left hip (+). `yaw` degrees turns the pelvis toward the left about the vertical. Keyed on `center` (shift) and `lower_body` (roll, yaw) |
 | `toes` | `{L = deg, R = deg}`: foot yaw about the vertical through each ankle (the leg IK bone), + toward the left: toes in are negative on the left foot and positive on the right. Any other key raises |
 | `lean`, `turn` | degrees: upper-body forward lean and turn toward the left, on top of the seat's back angle (default 0) |
@@ -1659,6 +1663,26 @@ empty one will do):
 | `hold` | 0..1: how much the free cloth is held where the armature carries it, each vertex at least its copy's `holds` (the sweater's 0.3, its sleeves' 0.9: it keeps its shape and swings and lags on it; near 0 the cloth goes where gravity and the body put it, as a skirt that swings) |
 | `grip` | how hard what is held is pulled back there (Blender's pin stiffness, 1) |
 | `cache` | false: simulate again though a simulation of the same inputs is cached (default true) |
+
+`[[cloth.<cast>.make]]` makes a cloth copy from the member's own faces, for a model that brings none (an imported
+character's blazer; the maths is `mkmmd/core/garment.py`, numpy only). It is a copy like the rig's, by its name (`pieces`
+picks among both; a rig copy of the same name is an error):
+
+| Key | Meaning |
+|---|---|
+| `name` | the copy's name (required) |
+| `materials` | the PMX names of the garment's materials (required) |
+| `collide` | the PMX names of the materials of the body under it (required): give all it covers, a skirt over a shirt the shirt too, or the cloth falls in through the hole. The skin within `reach` of the garment (0.15 m) is its collider, each sheet wound outward from the bones and set in by `inset` (0.003 m) |
+| `pin` | `{above, fade = 0.06}`: carried by the armature above `above` metres (rest height), free below `above - fade` (default: nothing pinned) |
+| `sleeves` | `{hold = 0.9, collides = false}`: what the arm bones carry most of is held that much toward where the arm carries it (a sleeve on an arm that moves faster than cloth) and collides with the body or not |
+| `open` | degrees, or `{deg, below, fade = 0.06}`: an unbuttoned front, eased in over the settle: each front panel slides round the torso about its side, toward its own side, as a jacket hangs open; with `below` only under that height (the lapels above the top button stay) |
+| `trims` | the PMX names of hard pieces on the garment (buttons, a brooch): every loose piece of them within `gap` (0.01 m) of the garment, whole, rides the cloth's triangle nearest its centre, never stretched |
+| `thick` | metres: a modelled garment's lining is what lies within it under the outside (0.003) |
+
+`make` keeps the garment's outside (no lining), collapses the slivers a modeller left (edges under 3 mm), keeps two faces
+to an edge (Surface Deform binds to nothing else) and winds every face outward. A lapped closure (a jacket's front laps over
+itself) is found: each side of the lap is a part of the cloth, and the garment's faces of each side bind to their own part,
+not to the one lying on them (the report's `laps` and `lapped`). The report adds `made`: `trims`, `pinned`, `sleeves`.
 
 The garment brings its own values (rig.json `settings`, e.g. `[sweater.cloth]`); the table's win. For each copy the stage
 makes `<root>_<name>_cloth`: the copy skinned to the armature, its pinned vertices following their skin and the others
@@ -3073,7 +3097,9 @@ Frames are claimed with an empty file first, so a stopped render resumes; a disk
 (it keeps 1.5 GB spare). Shots with a render-time look ([Shots](#looks-silhouette-and-reflection): silhouette, reflection) are finished
 flat frames on disk, composed inside the render job; `--no-styles` renders them as lit, and leaves out the cut effects and the screen type too (they are part of the looks). `[[transition]]` and `[[insert]]`
 ([Shots](#transitions-and-inserts)) add the layers they need next to the frames (`plate/`, `matte/`, `back/`, `point/`; `--no-transitions`
-leaves them out). Screen type ([Text](#screen-type)) is `screen/<frame>.png`, straight RGBA, for the frames that have any.
+leaves them out). Screen type ([Text](#screen-type)) is `screen/<frame>.png`, straight RGBA, for the frames that have any. With
+`[post] keep` ([Post](#post)) each frame gets `keep/<frame>.png` too, the mask of where the kept materials are seen, drawn before
+the frame (a frame already on disk without one gets it).
 
 #### mk's own renderer
 
@@ -3109,7 +3135,9 @@ the effects' layers, alongside) against 14 min 7 s in Blender, one job per outpu
 `mk post` composites the cut effects over the cut's frames, draws the lens streaks (`streaks`, below) from the result, lays the screen
 type over it, then grades the frames and encodes
 `<project>/out/<name>_<output>[_<preset>].mp4` (the preset is left out of the name for `final`) with `[audio]` (`file`, `start` = song
-seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 320k with a 60 ms fade-out. A missing frame or layer is an error
+seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 320k with a 60 ms fade-out. A clip of one frame
+(`[project] duration` of one frame) is a still: each output's graded frame is written as `<name>_<output>[_<preset>].png`, at
+its own size, with no sound (the sim and cloth reports then measure its frame and the two before). A missing frame or layer is an error
 unless `--allow-gaps` (the previous frame repeats; the plain cut shows where a layer is missing); `--to DIR` also copies the videos;
 `mk look` composes the same way for the images it shows. The report has each video's frames, size, `screen_type_frames`, and the darkest luma
 after the grade (`min_luma`).
@@ -3147,12 +3175,16 @@ the frame's longer side, so every output streaks alike), each scaled to its peak
 as itself; the sum is capped softly at `cap`, tinted `mix` of the way toward the palette slot `tint` and screened over the picture
 at `strength`. It is drawn before the screen type, so lyrics never streak. An unknown key is an error.
 
+`[post] screen = "over"` lays the screen type over the finished, graded picture instead of under the grade (`"graded"`, the
+default): its colours exactly as written, no grain or vignette on it, as type set on a photograph. Any other value is an error.
+
 `[post]` (all optional) is otherwise the grade, applied after the screen type in this order:
 
 | Key | Meaning |
 |---|---|
 | `halation` | `{strength 0.22, radius 0.012, threshold 0.72, tint "rose"}`: glow around highlights (radius as a fraction of the frame height), tinted like film halation; off unless the table has a key |
 | `saturation` | 1.06 |
+| `keep` | `{cast, materials, saturation 1.0}`: those materials of a cast member (PMX names; her irises: `["瞳"]`) keep their colour where they are seen, at `saturation` of the frame's own instead of the grade's (a black-and-white picture with only her eyes in colour: `saturation = 0.0` beside it). `mk render` draws the mask beside each frame, `keep/<frame>.png`: an EEVEE pass with every material a flat emission, white for the kept ones and black for the rest, so what stands in front hides them as in the picture (MMD materials see-through by their own alpha, texture included; anything else opaque), linear, antialiased. Screen type laid on under the grade is graded as type; inside a cut effect's window the frame is graded whole; a missing mask is an error unless `--allow-gaps`; the report counts `keep_frames`. An unknown member, key or material is an error that lists what there is |
 | `contrast`, `pivot` | 1.10 around the pivot 0.60: midtone contrast |
 | `split` | `{shadows "iris", highlights "gold", amount 0.06}`: split toning toward palette slots; off unless the table has a key |
 | `vignette` | 0.12: corner darkening (a fraction) |

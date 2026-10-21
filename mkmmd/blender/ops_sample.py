@@ -26,6 +26,7 @@ from fnmatch import fnmatchcase
 
 import bpy
 import numpy as np
+from mathutils import Vector
 
 from ..core import bonemap
 from ..core import families as FAM
@@ -94,6 +95,12 @@ def resolve_collider(spec, default_arm):
     if t in ("capsule", "fingers"):
         arm = _arm(spec.get("armature") or default_arm)
         mw = arm.matrix_world
+        if t == "capsule" and "a" in spec:               # a segment of the model's rest space riding on a bone
+            b0 = S.resolve_bone(arm, spec["bone"])
+            inv = (mw @ arm.data.bones[b0].matrix_local).inverted()
+            a, b = (list(inv @ (mw @ Vector(spec[k]))) for k in ("a", "b"))
+            return [{"kind": "capsule", "source": ["bone", arm.name, b0], "tag": tag, "a": a, "b": b,
+                     "R": float(spec["R"])}]
         pairs = []
         if t == "capsule":
             pairs.append((S.resolve_bone(arm, spec["bone"]), S.resolve_bone(arm, spec["to"]), float(spec["R"])))
@@ -116,7 +123,7 @@ def resolve_collider(spec, default_arm):
             out.append({"kind": "capsule", "source": ["bone", arm.name, b0], "tag": spec.get("tag", "hand"),
                         "a": [0.0, 0.0, 0.0], "b": list(e), "R": R})
         return out
-    raise ValueError(f"collider spec {spec!r}: give an object, a world center, bone+to, fingers or floor")
+    raise ValueError(f"collider spec {spec!r}: give an object, a world center, bone+to, bone+a+b, fingers or floor")
 
 
 # ---------------------------------------------------------------- evaluated geometry

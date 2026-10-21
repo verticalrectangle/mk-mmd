@@ -12,6 +12,7 @@ from .. import cutfx as CF
 from .. import framefx as FF
 from .. import master as MS
 from .. import post as P
+from ..core import keep as KP
 from ..core import palette as PAL
 from ..core import screentype as SRT
 from ..core import transition as TR
@@ -29,7 +30,9 @@ after the grade (`min_luma`: above 0 when the floor keeps shadows off black). A 
 one frame) is a still: each output's graded frame is written as <project>/out/<name>_<output>[_<preset>].png, at its
 full size and without sound. `[post] screen = "over"` lays the screen type over the finished, graded frame (its colours
 exactly as written, no grain or vignette on it: type set on a photograph) instead of under the grade ("graded", the
-default).
+default). `[post] keep = {cast, materials, saturation}` keeps those materials of a cast member in colour where they are
+seen (her eyes in a black-and-white picture) through the mask mk render draws beside each frame (keep/<frame>.png): a
+missing mask is an error unless --allow-gaps; inside a cut effect's window the frame is graded whole.
 
 [[transition]], [[insert]] and [[glitch]] entries (docs/design.md: Shots: Transitions and inserts, Glitches) are
 composited from the layers mk render drew next to the frames, before the grade: the grade, grain and vignette cover the
@@ -103,6 +106,10 @@ def run(args):
     au = proj.data.get("audio", {})
     audio, mastering = None, None
     still = proj.last_frame == proj.frame0                 # a picture: one PNG per output, no sound
+    try:
+        keep = KP.spec(proj.data.get("post"), proj.cast)
+    except ValueError as e:
+        raise UsageError(str(e)) from None
     if not args.no_audio and au.get("file") and not still:
         f = Path(au["file"]).expanduser()
         if not f.exists():
@@ -131,6 +138,11 @@ def run(args):
         if missing and not args.allow_gaps:
             raise UsageError(f"{o.name}: {len(missing)} frames missing in {src} (first {missing[:5]}); render them or "
                              f"pass --allow-gaps")
+        if keep:
+            masks = [f for f in frames if f in files and not (src / KP.rel(f)).exists()]
+            if masks and not args.allow_gaps:
+                raise UsageError(f"{o.name}: {len(masks)} keep masks missing in {src / KP.LAYER_DIR} (first {masks[:5]}): "
+                                 f"mk render draws them for [post] keep; or pass --allow-gaps")
         first = P.read(files[min(files)]) if files else None
         if first is None:
             raise UsageError(f"{o.name}: no frames in {src}")
@@ -164,10 +176,12 @@ def run(args):
         suffix = "" if args.preset == "final" else f"_{args.preset}"
         out = od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"
         ff = None if still else encode(frames, size, proj.fps, out, audio, args.crf)
-        prev, prev_layer, lmin, bare, typed = None, None, 1.0, 0, 0
+        prev, prev_layer, prev_keep, lmin, bare, typed, kept = None, None, None, 1.0, 0, 0, 0
         for k, f in enumerate(frames):
             raw = P.read(files[f], size) if f in files else prev
             layer = P.read_rgba(src / SRT.layer_rel(f), size) if f in files else prev_layer
+            km = (P.read(src / KP.rel(f), size) if f in files else prev_keep) if keep else None
+            mask = None if km is None or (fx and fx.active(f)) or (ffx and ffx.active(f)) else km[..., 0]
             img = raw
             if fx and fx.active(f):
                 try:
@@ -184,7 +198,10 @@ def run(args):
             if layer is not None and screen == "graded":         # screen type: over the cut and what its effects made of it
                 img = SRT.composite(img, layer)
                 typed += 1
-            g = grade(img, k)
+                if mask is not None:                              # the type over a kept eye is graded as type
+                    mask = mask * (1.0 - layer[..., 3])
+            g = grade(img, k, keep=mask)
+            kept += mask is not None
             if layer is not None and screen == "over":           # or over the finished picture, the grade under it
                 g = SRT.composite(g, layer)
                 typed += 1
@@ -193,13 +210,15 @@ def run(args):
                 Image.fromarray(P.to_u8(g)).save(out)
             else:
                 ff.stdin.write(P.to_u8(g).tobytes())
-            prev, prev_layer = raw, layer
+            prev, prev_layer, prev_keep = raw, layer, km
         if ff is not None:
             ff.stdin.close()
             if ff.wait() != 0:
                 raise UsageError(f"ffmpeg failed for {out}")
         report[o.name] = {"image" if still else "video": str(out), "frames": len(frames), "missing": len(missing),
                           "size": list(size), "min_luma": round(lmin, 4), "screen_type_frames": typed}
+        if keep:
+            report[o.name]["keep_frames"] = kept               # graded with the colour kept (not inside a cut effect)
         if fx:
             report[o.name]["effects"] = {"transitions": len(plan["transitions"]), "inserts": len(plan["inserts"]),
                                          "glitches": len(plan["glitches"]), "fx": len(plan.get("fx") or []),

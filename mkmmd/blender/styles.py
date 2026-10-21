@@ -213,6 +213,38 @@ def _hide(rs, ob):
     rs.attr(ob, "hide_render", True)
 
 
+def _flat_surface(rs, mat, value):
+    """Until `rs` runs, `mat` draws as a flat emission of grey `value` (0..1): through its MMD shader's own alpha
+    (mmd_tools' `mmd_shader` node, texture alpha included) when it has one, opaque otherwise."""
+    nt = mat.node_tree
+    outs = [n for n in nt.nodes if n.bl_idname == "ShaderNodeOutputMaterial"]
+    out = next((n for n in outs if n.is_active_output), outs[0] if outs else None)
+    if out is None:
+        return
+    surface = out.inputs["Surface"]
+    old = [ln.from_socket for ln in surface.links]
+    em = nt.nodes.new("ShaderNodeEmission")
+    em.inputs["Color"].default_value = (value, value, value, 1.0)
+    em.inputs["Strength"].default_value = 1.0
+    added, shader = [em], em.outputs[0]
+    mmd = nt.nodes.get("mmd_shader")
+    if mmd is not None and "Alpha" in mmd.outputs:
+        clear, mix = nt.nodes.new("ShaderNodeBsdfTransparent"), nt.nodes.new("ShaderNodeMixShader")
+        nt.links.new(mmd.outputs["Alpha"], mix.inputs["Fac"])
+        nt.links.new(clear.outputs[0], mix.inputs[1])
+        nt.links.new(em.outputs[0], mix.inputs[2])
+        added += [clear, mix]
+        shader = mix.outputs[0]
+    nt.links.new(shader, surface)
+
+    def undo():
+        for n in added:
+            nt.nodes.remove(n)
+        for s in old:
+            nt.links.new(s, surface)
+    rs.call(undo)
+
+
 def _materials(ob):
     """Every material of the object: its slots and the Set Material nodes of its geometry-nodes modifiers."""
     mats = [s.material for s in ob.material_slots if s.material is not None]
@@ -537,6 +569,32 @@ class Looks:
             return self._shoot("flat")
         finally:
             rs.run()
+
+    def keep_mask(self, materials):
+        """Coverage (h, w) in 0..1 of the surfaces drawn with `materials` (bpy materials) as the camera sees the frame
+        ([post] keep: where `mk post` keeps the colour). EEVEE, every material's surface swapped for a flat emission, white
+        for the kept ones and black for the rest, so whatever stands in front of a kept surface hides it as it does in the
+        picture; an MMD material (mmd_tools' `mmd_shader`) is transparent by its own alpha, texture included (an eye drawn
+        on a quad keeps only its painted part; a strand's see-through tip lets the eye show), any other is opaque. Objects
+        without any material are left out (they would render lit grey). Antialiased, the frame's size."""
+        keep, rs = set(materials), Restore()
+        try:
+            self._film(rs, EEVEE, "Raw")                     # linear: a rim's coverage, not its sRGB code
+            for m in bpy.data.materials:
+                if m.use_nodes and m.node_tree:
+                    _flat_surface(rs, m, 1.0 if m in keep else 0.0)
+            for o in self._objects():
+                if not o.hide_render and not _materials(o):
+                    _hide(rs, o)
+            px = self._shoot("keep")
+            return np.clip(px[..., 0] * px[..., 3], 0.0, 1.0).astype(np.float32)
+        finally:
+            rs.run()
+
+    def keep_layer(self, path, materials):
+        """Write `keep_mask` of the current frame into the grey PNG `path` (whole or not at all, its folder made)."""
+        m = self.keep_mask(materials)
+        _save_rgba(path, np.dstack([m, m, m, np.ones_like(m)]))
 
     def matte(self, scale=2):
         """Coverage (h, w) in 0..1 of the subject alone, without cords or type: the figure a transition turns into a
