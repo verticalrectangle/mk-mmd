@@ -75,6 +75,7 @@ class Ctx:
         look = self.data.get("look", {})
         self.palette = PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots"))
         self.log_lines = []
+        self.before_save = []          # checks on the finished scene (a pattern that must match what later stages make)
         self.t0 = time.time()
 
     # time
@@ -211,6 +212,8 @@ def build(args):
             for p in ctx.props.values():               # checks resolve {type = "prop", prop = name} and read use points from these
                 p.root["mk_colliders"] = json.dumps(p.colliders)
                 p.root["mk_use"] = json.dumps(p.card.get("use", {}))
+            for check in ctx.before_save:
+                check()
             bpy.context.scene.frame_set(ctx.frame0)
             bpy.ops.wm.save_as_mainfile(filepath=out, compress=True)
             report["save"] = {"out": out}

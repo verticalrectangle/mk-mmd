@@ -87,7 +87,7 @@ from . import BuildError, collection
 KNOWN = {"name", "on", "mount", "at", "facing", "up", "box", "text", "value", "font", "size", "fit", "align", "valign",
          "offset", "color", "glow", "lit", "depth", "lift", "tracking", "word_spacing", "leading", "reveal", "blink",
          "flicker", "fade", "ghost", "halo", "haze", "back", "kinetic", "lyric", "backing", "outline", "screen", "knockout",
-         "_aspect", "_multi", "_shot"}
+         "_aspect", "_multi", "_shot", "_path"}
 MAX_NAME = 50                  # characters of a text's name: Blender keeps 63, and the node group's `mk_text_` takes 8
 LIFT = 0.002                    # m in front of the surface
 GHOST_BACK = 0.0006             # m the unlit segments sit behind the lit ones
@@ -755,7 +755,8 @@ def _tape_material(name, b, rgb, pat_rgb, w, h):
 
 def _tape_mesh(g, P, b):
     """The strip: a grid centred on the word's ink box, the two short ends torn (every other vertex of the end columns
-    pulled in by a random share of `torn` x the height), `UVMap` stored for the pattern, `mk_alpha` = the word's opacity."""
+    pulled in by a random share of `torn` x the height) and leaning `slant` degrees (sheared: a parallelogram), `UVMap`
+    stored for the pattern, `mk_alpha` = the word's opacity."""
     w, h = b["size"]
     cx, cy = b["centre"]
     grid = g.node("GeometryNodeMeshGrid")
@@ -782,6 +783,8 @@ def _tape_mesh(g, P, b):
                                                                g.math("SUBTRACT", 1.0, odd)))
     pull = g.math("MULTIPLY", g.math("MULTIPLY", g.math("MULTIPLY", end, tooth), rnd.outputs[1]), b["torn"] * h)
     dx = g.math("MULTIPLY", pull, g.math("SUBTRACT", 1.0, g.math("MULTIPLY", left, 2.0)))   # +x on the left, -x right
+    if b.get("slant"):
+        dx = g.math("ADD", dx, g.math("MULTIPLY", y, math.tan(math.radians(b["slant"]))))  # the top to the right
     off = g.node("ShaderNodeCombineXYZ")
     g.put(off.inputs[0], dx)
     sp = g.node("GeometryNodeSetPosition")
@@ -1141,6 +1144,17 @@ def _outputs(ctx):
     return [o["name"] for o in (ctx.project.get("outputs") or [])] or ["main"]
 
 
+def _fly(ctx, ob, path):
+    """Key a text object's location along `path` [[t, [x, y, z]], ...] (clip seconds, world points; LINEAR, held
+    outside): a lyric bullet coming in, passing its mark on its onset and going on."""
+    from .. import keys as K
+    if ob.parent is not None:
+        raise BuildError(f"text {ob.name!r}: a flying word has no mount")
+    frames = [ctx.frame(float(t)) for t, _ in path]
+    for i in range(3):
+        K.key_prop(ob, "location", frames, [float(p[i]) for _, p in path], index=i, interp="LINEAR")
+
+
 def run(ctx):
     try:                                                  # `extends` / `abstract`: a look shared by several entries
         specs = SR.resolve_entries(ctx.data.get("text", []))
@@ -1183,6 +1197,8 @@ def run(ctx):
                     name = sub.get("name", "?")
                     try:
                         out[name] = _one(ctx, coll, sub, cache)
+                        if sub.get("_path"):                  # a lyric bullet: the panel flies past its mark
+                            _fly(ctx, bpy.data.objects[name], sub["_path"])
                     except T.TextError as e:
                         raise BuildError(f"text {name!r}: {e}") from None
                     except BuildError as e:

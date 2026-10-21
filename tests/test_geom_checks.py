@@ -54,6 +54,33 @@ def test_cylinder_side_and_cap_and_floor():
     assert pen[2] == pytest.approx(0.01) and sid[2] == 1          # the floor is the last label
 
 
+# ---------------------------------------------------------------- clearance geometry
+def _gaps(shapes, lo, hi):
+    W = geom.world(shapes.pack(), np.eye(3)[None], np.zeros((1, 3)))
+    return motion.body_gaps(W, np.array(lo, float), np.array(hi, float))
+
+
+def test_clearance_of_a_sphere_and_a_capsule_from_its_nearest_end():
+    s = _shapes(sphere=[dict(c=[0, 0, 0], R=0.1)], capsule=[dict(a=[0, 0, 0], b=[1, 0, 0.2], R=0.05)])
+    g = _gaps(s, [[0.5, -1, -1], [-1, -1, 0.5]], [[1, 1, 1], [2, 1, 1]])
+    assert g[0, 0] == pytest.approx(0.4) and g[1, 0] == pytest.approx(0.4)        # 0.5 off, less the radius
+    assert g[1, 1] == pytest.approx(0.25, abs=1e-9)          # the capsule's raised end, 0.3 under the box
+
+
+def test_clearance_of_a_box_between_edges_and_through_it():
+    turn = np.eye(4)
+    turn[:3, :3] = geom.quat_to_mat(np.array([[np.cos(np.pi / 8), 0, 0, np.sin(np.pi / 8)]]))[0]   # 45 deg about z
+    s = _shapes(box=[dict(M=turn, half=[0.5, 0.5, 0.5], rnd=0.0)])
+    g = _gaps(s, [[1, 1, -1]], [[2, 2, 1]])
+    assert g[0, 0] == pytest.approx(np.sqrt(2) - 0.5)       # its top edge to the box's upright edge: no corner is nearer
+    stick = np.eye(4)
+    stick[:3, :3] = geom.quat_to_mat(np.array([[np.cos(np.pi / 12), 0, 0, np.sin(np.pi / 12)]]))[0]  # 30 deg
+    s = _shapes(box=[dict(M=stick, half=[1.0, 0.02, 0.02], rnd=0.01)])
+    g = _gaps(s, [[-0.3, -0.3, -0.3], [-0.3, -0.3, 0.0]], [[0.3, 0.3, 0.3], [0.3, 0.3, 0.0]])
+    assert g[0, 0] == pytest.approx(-0.01) and g[1, 0] == pytest.approx(-0.01)   # a stick through a box, every
+    # corner of each outside the other, and through a flat word
+
+
 def test_shapes_ride_on_their_source():
     s = geom.Shapes()
     s.add("sphere", ("object", "", "ball"), "ball", c=[0, 0, 0], R=0.1)

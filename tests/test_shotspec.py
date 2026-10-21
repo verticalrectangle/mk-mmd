@@ -25,7 +25,8 @@ def test_a_shot_with_every_key_it_takes_passes():
     ({"lenss": 40}, "shot 'hood': unknown key 'lenss' (known: name, from, to, plate, aspect, mount, at, look"),
     ({"frame": {"subject": [[0, 0, 1]], "fil": 0.5}}, "shot 'hood' frame: unknown key 'fil' (known: subject, fill, solve)"),
     ({"dof": {"focus": "cast:rin", "fstopp": 2}}, "shot 'hood' dof: unknown key 'fstopp' (known: focus, fstop"),
-    ({"keys": [{"t": 0}, {"t": 1, "lenz": 2}]}, "shot 'hood' keys[1]: unknown key 'lenz' (known: t, at, look, lens, shift)"),
+    ({"keys": [{"t": 0}, {"t": 1, "lenz": 2}]}, "shot 'hood' keys[1]: unknown key 'lenz' (known: t, at, look, lens, roll, shift)"),
+    ({"follow": {"target": "cast:rin", "axis": "x"}}, "shot 'hood' follow: unknown key 'axis' (known: target, axes, lag, from)"),
     ({"aspect": {"1x1": {"lens": 40}}}, "[shot.aspect.1x1] is for an output the project does not have (outputs: 9x16, 16x9)"),
     ({"aspect": {"9x16": {"from": 1.0}}}, "shot 'hood' aspect.9x16: unknown key 'from'"),
     ({"aspect": {"9x16": {"frame": {"fil": 1}}}}, "shot 'hood' aspect.9x16 frame: unknown key 'fil'"),
@@ -65,6 +66,32 @@ def test_reflection_false_in_an_aspect_switches_the_look_off_for_that_output_onl
     assert SS.normalize(off, {}) == {}
     refl = SS.normalize(kept, {})["reflection"]
     assert refl["object"] == "glass" and refl["strength"] == 0.4 and refl["dim"] == 0.2     # merged, not replaced
+
+
+@pytest.mark.parametrize("patch, frag", [
+    ({"follow": {"axes": "x"}}, "shot 'hood' follow: give `target`"),
+    ({"follow": {"target": "cast:rin", "axes": "xw"}}, "axes = 'xw' is not a string of distinct letters"),
+    ({"follow": {"target": "cast:rin", "axes": "xx"}}, "axes = 'xx' is not a string of distinct letters"),
+    ({"follow": {"target": "cast:rin", "lag": -0.2}}, "follow: lag = -0.2 is not seconds"),
+    ({"follow": "cast:rin"}, "follow is a table {target, axes, lag, from}"),
+    ({"follow": {"target": "cast:rin"}, "mount": "car"}, "`follow` and `mount` together"),
+    ({"frame": {"subject": [[0, 0, 1]], "solve": "zoom"}}, "shot 'hood' frame: solve = 'zoom' is none of lens, distance, dolly"),
+    ({"follow": {"target": "cast:rin"}, "aspect": {"9x16": {"follow": {"lag": -1}}}}, "shot 'hood' aspect.9x16 follow: lag = -1"),
+])
+def test_follow_and_solve_mistakes_say_what_is_wrong(patch, frag):
+    with pytest.raises(SP.ShotError) as e:
+        SP.check(dict(SHOT, **patch), OUTS)
+    assert frag in str(e.value)
+
+
+def test_an_output_eases_the_follow_or_drops_it_and_keeps_the_rest():
+    shot = dict(SHOT, follow={"target": "cast:rin", "axes": "xz"},
+                aspect={"9x16": {"follow": {"lag": 0.3}}, "16x9": {"follow": False}})
+    SP.check(shot, OUTS)
+    assert SP.follow_spec(SP.merged(shot, shot["aspect"]["9x16"]), "s") == {"target": "cast:rin", "axes": (0, 2), "lag": 0.3,
+                                                                            "from": None}
+    assert SP.follow_spec(SP.merged(shot, shot["aspect"]["16x9"]), "s") is None
+    assert SP.follow_spec(shot, "s")["lag"] == 0.0 and SP.follow_spec(SHOT, "s") is None
 
 
 # ---------------------------------------------------------------- wear overrides

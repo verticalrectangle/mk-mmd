@@ -19,13 +19,16 @@ def _norm(w):
     return re.sub(r"[^a-z']", "", w.lower())
 
 
-def stems(mix, cache_dir, sr=S.SR):
-    """Demucs htdemucs stems {drums, bass, other, vocals}: (2, n) float32, cached by the audio's hash."""
+def stems(mix, cache_dir, sr=S.SR, compute=True):
+    """Demucs htdemucs stems {drums, bass, other, vocals}: (2, n) float32, cached by the audio's hash. With
+    `compute=False`, None when they are not cached (nothing is separated)."""
     key = hashlib.sha256(mix.tobytes()).hexdigest()[:20]
     path = os.path.join(cache_dir, f"stems-{key}.npz")
     if os.path.exists(path):
         with np.load(path) as z:
             return {k: z[k] for k in z.files}
+    if not compute:
+        return None
     import torch
     from demucs.apply import apply_model
     from demucs.pretrained import get_model

@@ -844,3 +844,38 @@ def test_numba_engine_reproduces_the_numpy_engine_with_inertia_and_a_bend_limit(
         b = run(sc, params, engine="numba", threads=2)
         assert np.abs(a.x - b.x).max() < 1e-9 and np.abs(a.D - b.D).max() < 1e-8
         assert np.abs(a.x - run(sc, engine="numpy").x).max() > 1e-2             # the settings changed the motion
+
+
+# ---------------------------------------------------------------- gravity over time
+def sideways_scene(F, chains=1):
+    """Strands whose anchor is turned a quarter about x for the whole clip: their rest shape sticks out sideways."""
+    half = np.full(F, np.radians(45.0))
+    q = np.stack([np.cos(half), np.sin(half), 0 * half, 0 * half], 1)
+    root = np.array([0.0, 0.0, TOP])
+    pos = root - np.einsum("fij,j->fi", geom.quat_to_mat(q), root)
+    return scene(straight_rig(chains=chains), F, poses={0: (pos, q)})
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_without_gravity_a_strand_keeps_its_shape_and_falls_once_gravity_returns(engine):
+    """A strand sticking out sideways sags under gravity; with gravity off it holds its modelled shape (the tip at the
+    root's height), and when gravity comes back halfway it sags again; lengths stay exact."""
+    F = 40
+    sc = sideways_scene(F)
+    tip = lambda res: res.x[:, 4, 2] - TOP                                     # noqa: E731 - the tip's height
+    weighed = tip(run(sc, engine=engine))
+    free = tip(run(sc, engine=engine, gravity=np.zeros(F)))
+    back = run(sc, engine=engine, gravity=np.r_[np.zeros(20), np.ones(20)])
+    assert weighed[-1] < -0.1 and abs(free).max() < 0.02
+    assert abs(tip(back)[19]) < 0.02 and tip(back)[-1] < -0.05
+    assert np.abs(np.linalg.norm(np.diff(back.x, axis=1), axis=2) - 0.1).max() < 1e-9
+    with pytest.raises(ValueError, match="gravity"):
+        run(sc, engine=engine, gravity=np.zeros(F - 1))
+
+
+@needs_numba
+def test_numba_engine_reproduces_the_numpy_engine_under_changing_gravity():
+    sc = sideways_scene(24, chains=3)
+    g = np.clip(np.linspace(1.5, -0.5, 24), 0.0, 1.0)
+    a, b = run(sc, engine="numpy", gravity=g), run(sc, engine="numba", threads=2, gravity=g)
+    assert np.abs(a.x - b.x).max() < 1e-9

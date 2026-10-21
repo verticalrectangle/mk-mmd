@@ -450,9 +450,12 @@ def _cone(u, t, cmax):
 
 class _Model:
     def __init__(self, chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, params, frames, rig, fps,
-                 substeps, wind, use_masks, anchor_free):
+                 substeps, wind, use_masks, anchor_free, gravity=None):
         f0, f1 = int(frames[0]), int(frames[1])
         self.f0, self.F = f0, f1 - f0 + 1
+        self.gscale = np.ones(self.F) if gravity is None else np.asarray(gravity, float).reshape(-1)
+        if self.gscale.shape != (self.F,) or not np.isfinite(self.gscale).all():
+            raise ValueError(f"strands: gravity is one finite scale per frame ({self.F}), got {self.gscale.shape}")
         N, S = len(chains), len(shapes.sources)
         F = self.F
         if N == 0:
@@ -667,6 +670,7 @@ class _Model:
         b.Da = Ra @ self.rest_root_T[None]
         b.W = _world_rows(self.P, Rs, ps)
         b.wind = self.wind
+        b.g = np.interp(np.minimum(ks + taus, self.F - 1), np.arange(self.F), self.gscale)   # gravity's share
         if self.wind is not None:
             b.wmean, b.wdisp, b.wt, b.wcar = (self.wind.mean_at(ts), self.wind.displacement_at(ts), ts,
                                               self.wind.carrier_at(ts))
@@ -856,7 +860,7 @@ class _NumpyEngine:
             v = self.v * decay[:, None] + u * M.wgain[:, None]
         else:
             v = self.v * decay[:, None]
-        p = self.x + v * dt + GRAVITY * dt * dt
+        p = self.x + v * dt + GRAVITY * dt * dt * blk.g[r]
         self.shape_pass(p, H0, Da, True)
         contact = np.zeros(M.N, bool)
         pushed = np.zeros_like(p)
@@ -1447,7 +1451,7 @@ if HAVE_NUMBA:
                     H0, Da, sc, sb, sm, bsc, bsr, wmean, wdisp, wt, wcar,
                     skind, sk, floor_z, has_floor,
                     kv, ae, ph, om, use_wind, use_turb,
-                    dt, samp, sweeps, ftl, xs, Ds, dep, who,
+                    dt, gz, samp, sweeps, ftl, xs, Ds, dep, who,
                     la, lb, ld0, lk, lrr, len_, lmid, chain_of, is_root,
                     bend, bcos, carries, carry, H0p, Dap):
         """Advance the chains cids (one coupled group, or independent chains) by nsteps substeps in lockstep (substep i
@@ -1465,7 +1469,6 @@ if HAVE_NUMBA:
             np.zeros((N, 3))
         hit, cont = np.zeros(N, np.bool_), np.zeros(N, np.bool_)
         lpush, lhit = np.zeros((nl, 3)), np.zeros(nl, np.bool_)
-        gdt2 = (-9.81 * dt) * dt
         tpush = SMOOTH * np.log(K + 1.0) + 1e-6                 # nearer than this (m) to a shape, a push is possible
         cut = tpush + REACH
         if rec_start >= 0:
@@ -1487,7 +1490,7 @@ if HAVE_NUMBA:
                     else:
                         _nb_carry(j0, j1, carry[c], H0[r - rstride, c], Da[r - rstride, c], H0[r, c], Da[r, c], x, v,
                                   tgt_prev)
-                _nb_pre(j1 - j0, j0, r, x, v, dec, wgain, wmean, wdisp, wt, kv, ae, ph, om, use_wind, use_turb, dt, gdt2,
+                _nb_pre(j1 - j0, j0, r, x, v, dec, wgain, wmean, wdisp, wt, kv, ae, ph, om, use_wind, use_turb, dt, gz[r],
                         p[j0:j1], ub[j0:j1], H0[r, c], Da[r, c], Dst[j0:j1], tgt[j0:j1], Lc[j0:j1], d0[j0:j1],
                         alpha[j0:j1], pushed[j0:j1], cont[j0:j1])
             for it in range(ITERS):                             # lengths, lateral ties, collisions
@@ -1654,7 +1657,8 @@ class _NumbaEngine:
                         dec, self.wgain, self.stick, self.sdec, self.rr, self.enable, self.x, self.v, self.tgt_prev,
                         self.Dst, self.tgt, blk.H0, blk.Da, sc, sb, sm, bsc, bsr,
                         *[np.ascontiguousarray(a) for a in wind[:4]], self.skind, self.sk, floor[0], floor[1],
-                        *wind[4:8], wind[8], wind[9], M.dt, M.samples, M.sweeps, M.ftl, self.xs, self.Ds, self.dep,
+                        *wind[4:8], wind[8], wind[9], M.dt, ((-9.81 * M.dt) * M.dt) * blk.g, M.samples, M.sweeps, M.ftl,
+                        self.xs, self.Ds, self.dep,
                         self.who, *grp[1:], self.chain_of, self.is_root, M.bends, self.bcos, M.carries, self.carry,
                         self.H0p, self.Dap)
 
@@ -1699,7 +1703,7 @@ def _nonfinite(M, eng, a, b):
 
 def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, params, frames, rig, fps=30.0, substeps=10,
              settle_s=1.5, wind=None, log=None, *, use_masks=False, anchor_free=geom.ANCHOR_FREE, engine="auto",
-             threads=None):
+             threads=None, gravity=None):
     """Simulate the chains over frames (f0, f1) inclusive.
 
     chains: geom.Chains whose head / end are already in world space (the armature's world matrix at the first frame
@@ -1718,7 +1722,7 @@ def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, para
     if engine == "numba" and not HAVE_NUMBA:
         raise RuntimeError("strands: numba is not installed (pip install 'mk-mmd[fast]')")
     M = _Model(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, params, frames, rig, fps, substeps, wind,
-               use_masks, anchor_free)
+               use_masks, anchor_free, gravity)
     F, N = M.F, M.N
     out = _Out()
     out.xs, out.Ds = np.zeros((F, N, 3)), np.zeros((F, N, 3, 3))
@@ -1872,7 +1876,7 @@ def main(argv=None):
                        spec.get("params"), frames, rig, fps, int(spec.get("substeps", 10)),
                        float(spec.get("settle_s", 1.5)), wind, log, use_masks=bool(spec.get("use_masks", False)),
                        anchor_free=float(spec.get("anchor_free", geom.ANCHOR_FREE)), engine=spec.get("engine", "auto"),
-                       threads=spec.get("threads"))
+                       threads=spec.get("threads"), gravity=a.get("gravity"))
         quats = local_quats(chains, res, bone_rest_R)
         rep = report(chains, res, window)
     except (ValueError, RuntimeError) as e:                                    # bad input, or numba asked for but absent

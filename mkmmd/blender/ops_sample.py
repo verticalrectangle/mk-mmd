@@ -14,7 +14,9 @@ args:
                                              under the prop root(s) `prop` (a name or a list; no colliders, no hidden
                                              objects, no characters), minus `exclude` (names or fnmatch patterns)
 npz keys: frames; per armature index a: bone_world_a (F,n,4,4) posed world matrices, bone_rest_a (n,4,4) rest
-matrices (armature space), arm_world_a (F,4,4); obj_world (F,m,4,4); expr_i (F,...); cam_world (F,4,4), cam_lens,
+matrices (armature space), arm_world_a (F,4,4); obj_world (F,m,4,4); obj_bbox (F,m,2,3) the world bounds (min, max) of
+each object's evaluated geometry (zeros when it has none on that frame), `objects` holding names or fnmatch patterns
+(`words_*`, expanded to the matching names in name order); expr_i (F,...); cam_world (F,4,4), cam_lens,
 cam_sensor (F,2), cam_shift (F,2), cam_clip (F,2); per mesh request k: mesh_v_k (n,3) vertices, mesh_t_k (m,3) triangle
 corners (indices into mesh_v_k), mesh_o_k (m,) index of the owning object in the reply's meshes[k].objects. The JSON
 reply names everything."""
@@ -273,7 +275,13 @@ def sample(args):
             if f in fams:
                 fam_sel[arm_name][f].append(pb.name)
                 want_bones.setdefault(arm_name, []).append(pb.name)
-    objects = list(dict.fromkeys(args.get("objects", [])))
+    objects = []
+    for n in args.get("objects", []):                   # a name, or an fnmatch pattern: every object it matches, by name
+        if any(ch in n for ch in "*?["):
+            objects += sorted(o.name for o in bpy.data.objects if fnmatchcase(o.name, n))
+        else:
+            objects.append(n)
+    objects = list(dict.fromkeys(objects))
     for it in items:
         kind, owner, name = it["source"]
         if kind == "bone":
@@ -311,6 +319,7 @@ def sample(args):
         out[f"bone_rest_{k}"] = np.array([_mat(arm.data.bones[n].matrix_local) for n in names]).reshape(-1, 4, 4)
         out[f"arm_world_{k}"] = np.zeros((F, 4, 4))
     out["obj_world"] = np.zeros((F, len(objects), 4, 4))
+    out["obj_bbox"] = np.zeros((F, len(objects), 2, 3))      # world bounds of the evaluated geometry (0, 0: none)
     expr_vals = [[] for _ in exprs]
     want_cam = bool(args.get("camera"))
     cam_names = []
@@ -329,7 +338,12 @@ def sample(args):
             for j, n in enumerate(names):
                 out[f"bone_world_{k}"][i, j] = _mat(mw @ ae.pose.bones[n].matrix)
         for j, n in enumerate(objects):
-            out["obj_world"][i, j] = _mat(bpy.data.objects[n].evaluated_get(dg).matrix_world)
+            ev = bpy.data.objects[n].evaluated_get(dg)
+            out["obj_world"][i, j] = _mat(ev.matrix_world)
+            corners = np.array([list(c) for c in ev.bound_box]) if ev.type in GEOMETRY else np.zeros((0, 3))
+            if len(corners) and np.ptp(corners, axis=0).max() > 1e-9:
+                w = corners @ out["obj_world"][i, j, :3, :3].T + out["obj_world"][i, j, :3, 3]
+                out["obj_bbox"][i, j] = (w.min(0), w.max(0))
         if codes:
             ns["frame"] = f
             ns["t"] = (f - proj["frame0"]) / proj["fps"] if proj.get("fps") else None

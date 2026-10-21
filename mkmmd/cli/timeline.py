@@ -24,6 +24,12 @@ count, onsets per beat and how they sit on the 8th-note grid of the beats (media
 onsets between 8ths). --lo/--hi (Hz) is the band whose energy rises are the onsets (default 800-6000: pick noise and
 string harmonics).
 
+`hits` writes the hit lanes of a timeline's song span, from the same cached stems, to a hits file (`[audio] hits`,
+default audio/hits.json): when the drums are struck (kick, snare, hat: {t, db}), when the mix or the bass falls silent
+(stop, bass_out: {t, dur, db}) and the notes of the `other` stem with their pitch (notes: {t, db, midi}), in clip
+seconds (mkmmd.timeline.hits). --lane / --gap / --notes add lanes or replace the default of the same name; it prints
+numbers only.
+
 Examples:
   mk timeline analyze                                # the project's clip
   mk timeline analyze song.flac --start 12.0 --duration 40 --out /tmp/tl.json
@@ -31,6 +37,8 @@ Examples:
   mk timeline show audio/timeline.json               # numbers only
   mk timeline onsets                                 # the project's timeline: stem other, 800-6000 Hz
   mk timeline onsets --timeline /tmp/tl.json --stem other --lo 1000 --hi 5000
+  mk timeline hits                                   # audio/hits.json: kick, snare, hat, stop, bass_out, notes
+  mk timeline hits --lane clap=drums:1000-4000 --gap breath=vocals:12:0.15
 """
 STEMS = ("drums", "bass", "other", "vocals")
 
@@ -64,6 +72,18 @@ def add(sub):
     on.add_argument("--context", type=float, default=20.0,
                     help="the --context given to analyze: the stem cache is keyed by the song span (default 20)")
     add_project_arg(on)
+    hi = s.add_parser("hits", help="hit lanes of a timeline's span (drums, stops, notes) into a hits file")
+    hi.add_argument("--timeline", help="timeline JSON (default: the project's audio/timeline.json)")
+    hi.add_argument("--out", help="hits JSON to write (default: audio/hits.json beside the project's timeline)")
+    hi.add_argument("--lane", action="append", default=[], metavar="NAME=STEM:LO-HI",
+                    help="an onset lane of a stem's band (stems: drums, bass, other, vocals, mix), repeatable")
+    hi.add_argument("--gap", action="append", default=[], metavar="NAME=STEM:DROP_DB:SECONDS",
+                    help="a lane of the times a stem falls DROP_DB under its running median for SECONDS, repeatable")
+    hi.add_argument("--notes", action="append", default=[], metavar="NAME=STEM:LO-HI",
+                    help="a lane of note onsets with their pitch, repeatable")
+    hi.add_argument("--context", type=float, default=20.0,
+                    help="the --context given to analyze: the stem cache is keyed by the song span (default 20)")
+    add_project_arg(hi)
     p.set_defaults(func=run)
 
 
@@ -99,6 +119,38 @@ def onsets(args, proj):
     return 0
 
 
+def hits(args, proj):
+    """Write the hit lanes of a timeline's span (mkmmd.timeline.hits) to a hits file."""
+    path = args.timeline or (proj.root / "audio" / "timeline.json" if proj else None)
+    path = Path(path).expanduser() if path else None
+    if not path or not path.exists():
+        raise UsageError("no timeline file: pass --timeline (or run inside a project with audio/timeline.json)")
+    tl = json.loads(path.read_text(encoding="utf-8"))
+    audio = (tl.get("audio") or {}).get("file")
+    if not audio or not Path(audio).expanduser().exists():
+        raise UsageError(f"{audio or 'the timeline audio'}: not found (run `mk timeline analyze`)")
+    from ..timeline import hits as H
+    try:
+        lanes = {kind: dict(base) for kind, base in (("onsets", H.ONSETS), ("gaps", H.GAPS), ("notes", H.NOTES))}
+        for kind, given in (("onsets", args.lane), ("gaps", args.gap), ("notes", args.notes)):
+            for text in given:
+                name, spec = H.parse(text, kind)
+                for other in lanes.values():
+                    other.pop(name, None)
+                lanes[kind][name] = spec
+        cache = (proj.mk_dir / "cache" / "timeline") if proj else CFG.cache_dir() / "timeline"
+        got, meta = H.timeline_hits(tl, str(cache), args.context, lanes["onsets"], lanes["gaps"], lanes["notes"],
+                                    log=stage)
+    except H.HitsError as e:
+        raise UsageError(str(e))
+    out = Path(args.out).expanduser() if args.out else path.parent / "hits.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(got, indent=1), encoding="utf-8")
+    emit({"out": str(out), "timeline": str(path), "lanes": {k: {**v, **meta[k]} for k, v in
+                                                             H.summary(got, tl.get("beats", [])).items()}})
+    return 0
+
+
 def stage(*what):
     """The analysis's stages (stems, whisper, align) on stderr as `timeline: NAME` lines: the Brief tab shows them while
     it waits. Never lyric text."""
@@ -116,6 +168,8 @@ def run(args):
         return 0
     if args.action == "onsets":
         return onsets(args, proj)
+    if args.action == "hits":
+        return hits(args, proj)
     au = proj.data.get("audio", {}) if proj else {}
     audio = args.audio or au.get("file")
     if not audio:

@@ -8,6 +8,8 @@ frames outside every window come back untouched. The layers an effect needs were
                         without its figure (`back/`); a rim of `edge` colour runs round it. The scale rises until the figure
                         fills the frame at the last frame of an expand / the first of a collapse, whatever its size.
     slash               a band sweeps across; behind it the incoming shot, ahead of it the outgoing one, the switch under it.
+    whip                a whip pan: the outgoing frame is flung off the frame and the incoming shot follows it in, side by
+                        side, both smeared along their way by the shutter.
     insert              a thought bubble over the host frame holds the other shot at reduced size (picture in picture),
                         popping in and out, or growing until its picture is the whole frame.
     glitch              the figure (the frame against its `bare/` layer, the same frame without the glitch's objects)
@@ -16,6 +18,7 @@ frames outside every window come back untouched. The layers an effect needs were
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -29,6 +32,18 @@ COVER_MARGIN = 1.02                      # the scale that fills the frame, with 
 DOT_RADII = (0.12, 0.19, 0.28)           # the trailing circles' radii, as shares of the bubble's half-height
 DOT_FIT = (0.085, 0.13, 0.18)            # and at most these shares of the trail's length (head edge to cloud rim)
 DOT_AT = (0.12, 0.40, 0.75)              # where they sit along it, as shares measured from the head edge
+
+
+def read_point(frames_dir, key, frame, size):
+    """(pixel coordinates, frame heights per metre at its depth) of a projected point, point/<key>/<frame>.json in an
+    output's frame folder; a FileNotFoundError when it is missing, unreadable or from before its scale was stored."""
+    rel = TR.point_rel(key, frame)
+    try:
+        data = json.loads((Path(frames_dir) / rel).read_text(encoding="utf-8"))
+        return M.frac_to_px(data["p"], size), float(data["m"])
+    except (OSError, ValueError, KeyError):
+        raise FileNotFoundError(f"{Path(frames_dir) / rel}: layer missing, unreadable or from before its scale was stored "
+                                f"(mk render makes it)") from None
 
 
 class CutFx:
@@ -71,7 +86,7 @@ class CutFx:
         touches `frames` fills the frame (a TransitionError when one cannot)."""
         want = set(frames)
         for tr in self.plan["transitions"]:
-            if tr["kind"] != "slash" and any(f in want for f in range(tr["first"], tr["last"] + 1)):
+            if tr["matte"] is not None and any(f in want for f in range(tr["first"], tr["last"] + 1)):
                 self._top_scale(tr)
 
     def frame(self, frame, main):
@@ -88,6 +103,8 @@ class CutFx:
                             colors=spec["colors"])
         if spec["kind"] == "slash":
             return self._slash(spec, frame, main)
+        if spec["kind"] == "whip":
+            return self._whip(spec, frame, main)
         return self._matte(spec, frame, main)
 
     # ---------------------------------------------------------------- layers
@@ -106,14 +123,7 @@ class CutFx:
         return np.asarray(im, np.float32) / 255.0
 
     def _point(self, key, frame):
-        """(index coordinates, frame heights per metre at its depth) of a projected point, point/<key>/<frame>.json."""
-        rel = TR.point_rel(key, frame)
-        try:
-            data = json.loads((self.dir / rel).read_text(encoding="utf-8"))
-            return M.frac_to_px(data["p"], self.size), float(data["m"])
-        except (OSError, ValueError, KeyError):
-            raise FileNotFoundError(f"{self.dir / rel}: layer missing, unreadable or from before its scale was stored "
-                                    f"(mk render makes it)") from None
+        return read_point(self.dir, key, frame, self.size)
 
     def _plate(self, shot, frame, main):
         """What `shot` shows at `frame`: the cut's own frame when it is the shot in the cut there, else its plate."""
@@ -192,6 +202,26 @@ class CutFx:
             mid = pos + (-half if sec["offset"] < 0 else half)               # the thin band's centre, a gap clear of the main one
             out = M.paint(out, sec["color"], M.coverage(np.abs(s - mid) - sec["width"] * diag / 2.0))
         return M.paint(out, tr["color"], M.coverage(np.abs(s - pos) - tr["width"] * diag / 2.0))
+
+    # ---------------------------------------------------------------- whip
+    def _whip(self, tr, frame, main):
+        """The outgoing frame and the incoming shot side by side, flung along the whip's way by its eased progress and
+        smeared over the way each frame's shutter (`blur` frames) covers."""
+        w, h = self.size
+        incoming = self._plate(tr["plate"], frame, main)
+        k = frame - tr["first"]
+        across = tr["dir"] in ("left", "right")
+        span = w if across else h
+        u = TR.whip_progress(tr, k)
+        speed = (TR.whip_progress(tr, k + 0.5) - TR.whip_progress(tr, k - 0.5)) * span      # px per frame
+        first, second = (main, incoming) if tr["dir"] in ("left", "up") else (incoming, main)
+        strip = np.concatenate([first, second], axis=1 if across else 0)                   # in the order they pass
+        blur = int(round(abs(speed) * tr["blur"]))
+        if blur > 1:
+            strip = cv2.blur(strip, (blur, 1) if across else (1, blur), borderType=cv2.BORDER_REPLICATE)
+        start = u * span if tr["dir"] in ("left", "up") else (1.0 - u) * span                # where the frame looks in
+        M = np.float32([[1, 0, -start], [0, 1, 0]]) if across else np.float32([[1, 0, 0], [0, 1, -start]])
+        return cv2.warpAffine(strip, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
     # ---------------------------------------------------------------- insert
     def _dots(self, start, centre, a, b):

@@ -303,6 +303,26 @@ def test_the_slash_sweep_direction_follows_dir(tmp_path):
         assert px(img, side, 5) == pytest.approx(COL["l2"], abs=0.02)        # the side the band started from shows the new shot
 
 
+def test_a_whip_flings_the_outgoing_frame_off_and_brings_the_incoming_shot_in_behind_it(tmp_path):
+    for direction in ("left", "right"):
+        d = project(transition=[{"at": 6.0, "kind": "whip", "dir": direction, "dur": 0.3, "blur": 0.0}], insert=[])
+        plan, fx = build(tmp_path / direction, d)
+        t = plan["transitions"][0]
+        shares = []
+        for f in range(t["first"], t["last"] + 1):
+            img = fx.frame(f, P.read(tmp_path / direction / f"{f:05d}.png"))
+            new = np.flatnonzero(np.abs(img[5] - np.asarray(COL["l2"])).max(axis=1) < 0.02)   # the incoming shot's columns
+            assert len(new) == 0 or (new.max() == W - 1 if direction == "left" else new.min() == 0)   # from its side
+            shares.append(len(new) / W)
+        assert shares[0] < 0.25 and shares[-1] > 0.75 and all(a < b for a, b in zip(shares, shares[1:]))
+    smeared, fx = build(tmp_path / "blur", project(transition=[{"at": 6.0, "kind": "whip", "dur": 0.3}], insert=[]))
+    t = smeared["transitions"][0]
+    mid = (t["first"] + t["last"]) // 2
+    row = fx.frame(mid, P.read(tmp_path / "blur" / f"{mid:05d}.png"))[5]
+    pure = lambda c: np.abs(row - np.asarray(c)).max(axis=1) < 0.02                      # noqa: E731
+    assert (~pure(COL["l2"]) & ~pure(COL["s2"])).sum() > 4                               # the seam smeared along the way
+
+
 # ---------------------------------------------------------------- insert
 def test_the_bubble_is_a_picture_in_picture_with_an_outline_that_pops_in_holds_and_grows(world):
     root, plan, fx = world

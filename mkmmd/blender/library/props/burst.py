@@ -48,6 +48,20 @@ def _driver(owner, path, expr, root, index=-1):
             raise ValueError(f"burst: the driver on {path} is not a Blender simple expression ({expr})")
 
 
+def _glass(name, rgb, glow):
+    """A shard's material: a bright mirror of a metal tinted `rgb` with a glow of its own, so a sliver reads on black."""
+    m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    m.use_nodes = True
+    b = m.node_tree.nodes.get("Principled BSDF")
+    b.inputs["Base Color"].default_value = (*rgb, 1.0)
+    b.inputs["Metallic"].default_value = 1.0
+    b.inputs["Roughness"].default_value = 0.06
+    b.inputs["Emission Color"].default_value = (*rgb, 1.0)
+    b.inputs["Emission Strength"].default_value = glow
+    m.diffuse_color = (*rgb, 1.0)
+    return m
+
+
 @register("burst")
 def burst(name, coll, root, slots=None):
     slots = dict(slots or {})
@@ -67,7 +81,8 @@ def burst(name, coll, root, slots=None):
     meshes = {}
     for kind in BU.KINDS:
         if mix.get(kind, 0.0) > 0:
-            mat = _material(f"{name}_{kind}", _colour(colours[kind], slots), glow)
+            rgb = _colour(colours[kind], slots)
+            mat = _glass(f"{name}_{kind}", rgb, glow) if kind == "shard" else _material(f"{name}_{kind}", rgb, glow)
             meshes[kind], _ = SH.mesh_data(f"{name}_{kind}", BU.mesh(kind), lambda _role, m=mat: m)
     objs, at = [], {k: 0 for k in BU.KINDS}
     for piece in BU.layout(count, seed, mix):
@@ -79,6 +94,8 @@ def burst(name, coll, root, slots=None):
         o.rotation_mode = "XYZ"
         if kind == "heart":
             o["mk_heart"] = True
+        elif kind == "shard":
+            SH.exempt(o, "a sliver of broken glass: flat and sharp by nature")
         o["u"] = 0.0
         ex = BU.expressions(piece)
         _driver(o, '["u"]', ex["u"], root)

@@ -69,6 +69,10 @@ a final of a whole song takes hours to render.
 per line) beats Whisper's line breaks. For a strummed or plucked part, `mk timeline onsets` recomputes the onsets of a Demucs stem. If
 the transcription is wrong the words move, not the beats: check `words_source` and `word_stats` in the summary. The Brief tab's
 Time the words runs this on the clip already (with the lyrics when the person pasted them); run it again when the part changes.
+`mk timeline hits` then writes the moments to key things on (`audio/hits.json`, `[audio] hits`): kick, snare and hat hits, the stops
+(the mix falling silent), the bass's silences and the notes with their pitch; a video that moves on the drums starts there. Check a lane
+against the music before leaning on it (`mk site --tab music` shows them): a lane is a detector's guess, and `db` sorts the real hits
+from the leakage.
 
 ## 3. Storyboard
 
@@ -111,14 +115,21 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   A character that turns round uses `step_turn` (the head, chest and hips in turn, the feet stepping), not a `[[key]]` on its root's
   rotation: that spins it like a figure on a turntable. A character in the air (a jump, a blast; its height keyed on the root) gets
   `air`, so its legs tuck and reach down to land instead of hanging straight, and a `crouch` before it to brace.
+  A strut is `walk = {steps, cross = 1, sway = 0.035, arms = 0.1}` (the feet on one line, the hips over the foot that is down); give both
+  hands a `rest` move so the arms swing. A zero-g moment is `[sim.<cast>] gravity` eased out over a beat or two (`[[t, 1], [t + 0.4,
+  0]]`), not cut to 0 on one frame: a sudden cut flings the hair.
   Group and material morphs (vowels with a tongue bone, a blush) are keyed like any other: the cast stage binds the model's morph sliders
   (`bound_morphs` in its report).
   Take the numbers from `mk ref measure` or a timeline, not from taste.
 - **Moves** ([Moves](design.md#moves)): `[[move.<cast>]]` puts named moves on the beats (`chest_pat`, `paws`, `point`, `heart_wink`,
   `hands_up`, `stank` ...) or on clip seconds of their own (`hits = [...]`: a `bonk` on the snares; `flung` throws both arms up on its
   time, as a reaction does, where other moves set off early to arrive on it), and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them (a two-hand move then
-  plays with the free hand only; `place = "dainty"` rests a hand lightly on the front of a skirt, elbows in); they compile to the pose's hand keys (riding the chest) and perform's lean, twitches and faces. The hands
-  come in from outside and stop at the body, clothes and hair, and wrists stay within 60 degrees of the forearm: the pose report's
+  plays with the free hand only; `place = "dainty"` rests a hand lightly on the front of a skirt, elbows in); they compile to the pose's hand keys (riding the chest) and perform's lean, twitches and faces.
+  The poses `hair_flip`, `over_shoulder`, `hand_hip` and `finger_gun` hold a body and head attitude too (mirrored for the right hand): put
+  one on a dead stop of the music, between two walks, and shoot it from the side it reads from. A `hair_flip`'s hand runs
+  through the hair: with long simulated hair watch it in motion before keeping it (a lock can fly out like a whip). The hands
+  come in from outside and stop at the body and clothes (simulated hair and skirts make way, so a hand hangs by the thigh),
+  and wrists stay within 60 degrees of the forearm: the pose report's
   `moves.places` says how far each place was kept out and how much its wrist bends. A hand travels between places at a human pace
   and the build refuses a move it cannot reach in time (it says how long the trip takes): a few gestures, each held, read better
   than one on every word. Draw a pose sheet of every move, front and 3/4, and look at it closely before building the shots, then
@@ -147,11 +158,12 @@ fingertip bone's `.tail` and the prop.
 
 - **Shots** ([Shots](design.md#shots)): one `[[shot]]` per cut, a camera per output is made for you. Mount the camera on a car or a set, aim it at a target
   (`"cast:rin.head"`), give lens and lag; `frame = {subject, fill, solve}` solves the lens or dolly per output. A shot that two outputs frame differently
-  overrides keys in `[shot.aspect.<output>]`.
+  overrides keys in `[shot.aspect.<output>]`. A side-scroller is `follow = {target = "cast:rin.center", axes = "x"}` with a fixed `at` and `look` (her hops
+  rise in the frame, a tumble never spins the camera); `solve = "dolly"` with a keyed lens is a dolly zoom; `keys[].roll` turns the frame on the beat.
 - **Looks**: `style = "silhouette"` (flat background, the scene in one colour, accents in another), `style = "vector"` (a flat-vector drawing: every material a tone
   of the project's `[vector]` table, two-tone shading, outlines) and `reflection` (her image in a pane) are composed at render time; `mk look` draws them as
   `mk render` will, `--no-styles` draws the shot as lit. A vector look starts with the model's material names: `mk q BLEND --list materials` lists them with
-  the name a `[vector] materials` rule matches, and the shots stage warns about a rule that names none. `[[ring]]` entries flip a vector shot to the look's
+  the name a `[vector] materials` rule matches, and the build warns about a rule that names none. `[[ring]]` entries flip a vector shot to the look's
   `opposite` palette inside discs and bands that sweep out from a point on a beat.
 - **Freezes**: `[[freeze]] {from, to}` holds the world while the shot's camera goes on moving (a hit-stop orbit); `mk look` and `mk render` show it, `mk q`
   reads the timeline as it is.
@@ -159,9 +171,20 @@ fingertip bone's `.tail` and the prop.
   cut; the build refuses a window that starts before `[scene] start`. Preview a frame inside one with `mk look`.
 - **Glitches** ([Glitches](design.md#glitches)): `[[glitch]] {from, to, objects}` makes a character (its meshes, `"Rin_*"`, and what it holds) break up in
   jumping slices and colour ghosts and vanish by `to`; the build keeps it hidden after that. Start it on a hit; `seed` gives another take.
+- **Frame effects** ([Frame effects](design.md#frame-effects)): `[[fx]]` bends, smears and draws over the finished pictures: `lens` (a black hole's
+  lensing about a scene point), `echo` (figure trails), `slitscan` (time smeared across the frame), `push` (zoom into a pupil that shows the
+  first frame: the seam of a loop), `scope` (a stem as an oscilloscope trace), `zoom` (a punch on every kick), `shock` (a pressure ring
+  running out from a point), `slab` (Persona's slanted panels slamming in and flung off) and `tint` (the Dark Hour's green over a stop).
+  They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
+  (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
+  transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round
+  a `hole`) build a world in deep space; a `burst` of `shard`s on a `[[key]] lane = "kick"` bursts glass on every kick.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
   nib, and screen type laid over the picture. Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
-  Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to.
+  Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
+  `bullets = {at = "cast:rin.center", offsets = [...]}` ([Lyrics](design.md#lyrics)): each flies past where she is on the frame it lands; key her hop or duck on
+  the same onsets and prove it with a `clearance` check. Persona's kinetic type is screen type with `lyrics = {style = "slam", layout = "same",
+  recycle = {fade = 4, slide = 7}, backing = {color = "#E3263A", torn = 0, slant = 14}}` in a heavy italic font.
 
 ## 7. Checks
 
@@ -181,12 +204,15 @@ A project's `[[check]]` entries define done; `mk check` runs them all in one Ble
 | No near-black, stays in palette | `palette` on rendered frames |
 | No shimmer | `flicker` on rendered frames, compared shot with shot |
 | A hero prop is not a pile of boxes | `form`, default `max` 0.25 (see Modelling props) |
+| Words that fly past miss her (or hit her on purpose) | `clearance` with the entry's words, `objects = "<entry>_l*"`, `min` a margin above 0 (or `max = 0` for a hit) |
 
 Reading results:
 
 - `jitter` with a `static` note: the chain barely moves and the ratio is float32 noise; judge by `jerk_p95_mm`.
 - `penetration` is measured on the baked bones (what renders), with each chain's own radius. It reports the frame, bone and the shape it is in (`body:<bone>` for the model's own
   bodies). Body capsules are fatter than the mesh, so a few millimetres rarely show; look before fixing.
+- `clearance` measures the rig's collision bodies, which often stop at the ankles and wrists: a word that clears the ankle capsules by less than a shoe's height
+  goes through the shoe. `detail.at_frame` and `detail.body` say where to look.
 - `joint_limits` does not flag sideways elbow bends: MMD rigs treat the elbow as a ball joint and professional motions put upper-arm rotation there. It flags fold-through, in-plane
   hyperextension, knees bending the wrong way or sideways, wrists past 110 degrees, and necks and spines past what dances do.
 - `framing` margins are fractions of the frame; negative means outside the safe area. Configure it per shot: a page close-up is not supposed to contain the head.

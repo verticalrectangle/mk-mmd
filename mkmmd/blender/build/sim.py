@@ -11,6 +11,8 @@
   wind = {direction, speed, exposure, gust, gust_period, turbulence, scale, seed, carrier = "car"}: with a carrier,
          the vehicle's velocity enters the air (exposure: the share of its motion the air does not follow)
   use_masks = false, anchor_free = 0.25, substeps = 10, settle_s = 1.5, engine = "auto"
+  gravity = [[t, scale], ...] the world's gravity over time (1 as it is, 0 none: the hair floats; linear between keys,
+                              held outside them; the first frame settles under the first key's)
 A member whose [[cast]] says physics = "none" is left out; a table with no keys simulates nothing (the log says so); a table
 named after no cast member or holding a key this stage does not read is refused (mkmmd.core.tables).
 The whole frame range is simulated (the pre-roll lets the hair settle while the character eases into its pose).
@@ -93,6 +95,18 @@ def collider_items(ctx, spec, arm, floor):
     return [it for s in specs for it in resolve_collider(s, arm.name)]
 
 
+def gravity_scale(keys, ts, where):
+    """`gravity = [[t, scale], ...]` (clip seconds; 1 is the world's gravity, 0 none, held before the first key and after
+    the last, linear between) as one scale per time of `ts`."""
+    try:
+        pts = sorted((float(t), float(g)) for t, g in keys)
+    except (TypeError, ValueError):
+        raise BuildError(f"{where}: gravity is [[t, scale], ...] (clip seconds, 1 = the world's gravity)") from None
+    if not pts:
+        raise BuildError(f"{where}: gravity has no keys")
+    return np.interp(np.asarray(ts, float), [t for t, _ in pts], [g for _, g in pts])
+
+
 def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
     """Simulate the chains of rig_pass, key them, return (bones, penetration (F, 3), report)."""
     frames = ctx.frames
@@ -124,6 +138,8 @@ def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
         if veh is None:
             raise BuildError(f"sim.{m.name}: wind carrier {carrier!r} is not a vehicle")
         arrays["carrier_vel"] = np.gradient(np.asarray(veh["pos"], float), axis=0) * ctx.fps
+    if spec.get("gravity") is not None:
+        arrays["gravity"] = gravity_scale(spec["gravity"], [ctx.time(f) for f in frames], f"sim.{m.name}")
     solver_spec = {"rig": rig_pass, "families": fams, "armature": arm.name,
                    "frames": [int(frames[0]), int(frames[-1])], "fps": ctx.fps,
                    "substeps": int(spec.get("substeps", 10)), "settle_s": float(spec.get("settle_s", 1.5)),
@@ -131,11 +147,23 @@ def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
                    "params": spec.get("params") or {}, "wind": wind or None,
                    "use_masks": bool(spec.get("use_masks", False)),
                    "anchor_free": float(spec.get("anchor_free", geom.ANCHOR_FREE)),
-                   "window": [ctx.frame0, int(frames[-1])], "engine": spec.get("engine", "auto")}
+                   "window": [min(ctx.frame0, int(frames[-1]) - 2), int(frames[-1])],   # a still's frame and two before
+                   "engine": spec.get("engine", "auto")}
     res, rep = ctx.solve("mkmmd.solvers.strands", arrays, solver_spec, tag=tag)
     for i, b in enumerate(chains.bones):
         K.key_bone_quats(arm, b, frames, res["quats"][:, i], interp="LINEAR")
     return chains.bones, res["pen"], rep
+
+
+def families(ctx, name, m):
+    """The chain families the sim moves for cast member `name` (those of its `[sim.<cast>] families`, by default the
+    hair families, ears and tail, that its rig.json has): none without a table or with an empty one, with
+    `physics = "none"` or without a rig.json."""
+    spec = ctx.section("sim", name)
+    if not spec or CN.physics(m.spec) == "none" or m.rig is None:
+        return []
+    have = {c["family"] for c in m.rig["chains"]}
+    return [f for f in (spec.get("families") or DEFAULT_FAMILIES) if f in have]
 
 
 def run(ctx):
@@ -154,8 +182,7 @@ def run(ctx):
         if m.rig is None:
             raise BuildError(f"sim.{name}: the cast member has no rig.json (register it with mk assets add)")
         rig = m.rig
-        have = {c["family"] for c in rig["chains"]}
-        fams = [f for f in (spec.get("families") or DEFAULT_FAMILIES) if f in have]
+        fams = families(ctx, name, m)
         if not fams:
             ctx.log(f"sim {name}: no chains in families {spec.get('families') or DEFAULT_FAMILIES}")
             continue

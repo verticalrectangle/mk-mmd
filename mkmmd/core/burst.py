@@ -1,20 +1,21 @@
-"""A burst, bpy-free (the library prop `burst`, docs/design.md: the library table): pieces (puffy hearts, stars and smoke
-puffs) flung out from one point at a clip second, each easing out to its own reach while it spins and pops in, then
-shrinking away. Driver expressions on the frame do it (mkmmd/blender/library/props/burst.py lays them on the pieces), so
-a freeze (mkmmd.core.freeze), which holds the scene on a frame, holds them mid-air.
+"""A burst, bpy-free (the library prop `burst`, docs/design.md: the library table): pieces (puffy hearts, stars, smoke
+puffs, slivers of glass) flung out from one point at a clip second, each easing out to its own reach while it spins and
+pops in, then shrinking away. Driver expressions on the frame do it (mkmmd/blender/library/props/burst.py lays them on the
+pieces), so a freeze (mkmmd.core.freeze), which holds the scene on a frame, holds them mid-air.
 
 The pieces fly mostly across the picture (the directions are flattened toward the frame's plane, the prop's x-z: it
 faces -Y like a character), each with its own reach, size, a little delay and a spin; all from the `seed`, the same on
-every machine. Every piece is a pillow (mkmmd.core.hearts.pillow) of its outline: the heart's, a five-point star's
-with rounded tips, a cloud's."""
+every machine. A heart, a star or a puff is a pillow (mkmmd.core.hearts.pillow) of its outline (the heart's, a five-point
+star's with rounded tips, a cloud's); a shard is a thin flat sliver with sharp edges, mirror-bright."""
 import hashlib
 import math
 
 import numpy as np
 
 from . import hearts as HR
+from . import shell as CS
 
-KINDS = ("heart", "star", "puff")
+KINDS = ("heart", "star", "puff", "shard")
 PARAMS = {  # root property: (default, unit, doc); keyed with [[key]]
     "start": (0.0, "s", "the clip second it goes off"),
     "reach": (1.2, "m", "how far the farthest piece flies"),
@@ -24,7 +25,7 @@ PARAMS = {  # root property: (default, unit, doc); keyed with [[key]]
     "amount": (1.0, "", "overall scale of every piece (0 hides them)"),
 }
 MIX = {"heart": 0.45, "star": 0.35, "puff": 0.2}  # default share of each kind
-COLOURS = {"heart": "love", "star": "gold", "puff": "text"}
+COLOURS = {"heart": "love", "star": "gold", "puff": "text", "shard": "text"}
 POP = 0.08                       # share of its life a piece takes to pop in
 FADE = 0.7                       # share of its life after which it shrinks away
 FLAT = 0.45                      # how much of a direction toward or away from the camera is kept
@@ -149,12 +150,19 @@ def puff_outline(n=72, lobes=6, bump=0.13):
     return Q / (Q[:, 0].max() - Q[:, 0].min())
 
 
+def shard_outline():
+    """A sliver of broken glass: a long, thin, uneven triangle, (3, 2) points (x, z), unit width, counter-clockwise."""
+    return np.array([[-0.5, -0.11], [0.5, 0.02], [-0.36, 0.17]])
+
+
 def mesh(kind):
-    """The unit piece of a kind (`core.shell.Mesh`, unit width, facing -Y): a heart, a star, a cloud puff."""
+    """The unit piece of a kind (`core.shell.Mesh`, unit width, facing -Y): a heart, a star, a cloud puff, a shard."""
     if kind == "heart":
         return HR.heart_mesh()
     if kind == "star":
         return HR.pillow(star_outline(), 0.38, 16)
     if kind == "puff":
         return HR.pillow(puff_outline(), 0.7, 16)
+    if kind == "shard":
+        return CS.rounded_panel(shard_outline(), 0.02, r_edge=0.003, n=1).rot(90.0, 0.0, 0.0)
     raise ValueError(f"burst: no piece kind {kind!r} (have {', '.join(KINDS)})")

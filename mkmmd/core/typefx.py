@@ -83,14 +83,14 @@ def kinetic_spec(spec):
 
 
 # ------------------------------------------------------------------------------------------------------ backing
-BACKING_KEYS = {"color", "pattern", "pattern_color", "pad", "height", "torn", "dz", "glow", "scale", "seed"}
+BACKING_KEYS = {"color", "pattern", "pattern_color", "pad", "height", "torn", "dz", "glow", "scale", "seed", "slant"}
 PATTERNS = ("plain", "stripe", "dots", "check")
 TAPE_SCALE = {"stripe": (0.012, 0.38), "dots": (0.0165, 0.20), "check": (0.0102, 0.5)}   # pitch (m), duty / dot radius
 
 
 def backing_spec(spec):
     """The validated `backing` of a text: {color, pattern, pattern_color, pad [x, y] em, height em or None, torn (share of
-    the height), dz m, glow, scale (pattern pitch factor), seed} or None."""
+    the height), dz m, glow, scale (pattern pitch factor), seed, slant (degrees its ends lean: a parallelogram)} or None."""
     b = spec.get("backing")
     if b is None or b is False:
         return None
@@ -109,9 +109,11 @@ def backing_spec(spec):
            "pattern_color": b.get("pattern_color", "surface"), "pad": [float(pad[0]), float(pad[1])],
            "height": None if b.get("height") is None else float(b["height"]), "torn": float(b.get("torn", 0.1)),
            "dz": float(b.get("dz", 0.0006)), "glow": float(b.get("glow", 0.3)), "scale": float(b.get("scale", 1.0)),
-           "seed": int(b.get("seed", 1))}
+           "seed": int(b.get("seed", 1)), "slant": float(b.get("slant", 0.0))}
     if out["height"] is not None and not out["height"] > 0 or not out["scale"] > 0 or not 0.0 <= out["torn"] < 0.5:
         raise TextError("backing height and scale must be positive and torn in [0, 0.5)")
+    if not -60.0 <= out["slant"] <= 60.0:
+        raise TextError("backing slant is the lean of the strip's ends in degrees, -60 .. 60")
     return out
 
 

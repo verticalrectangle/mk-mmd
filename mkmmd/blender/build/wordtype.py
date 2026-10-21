@@ -59,13 +59,16 @@ def _shots(ctx):
 
 def expand(ctx, spec, measure=None, report=None):
     """The word texts of a lyrics entry. `measure` (string[, font] -> ink box, see mkmmd.core.wordtype.expand) serves the
-    layouts that put words next to each other; `report` (a dict) receives the summary: counts and (line, word) numbers."""
+    layouts that put words next to each other; `report` (a dict) receives the summary: counts and (line, word) numbers.
+    With `lyrics.bullets` the words fly past a target, read in the scene on the frame each word lands."""
     name = spec.get("name", "?")
     tl = _timeline(ctx, spec)
-    zoned = (spec.get("lyrics") or {}).get("zones") is not None       # each zone's panel is its own: asked per block
+    lyr = spec.get("lyrics") or {}
+    own = lyr.get("zones") is not None or bool(lyr.get("bullets"))      # zones: each zone's panel; bullets: their box
     try:
-        specs, summary = LY.expand(spec, tl, fps=ctx.fps, frame0=ctx.frame0, panel=None if zoned else _panel(ctx, spec),
-                                   measure=measure, shots=_shots(ctx), panel_of=lambda e: _panel(ctx, e))
+        specs, summary = LY.expand(spec, tl, fps=ctx.fps, frame0=ctx.frame0, panel=None if own else _panel(ctx, spec),
+                                   measure=measure, shots=_shots(ctx), panel_of=lambda e: _panel(ctx, e),
+                                   marks=lambda at, times: _marks(ctx, at, times, name))
     except LY.LyricsError as e:
         raise BuildError(str(e)) from None
     for key in ("first_frame", "last_frame", "cut_frame"):      # clip frames -> Blender frames (what `mk look` takes)
@@ -79,5 +82,24 @@ def expand(ctx, spec, measure=None, report=None):
         report.update(summary)
     ctx.log("lyrics", name, f"{summary['words']} word(s) of line(s) {summary['lines']}, Blender frames "
             f"{summary['first_frame']}..{summary['last_frame']}, cut at {summary['cut_frame']}"
-            + (f", {len(summary['blocks'])} shot(s)" if summary.get("blocks") else ""))
+            + (f", {len(summary['blocks'])} shot(s)" if summary.get("blocks") else "")
+            + (", flying past their target" if summary.get("bullets") else ""))
     return specs
+
+
+def _marks(ctx, target, times, name):
+    """The world point (x, y, z) of `target` at each clip second of `times`, the scene set to the frame of each."""
+    import bpy
+    from . import targets
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    out = []
+    try:
+        for t in times:
+            sc.frame_set(int(round(ctx.frame(t))))
+            out.append(tuple(targets.point(ctx, target)))
+    except BuildError as e:
+        raise BuildError(f"text {name!r}: lyrics bullets at: {e}") from None
+    finally:
+        sc.frame_set(keep)
+    return out

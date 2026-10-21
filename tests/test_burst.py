@@ -33,11 +33,12 @@ def _run(ex, P, t):
 
 def test_the_kinds_follow_the_mix_and_the_layout_is_the_seed_s():
     L = BU.layout(24, 3, BU.MIX)
-    assert {k: sum(p["kind"] == k for p in L) for k in BU.KINDS} == {"heart": 11, "star": 8, "puff": 5}
+    assert {k: sum(p["kind"] == k for p in L) for k in BU.KINDS} == {"heart": 11, "star": 8, "puff": 5, "shard": 0}
     again, other = BU.layout(24, 3, BU.MIX), BU.layout(24, 4, BU.MIX)
     assert all((a["dir"] == b["dir"]).all() and a["kind"] == b["kind"] for a, b in zip(L, again))
     assert any((a["dir"] != b["dir"]).any() for a, b in zip(L, other))
     assert {p["kind"] for p in BU.layout(5, 1, {"star": 1.0})} == {"star"}
+    assert {p["kind"] for p in BU.layout(6, 1, {"shard": 1.0})} == {"shard"}       # glass alone when the mix says so
 
 
 def test_pieces_fly_across_the_picture_more_than_toward_the_camera():

@@ -6,8 +6,10 @@ import time
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from .. import cutfx as CF
+from .. import framefx as FF
 from .. import master as MS
 from .. import post as P
 from ..core import palette as PAL
@@ -23,12 +25,18 @@ small speakers first (mkmmd.master: the booms of a lane of [audio] hits get over
 and the rest of the mix ducked under them; the sub is cut; the loudness is set under a limiter), and the report's
 `audio_master` says how far the booms stand out through a phone's speakers before and after. Missing frames are an error
 unless --allow-gaps (then the previous frame repeats). The report has each video's path, frames, size and the darkest luma
-after the grade (`min_luma`: above 0 when the floor keeps shadows off black).
+after the grade (`min_luma`: above 0 when the floor keeps shadows off black). A clip of one frame ([project] duration of
+one frame) is a still: each output's graded frame is written as <project>/out/<name>_<output>[_<preset>].png, at its
+full size and without sound. `[post] screen = "over"` lays the screen type over the finished, graded frame (its colours
+exactly as written, no grain or vignette on it: type set on a photograph) instead of under the grade ("graded", the
+default).
 
 [[transition]], [[insert]] and [[glitch]] entries (docs/design.md: Shots: Transitions and inserts, Glitches) are
 composited from the layers mk render drew next to the frames, before the grade: the grade, grain and vignette cover the
 whole frame. A missing layer is an error unless --allow-gaps (then the plain cut shows there); --no-transitions leaves the
-effects out. Lens streaks ([post] streaks) are drawn from the result's brightest lights; then screen type ([[text]] with
+effects out. [[fx]] frame effects (lens, echo, slitscan, push, scope; docs/design.md: Shots: Frame effects) follow, in
+the order of the table, reading the rendered frames around each one. Lens streaks ([post] streaks) are drawn from the
+result's brightest lights; then screen type ([[text]] with
 `screen`, docs/design.md: Text) is laid over it: <frames>/screen/<frame>.png, drawn by mk render.
 
 Examples:
@@ -94,7 +102,8 @@ def run(args):
     pal = PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots"))
     au = proj.data.get("audio", {})
     audio, mastering = None, None
-    if not args.no_audio and au.get("file"):
+    still = proj.last_frame == proj.frame0                 # a picture: one PNG per output, no sound
+    if not args.no_audio and au.get("file") and not still:
         f = Path(au["file"]).expanduser()
         if not f.exists():
             raise UsageError(f"[audio] file {f} not found")
@@ -108,6 +117,13 @@ def run(args):
     od.mkdir(exist_ok=True)
     t0 = time.time()
     report = {}
+    stems = FF.stem_source(proj.root, proj.mk_dir / "cache" / "timeline")
+    for spec in (plan or {}).get("fx") or []:                  # a scope's stems are there before anything is encoded
+        if spec["kind"] == "scope":
+            try:
+                stems(spec["timeline"], spec["stem"])
+            except FileNotFoundError as e:
+                raise UsageError(f"fx {spec['index']}: {e}") from None
     for o in outs:
         src = proj.root / "renders" / args.preset / o.name
         files = {int(p.stem): p for p in src.glob("*.png") if p.stat().st_size > 0} if src.exists() else {}
@@ -118,7 +134,10 @@ def run(args):
         first = P.read(files[min(files)]) if files else None
         if first is None:
             raise UsageError(f"{o.name}: no frames in {src}")
-        size = (first.shape[1] // 2 * 2, first.shape[0] // 2 * 2)
+        size = (first.shape[1], first.shape[0]) if still else (first.shape[1] // 2 * 2, first.shape[0] // 2 * 2)
+        screen = proj.data.get("post", {}).get("screen", "graded")
+        if screen not in ("graded", "over"):
+            raise UsageError(f"[post] screen = {screen!r}: \"graded\" (the grade covers the screen type) or \"over\"")
         grade = P.Grade(proj.data.get("post", {}), pal, size)
         st_spec = proj.data.get("post", {}).get("streaks")
         try:
@@ -129,16 +148,22 @@ def run(args):
         if fx:
             lacking = fx.missing(frames)
             if lacking and not args.allow_gaps:
-                raise UsageError(f"{o.name}: {len(lacking)} layer files of transitions / inserts missing in {src} (first "
-                                 f"{lacking[:3]}); mk render draws them, or pass --no-transitions or --allow-gaps")
+                raise UsageError(f"{o.name}: {len(lacking)} layer files of transitions / inserts / fx missing in {src} "
+                                 f"(first {lacking[:3]}); mk render draws them, or pass --no-transitions or --allow-gaps")
             if not lacking:
                 try:
                     fx.check(frames)
                 except TR.TransitionError as e:
                     raise UsageError(str(e)) from None
+        ffx = None
+        if (plan or {}).get("fx"):
+            ffx = FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, stem_of=stems,
+                             hits=FF.project_hits(proj.root, proj.data),
+                             frame_of=lambda g, files=files, size=size: P.read(files[g], size) if g in files else None,
+                             point_of=lambda key, g, src=src, size=size: CF.read_point(src, key, g, size))
         suffix = "" if args.preset == "final" else f"_{args.preset}"
-        out = od / f"{proj.name}_{o.name}{suffix}.mp4"
-        ff = encode(frames, size, proj.fps, out, audio, args.crf)
+        out = od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"
+        ff = None if still else encode(frames, size, proj.fps, out, audio, args.crf)
         prev, prev_layer, lmin, bare, typed = None, None, 1.0, 0, 0
         for k, f in enumerate(frames):
             raw = P.read(files[f], size) if f in files else prev
@@ -149,24 +174,36 @@ def run(args):
                     img = fx.frame(f, raw)
                 except FileNotFoundError:                         # layers missing (allowed): the plain cut shows
                     bare += 1
+            if ffx and ffx.active(f):
+                try:
+                    img = ffx.frame(f, img)
+                except FileNotFoundError:                         # a point or a frame missing (allowed): left out there
+                    bare += 1
             if streaks is not None:                               # lens streaks: from the picture's lights, not the type
                 img = streaks(img)
-            if layer is not None:                                 # screen type: over the cut and what its effects made of it
+            if layer is not None and screen == "graded":         # screen type: over the cut and what its effects made of it
                 img = SRT.composite(img, layer)
                 typed += 1
             g = grade(img, k)
+            if layer is not None and screen == "over":           # or over the finished picture, the grade under it
+                g = SRT.composite(g, layer)
+                typed += 1
             lmin = min(lmin, P.luma_min(g))
-            ff.stdin.write(P.to_u8(g).tobytes())
+            if ff is None:
+                Image.fromarray(P.to_u8(g)).save(out)
+            else:
+                ff.stdin.write(P.to_u8(g).tobytes())
             prev, prev_layer = raw, layer
-        ff.stdin.close()
-        if ff.wait() != 0:
-            raise UsageError(f"ffmpeg failed for {out}")
-        report[o.name] = {"video": str(out), "frames": len(frames), "missing": len(missing), "size": list(size),
-                          "min_luma": round(lmin, 4), "screen_type_frames": typed}
+        if ff is not None:
+            ff.stdin.close()
+            if ff.wait() != 0:
+                raise UsageError(f"ffmpeg failed for {out}")
+        report[o.name] = {"image" if still else "video": str(out), "frames": len(frames), "missing": len(missing),
+                          "size": list(size), "min_luma": round(lmin, 4), "screen_type_frames": typed}
         if fx:
             report[o.name]["effects"] = {"transitions": len(plan["transitions"]), "inserts": len(plan["inserts"]),
-                                         "glitches": len(plan["glitches"]), "frames_without_layers": bare,
-                                         "matte_scale": fx.notes}
+                                         "glitches": len(plan["glitches"]), "fx": len(plan.get("fx") or []),
+                                         "frames_without_layers": bare, "matte_scale": fx.notes}
         if args.to:
             dest = Path(args.to).expanduser() / out.name
             dest.write_bytes(out.read_bytes())

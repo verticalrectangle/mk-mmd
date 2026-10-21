@@ -1,17 +1,21 @@
-"""Cut effects between and over shots, bpy-free (docs/design.md: Shots: Transitions and inserts, Glitches): the
-`[[transition]]`, `[[insert]]` and `[[glitch]]` specs, the plan that checks them against the cut, the frames each one needs
-rendered and the files those frames are stored in. `mk build` (keys the cameras the effects need), `mk render` (renders the
-missing layers), `mk post` and `mk look` (composite them, mkmmd.cutfx) all read the one plan, `plan()`, made from mk.toml
-alone.
+"""Cut effects between and over shots, bpy-free (docs/design.md: Shots: Transitions and inserts, Glitches, Frame effects):
+the `[[transition]]`, `[[insert]]`, `[[glitch]]` and `[[fx]]` specs, the plan that checks them against the cut, the frames
+each one needs rendered and the files those frames are stored in. `mk build` (keys the cameras the effects need), `mk render`
+(renders the missing layers), `mk post` and `mk look` (composite them, mkmmd.cutfx and mkmmd.framefx) all read the one plan,
+`plan()`, made from mk.toml alone.
 
-    [[transition]]  at, kind = "expand" | "collapse" | "slash", dur, ease
+    [[transition]]  at, kind = "expand" | "collapse" | "slash" | "whip", dur, ease
         expand / collapse: scale = [1, "fill"], turn = [0, 90], center = "subject" | [x, y] | [x, y, z] | "<expression>",
                            edge = {color, width}
         slash:             angle = -20, width = 0.3, color = "love", second = {color, width, offset}, dir = "right"
+        whip:              dir = "left", blur = 1.0: a whip pan, the outgoing shot flung off the frame and the incoming
+                           one after it, smeared along their way
     [[insert]]      from, to, shot, shape = "thought", anchor, radius, size, offset, ratio, outline = {color, width},
                     pop = {dur, overshoot}, out = "pop" | "expand", expand = {dur, turn, ease}, aspect.<output>
     [[glitch]]      from, to, objects, seed = 1, shift = 0.06, split = 6, colors = ["love", "foam"]
-
+    [[fx]]          from, to, kind = "lens" | "echo" | "slitscan" | "push" | "scope" | "zoom" | "shock" | "slab" | "tint"
+                    (mkmmd.core.framefx); unlike the others they may overlap one another and any window, and stack in
+                    table order
 A window is a run of frames over which an effect changes the picture: the `dur` seconds that END at the cut (`at`) for a
 transition, the whole `from`..`to` for an insert or a glitch. Frames of the other shot inside a window are *plates*,
 rendered next to the cut's frames (`plate/<shot>/<frame>.png`); the silhouette whose figure is the matte of an expand /
@@ -22,12 +26,14 @@ import json
 import math
 from pathlib import Path
 
+from . import framefx as FX
 from . import shotstyle as SS
 from . import tween as TW
 
-KINDS = ("expand", "collapse", "slash")
+KINDS = ("expand", "collapse", "slash", "whip")
 SHAPES = ("thought",)
 SLASH_DIRS = ("right", "left")
+WHIP_DIRS = ("left", "right", "up", "down")   # the way the pictures travel: a pan to the right sends them left
 MIN_WINDOW = 2                          # frames
 LAYER_DIRS = ("plate", "matte", "back", "bare", "point")      # folders of an output's frame folder that hold layers
 _GEOMETRY = {"size", "offset", "ratio"}  # the insert keys an `aspect.<output>` table may override
@@ -35,7 +41,9 @@ _GEOMETRY = {"size", "offset", "ratio"}  # the insert keys an `aspect.<output>` 
 _COMMON = {"at", "kind", "dur", "ease"}
 TRANSITION_KEYS = {"expand": _COMMON | {"scale", "turn", "center", "edge"},
                    "collapse": _COMMON | {"scale", "turn", "center", "edge"},
-                   "slash": _COMMON | {"angle", "width", "color", "second", "dir"}}
+                   "slash": _COMMON | {"angle", "width", "color", "second", "dir"},
+                   "whip": _COMMON | {"dir", "blur"}}
+DEFAULT_DUR = {"slash": 0.18, "whip": 0.15}   # s; an expand or a collapse takes 0.4
 INSERT_KEYS = {"from", "to", "shot", "shape", "anchor", "radius", "size", "offset", "ratio", "outline", "pop", "out", "expand",
                "aspect"}
 GLITCH_KEYS = {"from", "to", "objects", "seed", "shift", "split", "colors"}
@@ -109,12 +117,20 @@ def normalize_transition(spec, palette):
     _unknown(spec, TRANSITION_KEYS[kind], what)
     if "at" not in spec:
         raise TransitionError(f"{what}: needs `at` (clip seconds of the cut)")
-    out = {"kind": kind, "at": float(spec["at"]), "dur": float(spec.get("dur", 0.18 if kind == "slash" else 0.4)),
-           "ease": spec.get("ease", "inout" if kind == "slash" else "in")}
+    out = {"kind": kind, "at": float(spec["at"]), "dur": float(spec.get("dur", DEFAULT_DUR.get(kind, 0.4))),
+           "ease": spec.get("ease", "inout" if kind in DEFAULT_DUR else "in")}
     if out["dur"] <= 0:
         raise TransitionError(f"{what}: dur must be positive")
     if out["ease"] not in TW.EASES:
         raise TransitionError(f"{what}: ease = {out['ease']!r}, expected one of {TW.EASES}")
+    if kind == "whip":
+        out["dir"] = spec.get("dir", "left")
+        if out["dir"] not in WHIP_DIRS:
+            raise TransitionError(f"{what}: dir = {out['dir']!r}, expected one of {WHIP_DIRS} (the way the pictures go)")
+        out["blur"] = float(spec.get("blur", 1.0))
+        if not 0.0 <= out["blur"] <= 4.0:
+            raise TransitionError(f"{what}: blur = {out['blur']}: the shutter in frames, 0 .. 4")
+        return out
     if kind == "slash":
         out["angle"] = float(spec.get("angle", -20.0))
         out["width"] = float(spec.get("width", 0.3))
@@ -256,15 +272,15 @@ def _window_overlap(a, b):
 
 
 def plan(data, fps, frame0, palette):
-    """The transitions, inserts and glitches of a project (mk.toml `data`) checked against its shots:
+    """The transitions, inserts, glitches and frame effects of a project (mk.toml `data`) checked against its shots:
 
         {"fps", "frame0", "cuts": [{name, from, to}] (the cut, in frames), "plates": [shots that are not in the cut],
-         "transitions": [...], "inserts": [...], "glitches": [...]}
+         "transitions": [...], "inserts": [...], "glitches": [...], "fx": [...]}
 
     Every transition carries its `cut` frame, window (`n` frames, `first`..`last`), the outgoing and incoming shots
     (`out`, `in`) and which of them gives the figure (`matte`) and which plays inside it (`plate`); every insert its
     `f0`..`f1` (the window is f0 .. f1 - 1), `host` shot and the frame counts of its pop and exit; every glitch its `f0`..`f1`
-    and `host` shot. [] entries when the project has none."""
+    and `host` shot; every frame effect what mkmmd.core.framefx.plan gives it. [] entries when the project has none."""
     shots = data.get("shot") or []
     specs = data.get("transition") or []
     inserts = data.get("insert") or []
@@ -368,13 +384,19 @@ def plan(data, fps, frame0, palette):
             if _window_overlap(windows[a], windows[b]):
                 raise TransitionError(f"{windows[a][2]} and {windows[b][2]} overlap in frames "
                                       f"{max(windows[a][0], windows[b][0])}..{min(windows[a][1], windows[b][1])}")
+    duration = (data.get("project") or {}).get("duration")
+    last = None if duration is None else int(frame0) + int(round(float(duration) * fps)) - 1
+    try:
+        out["fx"] = FX.plan(data, fps, frame0, palette, last)
+    except FX.FxError as e:
+        raise TransitionError(str(e)) from None
     return out
 
 
 # ================================================================================================= what a frame needs
 def has_effects(pl):
     """Whether the plan has any effect to render layers for and composite."""
-    return bool(pl and (pl["transitions"] or pl["inserts"] or pl["glitches"]))
+    return bool(pl and (pl["transitions"] or pl["inserts"] or pl["glitches"] or pl.get("fx")))
 
 
 def in_force(pl, shot, frame):
@@ -407,7 +429,7 @@ def demands(pl, frames=None):
 
     for tr in pl["transitions"]:
         for f in range(tr["first"], tr["last"] + 1):
-            if tr["kind"] == "slash":
+            if tr["matte"] is None:                          # a slash or a whip: the incoming shot's plates only
                 plate(f, tr["plate"])
                 continue
             add(f, {"kind": "matte", "shot": tr["matte"]})
@@ -421,7 +443,30 @@ def demands(pl, frames=None):
     for g in pl["glitches"]:
         for f in range(g["f0"], g["f1"]):
             add(f, {"kind": "bare", "shot": g["host"], "key": f"g{g['index']}", "hide": g["objects"]})
+    for fx in pl.get("fx") or []:
+        if "center" in fx and fx["center"]["mode"] == "point":
+            for f in range(fx["f0"], fx["f1"]):
+                shot = cut_shot(pl["cuts"], f)
+                if shot is not None:
+                    add(f, {"kind": "point", "key": FX.point_key(fx), "expr": fx["center"]["expr"], "shot": shot})
     return dict(sorted(out.items()))
+
+
+def fx_frames(pl, frames):
+    """{frame: [plate items]}: the cut's own frames that the frame effects on `frames` read (an echo's copies, a
+    slitscan's ages, a push's inside), as plates of the shot in the cut there. `mk post` has them all already; `mk look`,
+    which draws only the frames asked for, renders these beside them."""
+    out = {}
+    for f in sorted(set(int(x) for x in frames)):
+        for fx in FX.at(pl.get("fx") or [], f):
+            for g in FX.sources(fx, f, pl["frame0"]):
+                shot = cut_shot(pl["cuts"], g)
+                if shot is not None and g != f:
+                    bucket = out.setdefault(g, [])
+                    item = {"kind": "plate", "shot": shot}
+                    if item not in bucket:
+                        bucket.append(item)
+    return out
 
 
 def needs(pl):
@@ -530,6 +575,13 @@ def slash_progress(tr, k):
     return TW.ease((k + 1) / (tr["n"] + 1), tr["ease"])
 
 
+def whip_progress(tr, k):
+    """0..1 of the way a whip has carried the pictures at window frame `k` (fractional frames for its speed): eased, so
+    it starts and ends slowly; never exactly 0 or 1 inside the window, as a slash's band."""
+    u = min(max((k + 1) / (tr["n"] + 1), 0.0), 1.0)
+    return TW.ease(u, tr["ease"])
+
+
 def insert_state(ins, frame):
     """What an insert shows at `frame` of its window: {"phase": "in" | "hold" | "out" | "expand", "bubble", "dots": [3],
     "p"}. `bubble` and `dots` are the pop scale (1 at rest, over 1 in the overshoot) of the shape and of its three trailing
@@ -572,4 +624,5 @@ def summary(pl):
             "inserts": [{"index": s["index"], "frames": [s["f0"], s["f1"] - 1], "host": s["host"], "shot": s["shot"],
                          "out": s["out"]} for s in pl["inserts"]],
             "glitches": [{"index": g["index"], "frames": [g["f0"], g["f1"] - 1], "host": g["host"], "objects": g["objects"]}
-                         for g in pl["glitches"]]}
+                         for g in pl["glitches"]],
+            "fx": FX.summary(pl.get("fx") or [])}

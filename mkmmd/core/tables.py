@@ -30,21 +30,22 @@ PERFORM = {
     "glance": ("t", "at", "dur", "pitch", "rise", "fall", "blink"), "head_share": None,
     "head_limits": tuple(PF.HEAD_LIMITS), "neck_share": None, "eye_max": None, "breath": ("per_min", "deg"),
     "sway": ("deg", "period"), "nod": ("deg", "period"), "bob": ("deg", "timeline", "beats", "downbeat_accent"),
-    "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None,
+    "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "head_turn": None,
     "rock": ("deg", "period", "phase", "axis", "hips"),
     "head_rock": ("deg", "period", "phase", "axis"), "blink": ("per_min", "seed", "extra"), "lids": None,
     "sing": ("timeline", "lines", "words", "mouth", "lead", "voice"), "expressions": ("morph", "keys"),
     "twitch": ("bones", "family", "t", "deg", "axis", "dur"),
     "bounce": ("depth", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"), "rise": None, "crouch": None,
     "kick": ("foot", "height", "back", "hold", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"),
-    "air": PF.AIR_KEYS, "step_turn": PF.TURN_KEYS,
+    "air": PF.AIR_KEYS, "step_turn": PF.TURN_KEYS, "tumble": PF.TUMBLE_KEYS,
+    "walk": {**{k: None for k in PF.WALK_KEYS}, "hops": PF.HOP_KEYS},
     "strum": ("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "kick", "windmill",
               "windmill_dur") + tuple(strum.DEFAULTS),
     "drum": ("hand", "fingers", "deg", "lift", "roll", "timeline", "beats", "downbeat_accent", "from", "to"),
 }
 
 SIM = {k: None for k in ("families", "params", "colliders", "props", "fingers", "floor", "wind", "use_masks", "anchor_free",
-                         "substeps", "settle_s", "engine")}
+                         "substeps", "settle_s", "engine", "gravity")}
 
 FOLDS = {"enabled": None, "depth": None}
 

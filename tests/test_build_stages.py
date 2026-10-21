@@ -1214,3 +1214,185 @@ def test_a_simulated_skirt_lags_a_spin_its_faces_on_the_cloth_and_a_rebuild_reus
     again = build(180)
     assert again["cached"] and again["key"] == rep["key"] and again["pen_mm"] == rep["pen_mm"]
     assert not build(90)["cached"]
+
+
+WALK = """[pose.mq]
+feet = "floor"
+[perform.mq]
+walk = {{ steps = [0.3, 0.7, 1.1], hops = [{{ from = 1.3, to = 1.8 }}], stride = 0.5 }}
+{extra}"""
+
+
+def test_a_walk_carries_the_root_plants_the_feet_and_a_tumble_turns_about_the_hips(make, capsys):
+    """The root goes where the steps and the hop carry the body; a foot that is down does not move in the world; a 360
+    degree flip in the air ends upright with the hips where the walk put them and keeps them there all through; a
+    [[key]] that keys the root's location outright is refused (a relative one is a push on top)."""
+    import numpy as np
+    code, out = make(WALK.format(extra='tumble = [{ from = 1.35, to = 1.75, deg = 360 }]'), until="perform",
+                     cast="yaw = 90")
+    assert code == 0, out.get("error")
+    rep = out["stages"]["perform"]["mq"]
+    assert rep["walk"]["steps"] == 3 and rep["walk"]["hops"] == 1 and rep["tumble"] == {"flip": 360.0}
+    expr = '[list(obj("Mq").loc), list(bone("leg_ik.L").head), list(bone("center").head), list(obj("Mq").euler)]'
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "31:91", "--project", str(make.root)],
+                  capsys)
+    assert code == 0, q
+    root, foot, hips, euler = (np.array([v[i] for v in q["values"]]) for i in range(4))
+    t = (np.arange(31, 92) - 31) / 30.0
+    assert abs(root[0, 0]) < 0.05 and root[-1, 0] > 1.0                                # walked toward +X (yaw 90)
+    down = (t > 0.31) & (t < 0.7)                                                      # L landed at 0.3, lifts after 0.7
+    assert np.ptp(foot[down], axis=0).max() < 1e-3
+    flip = (t >= 1.35) & (t <= 1.75)
+    path = root[flip] - root[flip][0]                                                  # the body's own travel ...
+    sway = (hips[flip] - hips[flip][0]) - path * np.array([1.0, 1.0, 0.0])            # ... aside, the hips stay put
+    assert np.abs(sway[:, 1]).max() < 0.02 and abs(euler[-1, 0] - euler[0, 0]) % 360 == pytest.approx(0.0, abs=0.5)
+    code, out = make(WALK.format(extra="") + '\n[[key]]\ntarget = "Mq"\nprop = "location"\nkeys = [[0.0, 0.0], '
+                     '[1.0, 0.3]]\n', until="perform", cast="yaw = 90")
+    assert code == 3 and "relative = true" in out["error"]
+
+
+STRUT = """[pose.mq]
+feet = "floor"
+[perform.mq]
+walk = { steps = [0.3, 0.8, 1.3], stride = 0.5, cross = 1.0, sway = 0.04 }
+head_turn = [[1.6, 0.0], [1.8, 50.0]]
+"""
+
+
+def test_a_strut_sets_the_feet_on_one_line_sways_the_hips_over_the_planted_foot_and_a_head_turn_turns_the_head(make, capsys):
+    """Facing +X (yaw 90), the character's left is +Y: each landing foot comes down on the line under the root, the
+    hips are over the foot that is down halfway between two landings (the left one after the first step), and the head
+    turns toward her left by the head_turn keys."""
+    import numpy as np
+    code, out = make(STRUT, until="perform", cast="yaw = 90")
+    assert code == 0, out.get("error")
+    assert out["stages"]["perform"]["mq"]["sway_mm"] == pytest.approx(40.0, abs=1.0)  # its peak, as the frames sample it
+    expr = ('[list(obj("Mq").loc), list(bone("leg_ik.L").head), list(bone("leg_ik.R").head), list(bone("center").head), '
+            'list(bone("head").matrix.to_euler())]')
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "31:91", "--project", str(make.root)],
+                  capsys)
+    assert code == 0, q
+    root, left, right, hips, head = (np.array([v[i] for v in q["values"]]) for i in range(5))
+    t = (np.arange(31, 92) - 31) / 30.0
+    on = lambda s: int(np.argmin(np.abs(t - s)))                                     # noqa: E731
+    assert abs(left[on(0.35), 1] - root[on(0.35), 1]) < 0.01                          # L down on the line (y of the root)
+    assert abs(right[on(0.85), 1] - root[on(0.85), 1]) < 0.01                         # then R
+    mid = on(0.55)                                                                    # L carries her from 0.3 to 0.8
+    assert hips[mid, 1] - root[mid, 1] == pytest.approx(0.04, abs=0.005)              # over it: toward her left
+    assert hips[on(1.05), 1] - root[on(1.05), 1] == pytest.approx(-0.04, abs=0.005)   # then over R
+    assert np.degrees(head[on(1.85), 2] - head[on(1.55), 2]) > 30                     # the head turned toward her left
+
+
+# ---------------------------------------------------------------- the camera: follow, dolly, keyed roll
+FOLLOWED = """
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -5.0, 1.0]
+look = [0.0, 0.0, 0.9]
+follow = { target = "cast:mq.center", axes = "x" }
+
+[shot.aspect.9x16]
+follow = { lag = 0.3 }
+"""
+
+
+def test_a_followed_camera_moves_with_her_along_x_only_and_never_turns(make, capsys):
+    """She walks along +X and hops. The camera and its aim move by her x displacement since the shot's `from`, so the hop
+    rises in the frame and the camera never turns; the 9x16 output eases the same move through its lag."""
+    import numpy as np
+    from mkmmd.core import perform as PF
+    code, out = make(WALK.format(extra="") + FOLLOWED, until="shots", cast="yaw = 90")
+    assert code == 0, out.get("error")
+    assert out["stages"]["shots"]["a"]["moves"]["16x9"]["follow_m"] > 1.0
+    expr = ('[list(bone("center").head), list(obj("a@16x9").loc), list(obj("a@16x9").matrix.col[2])[:3], '
+            'list(obj("a@9x16").loc)]')
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "29:90", "--project", str(make.root)], capsys)
+    assert code == 0, q
+    hips, cam, back, tall = (np.array([v[i] for v in q["values"]]) for i in range(4))
+    moved = hips[:, 0] - hips[2, 0]                                                    # frame 31: the shot's `from`
+    assert moved.max() > 1.0 and np.ptp(hips[:, 2]) > 0.2                              # she walked and hopped
+    assert np.allclose(cam[:, 0], moved, atol=1e-4)                                    # x: hers, exactly
+    assert np.allclose(cam[:, 1:], [-5.0, 1.0], atol=1e-4)                             # y and z stay: the hop rises
+    assert np.ptp(back, axis=0).max() < 1e-4                                           # the aim went along: no turn
+    eased = PF.lowpass(moved, 0.3 * 30)
+    assert np.allclose(tall[:, 0], eased, atol=1e-4) and (moved - eased).max() > 0.05
+
+
+DOLLY_ROLL = """
+[[shot]]
+name = "d"
+from = 0.0
+to = 1.0
+at = [0.0, -5.0, 0.85]
+look = [0.0, 0.0, 0.85]
+keys = [{ t = 0.0 }, { t = 0.8, lens = 105 }]
+frame = { subject = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.7]], fill = 0.5, solve = "dolly" }
+
+[[shot]]
+name = "r"
+from = 1.0
+to = 2.0
+at = [0.0, -4.0, 1.0]
+look = [0.0, 0.0, 1.0]
+roll = 5
+keys = [{ t = 1.0 }, { t = 1.5, roll = 40 }, { t = 1.9, roll = -20 }]
+"""
+
+
+def test_a_dolly_keeps_the_subject_its_size_as_the_lens_runs_and_a_keyed_roll_lands_on_its_keys(make, capsys):
+    """The dolly: a 1.7 m subject on the aim point (with 0.15 m headroom, 1.85 m) fills half the frame height on every frame
+    while the lens runs from 35 to 105 mm, so the camera stands 1.85 x lens / (0.5 x sensor height) away: 20.25 mm high on
+    the 640 x 360 output, 36 mm on the 360 x 640 one. The roll: a key without `roll` takes the shot's (5), keys ease."""
+    import math
+    import numpy as np
+    from mkmmd.core import perform as PF
+    code, out = make(DOLLY_ROLL, with_cast=False, until="shots")
+    assert code == 0, out.get("error")
+    expr = ('[bpy.data.cameras["d@16x9"].lens, list(obj("d@16x9").loc), bpy.data.cameras["d@9x16"].lens, '
+            'list(obj("d@9x16").loc)]')
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "29:63", "--project", str(make.root)], capsys)
+    assert code == 0, q
+    lens, cam, lens_t, cam_t = (np.array([v[i] for v in q["values"]]) for i in range(4))
+    assert lens.min() == pytest.approx(35.0) and lens.max() == pytest.approx(105.0)
+    away, away_t = np.linalg.norm(cam - [0, 0, 0.85], axis=1), np.linalg.norm(cam_t - [0, 0, 0.85], axis=1)
+    assert np.allclose(away / lens, 1.85 / (0.5 * 20.25), rtol=1e-4)                   # three times as far at 105 mm
+    assert np.allclose(away_t / lens_t, 1.85 / (0.5 * 36.0), rtol=1e-4)                # solved per output
+    tilt = 'math.degrees(math.atan2(obj("r@16x9").matrix.col[0][2], obj("r@16x9").matrix.col[1][2]))'
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), tilt, "--frames", "61,67,76,88", "--project",
+                   str(make.root)], capsys)
+    assert code == 0, q
+    got = np.array(q["values"], float)
+    sign = math.copysign(1.0, got[0])                                                  # the shot's own 5 degrees sets it
+    assert got * sign == pytest.approx([5.0, 5.0 + 35.0 * float(PF.smooth(0.4)), 40.0, -20.0], abs=0.01)
+
+
+TYPED = """
+[[text]]
+name = "sign"
+at = [0.0, 0.0, 1.0]
+facing = [0.0, -1.0, 0.0]
+box = [1.0, 0.3]
+text = "mk"
+fit = 0.8
+
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -4.0, 1.0]
+look = [0.0, 0.0, 1.0]
+style = "silhouette"
+hide = ["*"]
+keep = ["sign*", "nothing_here*"]
+"""
+
+
+def test_a_look_pattern_counts_what_later_stages_make_and_a_typo_still_warns(make):
+    """The text stage makes its objects after the shots stage: a look that keeps them is not warned about, a pattern that
+    matches nothing in the finished scene is."""
+    code, out = make(TYPED, with_cast=False)
+    assert code == 0, out.get("error")
+    warned = [ln for ln in warnings(out) if "pattern" in ln]
+    assert len(warned) == 1 and "'nothing_here*' matches no object" in warned[0], warned

@@ -1,8 +1,8 @@
 """A project's music as the site's timeline draws it (docs/design.md: The site), all in clip seconds: the clip's audio
 (the [audio] file cut to the clip, cached as WAV in the site cache), the timeline's beats, bars and onsets, its words
 by (line, word) and their times (never their text), the hits the project keeps ([audio] hits: named lists of hit
-times, `lanes` picks and orders them), and the cut with its effects (transitions, inserts, glitches, freezes, rings,
-texts). What cannot be read is named in `problems` and the rest is still shown."""
+times, `lanes` picks and orders them), and the cut with its effects (transitions, inserts, glitches, frame effects,
+freezes, rings, texts). What cannot be read is named in `problems` and the rest is still shown."""
 import hashlib
 import json
 import shutil
@@ -160,6 +160,8 @@ def music(root, cache_dir):
                 effects.append({"kind": "insert", "label": str(ins["shot"]), "from": secs(ins["f0"]), "to": secs(ins["f1"])})
             for g in plan["glitches"]:
                 effects.append({"kind": "glitch", "label": "glitch", "from": secs(g["f0"]), "to": secs(g["f1"])})
+            for fx in plan.get("fx") or []:
+                effects.append({"kind": "fx", "label": fx["kind"], "from": secs(fx["f0"]), "to": secs(fx["f1"])})
         except TR.TransitionError as e:
             problems.append(f"the cut: {e}")
         try:

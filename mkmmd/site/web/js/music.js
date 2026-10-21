@@ -1,6 +1,6 @@
 // The music timeline (docs/design.md: The site): the clip's audio through Web Audio and its lanes on one canvas, the
 // beats and bars, the project's hits and the timeline's onsets, the words by (line, word) (never their text), the shots
-// of the cut and the effects (transitions, inserts, glitches, freezes, rings, texts), all in clip seconds. Space plays,
+// of the cut and the effects (transitions, inserts, glitches, frame effects, freezes, rings, texts), all in clip seconds. Space plays,
 // a click or a drag moves the playhead (a click on a hit, a word, a shot or an effect jumps to its start and names it), a
 // drag along the ruler loops that span (a click on it clears the loop), Ctrl+wheel or a pinch zooms, a sideways wheel
 // pans, a double-click fits; ← → step a beat, l loops, f fits, Home goes back to the start.
@@ -9,7 +9,7 @@ import { h, clamp } from "./ui.js";
 
 const GUTTER = 58, PAD = 8;
 const ROW = { ruler: 20, wave: 38, beats: 18, hits: 16, words: 18, shots: 22, fx: 15 };
-const FX_KINDS = ["transition", "insert", "glitch", "freeze", "ring", "text"];
+const FX_KINDS = ["transition", "insert", "glitch", "fx", "freeze", "ring", "text"];
 
 let audioCtx = null;
 const decoded = new Map();          // url -> Promise<AudioBuffer>
@@ -38,7 +38,7 @@ export function colours() {
   const c = {};
   for (const k of ["fg", "muted", "faint", "line", "sunk", "card", "hover", "accent", "accent-soft", "ok", "warn", "bad"]) c[k] = css("--" + k);
   c.lanes = [c.accent, c.warn, c.ok, c.bad, c.muted];
-  c.fx = { transition: c.accent, insert: c.warn, glitch: c.bad, freeze: c.ok, ring: c.muted, text: c.faint };
+  c.fx = { transition: c.accent, insert: c.warn, glitch: c.bad, fx: c["accent-soft"], freeze: c.ok, ring: c.muted, text: c.faint };
   return c;
 }
 

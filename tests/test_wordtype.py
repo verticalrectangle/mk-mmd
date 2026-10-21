@@ -487,6 +487,39 @@ def test_slots_place_words_in_explicit_cells_and_recycle_with_a_fade():
     assert "opacity" not in specs[2]["kinetic"] or specs[2]["kinetic"]["opacity"][0][1] == 1.0
 
 
+def test_a_slammed_word_comes_down_from_big_hits_its_size_and_rings_out():
+    p = L.style_params("slam", {}, FPS)
+    s = [L.arrival("slam", t, p)["scale"] for t in (0.0, 0.5 * p["dur"], p["dur"], p["dur"] + 0.03, 0.6)]
+    assert s[0] == pytest.approx(p["big"]) and s[0] > s[1] > s[2]               # down, faster and faster
+    assert s[2] == pytest.approx(1.0 + p["a"]) and s[3] != pytest.approx(1.0)   # the impact squashes it, then it rings
+    assert s[4] == pytest.approx(1.0, abs=1e-3)                                  # and settles
+    assert L.arrival("slam", 0.0, p)["alpha"] == pytest.approx(p["alpha0"])
+    with pytest.raises(L.LyricsError, match="slam dur and big must be positive"):
+        L.style_params("slam", {"dur": 0}, FPS)
+
+
+def test_a_recycled_word_is_flung_off_sideways_over_its_fade_before_the_next_one_lands():
+    tl = timeline()
+    slots = [{"at": [0.0, 0.0], "box": [0.4, 0.2]}]
+    specs, _ = run(tl, lyr={"line": 1, "style": "none", "layout": {"kind": "slots", "slots": slots},
+                            "recycle": {"gap": 0, "fade": 4, "slide": 6.0}})
+    land1 = round(specs[1]["kinetic"]["show"][0] * FPS)
+    dx = dict(specs[0]["kinetic"]["dx"])
+    far = max(dx)
+    assert far <= land1 / FPS and dx[far] == pytest.approx(6.0 * L.sstep((land1 - 4) / FPS, land1 / FPS, far) ** 2)
+    early = [v for t, v in dx.items() if t < (land1 - 4) / FPS]
+    assert all(v == 0.0 for v in early)                                          # it stays put until its fade
+    assert sorted(dx.values()) == [v for _, v in sorted(dx.items())]             # then goes, never back
+
+
+def test_a_slanted_backing_leans_its_ends_within_reason():
+    from mkmmd.core import typefx as FX
+    assert FX.backing_spec({"backing": {"slant": 18}})["slant"] == 18.0
+    assert FX.backing_spec({"backing": True})["slant"] == 0.0
+    with pytest.raises(FX.TextError, match="slant"):
+        FX.backing_spec({"backing": {"slant": 75}})
+
+
 def test_slots_assign_picks_the_slot_of_every_word():
     tl = timeline()
     slots = [{"at": [0.0, 0.3]}, {"at": [0.0, 0.0]}, {"at": [0.0, -0.3]}]

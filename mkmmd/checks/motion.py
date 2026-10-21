@@ -1,4 +1,4 @@
-"""Metrics on sampled motion: jitter, contact, penetration, foot_slide, joint_limits."""
+"""Metrics on sampled motion: jitter, contact, penetration, clearance, foot_slide, joint_limits."""
 import numpy as np
 
 from ..core import families as FAM
@@ -226,6 +226,145 @@ class Penetration(Metric):
             "p95_mm": round(float(np.percentile(np.maximum(mm, 0), 95)), 3),
             "frames_over_2mm_by_shape": dict(sorted(deep.items(), key=lambda kv: -kv[1])[:5]),
             "points": int(len(X0)), "shapes": len(labels) - 1}
+
+
+# ---------------------------------------------------------------- clearance
+SEARCH_ITERS = 60          # ternary steps along a capsule's axis: the interval shrinks to (2/3)^60 ~ 3e-11 of it
+SIGNS = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], float)        # a box's 8 corners
+EDGES = np.array([(i, j) for i in range(8) for j in range(i + 1, 8)
+                  if np.abs(SIGNS[i] - SIGNS[j]).sum() == 2])                                 # and its 12 edges
+
+
+def _to_boxes(P, lo, hi):
+    """Distance from points P (m, ..., 3) to the boxes lo..hi (m, 3)."""
+    sh = (len(lo),) + (1,) * (P.ndim - 2) + (3,)
+    return np.linalg.norm(P - np.clip(P, lo.reshape(sh), hi.reshape(sh)), axis=-1)
+
+
+def _seg_seg(p1, q1, p2, q2):
+    """Least distance between the segments p1-q1 and p2-q2 (broadcasting arrays of points; Ericson, Real-Time
+    Collision Detection 5.1.9, points as segments of length 0 included)."""
+    d1, d2, r = q1 - p1, q2 - p2, p1 - p2
+    a, e = (d1 * d1).sum(-1), (d2 * d2).sum(-1)
+    b, c, f = (d1 * d2).sum(-1), (d1 * r).sum(-1), (d2 * r).sum(-1)
+    ok1, ok2 = a > 1e-18, e > 1e-18
+    sa, se = np.where(ok1, a, 1.0), np.where(ok2, e, 1.0)
+    den = a * e - b * b
+    s = np.where(den > 1e-12 * sa * se, np.clip((b * f - c * e) / np.where(den > 0, den, 1.0), 0.0, 1.0), 0.0)
+    t = (b * s + f) / se
+    tc = np.clip(t, 0.0, 1.0)
+    s = np.where(t != tc, np.clip((b * tc - c) / sa, 0.0, 1.0), s)
+    s, t = (np.where(ok1 & ok2, s, np.where(ok1, np.clip(-c / sa, 0.0, 1.0), 0.0)),
+            np.where(ok1 & ok2, tc, np.where(ok2, np.clip(f / se, 0.0, 1.0), 0.0)))
+    return np.linalg.norm(p1 + d1 * s[..., None] - p2 - d2 * t[..., None], axis=-1)
+
+
+def _capsule_gaps(A, B, lo, hi):
+    """Least distance (m, K) from the segments A-B (K, 3) to the boxes lo..hi (m, 3): the distance from a point of a
+    segment to a box is convex along it, so a ternary search finds its minimum."""
+    a, b = np.zeros((len(lo), len(A))), np.ones((len(lo), len(A)))
+
+    def gap(t):                                                                           # (m, K) at shares t of each
+        return _to_boxes(A[None] + t[..., None] * (B - A)[None], lo, hi)
+    for _ in range(SEARCH_ITERS):
+        t1, t2 = a + (b - a) / 3.0, b - (b - a) / 3.0
+        left = gap(t1) <= gap(t2)                                                         # the minimum is in [a, t2]
+        a, b = np.where(left, a, t1), np.where(left, t2, b)
+    return gap((a + b) / 2.0)
+
+
+def _box_gaps(C, Rk, h, lo, hi):
+    """Least distance (m, K) between the boxes C, Rk (K, 3), (K, 3, 3) of half sizes h (K, 3) and the axis-aligned
+    boxes lo..hi (m, 3); 0 where they overlap. Between two disjoint convex polyhedra it is reached from a corner of
+    one to the other or between an edge of each; they overlap when no separating axis exists (the 3 + 3 face normals
+    and the 9 cross products of their edges)."""
+    V = C[:, None] + np.einsum("kij,knj->kni", Rk, SIGNS[None] * h[:, None])              # (K, 8, 3) corners
+    U = (lo + hi)[:, None] / 2.0 + SIGNS[None] * ((hi - lo) / 2.0)[:, None]               # (m, 8, 3)
+    d = _to_boxes(np.broadcast_to(V[None], (len(lo),) + V.shape), lo, hi).min(2)
+    loc = np.einsum("kji,mknj->mkni", Rk, U[:, None] - C[None, :, None])                  # U in each box's frame
+    d = np.minimum(d, np.linalg.norm(loc - np.clip(loc, -h[None, :, None], h[None, :, None]), axis=-1).min(2))
+    ev, eu = V[:, EDGES], U[:, EDGES]                                                     # (K, 12, 2, 3), (m, 12, 2, 3)
+    d = np.minimum(d, _seg_seg(ev[None, :, :, None, 0], ev[None, :, :, None, 1],
+                               eu[:, None, None, :, 0], eu[:, None, None, :, 1]).min((2, 3)))
+    ax = np.concatenate([np.broadcast_to(np.eye(3)[None], Rk.shape), Rk.transpose(0, 2, 1),
+                         np.cross(np.eye(3)[None, :, None], Rk.transpose(0, 2, 1)[:, None]).reshape(-1, 9, 3)], 1)
+    n = np.linalg.norm(ax, axis=2, keepdims=True)
+    ax = np.where(n > 1e-9, ax / np.maximum(n, 1e-12), 0.0)                               # (K, 15, 3); 0: parallel edges
+    gap = np.abs(np.einsum("mki,kai->mka", C[None] - ((lo + hi) / 2.0)[:, None], ax))
+    ra = np.einsum("mi,kai->mka", (hi - lo) / 2.0, np.abs(ax))
+    rb = np.einsum("kj,kaj->ka", h, np.abs(np.einsum("kai,kij->kaj", ax, Rk)))[None]
+    apart = (gap > ra + rb + 1e-12).any(2)
+    return np.where(apart, d, 0.0)
+
+
+def body_gaps(W, lo, hi):
+    """Gaps (m, K) in metres between m axis-aligned boxes lo..hi (m, 3) and every shape of world geometry `W`
+    (geom.world of a model's own bodies, the K shapes in labels order): the least distance from the box to the shape's
+    core less its radius (a sphere's or capsule's, a box's rounding), exact. Negative: the shape reaches into the box
+    (when their cores overlap the gap is minus the radius, not the depth)."""
+    if "cylinder" in W:
+        raise CheckError("clearance: a cylinder is a scene collider, never a model's body")
+    out = []
+    if "sphere" in W:
+        Cs, Rs = W["sphere"]
+        out.append(_to_boxes(np.broadcast_to(Cs[None], (len(lo),) + Cs.shape), lo, hi) - Rs[None])
+    if "capsule" in W:
+        A, B, Rc = W["capsule"]
+        out.append(_capsule_gaps(A, B, lo, hi) - Rc[None])
+    if "box" in W:
+        C, Rk, half, rnd = W["box"]
+        out.append(_box_gaps(C, Rk, np.maximum(half - rnd[:, None], 0.0), lo, hi) - rnd[None])
+    return np.concatenate(out, 1) if out else np.zeros((len(lo), 0))
+
+
+@metric
+class Clearance(Metric):
+    name = "clearance"
+    doc = ("How close things that fly past a character come to it: the world bounds of each object named (names or "
+           "fnmatch patterns, e.g. a lyric entry's words `words_l*`), on the frames it has geometry, against the "
+           "character's own collision bodies (rig.json). Value: the least gap over frames and objects, metres "
+           "(negative: into a body); detail: which object, on which frame, nearest which body.")
+    args = {"cast": "cast member (needs its rig.json)", "objects": "object names or fnmatch patterns (required)"}
+    default_min = 0.0
+
+    def needs(self, args, ctx, need):
+        arm, rig = ctx.cast(args)
+        if rig is None:
+            raise CheckError("clearance: needs the model's rig.json (cast with rig/asset, or rig = path)")
+        pats = _list(args.get("objects"))
+        if not pats:
+            raise CheckError("clearance: give `objects` (names or fnmatch patterns of the things that fly past)")
+        need.obj(*pats)
+        need.bone(arm, *[b["bone"] for b in rig["bodies"] if b.get("bone") and "geom" in b])
+        return {"arm": arm, "rig": rig, "pats": pats}
+
+    def compute(self, args, ctx, data, frames, st):
+        from fnmatch import fnmatchcase
+        arm, rig = st["arm"], st["rig"]
+        names = [n for n in data.meta["objects"] if any(fnmatchcase(n, p) for p in st["pats"])]
+        if not names:
+            raise CheckError(f"clearance: no object matches {st['pats']}")
+        shapes = geom.Shapes()
+        geom.model_shapes(shapes, rig, arm)
+        P = shapes.pack()
+        labels = [f"body:{rig['bodies'][P[k]['model'][i]]['bone']}" for k in geom.KINDS for i in range(P[k]["n"])]
+        if not labels:
+            raise CheckError(f"clearance: {arm} has no collision bodies with a bone in its rig.json")
+        Rs, ps, _, _ = data.source_frames(shapes.sources, frames)
+        cols = [data.meta["objects"].index(n) for n in names]
+        boxes = data.z["obj_bbox"][data.rows(frames)][:, cols]                 # (F, m, 2, 3)
+        live = (boxes[:, :, 1] - boxes[:, :, 0]).max(2) > 0               # (F, m): the object has geometry then
+        if not live.any():
+            raise CheckError(f"clearance: none of {len(names)} object(s) has geometry on the frames checked")
+        best, where = np.inf, None
+        for k in np.flatnonzero(live.any(1)):
+            js = np.flatnonzero(live[k])
+            g = body_gaps(geom.world(P, Rs[k], ps[k]), boxes[k, js, 0], boxes[k, js, 1])
+            j, i = np.unravel_index(int(np.argmin(g)), g.shape)
+            if g[j, i] < best:
+                best, where = float(g[j, i]), (names[js[j]], int(frames[k]), labels[i])
+        return round(best, 4), {"object": where[0], "at_frame": where[1], "body": where[2], "objects": len(names),
+                                "object_frames": int(live.sum())}
 
 
 # ---------------------------------------------------------------- foot slide

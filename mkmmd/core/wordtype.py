@@ -35,9 +35,12 @@ from .typezones import plan_blocks, split_words
 
 LYRICS_KEYS = {"timeline", "line", "lines", "words", "case", "clean", "style", "arrive", "from", "to", "leave", "drip",
                "spread", "weight", "colors", "color_by", "sizes", "offsets", "layout", "tilt", "recycle", "recolor",
-               "backing", "scales", "punch", "write", "wow", "rewind", "carry", "zones"}
+               "backing", "scales", "punch", "write", "wow", "rewind", "carry", "zones", "bullets"}
+BULLETS = {"at": None, "offsets": [[0.0, 0.0, 0.0]], "box": [1.0, 0.3], "facing": [0.0, -1.0, 0.0], "up": [0.0, 0.0, 1.0],
+           "come": [6.0, 0.0, 0.0], "go": [-6.0, 0.0, 0.0], "lead": 0.6, "after": 0.6}
+BULLET_PLACEMENT = ("on", "mount", "at", "facing", "up", "box", "screen")   # entry keys bullets leave to `bullets`
 CASES = ("keep", "lower", "upper", "title")
-STYLES = ("pop", "drop", "rise", "slap", "slide", "type", "none")
+STYLES = ("pop", "drop", "rise", "slap", "slide", "slam", "type", "none")
 LAYOUTS = ("same", "flow", "stack", "slots")
 LEAVES = ("cut", "drip", "rewind")
 CARRIES = ("land", "still")
@@ -342,7 +345,21 @@ def arrival(style, tau, p):
         c["scale"] = pop
     elif style == "slide":
         c.update(TF.slide_state(tau, p))
+    elif style == "slam":
+        c.update(slam_state(tau, p))
     return c
+
+
+def slam_state(tau, p):
+    """A word slammed onto the picture: it starts `big` times its size and comes down to it over `dur` s, faster and
+    faster (it hits), then rings: a damped spring of its scale (`a`, `td`, `tp`, as `pop`) and a shake of `shake` em,
+    gone in 60 ms."""
+    if tau < p["dur"]:
+        u = max(tau, 0.0) / p["dur"]
+        return {"scale": p["big"] + (1.0 - p["big"]) * u * u, "dx": 0.0}
+    k = tau - p["dur"]
+    return {"scale": pop_scale(k, p["a"], p["td"], p["tp"]),
+            "dx": p["shake"] * math.exp(-k / 0.06) * math.sin(2.0 * math.pi * k / 0.045)}
 
 
 STYLE_DEFAULTS = {
@@ -356,8 +373,11 @@ STYLE_DEFAULTS = {
     "type": {"alpha0": 1.0, "alpha_frames": 2.0},
     "none": {"alpha0": 1.0, "alpha_frames": 2.0},
     "slide": dict(TF.SLIDE_DEFAULTS),
+    "slam": {"big": 2.6, "dur": 0.05, "a": -0.10, "td": 0.05, "tp": 0.16, "shake": 0.05, "alpha0": 1.0,
+             "alpha_frames": 2.0},
 }
-STYLE_SPAN = {"pop": 0.6, "slap": 0.6, "drop": 1.0, "rise": 0.0, "type": 0.0, "none": 0.0, "slide": 0.6}   # s an arrival can last
+STYLE_SPAN = {"pop": 0.6, "slap": 0.6, "drop": 1.0, "rise": 0.0, "type": 0.0, "none": 0.0, "slide": 0.6,
+              "slam": 0.6}   # s an arrival can last
 
 
 def style_params(style, over, fps):
@@ -376,6 +396,8 @@ def style_params(style, over, fps):
             raise LyricsError(f"lyrics: {e}") from None
         if not p["dur"] > 0:
             raise LyricsError("lyrics: slide dur must be positive")
+    if style == "slam" and not (p["dur"] > 0 and p["big"] > 0):
+        raise LyricsError("lyrics: slam dur and big must be positive")
     return p
 
 
@@ -504,7 +526,7 @@ def recycle_hide(lands, slots, gap=0):
 # ------------------------------------------------------------------------------------------------------ expand
 FLOW_KEYS, STACK_KEYS, SLOT_KEYS = {"gap", "rows", "align"}, {"rows", "pitch", "dir", "align", "shift", "tilt"}, {"slots", "assign"}
 DRIP_KEYS = {"g", "stretch", "life", "gap", "min_run", "order"}
-RECYCLE_KEYS = {"gap", "fade", "assign"}
+RECYCLE_KEYS = {"gap", "fade", "assign", "slide"}
 RECOLOR_KEYS = {"color", "from", "over", "ease", "words"}
 WEIGHT_KEYS = {"lo", "hi", "breath"}
 SPREAD_KEYS = {"scale"}
@@ -685,7 +707,85 @@ def _with_offset(places, off0):
             pl["spec"]["offset"] = [off0[0] + pl["offset"][0], off0[1] + pl["offset"][1]]
 
 
-def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None, shots=None, panel_of=None):
+def _bullets_options(lyr):
+    """`lyrics.bullets` checked and with its defaults (BULLETS), or None when the entry has none: the words fly past a
+    target as it stands when each is sung (`at`, any target; required), each `offsets[k]` [x, y, z] metres from it in the
+    world (cycled: a word at the feet to jump, at the head to duck), coming from `come` metres away `lead` seconds before
+    its onset and going on to `go` metres away `after` seconds after it, on a free panel `box` [w, h] metres facing
+    `facing` with `up`."""
+    b = lyr.get("bullets")
+    if b is None or b is False:
+        return None
+    if not isinstance(b, dict):
+        raise LyricsError("lyrics: bullets is a table {at, offsets, box, facing, up, come, go, lead, after}")
+    unknown = sorted(set(b) - set(BULLETS))
+    if unknown:
+        raise LyricsError(f"lyrics: bullets keys {unknown} are unknown (known: {sorted(BULLETS)})")
+    if lyr.get("zones") is not None:
+        raise LyricsError("lyrics: bullets fly in the world, zones set words on the screen of each shot: give one of them")
+    if lyr.get("leave", "cut") != "cut":
+        raise LyricsError("lyrics: a bullet leaves by flying on (`after`): drop `leave`")
+    o = {**BULLETS, **b}
+    if o["at"] is None:
+        raise LyricsError("lyrics: bullets needs `at`, the target the words fly past (\"cast:NAME.center\")")
+
+    def vec(v, n, what):
+        if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
+            raise LyricsError(f"lyrics: bullets {what} is a list of {n} numbers")
+        return [float(x) for x in v]
+    offs = o["offsets"]
+    if offs and isinstance(offs[0], (int, float)):
+        offs = [offs]
+    if not isinstance(offs, (list, tuple)) or not offs:
+        raise LyricsError("lyrics: bullets offsets is a list of [x, y, z] metres (cycled over the words)")
+    o["offsets"] = [vec(v, 3, "offsets[]") for v in offs]
+    for key, n in (("box", 2), ("facing", 3), ("up", 3), ("come", 3), ("go", 3)):
+        o[key] = vec(o[key], n, key)
+    for key in ("lead", "after"):
+        if isinstance(o[key], bool) or not isinstance(o[key], (int, float)) or o[key] < 0:
+            raise LyricsError(f"lyrics: bullets {key} is seconds (not negative)")
+        o[key] = float(o[key])
+    if min(o["box"]) <= 0:
+        raise LyricsError("lyrics: bullets box is [w, h] metres, both positive")
+    return o
+
+
+def _bullets_panel(entry, opts):
+    """The free panel every word of a bullets entry is set on (`bullets`' box, facing and up, at the origin until
+    _bullets moves it), for the layouts and the fit. The words place themselves, so the entry gives no placement."""
+    clash = [k for k in BULLET_PLACEMENT if k in entry]
+    if clash:
+        raise LyricsError(f"lyrics: bullets place every word where its target is: drop {clash} "
+                          "(the panel is bullets' box, facing and up)")
+    return {**entry, "at": [0.0, 0.0, 0.0], "facing": list(opts["facing"]), "up": list(opts["up"]),
+            "box": list(opts["box"])}
+
+
+def _bullets(entry, name, lyr, tl, fps, frame0, o, measure, marks):
+    """A bullets entry: the words expanded on their free panel (bullets_panel), then each put in the world at
+    marks(at, times)[k] (the target's world point on the frame word k lands) + its offset, shown from `lead` s before that
+    to `after` s after, with `_path` [[t, [x, y, z]], ...] the panel's world positions over that span: it comes from
+    `come`, passes the mark on the landing frame and goes on to `go` (the text stage keys the object's location along
+    it, linear). The style's own motion plays inside the flying panel; the cut is when the last word has flown."""
+    specs, summary = _expand(_bullets_panel(entry, o), name, lyr, tl, fps, frame0, tuple(o["box"]), measure)
+    times = [landing_frame(float(tl["lines"][s["lyric"][0] - 1]["words"][s["lyric"][1] - 1]["start"]), fps) / fps
+             for s in specs]
+    pts = list(marks(o["at"], times)) if specs else []
+    if len(pts) != len(specs):
+        raise LyricsError(f"lyrics: bullets got {len(pts)} point(s) for {len(specs)} word(s)")
+    for k, (sub, t, mark) in enumerate(zip(specs, times, pts)):
+        p = [float(a) + float(b) for a, b in zip(mark, _cycle(o["offsets"], k))]
+        t0, t1 = t - o["lead"], t + o["after"]
+        sub["at"] = p
+        sub["kinetic"] = {**(sub.get("kinetic") or {}), "show": [t0, t1]}
+        sub["_path"] = [[t0, [a + b for a, b in zip(p, o["come"])]], [t, p], [t1, [a + b for a, b in zip(p, o["go"])]]]
+    if specs:
+        summary["cut_frame"] = max(cut_frame(s["kinetic"]["show"][1], fps, frame0) for s in specs)
+    summary["bullets"] = len(specs)
+    return specs, summary
+
+
+def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None, shots=None, panel_of=None, marks=None):
     """Turn a `[[text]]` entry with `lyrics = {...}` into (specs, summary): one ordinary text spec per selected word that
     is ever on screen, plus numbers only (no lyric text) about what was built.
 
@@ -699,8 +799,10 @@ def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None, shots=None, pa
              other need it
     shots    [{"name", "from", "to"}] clip seconds of the project's cut, for `lyrics.zones` (a line set again in every shot)
     panel_of callable(entry) -> (w, h): the panel of an entry with a zone's overlay laid over it (zones only)
+    marks    callable(at, [t, ...]) -> [(x, y, z), ...]: the world point of target `at` (`lyrics.bullets.at`) at each clip
+             second (bullets only: the words fly past it, see _bullets)
     Each spec has `name` `<name>_l<line>w<word>` (`..._<shot>` with zones), `text`, `lyric = [line, word]` and a `kinetic`
-    table (docs/design.md: Text, lyrics) of keys the text stage turns into node inputs."""
+    table (docs/design.md: Text, lyrics) of keys the text stage turns into node inputs; a bullet also has `_path`."""
     name = entry.get("name")
     if not name:
         raise LyricsError("[[text]] with lyrics needs a name")
@@ -714,6 +816,11 @@ def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None, shots=None, pa
         if bad in entry:
             raise LyricsError(f"text {name!r}: a lyrics entry takes its words from the timeline: drop `{bad}`")
     try:
+        bullets = _bullets_options(lyr)
+        if bullets is not None:
+            if marks is None:
+                raise LyricsError("lyrics: bullets need the scene: the text stage reads where `at` is when each word lands")
+            return _bullets(entry, name, lyr, tl, float(fps), int(frame0), bullets, measure, marks)
         if lyr.get("zones") is not None:
             return _expand_zones(entry, name, lyr, tl, float(fps), int(frame0), shots, panel_of or (lambda e: panel), measure)
         return _expand(entry, name, lyr, tl, float(fps), int(frame0), panel, measure)
@@ -1179,6 +1286,18 @@ def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, dr
         arr["rot"] = [(t, -v) for t, v in arr["rot"]]
     if wow is not None or rew is not None:          # the held note's wow and flutter, the rewind: on top of the arrival
         _tape(arr, w, land, last, fps, wow, rew)
+    exit_at = None                                  # (t, frames): when a recycled slot's next word takes it, the fade
+    if rec is not None and float(rec.get("fade", 0)) > 0:
+        nxt = next((lands[j] for j in range(k + 1, n) if slot_of[j] == slot_of[k]), None)
+        if nxt is not None:
+            exit_at = ((nxt - float(rec.get("gap", 0))) / fps, float(rec["fade"]))
+    if exit_at is not None and float(rec.get("slide", 0.0)):  # it is flung off sideways over the fade, faster and faster
+        t_exp, fr = exit_at
+        c0 = max(int(math.floor(t_exp * fps - fr)), land)
+        held = _held(arr["dx"], land, last, fps, 0.0)
+        go = lambda t: float(rec["slide"]) * sstep(t_exp - fr / fps, t_exp, t) ** 2     # noqa: E731
+        arr["dx"] = sorted([(t, v) for t, v in arr["dx"] if round(t * fps) < c0]
+                           + [(c / fps, held[c] + go(c / fps)) for c in range(c0, last + 1)])
     for ch in ("scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot"):
         keys = arr[ch]
         if ch == "rot" and tilt:
@@ -1189,17 +1308,14 @@ def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, dr
         kin["pivot"] = "bottom"
     # opacity: the arrival ramp times the fade a recycled slot gets before the next word takes it over
     op = list(arr["alpha"])
-    if rec is not None and float(rec.get("fade", 0)) > 0:
-        fr = float(rec["fade"])
-        nxt = next((lands[j] for j in range(k + 1, n) if slot_of[j] == slot_of[k]), None)
-        if nxt is not None:
-            t_exp = (nxt - float(rec.get("gap", 0))) / fps
-            have = {round(t * fps) for t, _ in op}
-            fade = lambda t: 1.0 - sstep(t_exp - fr / fps, t_exp - 0.5 / fps, t)       # noqa: E731
-            op = [(t, v * fade(t)) for t, v in op]
-            op += [(c / fps, fade(c / fps)) for c in range(max(int(math.floor(t_exp * fps - fr)), land), last + 1)
-                   if c not in have]
-            op.sort()
+    if exit_at is not None:
+        t_exp, fr = exit_at
+        have = {round(t * fps) for t, _ in op}
+        fade = lambda t: 1.0 - sstep(t_exp - fr / fps, t_exp - 0.5 / fps, t)       # noqa: E731
+        op = [(t, v * fade(t)) for t, v in op]
+        op += [(c / fps, fade(c / fps)) for c in range(max(int(math.floor(t_exp * fps - fr)), land), last + 1)
+               if c not in have]
+        op.sort()
     if not _is_const(op, 1.0):
         kin["opacity"] = compress(op)
     if spread_k > 0.0:                      # tracking grows while the note is held and relaxes after it

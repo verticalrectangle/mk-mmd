@@ -362,3 +362,195 @@ def air_plan(ts, spans):
             off[s] = np.where(np.abs(v) > np.abs(off[s]), v, off[s])
             pitch[s] = np.maximum(pitch[s], math.radians(float(c["point"])) * e)
     return off, pitch
+
+
+# ------------------------------------------------------------------------------ walking, hopping, tumbling
+WALK = {"stride": 0.55, "first": "L", "lift": 0.07, "dip": 0.015, "slide": 0.0, "roll": 0.15, "hop": 0.0, "arms": 0.0,
+        "cross": 0.0, "sway": 0.0}
+WALK_KEYS = ("steps", "hops") + tuple(WALK)
+HOP_KEYS = ("from", "to", "move", "height")
+TUMBLE_KEYS = ("from", "to", "deg", "axis")
+TUMBLE_AXES = ("flip", "cartwheel")       # about the character's left axis (heels over head) or its forward axis
+GRAVITY = 9.81
+FIRST_SWING = 0.35                        # s: the swing of a step from a stand (the first, or one after a pause)
+WALK_PAUSE = 1.2                          # s: a step longer than this after the last (or a landing) is from a stand
+ARMS_SETTLE = 0.25                        # s: the arms' swing dies away over this once the feet have stopped
+
+
+def _hops(spec):
+    out = []
+    for i, h in enumerate(spec.get("hops") or []):
+        if not isinstance(h, dict) or "from" not in h or "to" not in h or set(h) - set(HOP_KEYS):
+            raise ValueError(f"hops[{i}]: expected {{{', '.join(HOP_KEYS)}}} with from and to")
+        t0, t1 = float(h["from"]), float(h["to"])
+        move = h.get("move")
+        if t1 <= t0 or (move is not None and np.asarray(move, float).shape != (2,)):
+            raise ValueError(f"hops[{i}]: from before to, move [x, y] metres (its left, behind)")
+        out.append({"from": t0, "to": t1, "move": None if move is None else np.asarray(move, float),
+                    "height": h.get("height")})
+    return sorted(out, key=lambda h: h["from"])
+
+
+def walk_plan(ts, spec, feet):
+    """Walking, a step on each of `steps` (clip seconds: when each foot comes down, alternating from `first`), and
+    hopping, both feet off the ground over each of `hops` [{from, to, move, height}]. In the character's frame (x its
+    left, y behind, so forward is -y): a step sets its foot down `stride` m ahead of the other foot, on its own side of
+    the body (where `feet` {side: (x, y)}, the ankles' floor positions at rest relative to the root, put it) or, with
+    `cross`, that share of the way in to the body's centre line (1: on it, a catwalk; up to 1.5: across it); the foot
+    rolls off the ground `roll` of the step's time after the other foot came down, swings through `lift` m high and comes
+    down on the step; the body moves straight, at a steady pace, so that it is midway between the feet each time one
+    comes down, and the hips dip `dip` m as it does. A step more than WALK_PAUSE s after the one before starts from a
+    stand, as the first does: the body waits where it stood and the foot swings over the last FIRST_SWING s, so a pose
+    between two walks holds still. `sway` (m) carries the hips over the foot that is down, out and back
+    while the other one swings (the strut's hips). A hop lifts the body off its feet from `from` to `to` on a
+    parabola `height` m high (default: what the flight time gives under gravity, g T^2 / 8; `hop` sets one height for
+    every hop) and carries it `move` [x, y] (default: a stride forward); the feet land a quarter stride either side of
+    the body, the one that was ahead ahead, and the next step goes on from there. `slide` (0..1) puts the walk on a
+    treadmill: the body goes 1 - slide of the way, the feet down slide back under it (1: the body stays, a running man).
+    `arms` (m) swings each hand forward as the other side's foot goes forward of where it stood, back as it goes
+    behind, while the feet move; it dies away over ARMS_SETTLE s once they stop, so a hand posed between two walks is
+    where its pose put it ("swing": {side: (F,)} the hand's forward offset; 0: none).
+    Returns {"shift": the root's travel (F, 2), "height": (F,), "feet": {side: (F, 2) the foot's floor position relative
+    to the root}, "lift": {side: (F,)}, "dip": (F,), "sway": (F,) the hips' offset toward the left, "air": [(from, to)]
+    the hops' flights, "swing", "steps", "hops"}. Raises ValueError for steps out of order or inside a hop."""
+    ts = np.asarray(ts, float)
+    o = dict(WALK, **{k: v for k, v in spec.items() if k in WALK})
+    bad = sorted(set(spec) - set(WALK_KEYS))
+    if bad:
+        raise ValueError(f"unknown key(s) {bad} (known: {', '.join(WALK_KEYS)})")
+    first = _side(o["first"], "walk first")
+    stride, lift, dip, slide, roll = (float(o[k]) for k in ("stride", "lift", "dip", "slide", "roll"))
+    cross, sway = float(o["cross"]), float(o["sway"])
+    if stride < 0 or lift < 0 or dip < 0 or not 0.0 <= slide <= 1.0 or not 0.0 <= roll < 1.0:
+        raise ValueError("stride, lift and dip not negative, slide within 0..1, roll within 0..1")
+    if not 0.0 <= cross <= 1.5 or sway < 0:
+        raise ValueError("cross within 0..1.5 (1: the feet on the centre line), sway not negative")
+    steps = sorted(float(t) for t in (spec.get("steps") or []))
+    if any(b - a < 1e-6 for a, b in zip(steps, steps[1:])):
+        raise ValueError("two steps at one time: each step is one foot coming down")
+    hops = _hops(spec)
+    for h in hops:
+        if any(h["from"] < t < h["to"] for t in steps):
+            raise ValueError(f"a step inside the hop {h['from']:g}..{h['to']:g} s: the feet are off the ground then")
+    for a, b in zip(hops, hops[1:]):
+        if b["from"] < a["to"]:
+            raise ValueError(f"the hop at {b['from']:g} s starts before the hop before it lands ({a['to']:g} s)")
+    fwd, lat = np.array([0.0, -1.0]), {s: np.array([float(feet[s][0]), 0.0]) for s in feet}
+    pos = {s: np.array([float(feet[s][0]), float(feet[s][1])]) for s in feet}
+    body = np.zeros(2)
+    keys = []                                        # (t, body position) of the body's path
+    swings = {s: [] for s in feet}                   # (t0, t1, from, to, arc)
+    dips, air, stance = [], [], []                   # stance: (t0, t1, side) a foot carries the body while the other swings
+    events = [("step", t, None) for t in steps] + [("hop", h["from"], h) for h in hops]
+    events.sort(key=lambda e: e[1])
+    side, last = first, None
+    for kind, t, h in events:
+        if kind == "step":
+            if side not in pos:                      # one leg only: it steps every time
+                side = next(iter(pos))
+            other = next((s for s in pos if s != side), side)
+            stood = last is None or t - last > WALK_PAUSE    # from a stand: the first step, or one after a pause
+            t0 = t - FIRST_SWING if stood else last + roll * (t - last)
+            if stood:
+                keys.append((t0, body.copy()))       # the body waits where it stood until the foot lifts
+            ahead = max(float(pos[s] @ fwd) for s in pos)
+            new = np.array([body[0], 0.0]) + lat[side] * (1.0 - cross) + fwd * (ahead + stride)   # a stride past the foot ahead
+            stance.append((t0 if stood else last, t, other))
+            swings[side].append((t0, t, pos[side].copy(), new, True))
+            pos[side] = new
+            body = np.array([body[0], 0.5 * (pos[side][1] + pos[other][1])])         # midway between the feet
+            keys.append((t, body.copy()))
+            dips.append(t)
+            last, side = t, other
+        else:
+            t0, t1 = h["from"], h["to"]
+            keys.append((t0, body.copy()))
+            move = h["move"] if h["move"] is not None else fwd * stride
+            body = body + move
+            front = max(pos, key=lambda s: float(pos[s] @ fwd))
+            for s in pos:
+                sign = 1.0 if s == front or len(pos) == 1 else -1.0
+                new = body + lat[s] + fwd * (0.25 * stride * sign)
+                swings[s].append((t0, t1, pos[s].copy(), new, False))
+                pos[s] = new
+            keys.append((t1, body.copy()))
+            air.append((t0, t1, h["height"]))
+            last = t1
+            side = next((s for s in pos if s != front), front)       # the foot behind steps next
+    n = len(ts)
+    if keys:
+        kt = np.array([k[0] for k in keys])
+        kp = np.array([k[1] for k in keys])
+        path = np.stack([np.interp(ts, kt, kp[:, 0]), np.interp(ts, kt, kp[:, 1])], 1)
+    else:
+        path = np.zeros((n, 2))
+    height = np.zeros(n)
+    for t0, t1, hh in air:
+        T = t1 - t0
+        H = float(hh) if hh is not None else (float(o["hop"]) or GRAVITY * T * T / 8.0)
+        u = np.clip((ts - t0) / T, 0.0, 1.0)
+        height = np.maximum(height, 4.0 * H * u * (1.0 - u))
+    out_feet, out_lift = {}, {}
+    for s in pos:
+        p = np.tile(np.array([float(feet[s][0]), float(feet[s][1])]), (n, 1))
+        up = np.zeros(n)
+        for t0, t1, a, b, arc in swings[s]:
+            u = np.clip((ts - t0) / max(t1 - t0, 1e-6), 0.0, 1.0)
+            w = smooth(u)
+            moving = ts >= t0
+            p[moving] = a + (b - a) * w[moving, None]
+            if arc:
+                up = np.maximum(up, lift * np.sin(np.pi * u) * ((u > 0) & (u < 1)))
+        out_feet[s] = p - path                                    # relative to the body, whatever the treadmill does
+        out_lift[s] = up
+    sag = np.zeros(n)
+    for t in dips:
+        sag = np.maximum(sag, dip * np.exp(-((ts - t) / 0.08) ** 2))
+    hips = np.zeros(n)                                            # over the foot that is down, out and back
+    if sway > 0:
+        for t0, t1, s in stance:
+            u = (ts - t0) / max(t1 - t0, 1e-6)
+            inside = (u > 0.0) & (u < 1.0)
+            hips[inside] = sway * math.copysign(1.0, lat[s][0] or 1.0) * np.sin(np.pi * u[inside])
+    runs = []                                                     # the walks: swings less than two settles apart run on
+    for t0, t1 in sorted((a, b) for s in swings for a, b, *_ in swings[s]):
+        if runs and t0 <= runs[-1][1] + 2.0 * ARMS_SETTLE:
+            runs[-1][1] = max(runs[-1][1], t1)
+        else:
+            runs.append([t0, t1])
+    moving = np.zeros(n)                                          # the arms swing over a walk, coming and going smoothly
+    for t0, t1 in runs:
+        moving = np.maximum(moving, smooth((ts - t0) / ARMS_SETTLE) * (1.0 - smooth((ts - t1) / ARMS_SETTLE)))
+    swing = {}                                                    # each hand goes forward as the other side's foot does
+    arms = float(o["arms"])
+    for s in out_feet:
+        other = next((x for x in out_feet if x != s), s)
+        ahead = -(out_feet[other][:, 1] - float(feet[other][1]))  # that foot's forward offset from where it stood
+        swing[s] = (arms * moving * np.clip(ahead / max(0.5 * stride, 1e-6), -1.0, 1.0) if arms > 0
+                    else np.zeros(n))
+    return {"shift": (1.0 - slide) * path, "height": height, "feet": out_feet, "lift": out_lift, "dip": sag,
+            "sway": hips, "air": [(a, b) for a, b, _ in air], "swing": swing, "steps": len(steps), "hops": len(hops)}
+
+
+def tumble_plan(ts, tumbles):
+    """Turns of the whole body in the air about its hips: each {from, to, deg, axis} turns it `deg` degrees (360: heels
+    over head and round) over from..to, eased in and out, about its left axis (`flip`; positive: head forward) or its
+    forward axis (`cartwheel`; positive: toward its left), the turns adding up and holding after. Returns {axis: (F,) rad}.
+    Raises ValueError for a bad or overlapping tumble."""
+    ts = np.asarray(ts, float)
+    out = {a: np.zeros(len(ts)) for a in TUMBLE_AXES}
+    end = {a: -math.inf for a in TUMBLE_AXES}
+    for i, tb in enumerate(sorted(tumbles, key=lambda x: float(x["from"]) if isinstance(x, dict) and "from" in x else 0)):
+        if not isinstance(tb, dict) or not {"from", "to", "deg"} <= set(tb) or set(tb) - set(TUMBLE_KEYS):
+            raise ValueError(f"tumble {i}: expected {{{', '.join(TUMBLE_KEYS)}}} with from, to and deg")
+        axis = tb.get("axis", "flip")
+        if axis not in TUMBLE_AXES:
+            raise ValueError(f"tumble {i}: axis is \"flip\" or \"cartwheel\", not {axis!r}")
+        t0, t1 = float(tb["from"]), float(tb["to"])
+        if t1 <= t0:
+            raise ValueError(f"tumble {i}: from before to")
+        if t0 < end[axis] - 1e-6:
+            raise ValueError(f"tumble {i} at {t0:g} s starts before the {axis} before it ends ({end[axis]:g} s)")
+        end[axis] = t1
+        out[axis] += math.radians(float(tb["deg"])) * smooth((ts - t0) / (t1 - t0))
+    return out

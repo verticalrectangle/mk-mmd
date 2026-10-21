@@ -423,8 +423,9 @@ def bake(ctx, out_dir):
     if keep:
         bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_apply=False,
                                   export_animations=False, export_skins=True, export_morph=True,
-                                  export_morph_normal=False, export_cameras=False, export_lights=False, export_yup=True)
-        spaces = vertex_spaces(glb, keep, nodes)
+                                  export_morph_normal=False, export_cameras=False, export_lights=False, export_yup=True,
+                                  export_current_frame=True)    # frame0, where nodes[...][0] is; not frame 0, where a
+        spaces = vertex_spaces(glb, keep, nodes)                # root keyed by a walk or a vehicle stands elsewhere
     else:
         _empty_glb(glb)
         spaces = {}

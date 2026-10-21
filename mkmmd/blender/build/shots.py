@@ -7,15 +7,19 @@
                                  s = 640, offset = 7, z = 1.2} for a roadside camera, {prop = ...}) is resolved per frame
   look = target                  what the camera points at (default: straight ahead along the mount's -Y)
   lens = 35, roll = 0 (deg), lag = 0.0 (s, operator lag on the aim), shake = 0.0 (deg, handheld)
-  keys = [{t, at, look, lens, shift}]   moves inside the shot (eased)
-  frame = {subject = [targets], fill = 0.45, solve = "lens" | "distance"}   automatic framing per aspect: the subject's
-                                 height fills `fill` of the frame (lens or dolly solved per aspect)
+  keys = [{t, at, look, lens, roll, shift}]   moves inside the shot (eased)
+  follow = {target, axes = "x", lag = 0.0, from}   the side-scroller lock: the camera's fixed position and aim point
+                                 move with the target's world displacement since clip second `from` (default the
+                                 shot's), along `axes` only, eased by `lag`; a pure translation, never with `mount`
+  frame = {subject = [targets], fill = 0.45, solve = "lens" | "distance" | "dolly"}   automatic framing per aspect: the
+                                 subject's height fills `fill` of the frame (lens, distance or, against a keyed lens,
+                                 the distance on every frame: a dolly zoom)
   shift = [x, y]                 lens shift as fractions of the LARGER image side (Blender's shift_x / shift_y: the
                                  picture moves the other way), constant or keyed in `keys[].shift`. A 1:1 output that
                                  must be an exact crop of a 9:16 master keeps the master's camera with lens and dof
                                  fstop x 1920 / 1080 and shift = [0, (420 - top) / 1080] for a crop `top` px from the
                                  master's top (mkmmd.core.shotstyle.crop_camera)
-  [shot.aspect.<output>]         per-output overrides of at / look / lens / roll / frame / shift / style / reflection
+  [shot.aspect.<output>]         per-output overrides of at / look / lens / roll / frame / follow / shift / style / reflection
   dof = {focus = target, fstop = 2.8, offset = 0}   offset: metres the focus plane sits nearer the camera than the target
                                  (a face's surface is 4-8 cm in front of its eye bones)
   style = "silhouette"           the flat look of a shot, composed at render time (`mk render`, `mk look`) by
@@ -76,12 +80,11 @@ def _vfov_scale(size):
     return (SENSOR / 2) * (h / max(w, h))
 
 
-def _styles(ctx, spec, outs, name):
+def _styles(ctx, spec, outs, name, later):
     """{aspect: {"silhouette" | "vector" | "reflection": normalised spec}} for the shot's render-time looks (the table
     that mkmmd.blender.styles reads; colours resolved against the project palette, a vector look with the project's
-    [vector] table)."""
-    styles, seen = {}, set()
-    recs = None
+    [vector] table). The looks' object patterns and material rules go into `later`, checked on the finished scene."""
+    styles = {}
     for out in outs:
         asp = out["name"]
         try:
@@ -93,26 +96,39 @@ def _styles(ctx, spec, outs, name):
             if glass is None or glass.type != "MESH":
                 raise BuildError(f"shot {name!r} ({asp}): reflection object {norm['reflection']['object']!r} is not a "
                                  f"mesh in the scene (list them with `mk q BLEND --list objects`)")
-        for kind, look in norm.items():                     # a pattern that matches nothing is a typo until proven otherwise
+        for kind, look in norm.items():
             for key in ("hide", "keep", "accent", "only"):
                 for pat in look.get(key, []):
-                    if (key, pat) in seen:
-                        continue
-                    seen.add((key, pat))
-                    recs = recs if recs is not None else ST.object_records(bpy.context.scene)
-                    if not SS.select(recs, [pat]):
-                        ctx.log(f"WARNING shot {name!r}: {kind} {key} pattern {pat!r} matches no object")
+                    if ("pattern", name, kind, key, pat) not in later:
+                        later.append(("pattern", name, kind, key, pat))
             for i, rule in enumerate(look.get("materials", []) if kind == "vector" else []):
-                if ("materials", i) in seen:
-                    continue
-                seen.add(("materials", i))
-                names = {SS.vector_name(m.name) for m in bpy.data.materials}
-                if not any(fnmatch.fnmatchcase(n, p) for n in names for p in rule["match"]):
-                    ctx.log(f"WARNING [vector] materials[{i}] (tone {rule['tone']!r}): match {rule['match']} names no "
-                            f"material in the scene")
+                if ("materials", i, rule["tone"], tuple(rule["match"])) not in later:
+                    later.append(("materials", i, rule["tone"], tuple(rule["match"])))
         if norm:
             styles[asp] = norm
     return styles
+
+
+def _check_looks(ctx, later):
+    """A look's pattern that matches no object, or a [vector] material rule that names no material, is a typo until proven
+    otherwise: checked on the finished scene, so what the stages after shots make (the text stage's words) counts."""
+    recs = ST.object_records(bpy.context.scene)
+    names = {SS.vector_name(m.name) for m in bpy.data.materials}
+    for item in later:
+        if item[0] == "pattern":
+            _, shot, kind, key, pat = item
+            if not SS.select(recs, [pat]):
+                ctx.log(f"WARNING shot {shot!r}: {kind} {key} pattern {pat!r} matches no object")
+        else:
+            _, i, tone, match = item
+            if not any(fnmatch.fnmatchcase(n, p) for n in names for p in match):
+                ctx.log(f"WARNING [vector] materials[{i}] (tone {tone!r}): match {list(match)} names no material in the "
+                        f"scene")
+
+
+def _fixed(v):
+    """1 when a camera position or aim is a fixed point (a list: it moves with a follow), 0 for a target (it moves)."""
+    return 1.0 if isinstance(v, (list, tuple)) else 0.0
 
 
 def run(ctx):
@@ -132,7 +148,8 @@ def run(ctx):
             SP.check(spec, [o["name"] for o in outs])
         except SP.ShotError as e:
             raise BuildError(str(e)) from None
-    table, report = [], {}
+    table, report, later = [], {}, []
+    ctx.before_save.append(lambda: _check_looks(ctx, later))
     for m in list(sc.timeline_markers):
         sc.timeline_markers.remove(m)
     for spec in shots:
@@ -151,11 +168,21 @@ def run(ctx):
                              f"scene's first frame {ctx.start} (lower [scene] start)")
         frames = np.arange(max(ctx.start, lo - 2), min(ctx.end, hi + 2) + 1)    # its own frames and those it lends
         own = frames[(frames >= f_from - 2) & (frames <= f_to + 2)]
-        cams = {}
+        cams, moves = {}, {}
         for out in outs:
             asp = out["name"]
             sp = SP.merged(spec, (spec.get("aspect") or {}).get(asp))
             mount = _mount(ctx, sp.get("mount"))
+            try:
+                fol = SP.follow_spec(sp, f"shot {name!r} ({asp})")
+            except SP.ShotError as e:
+                raise BuildError(str(e)) from None
+            fr = sp.get("frame")
+            if fr and "subject" not in fr:
+                raise BuildError(f"shot {name!r} ({asp}): `frame` needs a `subject` (a target or a list of targets)")
+            subj = (fr["subject"] if isinstance(fr["subject"], list) else [fr["subject"]]) if fr else []
+            dolly = bool(fr) and fr.get("solve", "lens") == "dolly"
+            roll0 = float(sp.get("roll", 0.0))
             cd = bpy.data.cameras.new(f"{name}@{asp}")
             cd.sensor_fit, cd.sensor_width = "AUTO", SENSOR
             cd.clip_start, cd.clip_end = 0.02, 5000.0
@@ -169,12 +196,14 @@ def run(ctx):
             for k in keys:
                 if "shift" in k:
                     SS.shift_pair(k["shift"], f"shot {name!r} ({asp}) keys[].shift")
-            # per frame: camera position (world), aim point (world), lens, lens shift, mount matrix
-            pos, aim, lens, mounts, shifts = [], [], [], [], []
+            # per frame: camera position (world), aim point (world), lens, roll, lens shift, mount matrix; for a follow the
+            # target's point and the shares of the position and aim that are fixed points (they move with it); for a
+            # dolly the subject's middle
+            pos, aim, lens, rolls, mounts, shifts, w_at, w_look, held, middle = [], [], [], [], [], [], [], [], [], []
             for f in frames:
                 sc.frame_set(int(f))
                 t = ctx.time(f)
-                at, look, ln = sp.get("at", (0, 0, 0)), sp.get("look"), float(sp.get("lens", 35.0))
+                at, look, ln, rl = sp.get("at", (0, 0, 0)), sp.get("look"), float(sp.get("lens", 35.0)), roll0
                 sh = base_shift
                 M = mount.matrix_world.copy() if mount is not None else Matrix()
 
@@ -186,18 +215,27 @@ def run(ctx):
                     u = 0.0 if k1 is k0 else float(PF.smooth((t - k0["t"]) / max(k1["t"] - k0["t"], 1e-6)))
                     p = place(k0.get("at", at)).lerp(place(k1.get("at", at)), u)
                     ln = k0.get("lens", ln) * (1 - u) + k1.get("lens", ln) * u
+                    rl = float(k0.get("roll", roll0)) * (1 - u) + float(k1.get("roll", roll0)) * u
                     look = k0.get("look", look) if u < 0.5 else k1.get("look", look)
                     sh = tuple(np.asarray(k0.get("shift", base_shift), float) * (1 - u)
                                + np.asarray(k1.get("shift", base_shift), float) * u)
+                    wa = (1 - u) * _fixed(k0.get("at", at)) + u * _fixed(k1.get("at", at))
                 else:
-                    p = place(at)
+                    p, wa = place(at), _fixed(at)
                 if look is None:
-                    a = p + (M.to_3x3() @ Vector((0, -1, 0))) * 10.0
+                    a, wl = p + (M.to_3x3() @ Vector((0, -1, 0))) * 10.0, wa      # straight ahead of where it stands
                 else:
-                    a = targets.point(ctx, look)
+                    a, wl = targets.point(ctx, look), _fixed(look)
+                if fol:
+                    held.append(tuple(targets.point(ctx, fol["target"])))
+                if dolly:
+                    middle.append(tuple(np.mean([tuple(targets.point(ctx, s)) for s in subj], axis=0)))
                 pos.append(tuple(p))
                 aim.append(tuple(a))
                 lens.append(ln)
+                rolls.append(rl)
+                w_at.append(wa)
+                w_look.append(wl)
                 shifts.append(sh)
                 mounts.append(M)
             pos, aim, lens = np.array(pos), np.array(aim), np.array(lens)
@@ -206,12 +244,26 @@ def run(ctx):
                 local = np.array([tuple(Mi.inverted() @ Vector(a)) for Mi, a in zip(mounts, aim)])
                 local = PF.lowpass(local, float(sp["lag"]) * ctx.fps)
                 aim = np.array([tuple(Mi @ Vector(a)) for Mi, a in zip(mounts, local)])
-            fr = sp.get("frame")
+            follow_m = None
+            if fol:                                  # after the aim's lag: a pure translation, so the camera never turns
+                f0 = int(round(ctx.frame(fol["from"]))) if fol["from"] is not None else f_from
+                hold = np.array(held)
+                if frames[0] <= f0 <= frames[-1]:
+                    ref = hold[f0 - frames[0]]
+                else:
+                    sc.frame_set(f0)
+                    ref = np.array(tuple(targets.point(ctx, fol["target"])))
+                moved = np.zeros_like(hold)
+                for ax in fol["axes"]:
+                    moved[:, ax] = hold[:, ax] - ref[ax]
+                if fol["lag"] > 0:
+                    moved = PF.lowpass(moved, fol["lag"] * ctx.fps)
+                pos = pos + moved * np.array(w_at)[:, None]
+                aim = aim + moved * np.array(w_look)[:, None]
+                follow_m = round(float(np.abs(moved).max()), 3)
+            dolly_m = None
             if fr:
-                if "subject" not in fr:
-                    raise BuildError(f"shot {name!r} ({asp}): `frame` needs a `subject` (a target or a list of targets)")
-                subj = fr["subject"] if isinstance(fr["subject"], list) else [fr["subject"]]
-                hs = []
+                hs, tall = [], []
                 for f in own[:: max(1, len(own) // 12)]:
                     sc.frame_set(int(f))
                     P = np.array([tuple(targets.point(ctx, s)) for s in subj])
@@ -219,24 +271,31 @@ def run(ctx):
                     d = np.linalg.norm(P.mean(0) - pos[k])
                     ext = max(P[:, 2].max() - P[:, 2].min(), 0.25)        # at least a head's height
                     hs.append((ext + 0.15) / d)                            # angular height (with headroom)
+                    tall.append(ext + 0.15)
                 ang = float(np.median(hs))
                 fill = float(fr.get("fill", 0.45))
                 half = _vfov_scale(out["size"])
-                if fr.get("solve", "lens") == "lens":
+                solve = fr.get("solve", "lens")
+                if solve == "lens":
                     lens[:] = fill * 2 * half / ang
-                else:                                                      # dolly along the aim line
+                elif solve == "distance":                                  # one dolly along the aim line
                     want = fill * 2 * half / lens.mean()
                     scale = ang / want
                     pos = aim + (pos - aim) * scale
+                else:                                                      # a dolly on every frame, against the keyed lens
+                    d = np.linalg.norm(np.array(middle) - pos, axis=1)
+                    scale = (float(np.median(tall)) / d) / (fill * 2 * half / lens)
+                    pos = aim + (pos - aim) * scale[:, None]
+                    away = np.linalg.norm(np.array(middle) - pos, axis=1)
+                    dolly_m = [round(float(away.min()), 3), round(float(away.max()), 3)]
             shake = float(sp.get("shake", 0.0))
             rng = np.random.default_rng(zlib.crc32(f"{name}@{asp}".encode()))
             jit = PF.lowpass(rng.normal(0, 1, (len(frames), 3)), 6.0) * math.radians(shake) * 2.5 if shake else None
-            roll = math.radians(float(sp.get("roll", 0.0)))
             quats = []
             for i in range(len(frames)):
                 d = Vector(aim[i]) - Vector(pos[i])
                 q = d.to_track_quat("-Z", "Y")
-                q = q @ Quaternion((0, 0, 1), roll)
+                q = q @ Quaternion((0, 0, 1), math.radians(rolls[i]))
                 if jit is not None:
                     q = q @ Quaternion((1, 0, 0), jit[i, 0]) @ Quaternion((0, 1, 0), jit[i, 1]) @ \
                         Quaternion((0, 0, 1), jit[i, 2] * 0.5)
@@ -260,7 +319,11 @@ def run(ctx):
                     dist.append(max((targets.point(ctx, sp["dof"]["focus"]) - Vector(pos[i])).length - off, 0.05))
                 K.set_fcurve(cd, "dof.focus_distance", 0, frames, dist, interp="LINEAR")
             cams[asp] = cam.name
-        styles = _styles(ctx, spec, outs, name)
+            if follow_m is not None:
+                moves.setdefault(asp, {})["follow_m"] = follow_m
+            if dolly_m is not None:
+                moves.setdefault(asp, {})["dolly_m"] = dolly_m
+        styles = _styles(ctx, spec, outs, name, later)
         entry = {"name": name, "from": f_from, "to": f_to, "cameras": cams, "keyed": [int(frames[0]), int(frames[-1])]}
         if plate:
             entry["plate"] = True                                    # not in the cut: no marker, rendered where wanted
@@ -271,6 +334,8 @@ def run(ctx):
             entry["styles"] = styles
         table.append(entry)
         report[name] = {"frames": [f_from, f_to], "keyed": entry["keyed"], "cameras": cams}
+        if moves:
+            report[name]["moves"] = moves                            # metres: the follow's farthest, the dolly's range
         if plate:
             report[name]["plate"] = True
         if styles:

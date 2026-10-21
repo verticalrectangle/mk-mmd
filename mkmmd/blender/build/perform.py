@@ -21,6 +21,7 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      reach that leans in and settles back, a head on a shoulder; hand targets still hold,
                                      except hands whose pose `ride` is a chest bone: they go with it)
   head_tilt = [[t, deg], ...]        the head rolls toward the model's left (on top of the gaze), keyed the same way
+  head_turn = [[t, deg], ...]        the head turns toward the model's left (on top of the gaze): a look over the shoulder
   rock = {deg, period = 4.0, phase = 0.0, hips = 0.0}, head_rock = {...}   a periodic sideways lean of the upper body (like
                                      `tilt`) and roll of the head (like `head_tilt`) toward the model's left: deg * sin(2 pi t /
                                      period + phase) of clip time, ADDED to the keyed tilts; unlike them it goes on at any clip
@@ -35,6 +36,12 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
   step_turn = [{t, deg, dur, first, lift = 0.045, dip = 0.02, move = [x, y]}]   the body turns round on the spot like a
                                      person: the cast root's yaw (and its travel), the chest leading the hips, the feet
                                      stepping round one after the other, the hips sinking (mkmmd.core.perform.turn_plan)
+  walk = {steps = [t, ...], hops = [{from, to, move = [x, y], height}], stride = 0.55, first = "L", lift = 0.07,
+          dip = 0.015, slide = 0.0, roll = 0.15, hop = 0.0}   the body walks: a foot comes down on each step a stride
+                                     past the other, the root travels with the body, the hips dip; over a hop both feet
+                                     leave the ground, the root flies a parabola and the legs tuck (mkmmd.core.perform.
+                                     walk_plan); slide 1 is a treadmill (a running man)
+  tumble = [{from, to, deg, axis = "flip" | "cartwheel"}]   the body turns about its hips in the air
   blink = {per_min = 15, seed = 0, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1)
   sing = {timeline = "audio/timeline.json" (the default), lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
@@ -316,19 +323,103 @@ def _turn(ctx, name, m, spec, ts, frames):
                                 "feet_gap_mm": round(plan["gap"] * 1000, 1) if math.isfinite(plan["gap"]) else None}}
 
 
-def _body(ctx, name, m, spec, ts, frames, settle, turn=None):
-    """bounce, crouch, rise, kick, air, a step_turn's feet and the rock's hips: the hips (the `center` bone) and the feet
-    (the leg IK bones) move on top of the offsets the pose stage gave them (eased in over the settle like them). `bounce`
-    dips the hips on the beats while the feet stay planted (the knees bend: a punk's pump); `crouch = [[t, metres], ...]`
-    lowers them so (a landing, a squat); `rock.hips` shifts them toward the model's left with the rock's own swing (the
-    weight goes from foot to foot); `rise = [[t, metres], ...]` lifts the whole body, feet too (she floats); `kick` flicks
-    one foot up and back on the beats, `hold` of the way lifted between them; `air` tucks both legs while the body is off
-    the ground and points the toes (mkmmd.core.perform.air_plan); `turn`, a step_turn's plan (`_turn`), steps the feet
-    round to the turned stance and sinks the hips while the root turns. Returns report numbers."""
+def _walk(ctx, name, m, spec, ts, frames, turned=None):
+    """walk and tumble: the cast root's travel (a walk's body, its hops' heights; mkmmd.core.perform.walk_plan) and its
+    turns in the air about the hips (tumble_plan), keyed here, before the gaze is sampled. Returns the walk's plan for
+    `_body` (its feet, lifts, dips and flights; None without a walk) and report numbers. A [[key]] on the root's
+    location or rotation adds on top only when it is `relative`."""
+    wk, tb = spec.get("walk"), spec.get("tumble")
+    if not wk and not tb:
+        return None, {}
+    where = f"perform.{name}"
+    if turned is not None:
+        raise BuildError(f"{where}: walk / tumble and step_turn all move the root, and a turn inside a walk is not "
+                         f"supported: face the walk with [[cast]] yaw, or give step_turn without a walk")
+    root, arm = m.root, m.arm
+    if root is None or root == arm:
+        raise BuildError(f"{where}: walk / tumble: the member has no root object to move")
+    if root.rotation_mode not in ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"):
+        raise BuildError(f"{where}: walk / tumble: the root {root.name!r} turns in {root.rotation_mode}, not Euler angles")
+    for k in ctx.data.get("key", []):
+        if k.get("target") == root.name and k.get("prop") in ("location", "rotation_euler") and not k.get("relative"):
+            raise BuildError(f"{where}: a [[key]] keys {root.name!r} {k['prop']} outright, which walk / tumble key: "
+                             f"give it `relative = true` (offsets on top of the walk)")
+    smap = S.semantic_map(arm)
+    W0 = arm.matrix_world.to_3x3().normalized()                 # the character's frame at rest
+    Wi = W0.inverted()
+    centre = arm.matrix_world.inverted() @ root.matrix_world.translation
+    n = len(ts)
+    off = np.zeros((n, 3))                                       # the root's offset in the character's axes
+    info, plan = {}, None
+    if wk:
+        if not isinstance(wk, dict):
+            raise BuildError(f"{where}.walk: a table {{steps, hops, stride, ...}}")
+        feet0 = (m.base or {}).get("feet") or {}
+        feet = {}
+        for s in ("L", "R"):
+            ik = smap.get(f"leg_ik.{s}")
+            if ik:
+                p = arm.data.bones[ik].head_local + Wi @ Vector(feet0.get(s, Vector()))
+                feet[s] = (p.x - centre.x, p.y - centre.y)
+        try:
+            plan = PF.walk_plan(ts, wk, feet)
+        except ValueError as e:
+            raise BuildError(f"{where}.walk: {e}") from None
+        plan["feet0"] = feet
+        off[:, :2] += plan["shift"]
+        off[:, 2] += plan["height"]
+        info["walk"] = {"steps": plan["steps"], "hops": plan["hops"], "feet": sorted(feet),
+                        "metres": round(float(np.linalg.norm(plan["shift"][-1])), 3),
+                        "hop_mm": round(float(plan["height"].max()) * 1000, 1)}
+    rot = None
+    if tb:
+        try:
+            turns = PF.tumble_plan(ts, tb if isinstance(tb, list) else [tb])
+        except ValueError as e:
+            raise BuildError(f"{where}.tumble: {e}") from None
+        pivot = arm.data.bones[smap["center"]].head_local - centre    # the hips, relative to the root
+        pivot = Vector((pivot.x, pivot.y, pivot.z))
+        rot = []
+        for i in range(n):
+            R = (Matrix.Rotation(float(turns["flip"][i]), 3, "X") @ Matrix.Rotation(float(turns["cartwheel"][i]), 3, "Y"))
+            rot.append(R)
+            off[i] += np.array(pivot - R @ pivot)                       # turned about the hips, not the feet
+        info["tumble"] = {a: round(float(np.degrees(v[-1])), 1) for a, v in turns.items() if v.any()}
+    P = root.parent.matrix_world.to_3x3().normalized().inverted() if root.parent else Matrix.Identity(3)
+    loc0 = Vector(root.location)
+    locs = [loc0 + P @ (W0 @ Vector(tuple(o))) for o in off]
+    for i in range(3):
+        K.key_prop(root, "location", frames, [v[i] for v in locs], index=i, interp="LINEAR")
+    if rot is not None:
+        R0w = root.matrix_world.to_3x3().normalized()                 # the root's turn in the world at rest
+        Pw = root.parent.matrix_world.to_3x3().normalized() if root.parent else Matrix.Identity(3)
+        eul, prev = [], root.rotation_euler.copy()
+        for R in rot:
+            Rw = W0 @ R @ Wi @ R0w                                       # the character's turn, in the world
+            e = (Pw.inverted() @ Rw).to_euler(root.rotation_mode, prev)
+            eul.append(e)
+            prev = e
+        for i in range(3):
+            K.key_prop(root, "rotation_euler", frames, [e[i] for e in eul], index=i, interp="LINEAR")
+    return plan, info
+
+
+def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
+    """bounce, crouch, rise, kick, air, a step_turn's feet, a walk's feet and the rock's hips: the hips (the `center`
+    bone) and the feet (the leg IK bones) move on top of the offsets the pose stage gave them (eased in over the settle
+    like them). `bounce` dips the hips on the beats while the feet stay planted (the knees bend: a punk's pump); `crouch =
+    [[t, metres], ...]` lowers them so (a landing, a squat); `rock.hips` shifts them toward the model's left with the
+    rock's own swing (the weight goes from foot to foot); `rise = [[t, metres], ...]` lifts the whole body, feet too (she
+    floats); `kick` flicks one foot up and back on the beats, `hold` of the way lifted between them; `air` tucks both legs
+    while the body is off the ground and points the toes (mkmmd.core.perform.air_plan); `turn`, a step_turn's plan
+    (`_turn`), steps the feet round to the turned stance and sinks the hips while the root turns; `walk`, a walk's plan
+    (`_walk`), steps the feet, dips the hips as each comes down and tucks the legs over its hops. Returns report numbers."""
     bn, rs, kk, cr, ai = spec.get("bounce"), spec.get("rise"), spec.get("kick"), spec.get("crouch"), spec.get("air")
     rk = spec.get("rock") or {}
     hips = float(rk.get("hips", 0.0))
-    if not (bn or rs or kk or cr or hips or ai or turn):
+    if walk and walk.get("air"):
+        ai = (list(ai) if isinstance(ai, list) else [ai] if ai else []) + [{"from": a, "to": b} for a, b in walk["air"]]
+    if not (bn or rs or kk or cr or hips or ai or turn or (walk and walk.get("feet"))):
         return {}
     arm = m.arm
     smap = S.semantic_map(arm)
@@ -351,9 +442,14 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None):
         info["crouch_mm"] = round(float(np.abs(down).max()) * 1000, 1)
     if turn:
         dip = dip + turn["dip"]
+    if walk and walk.get("feet"):
+        dip = dip + walk["dip"]
     if hips:
         side = hips * np.sin(2.0 * np.pi * ts / float(rk.get("period", 4.0)) + float(rk.get("phase", 0.0)))
         info["hips_mm"] = round(abs(hips) * 1000, 1)
+    if walk and walk.get("feet") and np.abs(walk.get("sway", 0.0)).max() > 0:
+        side = side + walk["sway"]                                   # the strut: over the foot that is down
+        info["sway_mm"] = round(float(np.abs(walk["sway"]).max()) * 1000, 1)
     if rs:
         lift = PF.eased_keys(ts, rs)
         info["rise_mm"] = round(float(np.abs(lift).max()) * 1000, 1)
@@ -379,7 +475,7 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None):
     centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i]) + left_w * float(side[i]))
               for i, s in enumerate(settle)]
     K.key_bone_locs(arm, smap["center"], frames, centre, interp="LINEAR")
-    if not (rs or kk or ai or turn):
+    if not (rs or kk or ai or turn or (walk and walk.get("feet"))):
         return info
     for s in ("L", "R"):
         ik = smap.get(f"leg_ik.{s}")
@@ -399,6 +495,9 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None):
             d[:, 1] += -sn * P[:, 0] + c * P[:, 1] - P[0, 1]
             d[:, 2] += turn["lift"][s]
             yaw_rel = turn["foot_yaw"][s] - y
+        if walk and s in walk.get("feet", {}):                      # the walk's step, relative to the root it carries
+            d[:, :2] += walk["feet"][s] - np.asarray(walk["feet0"][s], float)
+            d[:, 2] += walk["lift"][s]
         f0 = feet0.get(s, Vector())
         K.key_bone_locs(arm, ik, frames, [tuple(f0 * float(st) + W @ Vector(d[i])) for i, st in enumerate(settle)],
                         interp="LINEAR")
@@ -408,7 +507,43 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None):
             up, lat = Vector((0.0, 0.0, 1.0)), Vector((1.0, 0.0, 0.0))
             K.key_bone_arm(arm, ik, frames, [Quaternion(up, float(yaw_rel[i] + toes[i])) @ Quaternion(lat, float(pitch[i]))
                                              for i in range(n)], interp="LINEAR")
+    if walk and any(np.abs(v).max() > 0 for v in walk.get("swing", {}).values()):
+        info["arm_swing"] = _arm_swing(ctx, m, walk, frames)
     return info
+
+
+def _arm_swing(ctx, m, walk, frames):
+    """A walk's `arms`: each hand's IK goal moves forward and back (the plan's `swing`, along the character's forward
+    axis) on top of where the pose stage keyed it, in the goal's parent's frame as it stands at the settled pose (a goal
+    riding the chest swings with it). Returns the sides swung; a side without arm IK is left alone (logged)."""
+    sc = bpy.context.scene
+    arm = m.arm
+    fwd = arm.matrix_world.to_3x3().normalized() @ Vector((0.0, -1.0, 0.0))
+    keep = sc.frame_current
+    sc.frame_set(int(ctx.start + ctx.settle))
+    swung = []
+    for s, off in walk["swing"].items():
+        if s not in m.ik:
+            ctx.log(f"perform {m.name}: walk arms: no arm IK on side {s} (give the hand a pose, e.g. a `rest` move)")
+            continue
+        goal = m.ik[s][0]
+        if goal.parent is not None and goal.parent_type == "BONE":
+            pb = goal.parent.pose.bones[goal.parent_bone]
+            R = (goal.parent.matrix_world @ pb.matrix).to_3x3().normalized()
+        elif goal.parent is not None:
+            R = goal.parent.matrix_world.to_3x3().normalized()
+        else:
+            R = Matrix.Identity(3)
+        d = R.inverted() @ fwd
+        ad = goal.animation_data
+        for c in range(3):
+            fc = ad.action.fcurves.find("location", index=c) if ad and ad.action else None
+            base = [fc.evaluate(f) for f in frames] if fc is not None else [goal.location[c]] * len(frames)
+            K.key_prop(goal, "location", frames, [b + float(off[i]) * d[c] for i, b in enumerate(base)], index=c,
+                       interp="LINEAR")
+        swung.append(s)
+    sc.frame_set(keep)
+    return swung
 
 
 DRUM_FINGERS = ("little", "ring", "middle", "index")     # the order a tap ripples in
@@ -485,6 +620,7 @@ def run(ctx):
         smap = S.semantic_map(arm)
         base = m.base.get("spine") or {}
         plan, turn_info = _turn(ctx, name, m, spec, ts, frames)  # the root turns before the gaze is sampled
+        wplan, walk_info = _walk(ctx, name, m, spec, ts, frames, plan)    # and walks, hops and tumbles
         lat, back, up = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))     # armature axes (faces -Y)
         fwd = -back
         # ---- targets: idle look + gaze events (eye height, 3 m ahead by default)
@@ -545,7 +681,8 @@ def run(ctx):
             turn_x = turn_x + plan["chest"]                        # the chest leads a step_turn
         tilt_x = np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
         head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
-        head_pitch_x, head_yaw_x = np.zeros(len(ts)), np.zeros(len(ts))
+        head_pitch_x = np.zeros(len(ts))
+        head_yaw_x = np.radians(PF.eased_keys(ts, spec.get("head_turn", [])))
         for key, table in (("rock", spec.get("rock") or {}), ("head_rock", spec.get("head_rock") or {})):
             if not table:
                 continue
@@ -610,8 +747,8 @@ def run(ctx):
                 Ri = R.inverted()
                 loc = [tuple((Ri @ q.to_matrix() @ R).to_quaternion()) for q in qs]
                 K.key_bone_quats(arm, b, frames, loc, interp="LINEAR")
-        info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames), **turn_info}
-        info.update(_body(ctx, name, m, spec, ts, frames, settle, plan))
+        info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames), **turn_info, **walk_info}
+        info.update(_body(ctx, name, m, spec, ts, frames, settle, plan, wplan))
         # ---- face: blinks + lids
         bl = spec.get("blink", {})
         blink_m = _morph(m, "blink")

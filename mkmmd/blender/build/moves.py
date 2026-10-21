@@ -1,9 +1,11 @@
 """moves: `[[move.<cast>]]` (docs/design.md: Moves) compiled by mkmmd.core.moves into the tables the pose and perform stages
 read: the hand keys into `[pose.<cast>.hands.L/R] keys` (places as `{cast, point}` targets, the goals riding the chest so
-leans, tilts and sways carry them), lean and tilt keys, twitches and expressions into `[perform.<cast>]`. Runs at the start
+leans, tilts and sways carry them), lean, tilt, turn and head keys, twitches and expressions into `[perform.<cast>]`. Runs at the start
 of the pose stage. The landmarks the places are built from come from the member's rest pose in its root's frame, the beats
-from the project's timeline (audio/timeline.json), and the hands are kept off the member's own body, clothes and hair:
-the distance the compiler measures is to every face of its meshes in the rest pose that belongs to neither arm."""
+from the project's timeline (audio/timeline.json), and the hands are kept off the member's own body and clothes: the
+distance the compiler measures is to every face of its meshes in the rest pose that belongs to neither arm, nor to a chain
+the sim moves that hangs loose (hair, ears, a tail, a skirt, ribbons: those make way for a hand, colliding with its
+fingers and palm, so a hand hangs by the thigh under a wide skirt's flare instead of resting up on it)."""
 import json
 import math
 import os
@@ -13,13 +15,16 @@ import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
+from ...core import families as FAM
 from ...core import moves as MV
 from .. import scene as S
 from . import BuildError
+from . import sim as SIM
 
 MOUTH = (0.0, -0.06, 0.012)                 # the mouth from the head bone's head (an MMD head sits on the neck's top)
 EYES = (0.0, -0.05, 0.07)                   # the eyes from there, for a rig without eye bones
 ARM = ("arm", "arm_twist", "elbow", "wrist_twist", "wrist", "thumb", "index", "middle", "ring", "little")
+YIELD = FAM.HAIR_FAMILIES | {"ears", "tail", "skirt", "ribbon"}   # chains that make way for a hand when the sim moves them
 
 
 def marks(m):
@@ -51,10 +56,11 @@ def marks(m):
     return out
 
 
-def body_clearance(m):
+def body_clearance(m, soft=()):
     """`clear(points)` for mkmmd.core.moves: the smallest distance (m) from points (n, 3) in the member's own frame to the
-    faces of its meshes, in the pose they have now, whose vertices all belong to neither arm (by each vertex's heaviest
-    bone weight; mmd_tools' non-bone groups such as `mmd_edge_scale` are not bones)."""
+    faces of its meshes, in the pose they have now, whose vertices all belong to neither arm, leaving out the faces whose
+    vertices all belong to `soft` bones (by each vertex's heaviest bone weight; mmd_tools' non-bone groups such as
+    `mmd_edge_scale` are not bones)."""
     arm = m.arm
     smap = S.semantic_map(arm)
     arm_bones = set()
@@ -62,24 +68,27 @@ def body_clearance(m):
         stem, _, side = sem.partition(".")
         if side in ("L", "R") and stem.rstrip("0123456789").replace("_tip", "") in ARM:
             arm_bones.add(b)
-    bones = set(arm.data.bones.keys())
+    bones, soft = set(arm.data.bones.keys()), set(soft)
     inv = np.array(m.root.matrix_world.inverted())
     dg = bpy.context.evaluated_depsgraph_get()
     verts, polys, off = [], [], 0
     for o in S.model_meshes(arm):
         names = [g.name for g in o.vertex_groups]
         on_arm = np.zeros(len(o.data.vertices), bool)
+        yields = np.zeros(len(o.data.vertices), bool)
         for i, v in enumerate(o.data.vertices):
             gs = [g for g in v.groups if g.group < len(names) and names[g.group] in bones]
-            if gs and names[max(gs, key=lambda g: g.weight).group] in arm_bones:
-                on_arm[i] = True
+            if gs:
+                top = names[max(gs, key=lambda g: g.weight).group]
+                on_arm[i], yields[i] = top in arm_bones, top in soft
         oe = o.evaluated_get(dg)
         me = oe.to_mesh()
         try:
             V = np.array([v.co for v in me.vertices], float).reshape(-1, 3)
             M = inv @ np.array(o.matrix_world)
             verts.append(V @ M[:3, :3].T + M[:3, 3])
-            polys += [[i + off for i in p.vertices] for p in me.polygons if not on_arm[list(p.vertices)].any()]
+            polys += [[i + off for i in p.vertices] for p in me.polygons
+                      if not on_arm[list(p.vertices)].any() and not yields[list(p.vertices)].all()]
             off += len(V)
         finally:
             oe.to_mesh_clear()
@@ -95,6 +104,13 @@ def body_clearance(m):
                 best = min(best, hit[3])
         return best
     return clear
+
+
+def soft_bones(ctx, name, m):
+    """The bones of member `name`'s loose chains the sim moves (YIELD: hair, ears, a tail, a skirt, ribbons): they make
+    way for a hand."""
+    fams = set(SIM.families(ctx, name, m)) & YIELD
+    return {b for c in m.rig["chains"] if c["family"] in fams for b in c["bones"]} if fams else set()
 
 
 def _beats(ctx):
@@ -118,7 +134,7 @@ def apply(ctx):
         beats = _beats(ctx) if beats is None else beats
         yaw = math.degrees(m.root.matrix_world.to_euler().z)
         try:
-            res = MV.compile(list(entries), marks(m), beats, yaw=yaw, clear=body_clearance(m))
+            res = MV.compile(list(entries), marks(m), beats, yaw=yaw, clear=body_clearance(m, soft_bones(ctx, name, m)))
         except MV.MoveError as e:
             raise BuildError(f"move.{name}: {e}") from None
         chest = "upper_body2" if "upper_body2" in S.semantic_map(m.arm) else "upper_body"
@@ -132,7 +148,7 @@ def apply(ctx):
             hand["keys"] = [dict(k, at={"cast": name, "point": k["at"]}) for k in keys]
             hand.setdefault("ride", f"cast:{name}.{chest}")
         perf = ctx.data.setdefault("perform", {}).setdefault(name, {})
-        for key in ("lean", "tilt"):
+        for key in MV.BODY:
             if res[key]:
                 if perf.get(key):
                     raise BuildError(f"[perform.{name}] {key} and [[move.{name}]] both key it")

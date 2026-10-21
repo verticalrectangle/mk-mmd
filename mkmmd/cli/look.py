@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 from .. import bridge
 from .. import config as CFG
 from .. import cutfx as CF
+from .. import framefx as FF
 from .. import pixmap as PX
 from .. import post as P
 from ..core import screentype as SRT
@@ -29,7 +30,8 @@ Views:
                      or yaw:elev pairs such as 20:15 (degrees; yaw 0 = in front, 90 = the model's left)
   Shots of the cut with a render-time look (`style = "silhouette"` or `"vector"`, `reflection = {...}` in [[shot]]) are
   drawn in it, as `mk render` draws them; --no-styles draws every shot as it is lit. Frames inside a [[transition]] /
-  [[insert]] / [[glitch]] and frames with screen type are previewed composited, as `mk post` makes them.
+  [[insert]] / [[glitch]] or an [[fx]], and frames with screen type are previewed composited, as `mk post` makes them (the
+  frames an echo, a slitscan or a push reads are rendered beside them).
 
 Layout: one image per frame, view and output, written to --out as <view>_<output>_<frame>.jpg (the cut is view `cut`,
 orbit views are named after their preset or yaw_elev, orbits without --output are the square output `sq`); --sheet adds
@@ -218,6 +220,23 @@ def write_maps(shots):
     return out
 
 
+def _frame_fx(plan, proj, size, layers_dir, stems):
+    """The plan's frame effects over one output of a look: the cut's other frames come from the plates rendered beside
+    the images (TR.fx_frames), the projected points from the layers."""
+    def frame_of(g):
+        shot = TR.cut_shot(plan["cuts"], g)
+        if layers_dir is None or shot is None:
+            return None
+        return P.read(layers_dir / TR.plate_rel(shot, g), size)
+
+    def point_of(key, g):
+        if layers_dir is None:
+            raise FileNotFoundError(f"point {key} at frame {g}: no layers were rendered")
+        return CF.read_point(layers_dir, key, g, size)
+    return FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, frame_of=frame_of, point_of=point_of,
+                      stem_of=stems, hits=FF.project_hits(proj.root, proj.data))
+
+
 def run(args):
     proj = get_project(args)
     blend = scene_path(args.scene, proj)
@@ -253,9 +272,12 @@ def run(args):
     if TR.has_effects(plan):
         want = {int(f) for f in frames}
         for tr in plan["transitions"]:               # an expand / collapse also needs the frame where it fills the frame
-            if tr["kind"] != "slash" and any(f in want for f in range(tr["first"], tr["last"] + 1)):
+            if tr["matte"] is not None and any(f in want for f in range(tr["first"], tr["last"] + 1)):
                 want.add(TR.covering_frame(tr))
         dem = TR.demands(plan, want)
+        for g, items in TR.fx_frames(plan, frames).items():  # the cut's frames an echo, a slitscan or a push reads
+            bucket = dem.setdefault(g, [])
+            bucket += [it for it in items if it not in bucket]
         if dem:
             layers = {"dir": str(out / "layers"), "demands": {str(f): items for f, items in dem.items()}}
     job = {"frames": frames, "views": views, "sizes": sizes, "engine": args.engine, "samples": args.samples,
@@ -267,27 +289,41 @@ def run(args):
         extra = {"layers": layers} if layers and tag == "a" else {}
         shots[tag] = bridge.run("look", {**job, **extra, "out": str(out / tag if args.ab else out)}, blend=sc, project=proj,
                                 timeout=3600)
-    effects, fxs, typed = [], {}, 0
+    effects, fxs, ffxs, typed = [], {}, {}, 0
+    stems = FF.stem_source(proj.root, proj.mk_dir / "cache" / "timeline") if plan and plan.get("fx") else None
     for tag in shots:
         for s in shots[tag]:                         # composite the effects, then the screen type, over the cut's frames
             if s["view"] != "cut":
                 continue
-            fx = None
+            size, f = Image.open(s["path"]).size, int(s["frame"])
+            fx = ffx = None
             if layers and tag == "a":
                 fx = fxs.get(s["size"])
                 if fx is None:
-                    fx = fxs[s["size"]] = CF.CutFx(plan, Path(layers["dir"]) / s["size"], Image.open(s["path"]).size, s["size"])
-            has_fx = fx is not None and fx.active(int(s["frame"]))
-            layer = P.read_rgba(s["screen"], Image.open(s["path"]).size) if s.get("screen") else None
-            if not has_fx and layer is None:
+                    fx = fxs[s["size"]] = CF.CutFx(plan, Path(layers["dir"]) / s["size"], size, s["size"])
+            if stems is not None and tag == "a":
+                ffx = ffxs.get(s["size"])
+                if ffx is None:
+                    ffx = ffxs[s["size"]] = _frame_fx(plan, proj, size, Path(layers["dir"]) / s["size"] if layers else None,
+                                                      stems)
+            has_fx = fx is not None and fx.active(f)
+            has_ffx = ffx is not None and ffx.active(f)
+            layer = P.read_rgba(s["screen"], size) if s.get("screen") else None
+            if not has_fx and not has_ffx and layer is None:
                 continue
             im = np.asarray(Image.open(s["path"]).convert("RGB"), np.float32) / 255.0
             if has_fx:
                 try:
-                    fx.check([int(s["frame"])])
-                    im = fx.frame(int(s["frame"]), im)
+                    fx.check([f])
+                    im = fx.frame(f, im)
                 except (TR.TransitionError, FileNotFoundError) as e:
                     raise UsageError(str(e)) from None
+            if has_ffx:
+                try:
+                    im = ffx.frame(f, im)
+                except FileNotFoundError as e:
+                    raise UsageError(str(e)) from None
+            if has_fx or has_ffx:
                 effects.append({"frame": s["frame"], "size": s["size"]})
             if layer is not None:
                 im = SRT.composite(im, layer)

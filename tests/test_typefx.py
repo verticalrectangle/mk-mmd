@@ -45,7 +45,7 @@ def test_backing_defaults_and_validation():
     assert FX.backing_spec({}) is None and FX.backing_spec({"backing": False}) is None
     b = FX.backing_spec({"backing": True})
     assert b == {"color": "surface", "pattern": "plain", "pattern_color": "surface", "pad": [0.55, 0.3], "height": None,
-                 "torn": 0.1, "dz": 0.0006, "glow": 0.3, "scale": 1.0, "seed": 1}
+                 "torn": 0.1, "dz": 0.0006, "glow": 0.3, "scale": 1.0, "seed": 1, "slant": 0.0}
     b = FX.backing_spec({"backing": {"color": "rose", "pattern": "dots", "pad": [1, 2], "height": 1.5, "glow": 0.5}})
     assert b["pattern"] == "dots" and b["pad"] == [1.0, 2.0] and b["height"] == 1.5 and b["glow"] == 0.5
     for bad, frag in [({"stripes": 1}, "unknown backing keys"), ({"pattern": "plaid"}, "pattern must be one of"),

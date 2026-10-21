@@ -16,7 +16,8 @@ Every place is made natural before it is keyed (`resolve`):
   hammer) is aimed instead (AIM): the hand continues the forearm as far as a grip on a handle pointing that way allows
   (the mic at the mouth leans back to the lips from a fist under them, so the forearm rises to it); two hands that meet
   in one shape (SHAPED, the two-hand heart) keep the orientation written for them, sized to the arm so it suits any body;
-- the skin: given the build's distance to the member's own body, clothes and hair (`clear`), the hand comes in from
+- the skin: given the build's distance to what a hand must stay off (`clear`: the member's own body and clothes, less the
+  hair and skirts the sim moves), the hand comes in from
   outside and stops where it first comes within its margin: an arm held out (OUT) swings in round the shoulder, so it
   stays in reach (a hanging hand rises off a wide skirt), a hand by the body comes in straight (TOUCH, else straight out
   from the body's axis); a touching place (a pat on the chest, hands over the ears) ends on the surface, any other one
@@ -54,7 +55,7 @@ FAR = 0.3                        # m: how far out a hand by the body starts its 
 STEP = 0.01                      # m: the approach's step (the contact is then found to 0.003 mm by halving)
 SWING = math.radians(70.0)       # how far up and away an arm held out starts its swing in to its place
 SWING_STEP = math.radians(2.0)   # ... and its step
-MARGIN = 0.012                   # m: the room a place that does not touch keeps from the body, clothes and hair
+MARGIN = 0.012                   # m: the room a place that does not touch keeps from the body and clothes (`clear`)
 TOUCH_MARGIN = 0.003             # m: ... and a touching one
 SHAPES = {                       # finger shapes (mkmmd.core.fingers tables) the moves use
     "relaxed": "relaxed", "flat": "flat", "fist": "fist", "point": "point", "curled": "curled",
@@ -67,11 +68,13 @@ SHAPES = {                       # finger shapes (mkmmd.core.fingers tables) the
     "sparkle": {"thumb": [0, 5, 5], "spread": 24},
     "heart2": {"index": [15, 75, 45], "middle": [20, 85, 50], "ring": [30, 90, 55], "little": [40, 95, 60],
                "thumb": [45, 20, 10], "spread": 5},             # half of a two-hand heart: the tips curl down to meet
+    "gun": {"index": [0, 0, 0], "middle": [85, 95, 65], "ring": [85, 95, 65], "little": [85, 95, 65],
+            "thumb": [0, 0, 0], "spread": {"thumb": 28}},       # the finger gun: index out, the thumb up, the rest curled
 }
 BOX = {  # shape: (how far the hand reaches along its direction, a share of `hand`; half its thickness, m)
     "flat": (1.0, 0.012), "relaxed": (0.95, 0.014), "sparkle": (1.0, 0.012), "peace": (1.0, 0.016),
     "point": (0.95, 0.018), "curled": (0.75, 0.022), "paw": (0.7, 0.024), "heart": (0.65, 0.024), "fist": (0.6, 0.025),
-    "heart2": (0.7, 0.024),
+    "heart2": (0.7, 0.024), "gun": (0.95, 0.022),
 }
 WIDTH = 0.21                     # half the hand's width, a share of `hand`
 MARKS = ("arm.L", "arm.R", "chest", "mouth", "eye", "reach", "upper", "fore", "hand")
@@ -85,6 +88,7 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
     "mic_across": ((-0.6, -0.8, 0.0), 0.85),
     "bonk_up": ((0.35, -0.1, 1.0), 0.7),
     "bonk": ((0.12, -1.0, -0.75), 0.95),
+    "gun": ((-0.12, -1.0, 0.18), 0.98),
 }
 AIM = {  # a fist round a handle (a mic, a hammer): where the handle points, for the left hand, x mirrored for the right. A
     # fist holds a handle across its palm, so a straight wrist keeps it square to the forearm: the aims lean from upright
@@ -100,6 +104,8 @@ TOUCH = {  # a place on the body: the way the hand comes in to it, for the left 
     "chest": (0.0, -1.0, 0.0),
     "ears": (1.0, 0.0, 0.0),
     "dainty": (0.0, -1.0, 0.0),
+    "hair": (1.0, 0.0, 0.0),
+    "hip": (1.0, 0.0, 0.0),
 }
 SHAPED = ("heart_push",)         # two hands that meet in one shape: their orientation is kept as written
 
@@ -149,6 +155,10 @@ def place(name, side, marks):
         "bunny": (eye + _v(s * 0.09, 0.01, 0.17), _v(s * 0.1, -0.2, 1), _v(0, -1, 0), "paw"),
         "bonk_up": (out("bonk_up"), _v(0, -0.5, 0.85), _v(-s, 0, 0), "curled"),
         "bonk": (out("bonk"), _v(0, -0.8, -0.5), _v(-s, 0, 0), "curled"),
+        "hair": (eye + _v(s * 0.08, 0.07, 0.02), _v(s * 0.1, 0.45, 1.0), _v(-s, 0, 0), "relaxed"),    # in it, by the ear
+        "hair_out": (eye + _v(s * 0.20, 0.16, -0.05), _v(s * 0.35, 0.7, 0.45), _v(0, 0.6, 0.8), "flat"),  # tossed back
+        "hip": (chest + marks["reach"] * _v(s * 0.40, 0.08, -0.17), _v(-s * 0.15, -0.75, -0.65), _v(-s, 0, 0), "flat"),
+        "gun": (out("gun"), _v(-s * 0.12, -1, 0.12), _v(-s, 0, 0), "gun"),
     }
     if name not in P:
         raise MoveError(f"no hand place {name!r} (have {', '.join(sorted(P))})")
@@ -293,7 +303,9 @@ def resolve(name, side, marks, clear=None):
 # hand: "places" ((place, share of dur), ...) or "beats" (`place` + `on` on each beat inside it, or on the entry's `hits`,
 # `off_place` (default `place`) + `off` halfway to the next; offsets in the character's frame; a move with an off place of
 # its own starts there: its wind-up); both: both hands play it (mic_ok: the mic hand too; two_hands: it needs both free);
-# lean / tilt: degrees held over the move; twitch: a head flick on its start; face: (semantic morph, value) held over it
+# lean / tilt / turn / head_tilt / head_turn: degrees held over the move (BODY); twitch: a head flick on its start; face:
+# (semantic morph, value) held over it; wink: the eye on the other side from the hand winks; mirror: the turns, tilts and
+# the twitch are written for the left hand, and go the other way for the right one (a pose done with either hand)
 MOVES = {
     "bounce_hand": {"hand": "beats", "place": "bounce", "on": (0, 0, -0.05), "off": (0, 0, 0)},
     "chest_pat": {"hand": "beats", "place": "chest", "on": (0, 0, 0), "off": (0, -0.035, 0.01), "face": [("blush", 0.6)]},
@@ -318,27 +330,39 @@ MOVES = {
     "stank": {"twitch": {"bones": ["head"], "deg": -12.0, "axis": [1, 0, 0], "dur": 0.3}, "face": [("hau", 1.0)]},
     "blown": {"lean": -16.0, "twitch": {"bones": ["head"], "deg": -14.0, "axis": [1, 0, 0], "dur": 0.4},
               "face": [("surprised", 1.0)]},
+    "hair_flip": {"hand": "places", "places": (("hair", 0.0), ("hair_out", 0.4)), "head_tilt": -10.0, "mirror": True,
+                  "twitch": {"bones": ["head"], "deg": 12.0, "axis": [0, 1, 0], "dur": 0.4},
+                  "face": [("calm", 0.6), ("mouth_smile", 0.3)]},
+    "over_shoulder": {"turn": 25.0, "head_turn": 45.0, "head_tilt": 6.0, "mirror": True,
+                      "face": [("calm", 0.4), ("mouth_smile", 0.35)]},
+    "hand_hip": {"hand": "places", "places": (("hip", 0.0),), "head_tilt": 12.0, "tilt": -5.0, "mirror": True,
+                 "face": [("smile_eyes", 0.35), ("mouth_smile", 0.5)]},
+    "finger_gun": {"hand": "places", "places": (("gun", 0.0),), "lean": 6.0, "head_tilt": 8.0, "mirror": True,
+                   "wink": True, "face": [("mouth_smile", 0.6)]},
     "face": {},
 }
+BODY = ("lean", "tilt", "turn", "head_tilt", "head_turn")       # perform keys a move holds, degrees
+MIRRORED = ("tilt", "turn", "head_tilt", "head_turn")           # ... those that a mirrored move turns the other way
 KEYS = {"name", "t", "dur", "hand", "morph", "value", "hits"}
 REST_PLACES = ("rest", "dainty", "mic")
 
 
 def compile(entries, marks, beats=(), yaw=0.0, clear=None):
-    """The keys of one cast member's moves: {"hands": {side: [key]}, "lean": [[t, deg]], "tilt": [[t, deg]], "twitch":
-    [...], "expressions": [{morph, keys}], "places": {side: {place: {moved_mm, wrist_deg}}}}. `entries` are its
-    `[[move]]` tables {name, t, dur = 1, hand = "R", morph, value, hits}, and `{name = "rest", hand, place}` where that hand
-    waits (REST_PLACES; default "rest"); `marks` its landmarks (MARKS); `beats` clip seconds (a beat move pats on each
-    inside it, or on its entry's `hits`: clip seconds inside it); `yaw` the member's (degrees: hand directions are turned
-    into the world); `clear(points)` the smallest distance from points (n, 3) in the character's frame to its body, clothes
-    and hair (None: hands are not kept off them)."""
-    rest = {"L": "rest", "R": "rest"}
+    """The keys of one cast member's moves: {"hands": {side: [key]}, "lean", "tilt", "turn", "head_tilt", "head_turn":
+    [[t, deg]] (BODY), "twitch": [...], "expressions": [{morph, keys}], "places": {side: {place: {moved_mm,
+    wrist_deg}}}}. `entries` are its `[[move]]` tables {name, t, dur = 1, hand = "R", morph, value, hits}, and `{name =
+    "rest", hand, place}` where that hand waits (REST_PLACES; default "rest"); `marks` its landmarks (MARKS); `beats`
+    clip seconds (a beat move pats on each inside it, or on its entry's `hits`: clip seconds inside it); `yaw` the
+    member's (degrees: hand directions are turned into the world); `clear(points)` the smallest distance from points (n,
+    3) in the character's frame to what a hand stays off, its body and clothes (None: hands are not kept off anything)."""
+    rest, told = {"L": "rest", "R": "rest"}, set()                    # told: hands given a rest place of their own
     for e in entries:
         if isinstance(e, dict) and e.get("name") == "rest":
             if set(e) - {"name", "hand", "place"} or e.get("hand") not in ("L", "R") or e.get("place") not in REST_PLACES:
                 raise MoveError(f"rest = {e!r}: expected {{name = \"rest\", hand = \"L\" | \"R\", place = "
                                 f"{' | '.join(REST_PLACES)}}}")
             rest[e["hand"]] = e["place"]
+            told.add(e["hand"])
     entries = [e for e in entries if not (isinstance(e, dict) and e.get("name") == "rest")]
     missing = [k for k in MARKS if k not in marks]
     if missing:
@@ -347,7 +371,8 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
     world = lambda d: [round(c * d[0] - s * d[1], 4), round(s * d[0] + c * d[1], 4), round(float(d[2]), 4)]   # noqa: E731
     plays = {"L": [], "R": []}                                       # (t0, t1, [(t, place, offset)])
     body, faces = [], {}
-    out = {"hands": {"L": [], "R": []}, "lean": [], "tilt": [], "twitch": [], "expressions": [], "places": {"L": {}, "R": {}}}
+    out = {"hands": {"L": [], "R": []}, **{k: [] for k in BODY}, "twitch": [], "expressions": [],
+           "places": {"L": {}, "R": {}}}
     for i, e in enumerate(entries):
         what = f"move {i} ({e.get('name')!r})" if isinstance(e, dict) else f"move {i}"
         if not isinstance(e, dict) or set(e) - KEYS or "name" not in e or "t" not in e:
@@ -391,13 +416,16 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
                 for b, nb in zip(bs, bs[1:] + [t1]):
                     seq += [(b, on, m["on"]), (0.5 * (b + nb), off, m["off"])]
                 plays[side].append((t0, t1, seq, react))
-        if "lean" in m or "tilt" in m:
-            body.append((t0, t1, m.get("lean", 0.0), m.get("tilt", 0.0), what))
+        flip = -1.0 if m.get("mirror") and hand == "R" else 1.0
+        if any(k in m for k in BODY):
+            body.append((t0, t1, {k: float(m.get(k, 0.0)) * (flip if k in MIRRORED else 1.0) for k in BODY}, what))
         if "twitch" in m:
-            out["twitch"].append(dict(m["twitch"], t=t0))
+            out["twitch"].append(dict(m["twitch"], t=t0, deg=float(m["twitch"]["deg"]) * flip))
         if e["name"] == "face" and "morph" not in e:
             raise MoveError(f"{what}: a face needs `morph` (a morph's semantic name)")
-        for morph, value in m.get("face", []) + ([(str(e["morph"]), float(e.get("value", 1.0)))] if "morph" in e else []):
+        wink = [("wink_l" if hand == "R" else "wink_r", 1.0)] if m.get("wink") else []
+        for morph, value in (m.get("face", []) + wink
+                             + ([(str(e["morph"]), float(e.get("value", 1.0)))] if "morph" in e else [])):
             faces.setdefault(morph, []).append([t0, t1, value])
     for side in ("L", "R"):
         made = {}
@@ -407,15 +435,16 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
                 made[name] = resolve(name, side, marks, clear)
             return made[name]
 
-        out["hands"][side] = _hand(sorted(plays[side], key=lambda p: p[0]), side, rest[side], world, at)
+        out["hands"][side] = _hand(sorted(plays[side], key=lambda p: p[0]), side, rest[side], world, at, side in told,
+                                   fore=lambda w, side=side: forearm(side, marks, w))
         out["places"][side] = {n: {"moved_mm": round(r[4] * 1000.0, 1), "wrist_deg": round(r[5], 1)}
                                for n, r in sorted(made.items())}
-    body.sort()
-    for (a0, a1, *_, wa), (b0, *_, wb) in zip(body, body[1:]):
+    body.sort(key=lambda b: b[0])
+    for (a0, a1, _, wa), (b0, _, _, wb) in zip(body, body[1:]):
         if b0 < a1 - 1e-6:
-            raise MoveError(f"{wa} and {wb} both lean the body at {b0} s")
-    for t0, t1, lean, tilt, _ in body:
-        for key, v in (("lean", lean), ("tilt", tilt)):
+            raise MoveError(f"{wa} and {wb} both move the body at {b0} s")
+    for t0, t1, vals, _ in body:
+        for key, v in vals.items():
             if v:
                 out[key] += [[t0, 0.0], [min(t0 + EASE, 0.5 * (t0 + t1)), v], [max(t1 - EASE, 0.5 * (t0 + t1)), v], [t1, 0.0]]
     for morph, spans in faces.items():
@@ -429,7 +458,7 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
         for t0, t1, v in merged:
             keys += [[t0 - 0.06, 0.0], [t0 + 0.04, v], [max(t1 - 0.06, t0 + 0.05), v], [t1 + 0.06, 0.0]]
         out["expressions"].append({"morph": morph, "keys": [[round(t, 4), round(v, 3)] for t, v in keys]})
-    for key in ("lean", "tilt"):
+    for key in BODY:
         out[key] = [[round(t, 4), round(v, 3)] for t, v in out[key]]
     return out
 
@@ -449,10 +478,13 @@ def fling(a, b):
     return FLING_MIN + float(np.linalg.norm(np.asarray(b[0], float) - np.asarray(a[0], float))) / FLING_SPEED
 
 
-def _hand(spans, side, rest, world, at):
+def _hand(spans, side, rest, world, at, told=False, fore=None):
     """The keys of one hand: its moves' places on their times (`at(place)` resolves one), travelling between them at a
     human pace (`travel`), home to `rest` between two moves when it can stay there REST_MIN seconds. `spans` are (t0, t1,
-    [(t, place, offset)], react): a reacting move's hand leaves where it is on t0 and arrives when `fling` gets it there."""
+    [(t, place, offset)], react): a reacting move's hand leaves where it is on t0 and arrives when `fling` gets it there.
+    A hand with no move waits at its rest place when it has one of its own (`told`: a rest entry), else it is left alone.
+    With `fore` (wrist point -> its forearm's direction) a trip whose hand would fold over its wrist on the way passes a
+    key halfway (`_via`)."""
     grip = SHAPES["curled"] if rest == "mic" else None             # a mic hand never lets go of the mic
     keys = []
 
@@ -463,11 +495,11 @@ def _hand(spans, side, rest, world, at):
     def key(t, name, off=(0, 0, 0)):
         point, d, palm, shape, *_ = at(name)
         keys.append({"t": round(t, 4), "at": [round(float(p + o), 4) for p, o in zip(point, off)], "dir": world(d),
-                     "palm": world(palm), "fingers": grip if grip is not None else SHAPES[shape]})
+                     "palm": world(palm), "fingers": grip if grip is not None else SHAPES[shape], "_d": d, "_p": palm})
 
-    if not spans and rest != "rest":
+    if not spans and (rest != "rest" or told):
         key(0.0, rest)                                               # it waits there from the start
-        return keys
+        return _via(keys, world, fore)
     for k in range(1, len(spans)):
         if spans[k][0] < spans[k - 1][1] - 1e-6:
             raise MoveError(f"the {side} hand plays two moves at once (at {spans[k - 1][0]} and {spans[k][0]} s)")
@@ -507,4 +539,43 @@ def _hand(spans, side, rest, world, at):
             key(end, seq[-1][1], seq[-1][2])
         if k + 1 == len(plan) or not straight[k + 1]:
             key(t1 + travel(last, home), rest)
-    return keys
+    return _via(keys, world, fore)
+
+
+def halfway(a, b):
+    """(dir, palm) halfway along the shortest turn from hand orientation `a` to `b` (each (dir, palm)): the chordal mean
+    of the two rotations, which for two of them is the midpoint of the turn."""
+    U, _, Vt = np.linalg.svd(_basis(*a) + _basis(*b))
+    if np.linalg.det(U @ Vt) < 0:
+        U[:, -1] *= -1.0
+    R = U @ Vt
+    return R[:, 0], R[:, 1]
+
+
+def _basis(d, p):
+    """The hand's frame as a rotation: columns its direction, its palm (square to it) and their cross."""
+    d = _unit(d)
+    p = _unit(np.asarray(p, float) - (np.asarray(p, float) @ d) * d)
+    return np.stack([d, p, np.cross(d, p)], 1)
+
+
+def _via(keys, world, fore):
+    """`keys` (each with its directions in the character's frame as "_d" / "_p", dropped here) with a key halfway through
+    every trip whose hand, turned halfway from one end's orientation to the other's (`halfway`), would bend more than
+    WRIST degrees from the forearm the arm has there (`fore`): the wrist halfway between the two places and the hand
+    turned back toward its forearm (`natural`). Interpolating only the two ends' orientations while the arm swings round
+    under them folds the hand over its wrist on the way (a hand going up to the hair from beside the hip)."""
+    out = []
+    for a, b in zip(keys, keys[1:] + [None]):
+        out.append({k: v for k, v in a.items() if k not in ("_d", "_p")})
+        if fore is None or b is None or b["t"] - a["t"] < 1e-3:
+            continue
+        mid = 0.5 * (np.asarray(a["at"], float) + np.asarray(b["at"], float))
+        f = fore(mid)
+        d, p = halfway((a["_d"], a["_p"]), (b["_d"], b["_p"]))
+        if bend(d, f) <= WRIST:
+            continue
+        d, p = natural(d, p, f)
+        out.append({"t": round(0.5 * (a["t"] + b["t"]), 4), "at": [round(float(v), 4) for v in mid],
+                    "dir": world(d), "palm": world(p)})
+    return out
