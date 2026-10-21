@@ -1,7 +1,8 @@
 """Which frames mk's own renderer draws, and with what (docs/design.md: Rendering), bpy-free, from the scene's bake
 (mkmmd/blender/build/bake.py). A shot of an output is mk's when its look is vector and everything it shows over its
-frames is in the bake; anything else (another look, type over the picture, an object the bake cannot hold, a drawn
-tone whose texture it lacks, a ring whose centre failed) leaves the whole shot to Blender, with the reason.
+frames is in the bake; anything else (another look, type over the picture, an object the bake cannot hold, a drawn or
+cel tone whose texture it lacks, a ring whose centre failed) leaves the whole shot to Blender, with the reason. The
+frames of a [[medium]] window with a look of its own (mkmmd.core.medium) are Blender's too.
 
 The vector look sorts the objects and numbers the materials as Blender's does (mkmmd.core.shotstyle.vector_sort,
 vector_materials, vector_table), and a ring's centre is projected through the bake's camera as world_to_camera_view
@@ -11,10 +12,11 @@ from pathlib import Path
 
 import numpy as np
 
+from ..core import medium as MD
 from ..core import rings as RG
 from ..core import shotstyle as SS
 
-BAKE_VERSION = 2            # the bake that holds what the vector look needs
+BAKE_VERSION = 3            # the bake that holds what the vector look needs (3: the [[medium]] windows)
 
 
 class BakeError(ValueError):
@@ -103,8 +105,8 @@ def shot_look(doc, entry, output, span):
     table = SS.vector_table(mats, spec)
     by_frame = {m for n in sort["subject"] if objs[n]["baked"] == "by_frame" for m in objs[n]["materials"]}
     drawn = False
-    for i, m in enumerate(mats):
-        if spec["tones"][table[0][i + 1]]["kind"] != "drawn":
+    for i, m in enumerate(mats if not spec.get("sketch") else ()):          # a sketch draws its lines alone
+        if spec["tones"][table[0][i + 1]]["kind"] not in SS.TEX_KINDS:
             continue
         drawn = True
         rec = doc["materials"].get(m) or {}
@@ -131,12 +133,13 @@ def plan(doc, blob, outputs, frames, percent):
                `centres` the live rings' centres as frame fractions ({index: (x, y) or None})
       rings    the ring table's rings (the finish draws the live ones from `centres`)
       blender  {output: [frames Blender renders]}
-      shots    {output: {shot: {"engine": "mk" | "blender", "frames": n, "why": ...}}}"""
+      shots    {output: {shot or "medium <i>": {"engine": "mk" | "blender", "frames": n, "why": ...}}}"""
     frame0, n = doc["frame0"], doc["frames"]
     cams = {c["name"]: c for c in doc["cameras"]}
     shots = [e for e in doc.get("shots") or [] if not e.get("plate")]
     rings = (doc.get("rings") or {}).get("table") or {}
     points = (doc.get("rings") or {}).get("points") or {}
+    media = doc.get("medium") or []
     at = {f: SS.shot_at(shots, f) for f in range(frame0, frame0 + n)}
     spans = {}
     for f, e in at.items():
@@ -151,6 +154,13 @@ def plan(doc, blob, outputs, frames, percent):
         for f in frames:
             k = f - frame0
             e = at.get(f)
+            win = MD.at(media, f)
+            if win is not None and win["styles"].get(name):
+                rec = report[name].setdefault(f"medium {win['index']}", {"engine": "blender", "frames": 0,
+                                                                       "why": "a [[medium]] window's look"})
+                rec["frames"] += 1
+                blender[name].append(f)
+                continue
             if e is None:
                 blender[name].append(f)
                 continue

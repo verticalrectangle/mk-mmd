@@ -27,7 +27,8 @@
                                  [object patterns], tint = [{object, prop, color, gain, glow}], knockout = {objects,
                                  color}, grow, samples (docs/design.md: Shots)
   style = "vector"               the flat-vector look: the project's [vector] table (tones, materials, lines, shadow,
-                                 light) with the shot's own colors = {background, line, inner}, tones, hide / keep
+                                 light) with the shot's own colors = {background, line, inner}, tones, materials (rules
+                                 checked before the project's), lines, sketch (line art on paper), hide / keep
   reflection = {object = "<glass>", strength, dim, roughness, hide, only, bend, world, tint}   her image in a window
                                  pane: a plane light probe and a mirror layer on the glass object, made at render time
   plate = true                   not in the cut (no `from` / `to` needed): a shot that only a [[transition]] or [[insert]]
@@ -36,6 +37,8 @@
 [[ring]] = {at, center, dur, width, hold, ease, edge}: a disc or band sweeping out from a point of the frame or the scene,
 flipping a vector shot to its look's `opposite` palette inside (mkmmd.core.rings); the stage keeps them in
 scene["mk_rings"] with the clip's fps and frame0 and warns about one live over a shot without a vector look.
+[[medium]] = {from, to, style, ...the look keys of a shot, aspect.<output>}: a window of clip seconds drawn in another
+look whatever shot is in the cut (mkmmd.core.medium); the stage keeps them in scene["mk_medium"] as Blender frames.
 The scene keeps the shot table in scene["mk_shots"] (JSON; per output aspect the normalised style and reflection, colours
 resolved; `keyed`: the frames the cameras are keyed over; `plate`) so `mk look` and `mk render` bind the markers to each
 aspect's cameras and switch the look per frame."""
@@ -49,6 +52,7 @@ import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 
 from ...core import freeze as FZ
+from ...core import medium as MD
 from ...core import perform as PF
 from ...core import rings as RG
 from ...core import shotspec as SP
@@ -96,17 +100,24 @@ def _styles(ctx, spec, outs, name, later):
             if glass is None or glass.type != "MESH":
                 raise BuildError(f"shot {name!r} ({asp}): reflection object {norm['reflection']['object']!r} is not a "
                                  f"mesh in the scene (list them with `mk q BLEND --list objects`)")
-        for kind, look in norm.items():
-            for key in ("hide", "keep", "accent", "only"):
-                for pat in look.get(key, []):
-                    if ("pattern", name, kind, key, pat) not in later:
-                        later.append(("pattern", name, kind, key, pat))
-            for i, rule in enumerate(look.get("materials", []) if kind == "vector" else []):
-                if ("materials", i, rule["tone"], tuple(rule["match"])) not in later:
-                    later.append(("materials", i, rule["tone"], tuple(rule["match"])))
+        _later(later, f"shot {name!r}", norm)
         if norm:
             styles[asp] = norm
     return styles
+
+
+def _later(later, who, norm):
+    """Queue a normalised look's object patterns and material rules for `_check_looks` (`who` names the shot or window
+    in the WARNING; a rule of the project's [vector] table is named once, whoever uses it)."""
+    for kind, look in norm.items():
+        for key in ("hide", "keep", "accent", "only"):
+            for pat in look.get(key, []):
+                if ("pattern", who, kind, key, pat) not in later:
+                    later.append(("pattern", who, kind, key, pat))
+        for rule in look.get("materials", []) if kind == "vector" else []:
+            where = rule["where"] if rule["where"].startswith("[vector]") else f"{who} {rule['where']}"
+            if ("materials", where, rule["tone"], tuple(rule["match"])) not in later:
+                later.append(("materials", where, rule["tone"], tuple(rule["match"])))
 
 
 def _check_looks(ctx, later):
@@ -116,14 +127,13 @@ def _check_looks(ctx, later):
     names = {SS.vector_name(m.name) for m in bpy.data.materials}
     for item in later:
         if item[0] == "pattern":
-            _, shot, kind, key, pat = item
+            _, who, kind, key, pat = item
             if not SS.select(recs, [pat]):
-                ctx.log(f"WARNING shot {shot!r}: {kind} {key} pattern {pat!r} matches no object")
+                ctx.log(f"WARNING {who}: {kind} {key} pattern {pat!r} matches no object")
         else:
-            _, i, tone, match = item
+            _, where, tone, match = item
             if not any(fnmatch.fnmatchcase(n, p) for n in names for p in match):
-                ctx.log(f"WARNING [vector] materials[{i}] (tone {tone!r}): match {list(match)} names no material in the "
-                        f"scene")
+                ctx.log(f"WARNING {where} (tone {tone!r}): match {list(match)} names no material in the scene")
 
 
 def _fixed(v):
@@ -346,7 +356,18 @@ def run(ctx):
     sc.camera = bpy.data.objects[first["cameras"][outs[0]["name"]]]
     if TR.has_effects(plan):
         report["_cut_effects"] = TR.summary(plan)
-    rings = _rings(ctx, table, outs)
+    try:
+        media = MD.normalize(ctx.data.get("medium", []), [o["name"] for o in outs], ctx.palette, ctx.data.get("vector"),
+                             ctx.fps, ctx.frame0, ctx.end)
+    except MD.MediumError as e:
+        raise BuildError(str(e)) from None
+    for w in media:
+        for norm in w["styles"].values():
+            _later(later, f"medium {w['index']}", norm)
+    sc["mk_medium"] = json.dumps(media)                          # mk render / mk look draw these frames in their look
+    if media:
+        report["_medium"] = MD.summary(media)
+    rings = _rings(ctx, table, outs, media)
     if rings:
         report["_rings"] = rings
     try:
@@ -359,10 +380,11 @@ def run(ctx):
     return report
 
 
-def _rings(ctx, table, outs):
+def _rings(ctx, table, outs, media=()):
     """[[ring]] normalised into scene["mk_rings"] with the clip's fps and frame0 (mkmmd.blender.styles draws them) and
-    checked against the cut: a ring is drawn in vector shots only (a WARNING names any other shot it is live over), and
-    their look needs an `opposite` palette for the inside of the ring."""
+    checked against the cut and the [[medium]] windows: a ring is drawn in vector looks only (a WARNING names any other
+    shot or window it is live over), and their look needs an `opposite` palette for the inside of the ring (a sketch
+    does not flip)."""
     try:
         rings = RG.normalize(ctx.data.get("ring", []), ctx.palette)
     except RG.RingError as e:
@@ -370,15 +392,18 @@ def _rings(ctx, table, outs):
     bpy.context.scene["mk_rings"] = json.dumps({"fps": ctx.fps, "frame0": ctx.frame0, "rings": rings})
     for r in rings:
         f0, f1 = ctx.frame0 + r["at"] * ctx.fps, ctx.frame0 + r["until"] * ctx.fps
-        for e in table:
-            if e.get("plate") or e["to"] <= f0 or e["from"] >= f1:
-                continue
+        live = [(f"shot {e['name']!r}", e.get("styles") or {}) for e in table
+                if not e.get("plate") and e["to"] > f0 and e["from"] < f1]
+        live += [(f"medium {w['index']}", w["styles"]) for w in media if w["to"] > f0 and w["from"] < f1]
+        for who, styles in live:
             for out in outs:
-                look = (e.get("styles") or {}).get(out["name"]) or {}
+                look = styles.get(out["name"]) or {}
+                if not look and who.startswith("medium"):
+                    continue                                         # the shot's own look, checked above
                 if "vector" not in look:
-                    ctx.log(f"WARNING ring {r['index']} at {r['at']} s: shot {e['name']!r} ({out['name']}) has no vector "
-                            f"look, so the ring is not drawn there")
-                elif look["vector"]["opposite"] is None:
-                    raise BuildError(f"ring {r['index']} at {r['at']} s: shot {e['name']!r} ({out['name']}) needs a "
-                                     f"[vector] opposite palette for the inside of the ring")
+                    ctx.log(f"WARNING ring {r['index']} at {r['at']} s: {who} ({out['name']}) has no vector look, so the "
+                            f"ring is not drawn there")
+                elif look["vector"]["opposite"] is None and not look["vector"]["sketch"]:
+                    raise BuildError(f"ring {r['index']} at {r['at']} s: {who} ({out['name']}) needs a [vector] opposite "
+                                     f"palette for the inside of the ring")
     return {"rings": len(rings)} if rings else None

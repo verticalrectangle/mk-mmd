@@ -16,6 +16,8 @@ LINE_SHIFT = 4                   # fixed-point bits of the trace's points (sub-p
 CACHE = 64                       # decoded frames kept for echoes and slitscans
 SLAB_SAMPLES = 8                 # positions a moving slab is drawn at over its shutter (motion blur)
 SHOCK_RIM = 0.6                  # the lit front of a shock ring, as a share of its width
+MOSH_SCALE = 0.25                # a mosh's optical flow is worked out on pictures this share of the frame's size
+DOT = 0.72                       # a halftone dot's radius at full darkness, in cells: the dots merge into solid ink
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
 
 
@@ -197,6 +199,85 @@ def draw_trace(img, pts, centre, radius, colour, width, glow, opacity=1.0, px=1.
     return np.clip(img + opacity * a[..., None] * np.asarray(colour, np.float32), 0.0, 1.0)
 
 
+def plate_shift(a, dx, dy):
+    """One colour plate `a` (h, w) printed `dx`, `dy` px off (sub-pixel), its edge repeated."""
+    h, w = a.shape
+    M = np.float32([[1.0, 0.0, dx], [0.0, 1.0, dy]])
+    return cv2.warpAffine(np.ascontiguousarray(a, np.float32), M, (w, h), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
+
+
+def halftone(img, cell, angle, level, ink, lift, offset):
+    """Comic print (`cell` and `offset` in px): where the luma is under `level` the picture is lifted toward white by
+    `lift` x its darkness d (0 at `level`, 1 at black) and screened with round `ink` dots on a grid `cell` px apart turned
+    `angle` degrees, a dot's radius DOT x cell x sqrt(d) (they touch at a quarter and merge into solid ink at black, as
+    dots gain on cheap paper); the lights stay clean. Then the red plate is printed `offset` (dx, dy) px off and the blue
+    as far the other way, a press out of register."""
+    h, w = img.shape[:2]
+    L = np.clip(img @ LUMA, 0.0, 1.0)
+    d = np.clip((np.float32(level) - L) / np.float32(level), 0.0, 1.0)
+    a = np.radians(angle)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    ca, sa = np.float32(np.cos(a)), np.float32(np.sin(a))
+    u = (xx * ca + yy * sa) / np.float32(cell)
+    v = (yy * ca - xx * sa) / np.float32(cell)
+    u -= np.rint(u)
+    v -= np.rint(v)
+    dist = np.sqrt(u * u + v * v) * np.float32(cell)
+    cov = (np.clip(np.float32(DOT * cell) * np.sqrt(d) - dist + np.float32(0.5), 0.0, 1.0) * (d > 0))[..., None]
+    base = img + (1.0 - img) * (np.float32(lift) * d)[..., None]
+    out = (base * (1.0 - cov) + np.asarray(ink, np.float32) * cov).astype(np.float32)
+    if offset[0] or offset[1]:
+        out[..., 0] = plate_shift(out[..., 0], offset[0], offset[1])
+        out[..., 2] = plate_shift(out[..., 2], -offset[0], -offset[1])
+    return out
+
+
+def split(img, rng, bands, shift, share, rgb):
+    """A broken digital signal (`shift` and `rgb` in px, `rng` a numpy Generator): the frame cut into `bands` bands of
+    random heights, `share` of them torn sideways by up to `shift` px (what leaves one side comes in at the other), the
+    red and blue planes pulled `rgb` px apart in a torn band and a third of that everywhere else."""
+    h = img.shape[0]
+    n = min(int(bands), h)
+    cuts = np.sort(rng.choice(np.arange(1, h), size=n - 1, replace=False)) if n > 1 else np.zeros(0, int)
+    edges = np.concatenate([[0], cuts, [h]]).astype(int)
+    base = int(round(rgb / 3.0))
+    out = np.empty_like(img)
+    out[..., 0], out[..., 1], out[..., 2] = np.roll(img[..., 0], base, 1), img[..., 1], np.roll(img[..., 2], -base, 1)
+    for a, b in zip(edges[:-1], edges[1:]):
+        if rng.random() >= share:
+            continue
+        dx, s = int(round(rng.uniform(-1.0, 1.0) * shift)), int(round(rgb))
+        band = img[a:b]
+        out[a:b, :, 0] = np.roll(band[..., 0], dx + s, 1)
+        out[a:b, :, 1] = np.roll(band[..., 1], dx, 1)
+        out[a:b, :, 2] = np.roll(band[..., 2], dx - s, 1)
+    return out
+
+
+def _grey8(img, size):
+    small = cv2.resize(np.ascontiguousarray(img, np.float32), size, interpolation=cv2.INTER_AREA)
+    return (np.clip(small @ LUMA, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+
+
+def mosh_step(held, prev, cur, block):
+    """`held` carried one frame along the motion from `prev` to `cur` (the cut's own pictures): Farneback optical flow on
+    grey pictures at MOSH_SCALE of the frame, averaged over `block` px squares so the picture moves in chunks as a
+    codec's motion vectors move it, each pixel taking what stood `flow` behind it."""
+    h, w = cur.shape[:2]
+    sw, sh = max(8, int(round(w * MOSH_SCALE))), max(8, int(round(h * MOSH_SCALE)))
+    flow = cv2.calcOpticalFlowFarneback(_grey8(prev, (sw, sh)), _grey8(cur, (sw, sh)), None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    b = max(1, int(round(block * MOSH_SCALE)))
+    gh, gw = -(-sh // b), -(-sw // b)
+    pad = np.pad(flow, ((0, gh * b - sh), (0, gw * b - sw), (0, 0)), mode="edge")
+    blocks = np.ascontiguousarray(pad.reshape(gh, b, gw, b, 2).mean((1, 3)), np.float32)
+    full = cv2.resize(blocks, (gw * b, gh * b), interpolation=cv2.INTER_NEAREST)[:sh, :sw]
+    full = cv2.resize(full, (w, h), interpolation=cv2.INTER_NEAREST) / np.float32(MOSH_SCALE)
+    xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    return cv2.remap(np.ascontiguousarray(held, np.float32), xs - full[..., 0], ys - full[..., 1], cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_REPLICATE)
+
+
 def stem_source(root, cache_dir):
     """callable(timeline, stem) -> (mono float32 samples, sample rate, pre) for a project at `root`: the stems of the
     window `timeline` (project-relative) was analysed on, from the stem cache `cache_dir` only (mkmmd.timeline.hits
@@ -246,7 +327,7 @@ class FrameFx:
     """The frame effects of a plan's `fx` over one output's frames.
 
     size      (width, height) of the pictures
-    frame_of  callable(Blender frame) -> picture or None: the cut's frame there, for echoes, slitscans and pushes
+    frame_of  callable(Blender frame) -> picture or None: the cut's frame there, for echoes, slitscans, pushes and moshes
     point_of  callable(key, frame) -> ((x, y) px, frame heights per metre at its depth): a projected scene point
     stem_of   callable(timeline, stem name) -> (mono float32 samples, sample rate, song seconds before clip time 0 in
               them), for scopes (None: a scope is an error); `stem_source` makes one for a project
@@ -258,6 +339,7 @@ class FrameFx:
         self.px = min(self.size) / 1080.0
         self._cache = OrderedDict()
         self._gain, self._times = {}, {}
+        self._held = {}                  # a mosh's index -> (frame, the picture it holds there)
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))
@@ -381,3 +463,49 @@ class FrameFx:
         if s <= 0.0:
             return img
         return (img * (1.0 - s) + gradient_map(img, fx["dark"], fx["color"], fx["light"]) * s).astype(np.float32)
+
+    def _halftone(self, fx, frame, img):
+        s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
+        if s <= 0.0:
+            return img
+        out = halftone(img, fx["cell"] * self.px, fx["angle"], fx["level"], fx["ink"], fx["lift"],
+                       (fx["offset"][0] * self.px, fx["offset"][1] * self.px))
+        return out if s >= 1.0 else (img * (1.0 - s) + out * s).astype(np.float32)
+
+    def _split(self, fx, frame, img):
+        """The tear holds `hold` seconds, then the signal breaks another way (seeded: the same frames again break the
+        same); the strength scales how far it tears."""
+        t = self._t(frame)
+        s = max(FX.strength(fx, t), 0.0)
+        if s <= 0.0:
+            return img
+        step = max(int(np.floor((t - fx["from"]) / fx["hold"] + 1e-6)), 0)
+        rng = np.random.default_rng([fx["seed"], fx["index"], step])
+        return split(img, rng, fx["bands"], fx["shift"] * self.size[0] * s, fx["share"], fx["rgb"] * self.px * s)
+
+    def _mosh(self, fx, frame, img):
+        held = self._moshed(fx, frame, img)
+        s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
+        return img if s <= 0.0 else (img * (1.0 - s) + held * s).astype(np.float32)
+
+    def _moshed(self, fx, frame, img):
+        """The picture a mosh holds at `frame`: the cut's frame before its span (its first when the clip starts inside
+        it), carried along the cut's own motion from each frame to the next since its first frame (the motion across the
+        cut itself is the key frame a mosh loses); one step on from the frame before when that was the last asked, else
+        worked out again from the start."""
+        i, f0 = fx["index"], fx["f0"]
+        pic = lambda g: (img if g == frame else None) if self._get(g) is None else self._get(g)     # noqa: E731
+        state = self._held.get(i)
+        if state is not None and state[0] == frame - 1:
+            held, first = state[1], frame
+        else:
+            held, first = self._get(f0 - 1), f0 + 1
+            if held is None:
+                held = pic(f0)
+        for g in range(max(first, f0 + 1), frame + 1):
+            a, b = pic(g - 1), pic(g)
+            if a is not None and b is not None and held is not None:
+                held = mosh_step(held, a, b, fx["block"] * self.px)
+        held = img if held is None else held
+        self._held[i] = (frame, held)
+        return held

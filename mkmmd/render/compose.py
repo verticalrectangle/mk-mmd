@@ -35,7 +35,7 @@ def finish(path, buf, size, tex, spec, table, rings, t, centres):
     if live:
         fs = (size[0] / SS.VECTOR_SCALE, size[1] / SS.VECTOR_SCALE)
         flip, edges = RG.masks(RG.shapes(rings, t, centres, fs), fs, SS.VECTOR_SCALE)
-    img = SS.compose_vector(p, spec, (table[0], table[1]), flip=flip, edges_on=edges)
+    img = SS.compose_vector(p, spec, (table[0], table[1]), flip=flip, edges_on=edges, t=t)
     img8 = (np.clip(img, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
     tmp = f"{path}.{os.getpid()}.part"
     with open(tmp, "wb") as fh:

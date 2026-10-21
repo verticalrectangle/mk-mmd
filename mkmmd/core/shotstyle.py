@@ -28,11 +28,16 @@ COLOR_ROLES = ("background", "subject", "accent")
 DEFAULT_COLORS = {"background": "base", "subject": "text", "accent": "surface"}
 SILHOUETTE_ONLY = ("accent", "tint", "knockout", "grow", "samples")     # shot keys no other style reads
 VECTOR_KEYS = ("colors", "tones", "materials", "lines", "shadow", "light", "opposite")
+VECTOR_ONLY = ("tones", "materials", "lines", "sketch")                 # shot keys only the vector style reads
 VECTOR_ROLES = ("background", "line", "inner")
 VECTOR_COLORS = {"background": "base", "line": "text"}                  # `inner` defaults to `line`
 VECTOR_TONES = {"fill": {"lit": "text", "shade": "subtle"}}             # a project without [vector] tones
 VECTOR_LINES = {"outline": 5.0, "inner": 2.0}                           # line widths, px at 1080 on the frame's short side
 VECTOR_LIGHT = (0.45, -0.35, 0.82)                                      # Workbench's shadow direction (toward the light)
+TEX_KINDS = ("drawn", "cel")                                            # tones that read the texture pass
+SKETCH = {"paper": "text", "ink": "base", "boil": 1.2, "fps": 12.0, "strokes": 2, "grain": 0.35, "hatch": 0.0,
+          "seed": 1}                                                    # a vector look drawn as line art (`sketch`)
+SKETCH_CELL = 48.0                                                      # px at 1080 between two bends of a sketch's wobble
 _SUFFIX = re.compile(r"\.\d{3}$")                                       # Blender's name-clash suffix: `face.001`
 
 
@@ -268,17 +273,19 @@ def normalize_reflection(spec, palette):
 
 def _tone(name, t, palette):
     """One tone of the vector look: a colour (flat), `{lit, shade}` (lit and in shadow under the look's light; no `shade`:
-    flat) or `{colors, at, grey}` (drawn: the texture's brightness picks one of the colours, so what the model draws on
-    itself, eyes and mouth, carries over)."""
+    flat), `{colors, at, grey}` (drawn: the texture's brightness picks one of the colours, so what the model draws on
+    itself, eyes and mouth, carries over) or `{texture = true, shade}` (cel: the model's own texture colours, multiplied by
+    the `shade` colour where the look's light does not reach; no `shade`: the textures under flat light)."""
     col = lambda c: _rgb(resolve_colour(c, palette))
     if not isinstance(t, dict):
         return {"kind": "flat", "lit": col(t)}
-    drawn = "colors" in t
-    unknown = sorted(set(t) - ({"colors", "at", "grey"} if drawn else {"lit", "shade"}))
+    kind = "drawn" if "colors" in t else "cel" if "texture" in t else "lit"
+    known = {"drawn": {"colors", "at", "grey"}, "cel": {"texture", "shade"}, "lit": {"lit", "shade"}}[kind]
+    unknown = sorted(set(t) - known)
     if unknown:
-        raise StyleError(f"vector tone {name!r}: unknown keys {unknown} (a tone is a colour, {{lit, shade}} or "
-                         f"{{colors, at, grey}})")
-    if drawn:
+        raise StyleError(f"vector tone {name!r}: unknown keys {unknown} (a tone is a colour, {{lit, shade}}, "
+                         f"{{colors, at, grey}} or {{texture = true, shade}})")
+    if kind == "drawn":
         cols, at = t["colors"], t.get("at", [])
         if not isinstance(cols, list) or len(cols) < 2 or not isinstance(at, list) or len(at) != len(cols) - 1:
             raise StyleError(f"vector tone {name!r}: colors = [n colours] and at = [n - 1 brightness steps]")
@@ -289,15 +296,19 @@ def _tone(name, t, palette):
         if not 0.0 < grey <= 1.0:
             raise StyleError(f"vector tone {name!r}: grey = {grey}: a saturation in 0..1")
         return {"kind": "drawn", "colors": [col(c) for c in cols], "at": at, "grey": grey}
+    if kind == "cel":
+        if t["texture"] is not True:
+            raise StyleError(f"vector tone {name!r}: texture = {t['texture']!r}: true (the model's own colours)")
+        return {"kind": "cel", "lit": [1.0, 1.0, 1.0], "shade": col(t["shade"]) if "shade" in t else None}
     if "lit" not in t:
-        raise StyleError(f"vector tone {name!r}: needs lit (or colors)")
+        raise StyleError(f"vector tone {name!r}: needs lit (or colors, or texture)")
     if "shade" not in t:
         return {"kind": "flat", "lit": col(t["lit"])}
     return {"kind": "lit", "lit": col(t["lit"]), "shade": col(t["shade"])}
 
 
-def _material_rule(i, rule, tones):
-    what = f"[vector] materials[{i}]"
+def _material_rule(what, rule, tones):
+    """One rule of a vector look's `materials` (`what` names it in messages and in the normalised rule's `where`)."""
     if not isinstance(rule, dict) or set(rule) - {"match", "tone", "group"} or not {"match", "tone"} <= set(rule):
         raise StyleError(f"{what} = {rule!r}: expected {{match = [material name patterns], tone, group}}")
     match = [rule["match"]] if isinstance(rule["match"], str) else rule["match"]
@@ -306,12 +317,62 @@ def _material_rule(i, rule, tones):
     if rule["tone"] not in tones:
         raise StyleError(f"{what}: tone {rule['tone']!r} is not one of the tones ({', '.join(tones)})")
     group = rule.get("group")
-    return {"match": list(match), "tone": str(rule["tone"]), "group": None if group is None else str(group)}
+    return {"match": list(match), "tone": str(rule["tone"]), "group": None if group is None else str(group),
+            "where": what}
+
+
+def _lines(given, where, lines):
+    """`lines = {outline, inner}` (px at 1080 on the frame's short side) laid over `lines`."""
+    if given is None:
+        return lines
+    if not isinstance(given, dict) or set(given) - set(VECTOR_LINES):
+        raise StyleError(f"{where} = {given!r}: expected {{outline, inner}} (px at 1080)")
+    out = dict(lines)
+    for k, v in given.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise StyleError(f"{where}.{k} = {v!r}: a width in px at 1080")
+        out[k] = float(v)
+        if out[k] < 0:
+            raise StyleError(f"{where}.{k} must not be negative")
+    return out
+
+
+def _sketch_spec(s, palette):
+    """`sketch = true | {paper, ink, boil, fps, strokes, grain, hatch, seed}`: the vector look drawn as line art
+    (`_sketch`), with SKETCH's defaults; None without one."""
+    if s is None or s is False:
+        return None
+    s = {} if s is True else s
+    if not isinstance(s, dict):
+        raise StyleError(f"sketch = {s!r}: expected true or a table {{{', '.join(SKETCH)}}}")
+    unknown = sorted(set(s) - set(SKETCH))
+    if unknown:
+        raise StyleError(f"sketch: unknown keys {unknown} (known: {', '.join(SKETCH)})")
+    o = {**SKETCH, **s}
+    num = {}
+    for k in ("boil", "fps", "grain", "hatch"):
+        if isinstance(o[k], bool) or not isinstance(o[k], (int, float)):
+            raise StyleError(f"sketch: {k} = {o[k]!r} is not a number")
+        num[k] = float(o[k])
+    if num["boil"] < 0 or num["hatch"] < 0:
+        raise StyleError("sketch: boil and hatch are px at 1080, 0 or more")
+    if num["fps"] <= 0:
+        raise StyleError(f"sketch: fps = {num['fps']}: how many times a second the lines are drawn again, above 0")
+    if not 0.0 <= num["grain"] <= 1.0:
+        raise StyleError(f"sketch: grain = {num['grain']}: a share in 0..1")
+    strokes, seed = o["strokes"], o["seed"]
+    if isinstance(strokes, bool) or not isinstance(strokes, int) or not 1 <= strokes <= 4:
+        raise StyleError(f"sketch: strokes = {strokes!r}: how many times each line is drawn, 1 .. 4")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise StyleError(f"sketch: seed = {seed!r}: a whole number, 0 or more")
+    return {"paper": _rgb(resolve_colour(o["paper"], palette)), "ink": _rgb(resolve_colour(o["ink"], palette)), **num,
+            "strokes": strokes, "seed": seed}
 
 
 def normalize_vector(spec, palette, project=None):
     """The flat-vector look of a shot: the project's `[vector]` table (`project`) with the shot's own `colors`, `tones`,
-    `hide` and `keep` laid over it (docs/design.md: Looks: vector)."""
+    `lines`, `hide` and `keep` laid over it, its own `materials` rules checked before the project's, and its `sketch`
+    (docs/design.md: Looks: vector)."""
     project = {} if project is None else project
     if not isinstance(project, dict):
         raise StyleError("[vector] must be a table")
@@ -337,14 +398,10 @@ def normalize_vector(spec, palette, project=None):
     rules = project.get("materials") or []
     if not isinstance(rules, list):
         raise StyleError("[vector] materials: expected a list of {match, tone, group}")
-    lines = dict(VECTOR_LINES)
-    given = project.get("lines") or {}
-    if not isinstance(given, dict) or set(given) - set(VECTOR_LINES):
-        raise StyleError(f"[vector] lines = {given!r}: expected {{outline, inner}} (px at 1080)")
-    for k, v in given.items():
-        lines[k] = float(v)
-        if lines[k] < 0:
-            raise StyleError(f"[vector] lines.{k} must not be negative")
+    own = spec.get("materials") or []
+    if not isinstance(own, list):
+        raise StyleError("materials: expected a list of {match, tone, group}")
+    lines = _lines(spec.get("lines"), "lines", _lines(project.get("lines"), "[vector] lines", dict(VECTOR_LINES)))
     shadow = float(project.get("shadow", 0.3))
     if not 0.0 <= shadow <= 1.0:
         raise StyleError(f"[vector] shadow = {shadow}: a share of the light in 0..1")
@@ -357,9 +414,11 @@ def normalize_vector(spec, palette, project=None):
         raise StyleError(f"[vector] light = {project.get('light')!r}: expected [x, y, z] toward the light")
     cols = {k: _rgb(resolve_colour(colors[k], palette)) for k in VECTOR_ROLES}
     return {"colors": cols, "tones": tones, "opposite": _opposite(project.get("opposite"), colors, tones, palette),
-            "materials": [_material_rule(i, r, tones) for i, r in enumerate(rules)],
+            "materials": [_material_rule(f"materials[{i}]", r, tones) for i, r in enumerate(own)]
+                         + [_material_rule(f"[vector] materials[{i}]", r, tones) for i, r in enumerate(rules)],
             "default": "fill" if "fill" in tones else next(iter(tones)), "lines": lines, "shadow": shadow,
-            "light": light, "hide": _patterns(spec, "hide"), "keep": _patterns(spec, "keep")}
+            "light": light, "sketch": _sketch_spec(spec.get("sketch"), palette), "hide": _patterns(spec, "hide"),
+            "keep": _patterns(spec, "keep")}
 
 
 def _opposite(opp, colors, tones, palette):
@@ -386,8 +445,9 @@ def _opposite(opp, colors, tones, palette):
                 raise StyleError(kept)
             t = {"colors": t["colors"], "at": base["at"], "grey": base["grey"]}
         new = _tone(name, t, palette)
-        if new["kind"] != base["kind"] or len(new.get("colors", ())) != len(base.get("colors", ())):
-            raise StyleError(kept)
+        if new["kind"] != base["kind"] or len(new.get("colors", ())) != len(base.get("colors", ())) or \
+                (new["kind"] == "cel" and (new["shade"] is None) != (base["shade"] is None)):
+            raise StyleError(kept + ("; a cel tone keeps its shade or its lack of one" if new["kind"] == "cel" else ""))
         out[name] = new
     return {"colors": {k: _rgb(resolve_colour({**colors, **oc}[k], palette)) for k in VECTOR_ROLES}, "tones": out}
 
@@ -395,7 +455,7 @@ def _opposite(opp, colors, tones, palette):
 def normalize(spec, palette, vector=None):
     """{'silhouette' | 'vector': {...}} and / or {'reflection': {...}} for one shot spec (an aspect's overrides merged
     in); {} when the shot has none. `vector` is the project's `[vector]` table. `style = "none"` and `reflection = false`
-    switch an inherited look off for one aspect."""
+    switch an inherited look off for one aspect, with the look's own keys it inherits."""
     style = spec.get("style")
     reflection = spec.get("reflection")
     out = {}
@@ -405,16 +465,22 @@ def normalize(spec, palette, vector=None):
         if style == "vector":
             out["vector"] = normalize_vector(spec, palette, vector)
         else:
-            if "tones" in spec:
-                raise StyleError(f"shot {spec.get('name')!r}: tones belong to the vector style")
+            _vector_only(spec)
             out["silhouette"] = normalize_silhouette(spec, palette)
-    elif "tones" in spec:
-        raise StyleError(f"shot {spec.get('name')!r}: tones belong to the vector style")
+    elif style is None:
+        _vector_only(spec)
     if reflection is not None and reflection is not False:
         if out:
             raise StyleError(f"shot {spec.get('name')!r}: a {style} shot cannot have a reflection")
         out["reflection"] = normalize_reflection(reflection, palette)
     return out
+
+
+def _vector_only(spec):
+    """The vector style's own keys (`tones`, `materials`, `lines`, `sketch`) on a shot of another look are a mistake."""
+    given = [k for k in VECTOR_ONLY if k in spec]
+    if given:
+        raise StyleError(f"shot {spec.get('name')!r}: {', '.join(given)} belong to the vector style")
 
 
 # ================================================================================================= the cut
@@ -613,10 +679,20 @@ def depth_breaks(z, cover, step=0.01, rel=0.004):
     return e
 
 
+def _lit(p, spec, scale):
+    """Where the look's light reaches, (H, W) bool: `shade` at or over `spec["shadow"] * LIGHT_FULL`, opened and closed so
+    no lit sliver or shadow pinhole is left."""
+    r = max(1, int(round(scale)))
+    lit = p["shade"] >= spec["shadow"] * LIGHT_FULL
+    lit = dilate_round(~dilate_round(~lit, r), r)                            # opened: no lit slivers
+    return ~dilate_round(~dilate_round(lit, r), r)                           # closed: no shadow pinholes
+
+
 def _vector_slots(p, spec, table, scale, subject):
-    """(slots, keys): every pass pixel's colour as an index into `keys`, the colour roles of the look: "background",
+    """(slots, keys, lit): every pass pixel's colour as an index into `keys`, the colour roles of the look: "background",
     "line", "inner" and (tone, "lit" | "shade") or (tone, "band", i). A palette (`_vector_palette`) turns them into colours,
-    so the drawing is worked out once and painted in as many palettes as the frame needs."""
+    so the drawing is worked out once and painted in as many palettes as the frame needs. `lit` is `_lit`'s mask (None
+    when the figures are left out)."""
     import numpy as np
     tones_of, groups_of = table
     mid = p["id"]
@@ -624,24 +700,22 @@ def _vector_slots(p, spec, table, scale, subject):
     keys = ["background", "line", "inner"]
     slots = np.zeros((H, W), np.int16)
     if not subject:
-        return slots, keys
+        return slots, keys, None
     cover = mid > 0
     names = list(spec["tones"])
     T = np.asarray([-1] + [names.index(t) for t in tones_of[1:]], np.int32)[mid]
     r = max(1, int(round(scale)))
-    lit = p["shade"] >= spec["shadow"] * LIGHT_FULL
-    lit = dilate_round(~dilate_round(~lit, r), r)                            # opened: no lit slivers
-    lit = ~dilate_round(~dilate_round(lit, r), r)                            # closed: no shadow pinholes
+    lit = _lit(p, spec, scale)
     tex = p.get("tex")
-    for k, name in enumerate(names):
+    for k, name in enumerate(names if not spec.get("sketch") else ()):          # a sketch draws its lines alone
         m = cover & (T == k)
         if not m.any():
             continue
         t = spec["tones"][name]
-        if t["kind"] == "flat":
+        if t["kind"] == "flat" or (t["kind"] == "cel" and t["shade"] is None):
             slots[m] = len(keys)
             keys.append((name, "lit"))
-        elif t["kind"] == "lit":
+        elif t["kind"] in ("lit", "cel"):
             slots[m & lit], slots[m & ~lit] = len(keys), len(keys) + 1
             keys += [(name, "lit"), (name, "shade")]
         else:
@@ -659,7 +733,7 @@ def _vector_slots(p, spec, table, scale, subject):
     inner = (edges(groups) | depth_breaks(p["depth"], cover)) & cover
     slots[dilate_round(inner, spec["lines"]["inner"] * px / 2.0) & dilate_round(cover, r)] = 2
     slots[dilate_round(edges(cover), spec["lines"]["outline"] * px / 2.0)] = 1
-    return slots, keys
+    return slots, keys, lit
 
 
 def _vector_palette(look, keys):
@@ -675,28 +749,101 @@ def _vector_palette(look, keys):
     return np.asarray(out, np.float32)
 
 
-def compose_vector(p, spec, table, scale=VECTOR_SCALE, subject=True, flip=None, edges_on=()):
+def compose_vector(p, spec, table, scale=VECTOR_SCALE, subject=True, flip=None, edges_on=(), t=None):
     """The finished vector frame, float32 RGB (h, w, 3) in display space, from the passes `p` (numpy arrays at `scale`
     times the frame's size):
       id      (H, W) int material ids (`vector_table`'s; 0 where nothing is)
       shade   (H, W) Workbench's studio light with cast shadows on plain white, linear (a share of LIGHT_FULL)
       depth   (H, W) metres from the camera (anything where nothing is)
-      tex     (H, W, 3) the textures, flat, display space: only for drawn tones
+      tex     (H, W, 3) the textures, flat, display space: only for drawn and cel tones
     Every material is filled with its tone: flat, lit or in shadow (`shade` under `spec["shadow"] * LIGHT_FULL`, opened
-    and closed so no sliver or pinhole is left), or drawn (the texture's luma picks the colour; the last colour takes only
-    texels greyer than `grey`). Then the inner lines (where two line groups meet, where the depth breaks) and the outline
-    round everything, `spec["lines"]` px wide at 1080 on the short side. `subject = False` leaves the figures out.
-    `flip` (H, W) bool paints those pixels in the look's `opposite` palette (the inside of the rings); `edges_on` is
-    [(mask (H, W) bool, rgb)] painted last (the rings' wavefronts)."""
+    and closed so no sliver or pinhole is left), drawn (the texture's luma picks the colour; the last colour takes only
+    texels greyer than `grey`) or cel (the texture itself, times the tone's shade colour in shadow). Then the inner lines
+    (where two line groups meet, where the depth breaks) and the outline round everything, `spec["lines"]` px wide at 1080
+    on the short side. `subject = False` leaves the figures out. `flip` (H, W) bool paints those pixels in the look's
+    `opposite` palette (the inside of the rings); `edges_on` is [(mask (H, W) bool, rgb)] painted last (the rings'
+    wavefronts). A look with a `sketch` is line art instead (`_sketch`: the lines alone, in ink on paper, boiling with
+    the clip second `t`; no flip)."""
     import numpy as np
-    slots, keys = _vector_slots(p, spec, table, scale, subject)
-    out = _vector_palette(spec, keys)[slots]
-    if flip is not None and flip.any():
-        if spec.get("opposite") is None:
-            raise ValueError("rings flip the picture to the [vector] opposite palette, and the look has none")
-        out[flip] = _vector_palette(spec["opposite"], keys)[slots[flip]]
+    slots, keys, lit = _vector_slots(p, spec, table, scale, subject)
+    if spec.get("sketch"):
+        out = _sketch(slots, lit, p, spec, t)
+    else:
+        out = _vector_palette(spec, keys)[slots]
+        if flip is not None and flip.any():
+            if spec.get("opposite") is None:
+                raise ValueError("rings flip the picture to the [vector] opposite palette, and the look has none")
+            out[flip] = _vector_palette(spec["opposite"], keys)[slots[flip]]
+        cel = [i for i, k in enumerate(keys) if not isinstance(k, str) and spec["tones"][k[0]]["kind"] == "cel"]
+        if cel:
+            if p.get("tex") is None:
+                raise ValueError("a cel tone takes the model's own colours from the textures: the passes need `tex`")
+            m = np.isin(slots, cel)
+            out[m] *= p["tex"][..., :3][m]
     for mask, rgb in edges_on:
         out[mask] = rgb
     H, W = slots.shape
     s = int(scale)
     return out.reshape(H // s, s, W // s, s, 3).mean((1, 3)).astype(np.float32)
+
+
+def _smooth_noise(rng, shape, cell):
+    """(H, W) float32 noise in -1..1 that bends once every `cell` pixels: random values on a coarse grid blended with
+    smoothstep weights along each axis (two matrix products: no full-size temporaries but the result)."""
+    import numpy as np
+    H, W = shape
+    cell = max(float(cell), 1.0)
+    grid = rng.uniform(-1.0, 1.0, (int(H / cell) + 2, int(W / cell) + 2)).astype(np.float32)
+
+    def weights(n, m):
+        u = np.arange(n, dtype=np.float64) / cell
+        i = np.floor(u).astype(np.intp)
+        f = u - i
+        f = f * f * (3.0 - 2.0 * f)
+        w = np.zeros((n, m), np.float32)
+        w[np.arange(n), i], w[np.arange(n), i + 1] = 1.0 - f, f
+        return w
+    return weights(H, grid.shape[0]) @ grid @ weights(W, grid.shape[1]).T
+
+
+def _warp(m, dy, dx):
+    """`m` (H, W) as a wobbling hand draws it: every pixel takes the value `dy`, `dx` pixels away (nearest)."""
+    import numpy as np
+    H, W = m.shape
+    yy = np.clip(np.rint(np.arange(H, dtype=np.float32)[:, None] + dy), 0, H - 1).astype(np.int32)
+    xx = np.clip(np.rint(np.arange(W, dtype=np.float32)[None, :] + dx), 0, W - 1).astype(np.int32)
+    return m[yy, xx]
+
+
+def _sketch(slots, lit, p, spec, t):
+    """The vector look drawn as line art, float32 (H, W, 3) at the passes' size: paper everywhere and the look's outline
+    and inner lines in ink, drawn `strokes` times by a hand that wobbles up to `boil` px (at 1080) and draws the picture
+    again `fps` times a second of the clip (`t`), so the lines boil; each pass of a pencil (two strokes or more) a little
+    lighter than ink, its pressure drifting along the line and broken by the paper's `grain`. With `hatch` (px at 1080
+    between strokes) what the look's light does not reach is shaded with diagonal strokes, crossed by the second pass."""
+    import numpy as np
+    sk = spec["sketch"]
+    H, W = slots.shape
+    px = min(H, W) / 1080.0
+    step = 0 if t is None else int(np.floor(float(t) * sk["fps"] + 1e-6))
+    lines = (slots == 1) | (slots == 2)
+    shadow = (p["id"] > 0) & ~lit if sk["hatch"] > 0 and lit is not None else None
+    alpha = np.float32(1.0 if sk["strokes"] == 1 else 0.72)
+    ys, xs = np.arange(H, dtype=np.float32)[:, None], np.arange(W, dtype=np.float32)[None, :]
+    ink = np.zeros((H, W), np.float32)
+    for s in range(sk["strokes"]):
+        rng = np.random.default_rng([sk["seed"], s, step % (1 << 32)])
+        dy = _smooth_noise(rng, (H, W), SKETCH_CELL * px) * np.float32(sk["boil"] * px)
+        dx = _smooth_noise(rng, (H, W), SKETCH_CELL * px) * np.float32(sk["boil"] * px)
+        a = _warp(lines, dy, dx).astype(np.float32)
+        if shadow is not None:
+            per = sk["hatch"] * px
+            u = ((xs + dx) + (ys + dy) if s % 2 == 0 else (xs + dx) - (ys + dy)) / np.float32(per * np.sqrt(2.0))
+            hatch = (np.abs(u - np.rint(u)) * np.float32(per) < 0.5 * px) & _warp(shadow, dy, dx)
+            a = np.maximum(a, hatch.astype(np.float32) * np.float32(0.6))
+        a *= alpha * (np.float32(0.8) + np.float32(0.2) * _smooth_noise(rng, (H, W), 4.0 * SKETCH_CELL * px))
+        if sk["grain"] > 0:
+            a *= np.float32(1.0) - np.float32(sk["grain"]) * rng.random((H, W), dtype=np.float32)
+        ink = np.float32(1.0) - (np.float32(1.0) - ink) * (np.float32(1.0) - a)
+    paper, pen = np.asarray(sk["paper"], np.float32), np.asarray(sk["ink"], np.float32)
+    return paper + (pen - paper) * ink[..., None]

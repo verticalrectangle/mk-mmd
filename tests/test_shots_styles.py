@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from mkmmd.core import palette as PAL
+from mkmmd.core import shotspec as SP
 from mkmmd.core import shotstyle as SS
 
 MASTER, SQUARE = (1080, 1920), (1080, 1080)
@@ -440,6 +441,11 @@ def test_tones_belong_to_the_vector_style_only():
         SS.normalize({"name": "lit", "tones": {"dark": "#000"}}, DAWN)
 
 
+def test_style_none_in_an_aspect_switches_an_inherited_vector_look_off_with_its_own_keys():
+    shot = {"name": "v", "style": "vector", "tones": {"dark": "#000"}, "lines": {"inner": 4}, "sketch": True}
+    assert SS.normalize(SP.merged(shot, {"style": "none"}), DAWN, VEC) == {}
+
+
 def test_the_material_table_takes_the_first_rule_and_ignores_blenders_suffix():
     tones, groups = SS.vector_table(["skin", "face.001", "Yellow2", "hair", "Yellow2.001", "eye"], _vec())
     assert tones == [None, "white", "white", "dark", "white", "dark", "eyes"]   # hair: no rule, the default tone
@@ -572,3 +578,80 @@ def test_flipped_pixels_take_the_opposite_palette_and_only_they():
     assert np.allclose(out[1, 20], _rgb("#FFD21F")) and np.allclose(out[1, 60], _rgb("#1B2A6B"))      # the background
     with pytest.raises(ValueError, match="opposite"):
         SS.compose_vector(_passes(ids), _vec(), SS.vector_table(["Yellow1"], _vec()), scale=1, flip=flip)
+
+
+CEL = dict(VEC, tones={**VEC["tones"], "cel": {"texture": True, "shade": "#808080"}, "flatcel": {"texture": True}})
+
+
+def test_a_cel_tone_keeps_the_textures_colours_lit_and_multiplies_them_by_its_shade_in_shadow():
+    ids = np.zeros((40, 60), np.int32)
+    ids[5:35, 5:55] = 1
+    shade = np.full(ids.shape, 0.4, np.float32)
+    shade[:, 30:] = 0.0                                                       # the right half in shadow
+    tex = np.zeros((40, 60, 3), np.float32)
+    tex[...] = [0.9, 0.3, 0.2]
+    for tone, dark in (("cel", 0.9 * _rgb("#808080")[0]), ("flatcel", 0.9)):
+        spec = _vec({"materials": [{"match": "skin", "tone": tone}]}, CEL)
+        out = SS.compose_vector(_passes(ids, shade=shade, tex=tex), spec, SS.vector_table(["skin"], spec), scale=1)
+        assert np.allclose(out[20, 15], [0.9, 0.3, 0.2]) and out[20, 45, 0] == pytest.approx(dark, abs=1e-6)
+        assert np.allclose(out[20, 4], _rgb("#1B2A6B"))                         # the outline is ink, not the texture
+    with pytest.raises(ValueError, match="the passes need `tex`"):
+        SS.compose_vector(_passes(ids), spec, SS.vector_table(["skin"], spec), scale=1)
+
+
+def test_a_shots_own_material_rules_come_before_the_projects_and_its_lines_lay_over_them():
+    v = _vec({"materials": [{"match": "Yellow*", "tone": "white"}], "lines": {"inner": 9}},
+             dict(VEC, lines={"outline": 7, "inner": 1}))
+    assert SS.vector_table(["Yellow2", "eye"], v)[0] == [None, "white", "eyes"]   # its rule wins, the rest are the project's
+    assert v["lines"] == {"outline": 7.0, "inner": 9.0}
+
+
+@pytest.mark.parametrize("spec", [dict(SIL, sketch=True), dict(SIL, materials=[]), {"name": "lit", "lines": {"inner": 2}}])
+def test_the_vector_styles_own_keys_on_another_look_are_refused(spec):
+    with pytest.raises(SS.StyleError, match="belong to the vector style"):
+        SS.normalize(spec, DAWN)
+
+
+@pytest.mark.parametrize("shot, frag", [
+    ({"sketch": {"pen": 1}}, "unknown keys"),
+    ({"sketch": "yes"}, "expected true or a table"),
+    ({"sketch": {"strokes": 0}}, "1 .. 4"),
+    ({"sketch": {"fps": 0}}, "above 0"),
+    ({"sketch": {"grain": 2}}, "a share in 0..1"),
+    ({"sketch": {"hatch": -1}}, "0 or more"),
+    ({"tones": {"t": {"texture": 1}}}, "true"),
+    ({"tones": {"t": {"texture": True, "lit": "#fff"}}}, "unknown keys"),
+    ({"lines": {"outline": "thick"}}, "a width in px"),
+    ({"materials": {"match": "x"}}, "a list of")])
+def test_bad_sketches_cel_tones_and_shot_rules_say_what_is_wrong(shot, frag):
+    with pytest.raises(SS.StyleError, match=frag):
+        _vec(shot)
+
+
+def test_an_opposite_cel_tone_keeps_its_shade_or_its_lack_of_one():
+    with pytest.raises(SS.StyleError, match="keeps its shade"):
+        _vec(project=dict(CEL, opposite={"tones": {"cel": {"texture": True}}}))
+
+
+def _sketch(t, hatch=0.0, shade=0.4):
+    ids = np.zeros((216, 216), np.int32)
+    ids[20:196, 20:108], ids[20:196, 108:196] = 1, 2
+    spec = _vec({"sketch": {"paper": "#FFFFFF", "ink": "#000000", "hatch": hatch, "seed": 4}},
+                dict(VEC, lines={"outline": 30.0, "inner": 10.0}))
+    return SS.compose_vector(_passes(ids, shade=shade), spec, SS.vector_table(["skin", "Yellow2"], spec), scale=1, t=t)
+
+
+def test_a_sketch_draws_only_the_lines_in_ink_on_paper_and_they_boil_once_a_drawing():
+    a = _sketch(1.0)
+    assert np.allclose(a[100, 60], 1.0) and np.allclose(a[5, 5], 1.0)          # a fill and the background: paper
+    assert a[100, 18:23].min() < 0.5 and a[100, 104:112].min() < 0.5          # the outline and the line between groups
+    assert np.array_equal(_sketch(1.04), a)                                    # the same drawing within 1/12 s
+    assert not np.array_equal(_sketch(1.09), a)                                # the next one is drawn again
+
+
+def test_a_sketch_hatches_what_the_light_does_not_reach_and_nothing_lit():
+    shade = np.full((216, 216), 0.4, np.float32)
+    shade[:, 60:] = 0.0
+    out = _sketch(1.0, hatch=6.0, shade=shade)
+    assert (out[40:180, 70:100].mean(-1) < 0.8).mean() > 0.1                   # strokes in the shadow
+    assert np.allclose(out[40:180, 35:50], 1.0)                                # none in the light

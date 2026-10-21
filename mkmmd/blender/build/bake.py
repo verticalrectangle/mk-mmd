@@ -488,11 +488,12 @@ def bake(ctx, out_dir):
     for i, c in centres.items():
         ring_doc["points"][str(i)] = put(c)
     np.concatenate(blob).astype("<f4").tofile(os.path.join(part, "bake.bin"))
-    doc = {"version": 2, "fps": ctx.fps, "frame0": ctx.frame0, "frames": n, "duration": ctx.duration, "glb": "scene.glb",
+    doc = {"version": 3, "fps": ctx.fps, "frame0": ctx.frame0, "frames": n, "duration": ctx.duration, "glb": "scene.glb",
            "outputs": outputs, "cut": cut, "shots": _table(sc), "freezes": wins, **index, "objects": objects,
            "blocks": [{"name": b.name, "why": why, "shows": _ranges(vis[b.name])} for b, why in blocks],
            "materials": {m: _material(bpy.data.materials[m], wb_nodes[m]) for m in mat_names},
-           "rings": ring_doc, "workbench": _workbench(sc), "screen": sum(1 for o in sc.objects if "mk_screen" in o.keys())}
+           "rings": ring_doc, "workbench": _workbench(sc), "screen": sum(1 for o in sc.objects if "mk_screen" in o.keys()),
+           "medium": json.loads(sc.get("mk_medium") or "[]")}
     with open(os.path.join(part, "bake.json"), "w", encoding="utf-8") as fh:
         json.dump(doc, fh, ensure_ascii=False)
     shutil.rmtree(out_dir, ignore_errors=True)

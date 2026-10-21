@@ -829,6 +829,22 @@ def test_bend_max_keeps_every_segment_within_its_cone_when_the_anchor_flips(engi
     assert np.abs(np.linalg.norm(np.diff(held.x, axis=1), axis=2) - 0.1).max() < 1e-9
 
 
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_a_skirt_with_no_params_of_its_own_keeps_its_folds_in_a_whip_turn(engine):
+    """A skirt left at its family's defaults flew up over her waist and crumpled there whenever she turned or walked
+    (every project had to remember Hello Brooklyn's settings): its defaults are now those, so through a 150 degree whip
+    of the hips in four frames no segment turns more than 30 deg on its parent and nothing rises above the waist."""
+    F = 16
+    sc = ring_scene(ring_rig(n=8, nb=3), F, poses={"hips": (np.zeros((F, 3)), spin(F))})
+    res = run(sc, engine=engine)
+    parent = np.asarray(sc["chains"].parent, int)
+    assert turn_on_parent(res, parent).max() <= 30.0 + 1e-6
+    root = np.arange(len(parent))
+    for i, p in enumerate(parent):                                         # parents come before their children
+        root[i] = i if p < 0 else root[p]
+    assert (res.x[..., 2] <= res.x[:, root, 2] + 1e-9).all()               # no point above its chain's first one
+
+
 @needs_numba
 @pytest.mark.parametrize("block_bytes", [strands.BLOCK_BYTES, 1.0])
 def test_numba_engine_reproduces_the_numpy_engine_with_inertia_and_a_bend_limit(monkeypatch, block_bytes):

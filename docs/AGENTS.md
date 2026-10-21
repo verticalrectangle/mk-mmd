@@ -128,7 +128,7 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   The poses `hair_flip`, `over_shoulder`, `hand_hip` and `finger_gun` hold a body and head attitude too (mirrored for the right hand): put
   one on a dead stop of the music, between two walks, and shoot it from the side it reads from. A `hair_flip`'s hand runs
   through the hair: with long simulated hair watch it in motion before keeping it (a lock can fly out like a whip). The hands
-  come in from outside and stop at the body and clothes (simulated hair and skirts make way, so a hand hangs by the thigh),
+  come in from outside and stop at the body and clothes (simulated hair makes way; a skirt does not, so hands stay outside it),
   and wrists stay within 60 degrees of the forearm: the pose report's
   `moves.places` says how far each place was kept out and how much its wrist bends. A hand travels between places at a human pace
   and the build refuses a move it cannot reach in time (it says how long the trip takes): a few gestures, each held, read better
@@ -164,7 +164,15 @@ fingertip bone's `.tail` and the prop.
   of the project's `[vector]` table, two-tone shading, outlines) and `reflection` (her image in a pane) are composed at render time; `mk look` draws them as
   `mk render` will, `--no-styles` draws the shot as lit. A vector look starts with the model's material names: `mk q BLEND --list materials` lists them with
   the name a `[vector] materials` rule matches, and the build warns about a rule that names none. `[[ring]]` entries flip a vector shot to the look's
-  `opposite` palette inside discs and bands that sweep out from a point on a beat.
+  `opposite` palette inside discs and bands that sweep out from a point on a beat. A vector tone `{texture = true, shade}` is cel (the model's own
+  colours in two tones); a shot's own `materials = [{match = "*", tone = "cel"}]` and `lines` restyle everything in it; `sketch = {...}` draws the
+  look as boiling ink or pencil line art.
+- **Medium shifts** ([Medium shifts](design.md#medium-shifts)): `[[medium]] {from, to, style, ...}` draws the whole picture in another look for a
+  window, whatever shot is in the cut: a beat or two of cel, a flat cartoon (the vector close-ups' tones on a wide shot) or a sketch, cut on a snare,
+  a stop or a big hit, and back. Pair a cartoon or a sketch with a `[[stepped]]` window over the same span (she moves on twos, the camera on
+  every frame; [Stepped motion](design.md#stepped-motion)), and print or glitch flashes with `[[fx]]` `halftone`, `split` and `mosh`. Keep them
+  short and on the hits, vary the medium, and look at each one: a dark lit frame gives a halftone nothing to screen, and a tint over a stop
+  washes a medium out unless its `strength` comes down.
 - **Freezes**: `[[freeze]] {from, to}` holds the world while the shot's camera goes on moving (a hit-stop orbit); `mk look` and `mk render` show it, `mk q`
   reads the timeline as it is.
 - **Transitions and inserts**: composited by `mk post` from layers `mk render` draws next to the frames. Windows may not overlap and must lie inside one shot of the
@@ -174,7 +182,9 @@ fingertip bone's `.tail` and the prop.
 - **Frame effects** ([Frame effects](design.md#frame-effects)): `[[fx]]` bends, smears and draws over the finished pictures: `lens` (a black hole's
   lensing about a scene point), `echo` (figure trails), `slitscan` (time smeared across the frame), `push` (zoom into a pupil that shows the
   first frame: the seam of a loop), `scope` (a stem as an oscilloscope trace), `zoom` (a punch on every kick), `shock` (a pressure ring
-  running out from a point), `slab` (Persona's slanted panels slamming in and flung off) and `tint` (the Dark Hour's green over a stop).
+  running out from a point), `slab` (Persona's slanted panels slamming in and flung off), `tint` (the Dark Hour's green over a stop),
+  `halftone` (comic print: Ben-Day dots in the shadows, the plates off register), `split` (a broken signal: torn bands, RGB apart) and
+  `mosh` (a datamosh: the frame before a cut dragged along the new shot's motion).
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
   transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round

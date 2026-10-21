@@ -4,8 +4,8 @@ leans, tilts and sways carry them), lean, tilt, turn and head keys, twitches and
 of the pose stage. The landmarks the places are built from come from the member's rest pose in its root's frame, the beats
 from the project's timeline (audio/timeline.json), and the hands are kept off the member's own body and clothes: the
 distance the compiler measures is to every face of its meshes in the rest pose that belongs to neither arm, nor to a chain
-the sim moves that hangs loose (hair, ears, a tail, a skirt, ribbons: those make way for a hand, colliding with its
-fingers and palm, so a hand hangs by the thigh under a wide skirt's flare instead of resting up on it)."""
+of hair, ears, a tail or ribbons that the sim moves (those make way for a hand, colliding with its fingers and palm, so
+long hair at her sides does not push a hanging hand out). A skirt is clothes: a hand stays outside it."""
 import json
 import math
 import os
@@ -24,7 +24,7 @@ from . import sim as SIM
 MOUTH = (0.0, -0.06, 0.012)                 # the mouth from the head bone's head (an MMD head sits on the neck's top)
 EYES = (0.0, -0.05, 0.07)                   # the eyes from there, for a rig without eye bones
 ARM = ("arm", "arm_twist", "elbow", "wrist_twist", "wrist", "thumb", "index", "middle", "ring", "little")
-YIELD = FAM.HAIR_FAMILIES | {"ears", "tail", "skirt", "ribbon"}   # chains that make way for a hand when the sim moves them
+YIELD = FAM.HAIR_FAMILIES | {"ears", "tail", "ribbon"}   # chains that make way for a hand when the sim moves them
 
 
 def marks(m):
@@ -107,8 +107,8 @@ def body_clearance(m, soft=()):
 
 
 def soft_bones(ctx, name, m):
-    """The bones of member `name`'s loose chains the sim moves (YIELD: hair, ears, a tail, a skirt, ribbons): they make
-    way for a hand."""
+    """The bones of member `name`'s loose chains the sim moves (YIELD: hair, ears, a tail, ribbons): they make way for a
+    hand."""
     fams = set(SIM.families(ctx, name, m)) & YIELD
     return {b for c in m.rig["chains"] if c["family"] in fams for b in c["bones"]} if fams else set()
 

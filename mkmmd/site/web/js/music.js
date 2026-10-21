@@ -9,7 +9,7 @@ import { h, clamp } from "./ui.js";
 
 const GUTTER = 58, PAD = 8;
 const ROW = { ruler: 20, wave: 38, beats: 18, hits: 16, words: 18, shots: 22, fx: 15 };
-const FX_KINDS = ["transition", "insert", "glitch", "fx", "freeze", "ring", "text"];
+const FX_KINDS = ["transition", "insert", "glitch", "fx", "medium", "freeze", "ring", "text"];
 
 let audioCtx = null;
 const decoded = new Map();          // url -> Promise<AudioBuffer>
@@ -38,7 +38,7 @@ export function colours() {
   const c = {};
   for (const k of ["fg", "muted", "faint", "line", "sunk", "card", "hover", "accent", "accent-soft", "ok", "warn", "bad"]) c[k] = css("--" + k);
   c.lanes = [c.accent, c.warn, c.ok, c.bad, c.muted];
-  c.fx = { transition: c.accent, insert: c.warn, glitch: c.bad, fx: c["accent-soft"], freeze: c.ok, ring: c.muted, text: c.faint };
+  c.fx = { transition: c.accent, insert: c.warn, glitch: c.bad, fx: c["accent-soft"], medium: c.fg, freeze: c.ok, ring: c.muted, text: c.faint };
   return c;
 }
 

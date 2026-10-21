@@ -2,7 +2,7 @@
 (the [audio] file cut to the clip, cached as WAV in the site cache), the timeline's beats, bars and onsets, its words
 by (line, word) and their times (never their text), the hits the project keeps ([audio] hits: named lists of hit
 times, `lanes` picks and orders them), and the cut with its effects (transitions, inserts, glitches, frame effects,
-freezes, rings, texts). What cannot be read is named in `problems` and the rest is still shown."""
+medium shifts, freezes, rings, texts). What cannot be read is named in `problems` and the rest is still shown."""
 import hashlib
 import json
 import shutil
@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from ..core import freeze as FRZ
+from ..core import medium as MD
 from ..core import palette as PAL
 from ..core import rings as RG
 from ..core import screentype as ST
@@ -170,6 +171,15 @@ def music(root, cache_dir):
                                 "to": round(min(r["until"], duration), 4)})
         except RG.RingError as e:
             problems.append(f"rings: {e}")
+        outs = [o["name"] for o in data.get("output") or [] if isinstance(o, dict) and o.get("name")] or ["main"]
+        try:
+            for w in MD.normalize(data.get("medium") or [], outs, palette, data.get("vector"), fps, frame0):
+                look = next((s for s in w["styles"].values() if s), {})
+                kind = next(iter(look), "none")
+                label = "sketch" if kind == "vector" and look[kind].get("sketch") else kind
+                effects.append({"kind": "medium", "label": label, "from": secs(w["from"]), "to": secs(w["to"])})
+        except MD.MediumError as e:
+            problems.append(f"medium shifts: {e}")
     try:
         for f0, f1 in FRZ.normalize(data.get("freeze"), fps, frame0):
             effects.append({"kind": "freeze", "label": "freeze", "from": secs(f0), "to": secs(f1)})

@@ -103,6 +103,24 @@ def test_each_shot_is_decided_on_its_own():
     assert p["shots"]["o"]["b"] == {"engine": "blender", "frames": 5, "why": "a silhouette look"}
 
 
+def test_the_frames_of_a_medium_window_with_a_look_go_to_blender_and_the_rest_of_the_shot_stays_mk_s():
+    doc, blob = bake([obj("body", ["skin"])], [shot("a", 1, styles(style="vector"))])
+    doc["medium"] = [{"index": 0, "from": 4, "to": 7, "styles": {"o": styles(style="vector", sketch=True)}},
+                     {"index": 1, "from": 8, "to": 10, "styles": {"o": {}}}]           # this output keeps the shot's
+    p = plan(doc, blob)
+    assert p["blender"]["o"] == [4, 5, 6] and [it["frame"] for it in p["items"]] == [1, 2, 3, 7, 8, 9, 10]
+    assert p["shots"]["o"]["medium 0"] == {"engine": "blender", "frames": 3, "why": "a [[medium]] window's look"}
+
+
+def test_a_cel_tone_asks_for_the_texture_pass_and_a_flat_one_does_not():
+    cel = SS.normalize({"style": "vector", "materials": [{"match": "skin", "tone": "cel"}],
+                        "tones": {"cel": {"texture": True, "shade": "subtle"}}}, DAWN, VECTOR)
+    for look, tex in ((cel, True), (styles(style="vector"), False)):
+        doc, blob = bake([obj("body", ["skin"])], [shot("a", 1, look)], materials={})
+        assert plan(doc, blob)["looks"][0]["tex"] is tex
+
+
+
 @pytest.mark.parametrize("shift, point, seen", [
     ((0.0, 0.0), (1.0, -5.0, 0.0), (0.7, 0.5)),   # 1 m right at 5 m, where half the frame is 2.5 m wide
     ((0.1, 0.0), (1.0, -5.0, 0.0), (0.6, 0.5)),   # the lens shifted right a tenth of the frame: further left

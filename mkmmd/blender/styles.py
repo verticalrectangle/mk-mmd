@@ -1,6 +1,7 @@
 """Render-time looks of a shot (docs/design.md: Shots): the flat `silhouette`, the flat `vector` and the window
 `reflection`, switched on and off per frame by `mk render` (ops_render) and `mk look` (ops_look) from the shot table that
-`mk build` keeps in scene["mk_shots"] (mkmmd.blender.build.shots; the normalised specs are mkmmd.core.shotstyle's).
+`mk build` keeps in scene["mk_shots"] (mkmmd.blender.build.shots; the normalised specs are mkmmd.core.shotstyle's), and
+the [[medium]] windows it keeps in scene["mk_medium"] (mkmmd.core.medium: a window's look wins over the shot's).
 
     looks = Looks(scene)
     for f in frames:
@@ -33,7 +34,8 @@ vector. A flat-vector drawing of the scene in the project's tones, composed with
 passes at SS.VECTOR_SCALE times the frame's size, boxed down:
   id     flat light, every material's viewport colour its id (`vector_table`), Raw, no antialiasing, a float EXR: exact;
          the compositor writes the Z pass to an EXR on the same render (the scene must have no compositor of its own)
-  tex    flat light, the textures: what a drawn tone (eyes, mouth) takes its colours from (only when a tone is drawn)
+  tex    flat light, the textures: what drawn tones (eyes, mouth) and cel tones take their colours from (only when one is
+         used)
   shade  the studio light, fixed in the world, with cast shadows from the look's `light`, on plain white (Raw)
   type   as for the silhouette, laid over the drawing.
 
@@ -49,6 +51,7 @@ import numpy as np
 from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
+from ..core import medium as MD
 from ..core import rings as RG
 from ..core import screentype as SR
 from ..core import shotstyle as SS
@@ -349,9 +352,13 @@ class Looks:
             self.rings = json.loads(self.sc.get("mk_rings", "{}"))
         except ValueError:
             self.rings = {}
+        try:
+            self.medium = json.loads(self.sc.get("mk_medium", "[]"))
+        except ValueError:
+            self.medium = []
         self.frame = None
         self.kind = None                  # "silhouette" | "vector" | "reflection" | None
-        self.key = None                   # (shot name, aspect, kind) of the look that is entered
+        self.key = None                   # (look name: a shot's or "medium <i>", aspect, kind) of the look that is entered
         self.spec = None
         self.rs = Restore()
         self.info = {}
@@ -363,14 +370,22 @@ class Looks:
 
     # ---------------------------------------------------------------- state machine
     def spec_at(self, frame, aspect=None, shot=None):
-        """(shot name, kind, spec) of the look at `frame` for an output aspect, or (name, None, None). `shot` names the
-        shot to look through instead of the one in the cut at `frame` (the plates of a transition or insert)."""
+        """(look name, kind, spec) of the look at `frame` for an output aspect, or (name, None, None): a [[medium]]
+        window's ("medium <i>") when one holds the frame and has a look for the aspect, else the shot's (its name).
+        `shot` names the shot to look through instead of the one in the cut at `frame` (the plates of a transition or
+        insert: a window draws them in its look too)."""
         if shot is None:
             entry = SS.shot_at(self.table, frame)
         else:
             entry = next((e for e in self.table if e["name"] == shot), None)
             if entry is None:
                 raise RuntimeError(f"no shot named {shot!r} in the scene's shot table (run mk build)")
+        w = MD.at(self.medium, frame)
+        if w is not None:
+            look = w["styles"].get(aspect) if aspect is not None else next(iter(w["styles"].values()), None)
+            if look:
+                kind = next(iter(look))
+                return f"medium {w['index']}", kind, look[kind]
         if entry is None:
             return None, None, None
         styles = entry.get("styles") or {}
@@ -747,7 +762,8 @@ class Looks:
         figure out (the frame round a transition's window)."""
         if self.kind == "vector":
             flip, edges_on = self._ring_masks(p["id"].shape)
-            img = SS.compose_vector(p, self.spec, self.vtable, subject=subject, flip=flip, edges_on=edges_on)
+            img = SS.compose_vector(p, self.spec, self.vtable, subject=subject, flip=flip, edges_on=edges_on,
+                                    t=self._clip_seconds())
             if "type" in p:
                 a = np.clip(p["type"][..., 3:4], 0.0, 1.0)
                 img = img * (1.0 - a) + p["type"][..., :3] * a
@@ -755,6 +771,14 @@ class Looks:
         return SS.compose_silhouette(p, self.spec, self.tint_values, hard=bool(self.cl["hard"]), subject=subject)
 
     # ---------------------------------------------------------------- vector
+    def _clip_seconds(self):
+        """The prepared frame as a clip second (the scene stage's `mk_frame0` and the scene's fps): what a sketch boils
+        on. None before a frame is prepared."""
+        if self.frame is None:
+            return None
+        r = self.sc.render
+        return (self.frame - float(self.sc.get("mk_frame0", self.sc.frame_start))) / (r.fps / r.fps_base)
+
     def _ring_masks(self, shape):
         """(flip, edges) of the rings live at the prepared frame, at the size of the vector passes (mkmmd.core.rings);
         (None, ()) when none is."""
@@ -798,7 +822,7 @@ class Looks:
             rs.attr(r, "resolution_y", r.resolution_y * s)
             self._visibility(rs, show=self.cl["subject"])
             out["id"], out["depth"] = self._vector_ids()
-            if any(t["kind"] == "drawn" for t in self.spec["tones"].values()):
+            if any(t["kind"] in SS.TEX_KINDS for t in self.spec["tones"].values()) and not self.spec.get("sketch"):
                 out["tex"] = self._vector_pass("tex")[..., :3]
             out["shade"] = self._vector_pass("shade")[..., 0]
         finally:

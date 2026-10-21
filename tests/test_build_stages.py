@@ -1593,3 +1593,83 @@ def test_a_look_pattern_counts_what_later_stages_make_and_a_typo_still_warns(mak
     assert code == 0, out.get("error")
     warned = [ln for ln in warnings(out) if "pattern" in ln]
     assert len(warned) == 1 and "'nothing_here*' matches no object" in warned[0], warned
+
+
+# ---------------------------------------------------------------- medium shifts and the cast on twos
+MEDIUM = """[pose.mq]
+feet = "floor"
+
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+
+[[medium]]
+from = 0.5
+to = 1.0
+style = "vector"
+colors = { background = "#FFD21F", line = "#1B2A6B" }
+tones = { dark = "#1B2A6B" }
+materials = [{ match = "*", tone = "dark" }]
+
+[medium.aspect.9x16]
+style = "none"
+"""
+
+
+def test_a_medium_window_draws_the_lit_shot_in_its_own_look_over_its_frames_and_leaves_the_output_it_is_told_to(make, capsys,
+                                                                                                               tmp_path):
+    """The shot is lit; over the window's frames (0.5 .. 1.0 s: 46 .. 60) the 16x9 output is drawn flat in the window's
+    colours, before and after it is lit again, and the 9x16 output, which the window leaves alone, stays lit."""
+    import numpy as np
+    from PIL import Image
+    code, out = make(MEDIUM)
+    assert code == 0, out.get("error")
+    assert out["stages"]["shots"]["_medium"] == [{"index": 0, "frames": [46, 60], "looks": {"16x9": "vector", "9x16": None}}]
+
+    def yellow(output, frames):
+        code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", frames, "--output", output, "--size",
+                          "200", "--out", str(tmp_path / output), "--project", str(make.root)], capsys)
+        assert code == 0, look.get("error")
+        return [float((np.abs(np.asarray(Image.open(p).convert("RGB"), int) - (255, 210, 31)).max(-1) < 30).mean())
+                for p in look["images"]]
+    wide = yellow("16x9", "45,46,60,61")
+    assert wide[0] == 0.0 and wide[1] > 0.5 and wide[2] > 0.5 and wide[3] == 0.0
+    assert yellow("9x16", "53") == [0.0]
+
+
+STEPPED = """
+[[stepped]]
+from = 0.4
+to = 1.0
+cast = "mq"
+fps = 6
+"""
+
+
+def test_on_twos_holds_her_whole_pose_between_steps_and_the_camera_still_moves_on_every_frame(make, capsys):
+    """At 6 poses a second at 30 fps a pose is drawn every 5th frame from 0.4 s (frame 43) and held until the next: her
+    root, hips and planted IK foot on every frame of the window are those of the plain walk at its last step, outside
+    the window they are the plain walk's own, and the camera that follows her is the plain build's on every frame."""
+    import numpy as np
+    expr = ('[list(obj("Mq").loc), list(bone("center").head), list(bone("leg_ik.R").head), list(bone("head").head), '
+            'list(obj("a@16x9").loc)]')
+    got = {}
+    for name, extra in (("plain", ""), ("stepped", STEPPED)):
+        code, out = make(WALK.format(extra="") + FOLLOWED + extra, until="stepped", cast="yaw = 90")
+        assert code == 0, out.get("error")
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "38:66", "--project", str(make.root)],
+                      capsys)
+        assert code == 0, q
+        got[name] = np.array([np.concatenate(v) for v in q["values"]])
+    assert out["stages"]["stepped"]["mq"]["windows"] == [[43, 60]] and out["stages"]["stepped"]["mq"]["poses"] == 4
+    frames = np.arange(38, 67)
+    held = np.where((frames >= 43) & (frames < 61), 43 + (frames - 43) // 5 * 5, frames)
+    body, cam = slice(0, 12), slice(12, 15)
+    assert np.allclose(got["stepped"][:, body], got["plain"][held - 38, body], atol=1e-5)
+    assert np.ptp(got["plain"][5:10, body], axis=0).max() > 0.01                      # she does move over a hold
+    assert np.allclose(got["stepped"][:, cam], got["plain"][:, cam], atol=1e-6)
+    assert np.all(np.abs(np.diff(got["stepped"][5:23, 12])) > 1e-4)                  # the camera, on every frame

@@ -163,11 +163,12 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
 | `[post]` | `mk post` | the grade: see [Rendering and post](#rendering-and-post) |
-| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope): see [Frame effects](#frame-effects) |
+| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh): see [Frame effects](#frame-effects) |
+| `[[medium]]` | `mk build` (shots), `mk render`, `mk look` | a window of clip seconds drawn in another look whatever shot is in the cut: see [Medium shifts](#medium-shifts) |
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
 | `[colliders]` | sim, checks | named lists of collision shapes: see [Colliders](#colliders) |
 | `[[check]]` | `mk check` | `name`, `metric`, `args`, `frames`, `min`, `max`: see [Checks](#checks) |
-| `[[set]]`, `[[prop]]`, `[[scatter]]`, `[[vehicle]]`, `[[cast]]`, `[pose.<cast>]`, `[[motion.<cast>]]`, `[perform.<cast>]`, `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[[light]]`, `[[text]]`, `[[key]]`, `[sim.<cast>]` | `mk build` | one build stage each: see [Building](#building) |
+| `[[set]]`, `[[prop]]`, `[[scatter]]`, `[[vehicle]]`, `[[cast]]`, `[pose.<cast>]`, `[[motion.<cast>]]`, `[perform.<cast>]`, `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[[light]]`, `[[text]]`, `[[key]]`, `[sim.<cast>]`, `[[stepped]]` | `mk build` | one build stage each: see [Building](#building) |
 
 ```toml
 [project]
@@ -610,15 +611,16 @@ member or the camera cannot be used by a stage that runs before them):
 | pose | `[pose.<cast>]`, `[[move.<cast>]]`, `[[prop]] wear / attach / anchor_to` | the base pose: sit on a seat or stand, feet, spine, head, arm IK, finger presets, grips, drape, worn props; named moves on the clock | [Posing](#posing), [Moves](#moves), [Grips](#grips), [Playing a worn guitar](#playing-a-worn-guitar) |
 | motion | `[[motion.<cast>]]` | VMD motions on NLA strips | [Motion](#motion) |
 | perform | `[perform.<cast>]` | gaze, blinks, breathing, sway, nods, beat bob, startles, expressions, lip sync, twitches, strumming | [Perform](#perform) |
-| shots | `[[shot]]`, `[[transition]]`, `[[insert]]` | the cut: a camera per shot and output, markers, render-time looks, cut effects | [Shots](#shots) |
+| shots | `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[vector]`, `[[ring]]`, `[[freeze]]`, `[[medium]]` | the cut: a camera per shot and output, markers, render-time looks, cut effects, medium windows | [Shots](#shots) |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure | [Lights and the look](#lights-and-the-look) |
 | text | `[[text]]` | type on set and prop surfaces, lyric type, handwriting, screen type | [Text](#text) |
 | keys | `[[key]]` | keys on set, prop and object properties | [Keys](#keys) |
 | sim | `[sim.<cast>]` | secondary motion solved outside Blender and baked to keys | [Sim](#sim) |
 | folds | `[folds.<cast>]` | the fold shapes a joint angle drives (rig.json `folds`), keyed from the final pose | [Folds](#folds) |
 | cloth | `[cloth.<cast>]` | garments' cloth copies (rig.json `cloth`) simulated with Blender's cloth, the garment's faces following it | [Cloth](#cloth) |
+| stepped | `[[stepped]]` | the cast on twos: each member's whole motion held 1 / fps s at a time over a window, the cameras on every frame | [Stepped motion](#stepped-motion) |
 | save | | the `.blend` | |
-| bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras, the meshes, what the glb cannot carry as Blender evaluates it on each frame, and what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
+| bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras, the meshes, what the glb cannot carry as Blender evaluates it on each frame, what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) and the [[medium]] windows (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
 
 The text stage runs after `lights` and before `keys`, so a `[[key]]` can toggle a text's `hide_render` or move it. A stage
 that has nothing to read for a cast member (no `[pose.rin]`, no `[perform.rin]`) leaves it alone, and a `[pose.x]`, `[perform.x]` or `[sim.x]` named after no cast member is ignored
@@ -1183,13 +1185,14 @@ natural:
   A place with something in the fist (a mic, a hammer) aims it instead: its hand continues the forearm as far as a fist round
   a handle pointing that way allows (the mic at the mouth: the forearm rises to a fist under the lips).
 - **The skin.** The build measures the distance to every face of the member's meshes in the rest pose that belongs to neither
-  arm: its body and clothes, but not the loose chains its `[sim.<cast>]` table simulates (hair, ears, a tail, a skirt, ribbons:
-  those make way for a hand, colliding with its fingers and palm, so long hair at her sides or a wide skirt's flare does not
-  push a hanging hand out from the body and up onto the skirt). The hand (a box the size of the model's hand and of its
-  finger shape) comes in from outside and stops where it first comes within its margin: an arm held out swings in round the
-  shoulder (so it stays in reach; a hanging hand rises off a wide skirt that does not move), a hand by the body comes in
-  straight. `chest_pat` and `ears` end on the surface (3 mm), every other place stays where it was written unless that is
-  closer than 12 mm to the body or inside it. Coming from outside, a hand never ends inside clothes or hair that does not move.
+  arm: its body and clothes, but not the hair, ear, tail and ribbon chains its `[sim.<cast>]` table simulates (those make way
+  for a hand, colliding with its fingers and palm, so long hair at her sides does not push a hanging hand out from the body).
+  A skirt is clothes, simulated or not: a hand stays outside it, since one inside would shove it up. The hand (a box the size
+  of the model's hand and of its finger shape) comes in from outside and stops where it first comes within its margin: an
+  arm held out swings in round the shoulder (so it stays in reach; a hanging hand ends against a wide skirt), a hand by the
+  body comes in straight. `chest_pat` and `ears` end on the surface (3 mm), every other place stays where it was written
+  unless that is closer than 12 mm to the body or inside it. Coming from outside, a hand never ends inside clothes or hair
+  that does not move.
 
 Faces of the same morph closer than 0.12 s are held through. The pose report has `moves` per member (`moves`, `hand_keys` per
 side, `expressions`, `twitches`, and `places`: per side and place, `moved_mm`, how far the approach kept the hand out, and
@@ -1553,11 +1556,13 @@ too, except those of the simulated bones (they move with the hair), and a chain 
 | `lateral` | 0..1, the tie stiffness of neighbouring chains (default 0.5 for `skirt` and for chains the rig ties, 0 elsewhere): chains whose rig.json `ties` join them (the joints between their bodies: a row under a sleeve as well as a ring) are tied to those neighbours; a skirt's other chains are tied to their neighbours in a ring found from their roots' rest positions (a slit breaks the ring); the cloth between them is kept out of seats and thighs; 0 = independent chains |
 | `lateral_collide` | 0 or 1: push the cloth between tied chains out of the shapes (default 1) |
 | `anchor_free` | metres: the family's own zone near the roots (default the stage's; 0 for a tied sheet, which then also collides with the body it hangs from) |
-| `inertia` | 0..1, the share of its anchor's motion the strand feels (default 1, all of it): each substep first carries the strand along by the rest, as a game engine's inertia scale does. For moves faster than cloth could follow: a 145 degree spin in four frames flares a skirt over her waist at 1, half as far at 0.5; 0 carries the strand rigidly and only gravity, the air and contacts move it |
-| `bend_max` | degrees: the most a segment turns from its rest shape on its parent, a joint's limit (default none). A skirt pinched between a resting hand (`place = "dainty"` rests one on it) and a thigh drapes around the hand instead of folding over on itself; 30 suits a skirt |
+| `inertia` | 0..1, the share of its anchor's motion the strand feels (default 1, all of it; a `skirt` 0.5): each substep first carries the strand along by the rest, as a game engine's inertia scale does. For moves faster than cloth could follow: a 145 degree spin in four frames flares a skirt over her waist at 1, half as far at 0.5; 0 carries the strand rigidly and only gravity, the air and contacts move it |
+| `bend_max` | degrees: the most a segment turns from its rest shape on its parent, a joint's limit (default none; a `skirt` 30). A skirt pinched between a resting hand (`place = "dainty"` rests one on it) and a thigh drapes around the hand instead of folding over on itself |
 
 Defaults per family (`sag` root / tip in degrees, `radius_max` in millimetres). `ears`, `bangs`, `side_hair` and `back_hair` are
-calibrated on a seated close-up; the other rows are plausible starting points to tune:
+calibrated on a seated close-up and `skirt` on a dancer's spins, falls and landings (Hello Brooklyn): stiff, almost no air, its
+motion damped hard toward hers, with `inertia` 0.5 and `bend_max` 30 too, so a skirt goes with her instead of flying up or
+crumpling round her waist; the other rows are plausible starting points to tune:
 
 | Family | sag | drag | zeta | radius | radius_max | friction |
 |---|---|---|---|---|---|---|
@@ -1569,7 +1574,7 @@ calibrated on a seated close-up; the other rows are plausible starting points to
 | `braid` | 15 / 60 | 8 | 0.9 | 0.5 | 22 | 25 |
 | `hair` | 15 / 70 | 6 | 0.8 | 0.5 | 20 | 20 |
 | `tail` | 10 / 45 | 4 | 0.6 | 0.5 | 40 | 15 |
-| `skirt` | 4 / 14 | 4 | 0.9 | 0.5 | 30 | 12 |
+| `skirt` | 1.5 / 5 | 0.2 | 3 | 0.5 | 30 | 12 |
 | `ribbon` | 20 / 80 | 3.5 | 0.5 | 0.5 | 10 | 10 |
 | `breasts` | 1 / 2 | 8 | 1 | 0.5 | 50 | 10 |
 | `sleeve` | 6 / 25 | 5 | 0.8 | 0.5 | 30 | 15 |
@@ -1709,6 +1714,35 @@ armature carries it),
 `verts`, `faces`, `collide_faces`, `settings`, `key`, `pc2` and `follows` (the mesh that follows the cloth and its vertex
 count). That mesh is too big for the bake to hold frame by frame in all but short clips: the site's scene viewer then
 goes without it and `mk render --engine mk` draws those shots in Blender (the bake report's `not_by_frame` says so).
+
+### Stepped motion
+
+`[[stepped]]` puts cast members on twos for a window of clip seconds, the way hand-drawn animation is shot: a new pose `fps`
+times a second, each held until the next, while the cameras keep every frame (a figure on 12 against a camera on 60 is the
+look of an animated film's character on its background). The stepped stage runs after everything that keys the cast (pose,
+motion, perform, keys, sim, folds), so the hair steps with her; `mkmmd/core/stepped.py` (bpy-free) has the timing and
+`mkmmd/blender/build/stepped.py` the keys.
+
+| Key | Meaning |
+|---|---|
+| `from`, `to` | clip seconds (required): the window, `from` .. `to` - 1 in frames, inside the clip |
+| `cast` | a member's name or a list of them (default: every member). A member is in one window at a time |
+| `fps` | poses a second (default 12: on twos at 24), at most the clip's. A pose is drawn on frame `from + round(k x clip fps / fps)` |
+
+Every animated datablock under the member's root (the root, the armature and its bones, the hands' goals, the morphs'
+placeholder, the meshes' shape keys) holds its value at each step from half a frame before it to half a frame before the next,
+keyed CONSTANT so no frame's shutter spans a step (motion blur leaves a stepped figure sharp), and takes up its own curve
+again half a frame before the window ends; keys outside the window keep their values, interpolation and handles. A VMD on an
+NLA strip ([Motion](#motion)) is held through the strip's own clock (Animated Strip Time, keyed to play as it did). A
+garment's cloth copy that Blender simulates does not step, and a curve with modifiers is left alone and counted. The report
+has per member `windows` (Blender frames), `poses` and `curves`.
+
+```toml
+[[stepped]]           # the cartoon flash on the snare: she moves on twos, the camera glides
+from = 20.39
+to = 21.15
+cast = "reisen"
+```
 
 ## Placement
 
@@ -2225,21 +2259,23 @@ composed inside the render call from passes that work (`compose_silhouette`, num
 - Silhouettes are always 8-bit.
 
 Vector. `style = "vector"`: a flat-vector drawing of the scene. Every material is filled with a tone of the project's `[vector]`
-table: one colour, two (lit and in shadow under one hard light), or a few picked by the texture's brightness, so what a model draws
-on itself (irises, lash lines, a mouth) carries over into the palette. Lines run round the figures, where two parts meet
-and where one part passes in front of another. The shot itself gives `style`, and may give `colors` and `tones` (laid over the
-project's, key by key: a shot inside an inverted palette swaps a few) and `hide` / `keep`; the silhouette's other keys are an error
-in a vector shot.
+table: one colour, two (lit and in shadow under one hard light), a few picked by the texture's brightness, so what a model draws
+on itself (irises, lash lines, a mouth) carries over into the palette, or the model's own texture colours in two tones (cel).
+Lines run round the figures, where two parts meet and where one part passes in front of another. The shot itself gives `style`,
+and may give `colors`, `tones` and `lines` (laid over the project's, key by key: a shot inside an inverted palette swaps a few),
+`materials` (its own rules, checked before the project's: `[{match = "*", tone = "cel"}]` draws everything cel), `sketch`
+(below) and `hide` / `keep`; the silhouette's other keys are an error in a vector shot, and the vector style's own keys
+(`tones`, `materials`, `lines`, `sketch`) in a shot of another look (an aspect's `style = "none"` drops them with the look).
 
 | `[vector]` key | Meaning |
 |---|---|
 | `colors` | `{background, line, inner}`: the background, the outline round the figures and the inner lines (palette slot, `#hex`, `"a:b:t"` or `[r, g, b]`; defaults `base`, `text`, and `inner` the line's colour) |
-| `tones` | `{name = tone}`. A tone is a colour (flat), `{lit, shade}` (the second where the look's light does not reach: the far side and cast shadows; no `shade` is flat) or `{colors = [n colours], at = [n - 1 brightness steps], grey}`: drawn, each texel takes the colour of its brightness band (sRGB luma), and the last colour only texels greyer than `grey` (saturation, default 1: all), so a bright tinted iris stays in the band below the white highlights. Default `{fill = {lit = "text", shade = "subtle"}}` |
+| `tones` | `{name = tone}`. A tone is a colour (flat), `{lit, shade}` (the second where the look's light does not reach: the far side and cast shadows; no `shade` is flat), `{colors = [n colours], at = [n - 1 brightness steps], grey}`: drawn, each texel takes the colour of its brightness band (sRGB luma), and the last colour only texels greyer than `grey` (saturation, default 1: all), so a bright tinted iris stays in the band below the white highlights; or `{texture = true, shade}`: cel, the texture's own colour (a material without an image: its viewport colour) and that colour multiplied by `shade` where the light does not reach (no `shade`: the texture under flat light). Default `{fill = {lit = "text", shade = "subtle"}}` |
 | `materials` | `[{match, tone, group}]`, in order: a material takes the first rule whose `match` (material name patterns, fnmatch, Blender's `.001` suffix ignored) fits it, else the tone `fill` (or the first tone). Lines are drawn where two `group`s meet; a material without one is its own group, so skin and the shirt get a line between them, and a face and its eyes that share a group do not. `mk q BLEND --list materials` names a scene's materials with the name a rule matches; the build logs a WARNING for a rule that names no material in the finished scene |
 | `lines` | `{outline, inner}`: line widths in px at 1080 on the frame's short side (default 5 and 2) |
 | `shadow` | the share of the light's full strength below which a two-tone surface takes its `shade` colour (default 0.3); cast shadows always do |
 | `light` | `[x, y, z]` toward the light that casts the shadows, in the world (default `[0.45, -0.35, 0.82]`: above, in front, from the figure's left) |
-| `opposite` | `{colors, tones}`: the palette inside a [ring](#rings), laid over the look's own (`colors` key by key, `inner` kept unless given; `tones` by name). A tone keeps its kind; a drawn tone gives only its `colors`, as many, and keeps the look's bands |
+| `opposite` | `{colors, tones}`: the palette inside a [ring](#rings), laid over the look's own (`colors` key by key, `inner` kept unless given; `tones` by name). A tone keeps its kind; a drawn tone gives only its `colors`, as many, and keeps the look's bands; a cel tone keeps its `shade` or its lack of one |
 
 ```toml
 [vector]
@@ -2267,13 +2303,21 @@ colors = { background = "#1B2A6B", line = "#FFD21F" }   # the inverted palette f
 tones = { dark = "#FFD21F" }
 ```
 
+A shot's (or a [medium window](#medium-shifts)'s) `sketch = true | {paper, ink, boil, fps, strokes, grain, hatch, seed}` draws
+the vector look as line art instead of fills: paper everywhere and the outline and inner lines in ink, drawn `strokes` times by a
+hand that wobbles up to `boil` px (at 1080; it bends once every 48 px) and draws the picture again `fps` times a second of the clip,
+so the lines boil; with two strokes or more each pass is a little lighter than ink (a pencil), its pressure drifting along the
+line and broken by the paper's `grain` (0..1). `hatch` (px at 1080 between strokes, 0: none) shades what the look's light does not
+reach with diagonal strokes, crossed by the second pass. Defaults: paper `text`, ink `base`, boil 1.2, fps 12, strokes 2, grain
+0.35, hatch 0, seed 1. Rings do not flip a sketch (it needs no `opposite`), and it reads no texture.
+
 The frame is composed with numpy (`compose_vector`) from Workbench passes rendered at twice the frame's size and boxed down, which
 antialiases the fills and the lines:
 
 - `id`: flat light, every material's viewport colour set to its number (Raw, no antialiasing, a float EXR: exact; a material under
   half opaque is left out, as the other passes leave it out). The compositor writes the Z pass of the same render, so the scene must
   have no compositor tree of its own.
-- `tex`: flat light and the textures (only when a tone is drawn).
+- `tex`: flat light and the textures (only when a drawn or cel tone is used, and not for a sketch).
 - `shade`: the studio light, fixed in the world, with shadows cast from `light`, on plain white. A two-tone surface is in shadow under
   `shadow` times the light on a white surface facing it (0.40 in Raw); the shadow is opened and closed by one pass pixel, so no
   sliver or pinhole is left.
@@ -2360,6 +2404,52 @@ give the keys inside the window to what should be there when it ends. Windows ma
 [[freeze]]                      # the biggest 808: the twins stop mid-move and the camera of the shot orbits them
 from = 7.576
 to = 8.30
+```
+
+### Medium shifts
+
+`[[medium]]` draws the whole picture in another look for a window of clip seconds, whatever shot is in the cut: for a beat or
+two on a hit the picture snaps into another medium and back, reality flickering between universes (her own colours as cel, a
+flat cartoon, a boiling sketch). A window is a shot's look over a span of time: `from`, `to` (clip seconds, required; frames
+`from` .. `to` - 1, inside the clip) and the look keys of a [[shot]] (`style` silhouette or vector, required, `colors`,
+`tones`, `materials`, `lines`, `sketch`, `hide`, `keep`, a silhouette's `accent`, `tint`, `knockout`, `grow`, `samples`;
+[Looks](#looks-silhouette-vector-and-reflection)), with `[medium.aspect.<output>]` tables laid over it as over a shot's
+(`style = "none"` leaves an output to its shots). No reflection: a window is a flat look. The cameras, the cut and the cut
+effects go on as they are; `mk render` and `mk look` draw the window's look on the cut's frames and on the plates of the
+transitions inside it alike, and mk's own renderer leaves its frames to Blender. Windows may not overlap; the shots stage
+keeps them in `scene["mk_medium"]` (`mkmmd.core.medium`), checks their object patterns and material rules on the finished
+scene like a shot's, and reports them (`_medium`: each window's frames and look per output); a ring live over a vector window
+needs its `opposite` palette there too.
+
+The comic print, the broken signal and the datamosh are post work, `[[fx]]` kinds `halftone`, `split` and `mosh`
+([Frame effects](#frame-effects)), and the figure on twos is a [[stepped]] window ([Stepped motion](#stepped-motion)): a
+medium shift is usually a window of each over the same span.
+
+```toml
+[[medium]]                      # the snare: a flat cartoon, red sky, white ground, bold ink
+from = 26.46
+to = 26.94
+style = "vector"
+colors = { background = "love", line = "base", inner = "base" }
+tones = { paper = "text", ink = "base" }
+materials = [{ match = ["*_floor"], tone = "paper" }, { match = ["*_piece"], tone = "ink" }]
+lines = { outline = 7, inner = 3 }
+
+[[medium]]                      # the stop: her own colours as cel, thick ink
+from = 23.43
+to = 24.19
+style = "vector"
+materials = [{ match = "*", tone = "cel" }]
+tones = { cel = { texture = true, shade = "#5F5A86" } }
+lines = { outline = 7, inner = 3 }
+
+[[medium]]                      # the next stop: a pencil drawing that boils on twos
+from = 29.51
+to = 30.27
+style = "vector"
+hide = ["*_floor"]
+lines = { outline = 3.2, inner = 1.6 }
+sketch = { paper = "text", ink = "base", strokes = 2, grain = 0.35, hatch = 7 }
 ```
 
 ### Transitions and inserts
@@ -2562,9 +2652,9 @@ They read the rendered frames as they are, without their effects: an echo of a f
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab` or `tint` (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh` (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
-| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's mix. A push has none |
+| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's and a mosh's mix, how far a split tears. A push has none |
 | `center` | lens and push (required), zoom and shock (default the middle): `[x, y]` fractions of the frame (0, 0 the top left), or `{point = "<expression>"}`, a point of the scene ([Expressions](#expressions)) that `mk render` projects through the camera of the shot in the cut on every frame of the span (`point/x<i>/<frame>.json`) |
 | `radius`, `radius_m` | lens and push: the lens's Einstein radius, or the push's disc at the start; `radius` a share of the frame height (default 0.1 for a lens, 0.02 for a push), `radius_m` metres at the depth of a scene point (a hole of a known size, a pupil), one of the two |
 | `shadow` | lens: the share of the Einstein radius painted black about the centre (default 0: the scene draws its own). The lens bends the whole picture, what passes in front of its centre too (a figure there wraps into a ring, as if it were behind): key `strength` down while something passes in front that should stay whole |
@@ -2579,6 +2669,9 @@ They read the rendered frames as they are, without their effects: an echo of a f
 | `speed`, `width`, `amount`, `life`, `color`, `glow` | shock: a ring runs out from `center` on every hit at `speed` frame heights a second (1.6), its front `width` (0.035 frame heights) wide pushing the picture out ahead of it and pulling it in behind by up to `amount` (0.012 frame heights), lit in `color` (`text`) at `glow` (0.6); it fades as (1 - t / `life`)² and is gone after `life` (0.55 s) |
 | `at`, `size`, `slant`, `angle`, `color`, `alpha`, `dir`, `in`, `out`, `shutter` | slab: a bar of `color` (`love`) at `alpha` (1) resting with its centre at `at` (frame fractions), `size` `[w, h]` frame heights (`[1.2, 0.18]`), its sides leaning `slant` degrees (18: to the right going up, as italics) and the whole turned `angle` degrees counter-clockwise (-8). It travels `dir` (`right`, `left`, `up`, `down`): in from the other side over `in` s (0.1, slamming: an ease-out) from fully off the frame, rests, and leaves the way it travels over the last `out` s (0.12, flung: an ease-in), drawn at 8 places over `shutter` frames (1) of its motion so it streaks. Persona's panels; stack a few, a thin one behind a thick one |
 | `color`, `dark`, `light` | tint: the picture through a gradient by its brightness, `dark` (black) at black, `color` (`#46E07A`, the Dark Hour's green) at mid grey, `light` (white) at white, mixed in by `strength`: key it up over a stop and back down |
+| `cell`, `angle`, `level`, `ink`, `lift`, `offset` | halftone: comic print. Where the luma is under `level` (0.5) the picture is lifted toward white by `lift` (0.35) x its darkness and screened with round dots of `ink` (black) on a grid `cell` px at 1080 apart (9) turned `angle` degrees (45), a dot's area growing with the darkness until the dots merge into solid ink at black; the lights stay clean. Then the red plate is printed `offset` `[x, y]` px at 1080 off (`[3, 2]`) and the blue as far the other way: a press out of register |
+| `bands`, `shift`, `share`, `rgb`, `hold`, `seed` | split: a broken digital signal. The frame is cut into `bands` (14) bands of random heights, `share` (0.35) of them torn sideways by up to `shift` (0.08 of the frame width; what leaves one side comes in at the other), the red and blue planes pulled `rgb` px at 1080 apart (10) in a torn band and a third of that everywhere else. A tear holds `hold` seconds (0.05), then the signal breaks another way; the same `seed` (1) breaks the same frames the same way |
+| `block` | mosh: a datamosh. The cut's frame before the span is held and carried along the cut's own motion from each frame to the next since the span's first frame (Farneback optical flow on the frames at a quarter size, averaged over `block` px at 1080 squares, 16, so it moves in chunks as a codec's motion vectors do), and mixed over the real frame by `strength`. Started on a cut it is the classic one: the outgoing picture smeared by the incoming shot's motion, as when the key frame of a cut is lost. Frames asked out of order are worked out again from the span's start |
 
 ```toml
 [[fx]]                        # the hole bends the stars behind it, its mass pumping with the kicks
@@ -2625,12 +2718,25 @@ kind = "tint"
 from = 17.3
 to = 18.0
 strength = [[17.3, 0.0], [17.36, 1.0], [17.8, 1.0], [18.0, 0.0]]
+
+[[fx]]                        # the finger gun as a comic panel: Ben-Day dots, the plates off register
+kind = "halftone"
+from = 35.58
+to = 36.34
+cell = 13
+level = 0.5
+offset = [4, 3]
+
+[[fx]]                        # the drop after the stop: the old picture dragged by the new shot's motion
+kind = "mosh"
+from = 18.21
+to = 18.97
 ```
 
-`mk render` draws the point layers of a scene centre with the other layers; `mk post` reads the frames an echo, a slitscan or a
-push needs from the cut it rendered, and `mk look`, which draws only the frames asked for, renders those beside them as plates
-of the shot in the cut there (`TR.fx_frames`). The plan, `mk build`'s shots report (`_cut_effects.fx`) and `mk post`'s report
-(`effects.fx`) list them.
+`mk render` draws the point layers of a scene centre with the other layers; `mk post` reads the frames an echo, a slitscan, a
+push or a mosh needs from the cut it rendered, and `mk look`, which draws only the frames asked for, renders those beside them
+as plates of the shot in the cut there (`TR.fx_frames`). The plan, `mk build`'s shots report (`_cut_effects.fx`) and `mk post`'s
+report (`effects.fx`) list them.
 
 ## Text
 
@@ -3112,15 +3218,18 @@ bakes it, `mk build --bake` again after the .blend was saved by hand), and worke
 antialiasing (a material under half opaque only hides what is behind it; of two surfaces at one depth the one drawn first
 stays) and the depth of the same draw; the studio light of the scene's shading on white, times Workbench's shadow factor,
 and nothing inside the stencil shadow volumes the look's `light` casts, extruded from every mesh's outline; the texture
-colour where a tone is drawn; Workbench's 16 jittered samples, spread with its Blackman-Harris filter and summed in log2,
-on the light and texture passes.
+colour where a tone is drawn or cel (a material without an image: its viewport colour, as Workbench draws it); Workbench's
+16 jittered samples, spread with its Blackman-Harris filter and summed in log2, on the light and texture passes. A sketch
+boils on the clip second of each frame, as Blender's does.
 
 A shot it cannot draw renders in Blender, whole, with the scene's own engine: another look (silhouette, reflection, lit by
 the scene), type over the picture (the text stage's in-scene type), an object the bake cannot hold (a curves or point-cloud
-object, particles, a collection instance, a volume, a mesh too big to bake frame by frame), a drawn tone whose texture the
-bake lacks, a ring whose centre failed. Blender also draws every frame's layers beside mk's (screen type, the cut effects'
-plates and mattes), all outputs at once. The report adds per output `engines` (frames per engine), `shots` (each shot's
-engine and, for Blender's, why) and `screen_layers`, and `mk` (`frames`, `seconds`, `gpu_seconds`, `renderer`). A page that
+object, particles, a collection instance, a volume, a mesh too big to bake frame by frame), a drawn or cel tone whose texture
+the bake lacks, a ring whose centre failed; and so does every frame of a [[medium]] window with a look of its own for the
+output (the bake carries the windows; a bake from before them, version 2, is refused: `mk build --bake`). Blender also draws
+every frame's layers beside mk's (screen type, the cut effects' plates and mattes), all outputs at once. The report adds per
+output `engines` (frames per engine), `shots` (each shot's, or `medium <i>`'s, engine and, for Blender's, why) and
+`screen_layers`, and `mk` (`frames`, `seconds`, `gpu_seconds`, `renderer`). A page that
 sends no frame for a minute (five while it loads the bake) has stopped: the render fails naming the frame.
 
 What still differs from Blender's frames: an MMD model's custom normals ride its bones where Blender recomputes them on the
@@ -3656,7 +3765,7 @@ clip seconds: the clip's audio (the [audio] file cut from `start` for `duration`
 without ffmpeg the whole file plays from `start`) played through Web Audio over its waveform, then lanes for the beats
 (bars numbered at the downbeats), each list of the project's `[audio] hits` and each stem of the timeline's `onsets`,
 the words by `(line, word)` (the page never gets their text), the shots of the cut, and the effects packed into rows
-(transitions, inserts, glitches, frame effects, freezes, rings, and texts while they are up). Space plays, a click or a drag moves the
+(transitions, inserts, glitches, frame effects, medium shifts, freezes, rings, and texts while they are up). Space plays, a click or a drag moves the
 playhead (a click on a hit, word, shot or effect jumps to its start and names it, a shot with its frames), a drag along
 the ruler loops that span, Ctrl+wheel or a pinch zooms, a sideways wheel pans, a double-click fits; ← and → step a beat,
 l loops, f fits, Home goes back. The clock reads clip seconds, the Blender frame and bar.beat. What the project gets

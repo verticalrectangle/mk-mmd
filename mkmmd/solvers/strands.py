@@ -126,7 +126,7 @@ try:                                                 # pip install mk-mmd[fast]
 except Exception:                                    # not installed, or not built for this numpy
     HAVE_NUMBA = False
 
-VERSION = 3                                          # bump when results change (cache keys)
+VERSION = 4                                          # bump when results change (cache keys)
 GRAVITY = np.array([0.0, 0.0, -9.81])
 SMOOTH = 0.01                                        # soft-union width (m): creases between shapes fill this much
 ITERS = 4                                            # constraint + collision iterations per substep
@@ -157,8 +157,10 @@ FAMILY_DEFAULTS = {
     "braid":      dict(sag=(15.0, 60.0), drag=8.0, zeta=0.9, radius=0.5, radius_max=0.022, friction=25.0),
     "hair":       dict(sag=(15.0, 70.0), drag=6.0, zeta=0.8, radius=0.5, radius_max=0.020, friction=20.0),
     "tail":       dict(sag=(10.0, 45.0), drag=4.0, zeta=0.6, radius=0.5, radius_max=0.040, friction=15.0),
-    "skirt":      dict(sag=(4.0, 14.0), drag=4.0, zeta=0.9, radius=0.5, radius_max=0.030, friction=12.0,
-                       lateral=0.5),
+    # a skirt: stiff, almost no air, its motion damped hard toward hers and its folds held to 30 degrees, so it goes with
+    # her through walks, spins, falls and landings instead of flying up or crumpling round her waist (Rin's spins)
+    "skirt":      dict(sag=(1.5, 5.0), drag=0.2, zeta=3.0, radius=0.5, radius_max=0.030, friction=12.0,
+                       lateral=0.5, inertia=0.5, bend_max=30.0),
     "ribbon":     dict(sag=(20.0, 80.0), drag=3.5, zeta=0.5, radius=0.5, radius_max=0.010, friction=10.0),
     "breasts":    dict(sag=(1.0, 2.0), drag=8.0, zeta=1.0, radius=0.5, radius_max=0.050, friction=10.0),
     "sleeve":     dict(sag=(6.0, 25.0), drag=5.0, zeta=0.8, radius=0.5, radius_max=0.030, friction=15.0),

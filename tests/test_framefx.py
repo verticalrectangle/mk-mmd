@@ -54,6 +54,11 @@ def runner(pl, frames=None, points=None):
     ({"kind": "shock", "from": 0, "to": 1, "times": [0.5], "min_db": -6}, "pick from a lane"),
     ({"kind": "slab", "from": 0, "to": 0.2, "in": 0.15, "out": 0.15}, "longer than the slab is on"),
     ({"kind": "slab", "from": 0, "to": 1, "dir": "sideways"}, "the way it travels"),
+    ({"kind": "halftone", "from": 0, "to": 1, "cell": 1}, "cell = 1: expected at least 2"),
+    ({"kind": "halftone", "from": 0, "to": 1, "offset": 3}, "expected [x, y]"),
+    ({"kind": "split", "from": 0, "to": 1, "bands": 2.5}, "a whole number"),
+    ({"kind": "split", "from": 0, "to": 1, "hold": 0}, "hold = 0"),
+    ({"kind": "mosh", "from": 0, "to": 1, "block": 0.5}, "block = 0.5"),
 ])
 def test_bad_fx_say_what_is_wrong(spec, frag):
     with pytest.raises(TR.TransitionError, match=frag.replace("[", r"\[").replace("]", r"\]")):
@@ -204,3 +209,46 @@ def test_a_tint_maps_dark_to_dark_mid_grey_to_its_colour_and_light_to_light_by_i
     assert full[0, 0] == pytest.approx([0, 0, 0]) and full[0, 30] == pytest.approx([0.2, 0.9, 0.4], abs=1e-3)
     assert full[0, 50] == pytest.approx([1, 1, 1], abs=1e-5)
     assert np.array_equal(runner(pl).frame(F0 + 30, img), img)             # strength 0: untouched
+
+
+def test_a_halftone_screens_the_shadows_in_dots_that_grow_with_darkness_and_prints_its_plates_off_register():
+    img = np.ones((H, W, 3), np.float32)
+    img[:, :16], img[:, 16:32], img[:, 32:48] = 0.05, 0.25, 0.45      # near black, dark, just under the level; light
+    out = FF.halftone(img, 6.0, 45.0, 0.5, [0.0, 0.0, 0.0], 0.4, (0.0, 0.0))
+    ink = [float((out[:, a:b].mean(-1) < 0.15).mean()) for a, b in ((0, 16), (16, 32), (32, 48))]
+    assert ink[0] > ink[1] > ink[2] > 0.0 and np.array_equal(out[:, 48:], img[:, 48:])   # the lights stay clean
+    ground = 0.25 + 0.75 * 0.4 * 0.5                                       # lifted toward paper by lift x darkness
+    assert out[4:30, 18:30].min() < 0.05 and out[4:30, 18:30].max() == pytest.approx(ground, abs=1e-5)   # dots on it
+    off = FF.halftone(img, 6.0, 45.0, 0.5, [0.0, 0.0, 0.0], 0.4, (3.0, 0.0))
+    assert np.allclose(off[:, 10:58, 0], out[:, 7:55, 0], atol=1e-5) and np.allclose(off[..., 1], out[..., 1])
+    assert np.allclose(off[:, 10:58, 2], out[:, 13:61, 2], atol=1e-5)          # red 3 px one way, blue the other
+
+
+def test_a_split_tears_bands_sideways_holds_each_tear_and_breaks_again_after_its_hold():
+    pl = plan([{"kind": "split", "from": 1.0, "to": 2.0, "bands": 8, "shift": 0.3, "share": 1.0, "rgb": 0.0,
+                "hold": 0.1, "seed": 3}])
+    img = ramp()
+    a, b, c = runner(pl).frame(F0 + 30, img), runner(pl).frame(F0 + 31, img), runner(pl).frame(F0 + 33, img)
+    assert np.array_equal(a, b) and not np.array_equal(a, c)               # one tear for 0.1 s, then another
+    torn = [r for r in range(H) if not np.array_equal(a[r], img[r])]
+    assert torn and all(any(np.array_equal(a[r], np.roll(img[r], dx, 0)) for dx in range(1, W)) for r in torn)
+    planes = FF.split(img, np.random.default_rng(0), 1, 0.0, 0.0, 6.0)     # no tear: the planes 2 px apart everywhere
+    assert np.array_equal(planes[..., 0], np.roll(img[..., 0], 2, 1))
+    assert np.array_equal(planes[..., 2], np.roll(img[..., 2], -2, 1))
+
+
+def test_a_mosh_carries_the_frame_before_the_cut_along_the_new_shots_motion_from_any_frame_asked():
+    import cv2
+    w, h = 320, 180
+    tex = cv2.GaussianBlur(np.random.default_rng(1).random((h, w)).astype(np.float32), (0, 0), 3)
+    tex = np.repeat(((tex - tex.min()) / (tex.max() - tex.min()))[..., None], 3, 2)
+    before = np.zeros((h, w, 3), np.float32)
+    before[60:120, 130:190] = 1.0                                          # shot a's last frame: a white block
+    frames = {F0 + 59: before, **{F0 + 60 + k: np.roll(tex, 4 * k, 1) for k in range(8)}}   # shot b pans right
+    pl = plan([{"kind": "mosh", "from": 2.0, "to": 2.5, "block": 8}])
+    fx = FF.FrameFx(pl["fx"], (w, h), fps=FPS, frame0=F0, frame_of=frames.get, point_of=None)
+    left = [int(np.argmax(fx.frame(f, frames[f])[90, :, 0] > 0.5)) for f in range(F0 + 60, F0 + 66)]
+    assert left == [130 + 4 * k for k in range(6)]                         # held at the cut, then moved with shot b
+    late = FF.FrameFx(pl["fx"], (w, h), fps=FPS, frame0=F0, frame_of=frames.get, point_of=None)
+    assert np.allclose(late.frame(F0 + 65, frames[F0 + 65]), fx.frame(F0 + 65, frames[F0 + 65]), atol=1e-4)
+    assert FX.sources(pl["fx"][0], F0 + 63, F0) == list(range(F0 + 59, F0 + 64))

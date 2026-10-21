@@ -15,13 +15,17 @@ they are applied in the order of the table. The picture work is mkmmd/framefx.py
     shock     on each hit a ring runs out from a point, bending the picture as a pressure wave would, its front lit
     slab      a slanted bar of colour slams in from one side, rests, and slides on out the far side: Persona's panels
     tint      the picture mapped through a gradient by its brightness (dark, colour, light): the Dark Hour's green
+    halftone  comic print: the shadows screened with Ben-Day dots, the colour plates printed out of register
+    split     a broken digital signal: bands of the frame torn sideways, the red and blue planes pulled apart
+    mosh      a datamosh: the frame before the span carried along the cut's own motion in blocks, smeared over the new
+              shot as a codec does when the key frame of a cut is lost
 """
 import numpy as np
 
 from . import lanes as LN
 from . import shotstyle as SS
 
-KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint")
+KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split", "mosh")
 BLENDS = ("lighten", "darken")
 EDGES = ("left", "right", "top", "bottom")
 EASES = ("log", "smooth", "linear")
@@ -36,7 +40,10 @@ KEYS = {"lens": _COMMON | {"center", "radius", "radius_m", "shadow"},
         "zoom": _COMMON | _HITS | {"center", "amount", "attack", "decay"},
         "shock": _COMMON | _HITS | {"center", "speed", "width", "amount", "life", "color", "glow"},
         "slab": _COMMON | {"at", "size", "slant", "angle", "color", "alpha", "dir", "in", "out", "shutter"},
-        "tint": _COMMON | {"color", "dark", "light"}}
+        "tint": _COMMON | {"color", "dark", "light"},
+        "halftone": _COMMON | {"cell", "angle", "level", "ink", "lift", "offset"},
+        "split": _COMMON | {"bands", "shift", "share", "rgb", "hold", "seed"},
+        "mosh": _COMMON | {"block"}}
 DEFAULTS = {"lens": {"radius": 0.1, "shadow": 0.0},
             "echo": {"count": 4, "every": 3, "fade": 0.55, "blend": "lighten", "tint": None},
             "slitscan": {"depth": 24, "now": "right"},
@@ -48,7 +55,10 @@ DEFAULTS = {"lens": {"radius": 0.1, "shadow": 0.0},
                       "color": "text", "glow": 0.6, "min_db": None, "every": 1},
             "slab": {"at": [0.5, 0.5], "size": [1.2, 0.18], "slant": 18.0, "angle": -8.0, "color": "love", "alpha": 1.0,
                      "dir": "right", "in": 0.1, "out": 0.12, "shutter": 1.0},
-            "tint": {"color": "#46E07A", "dark": "#000000", "light": "#FFFFFF"}}
+            "tint": {"color": "#46E07A", "dark": "#000000", "light": "#FFFFFF"},
+            "halftone": {"cell": 9.0, "angle": 45.0, "level": 0.5, "ink": "#000000", "lift": 0.35, "offset": [3.0, 2.0]},
+            "split": {"bands": 14, "shift": 0.08, "share": 0.35, "rgb": 10.0, "hold": 0.05, "seed": 1},
+            "mosh": {"block": 16.0}}
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
 
 
@@ -195,6 +205,22 @@ def normalize(spec, palette, what="fx"):
     elif kind == "tint":
         for k in ("color", "dark", "light"):
             out[k] = _colour(out[k], palette, f"{what} {k}")
+    elif kind == "halftone":
+        out["cell"] = _num(out["cell"], f"{what} cell", lo=2.0)
+        out["angle"] = _num(out["angle"], f"{what} angle")
+        out["level"] = _num(out["level"], f"{what} level", 0.01, 1.0)
+        out["lift"] = _num(out["lift"], f"{what} lift", 0.0, 1.0)
+        out["offset"] = _pair(out["offset"], f"{what} offset")
+        out["ink"] = _colour(out["ink"], palette, f"{what} ink")
+    elif kind == "split":
+        out["bands"] = _num(out["bands"], f"{what} bands", 1, 400, integer=True)
+        out["shift"] = _num(out["shift"], f"{what} shift", 0.0, 1.0)
+        out["share"] = _num(out["share"], f"{what} share", 0.0, 1.0)
+        out["rgb"] = _num(out["rgb"], f"{what} rgb", lo=0.0)
+        out["hold"] = _num(out["hold"], f"{what} hold", lo=1e-3)
+        out["seed"] = _num(out["seed"], f"{what} seed", lo=0, integer=True)
+    elif kind == "mosh":
+        out["block"] = _num(out["block"], f"{what} block", lo=1.0)
     return out
 
 
@@ -305,7 +331,8 @@ def strength(fx, t):
 
 def sources(fx, frame, frame0):
     """The other frames of the cut that the effect reads at `frame` (Blender frames, the clip's own only): an echo's
-    copies, a slitscan's ages, a push's inside frame."""
+    copies, a slitscan's ages, a push's inside frame, a mosh's frame before its span and every frame since (the motion
+    it carries the held picture along, worked out again from its start when the frames come out of order)."""
     k = fx["kind"]
     if k == "echo":
         out = [frame - j * fx["every"] for j in range(1, fx["count"] + 1)]
@@ -313,6 +340,8 @@ def sources(fx, frame, frame0):
         out = [frame - j for j in range(1, fx["depth"] + 1)]
     elif k == "push":
         out = [fx["inside_frame"] + (frame - fx["f0"] if fx["play"] else 0)]
+    elif k == "mosh":
+        out = list(range(fx["f0"] - 1, frame + 1))
     else:
         out = []
     return [f for f in out if f >= frame0]

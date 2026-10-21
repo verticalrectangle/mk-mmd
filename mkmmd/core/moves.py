@@ -17,7 +17,7 @@ Every place is made natural before it is keyed (`resolve`):
   (the mic at the mouth leans back to the lips from a fist under them, so the forearm rises to it); two hands that meet
   in one shape (SHAPED, the two-hand heart) keep the orientation written for them, sized to the arm so it suits any body;
 - the skin: given the build's distance to what a hand must stay off (`clear`: the member's own body and clothes, less the
-  hair and skirts the sim moves), the hand comes in from
+  hair the sim moves), the hand comes in from
   outside and stops where it first comes within its margin: an arm held out (OUT) swings in round the shoulder, so it
   stays in reach (a hanging hand rises off a wide skirt), a hand by the body comes in straight (TOUCH, else straight out
   from the body's axis); a touching place (a pat on the chest, hands over the ears) ends on the surface, any other one
