@@ -762,9 +762,10 @@ def test_numba_engine_reproduces_the_numpy_engine_with_lateral_links(monkeypatch
     hips = (np.stack([0.03 * np.sin(8 * t), 0 * t, 0 * t], 1), swing)
     sc = ring_scene(ring_rig(n=6, nb=4, shared=True), F, shapes, poses={"hips": hips})
     wind = strands.Wind({"direction": [1, 0.4, 0], "speed": 3.0, "gust": 1.5, "turbulence": 1.0, "seed": 2})
-    a = run(sc, wind=wind, engine="numpy")
-    b = run(sc, wind=wind, engine="numba", threads=1)
-    c = run(sc, wind=wind, engine="numba", threads=4)
+    loose = {"skirt": {"inertia": 1.0, "bend_max": None}}                     # the links alone, not the skirt's cone
+    a = run(sc, loose, wind=wind, engine="numpy")
+    b = run(sc, loose, wind=wind, engine="numba", threads=1)
+    c = run(sc, loose, wind=wind, engine="numba", threads=4)
     assert a.links.shape[0] == 6 * 4 and np.array_equal(a.links, b.links)
     assert np.array_equal(b.x, c.x) and np.array_equal(b.pen, c.pen)
     assert np.abs(a.x - b.x).max() < 1e-7 and np.abs(a.D - b.D).max() < 1e-6 and np.abs(a.pen - b.pen).max() < 1e-7
@@ -854,12 +855,46 @@ def test_numba_engine_reproduces_the_numpy_engine_with_inertia_and_a_bend_limit(
     monkeypatch.setattr(strands, "BLOCK_BYTES", block_bytes)
     F = 16
     spinning = ring_scene(ring_rig(n=8, nb=3), F, poses={"hips": (np.zeros((F, 3)), spin(F))})
-    for sc, family in ((spinning, "skirt"), (flip_scene(F, chains=3), "hair")):
-        params = {family: {"inertia": 0.5, "bend_max": 20.0}}
+    for sc, family, params in ((spinning, "skirt", {"inertia": 0.8, "bend_max": 15.0}),     # the skirt's own: 0.5, 30
+                               (flip_scene(F, chains=3), "hair", {"inertia": 0.5, "bend_max": 20.0})):
+        params = {family: params}
         a = run(sc, params, engine="numpy")
         b = run(sc, params, engine="numba", threads=2)
         assert np.abs(a.x - b.x).max() < 1e-9 and np.abs(a.D - b.D).max() < 1e-8
         assert np.abs(a.x - run(sc, engine="numpy").x).max() > 1e-2             # the settings changed the motion
+
+
+# ---------------------------------------------------------------- a lock pinched near its root
+def long_lock_rig(n=27):
+    """One long lock of back hair: 16 mm segments at the root growing to 45 mm, 0.9 m in all, hanging from `anchor0`."""
+    L = np.clip(0.016 + 0.003 * np.arange(n), 0.016, 0.045)
+    z = TOP - np.concatenate([[0.0], np.cumsum(L)])
+    names = [f"b{i}" for i in range(n)]
+    bones = {"anchor0": {"head": [0.0, 0.0, TOP]}, **{nm: {"head": [0.0, 0.0, float(z[i])]} for i, nm in enumerate(names)}}
+    return {"bones": bones, "bodies": [], "chains": [{
+        "family": "back_hair", "root": names[0], "anchor": "anchor0", "bones": names, "parents": list(range(-1, n - 1)),
+        "ends": [[0.0, 0.0, float(z[i + 1])] for i in range(n)], "body_radius": [0.024] * n}]}
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_a_lock_pinched_against_her_back_by_a_sweeping_arm_is_pushed_not_flung(engine):
+    """An arm (a capsule across her, 6 cm under the lock's root) sweeps in at under 1 m/s and presses the lock against
+    her back. The pinch flaps the frames of the lock's top segments, and the rest-shape targets below them, which the
+    damping and the speed cap measure against, swung at tens of m/s and flung the lock at 45 m/s (at five substeps a
+    frame the state went non-finite); held to TARGET_SPEED against the anchor, no part of it moves at 25 m/s."""
+    F, fps = 30, 60.0
+    shapes = geom.Shapes()
+    shapes.add("capsule", ("world", "", ""), "back", a=[0.0, 0.06, TOP - 1.0], b=[0.0, 0.06, TOP + 0.05], R=0.05)
+    arm = shapes.src("object", "", "arm")
+    shapes.add("capsule", ("object", "", "arm"), "arm", a=[-0.3, 0.0, TOP - 0.06], b=[0.3, 0.0, TOP - 0.06], R=0.04)
+    t = np.arange(F) / fps
+    sweep = np.stack([0 * t, -0.15 + 0.12 * (1 - np.cos(2 * np.pi * t / 0.4)), 0 * t], 1)
+    sc = scene(long_lock_rig(), F, shapes, poses={arm: (sweep, np.tile([1.0, 0.0, 0.0, 0.0], (F, 1)))})
+    res = strands.simulate(sc["chains"], sc["shapes"], sc["src_pos"], sc["src_quat"], sc["rest_R"], sc["rest_p"],
+                           sc["anchor_src"], {"back_hair": {"zeta": 1.0, "inertia": 0.75}}, (10, 10 + F - 1), sc["rig"],
+                           fps=fps, substeps=10, settle_s=0.3, engine=engine)
+    assert res.pen[:, 2].max() > 0                                           # the arm does press into the lock
+    assert np.linalg.norm(np.diff(res.x, axis=0), axis=2).max() * fps < 25.0
 
 
 # ---------------------------------------------------------------- gravity over time

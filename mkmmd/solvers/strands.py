@@ -21,6 +21,11 @@ Model (position-based strands)
              settles) -> an exact length projection (follow the leader: root to tip, each particle to its rest distance
              from its parent) -> velocities, damped relative to the rest shape (zeta), capped, and by friction while
              touching. The first frame is settled under gravity.
+  targets    the rest-shape targets the damping and the speed cap measure against ride their parents' current frames.
+             A strand pinched near its root (a dancer's arm sweeping it against her back) has those frames flap, and the
+             targets below would swing at tens of m/s and fling the strand with them: a target's velocity is held within
+             TARGET_SPEED of the velocity it would have riding rigidly with the chain's anchor (rarely reached otherwise:
+             a long lock swinging hard moves its targets at a few m/s against the head).
   inextensible  every substep ends with exact segment lengths, so the particles ARE the forward kinematics of the keyed
              bones (which keep their rest length) and the penetration reported is the penetration that renders. Under
              strong forcing (wind, a fast carrier) sweeps alone leave 3-20 % stretch, and rendered bones then end far
@@ -126,7 +131,7 @@ try:                                                 # pip install mk-mmd[fast]
 except Exception:                                    # not installed, or not built for this numpy
     HAVE_NUMBA = False
 
-VERSION = 4                                          # bump when results change (cache keys)
+VERSION = 5                                          # bump when results change (cache keys)
 GRAVITY = np.array([0.0, 0.0, -9.81])
 SMOOTH = 0.01                                        # soft-union width (m): creases between shapes fill this much
 ITERS = 4                                            # constraint + collision iterations per substep
@@ -134,6 +139,7 @@ SWEEPS = 4                                           # length-relaxation sweeps 
 FTL_DAMP = 1.0                                       # share of a length correction handed to the parent as velocity
 PUSH_SPEED = 0.25                                    # most velocity (m/s) a collision push may give a particle
 MAX_SPEED = 2.5                                      # most speed (m/s) a particle may have relative to its rest shape
+TARGET_SPEED = 6.0                                   # most speed (m/s) a rest-shape target may have against its anchor
 PUSH_CAP = 0.03                                      # largest single collision push (m)
 LEVER_CAP = 1.5                                      # push multiplier for points nearer the root than the tip, at most
 CONTACT_EPS = 1e-7                                   # a push longer than this (m) counts as touching
@@ -701,9 +707,8 @@ class _NumpyEngine:
         self.D, self.x = M.initial_state()
         self.v = np.zeros((M.N, 3))
         self.tgt, self.tgt_prev = self.x.copy(), self.x.copy()
-        if M.carries:                                   # where the anchors were on the last substep: the first frame
-            b = M.block([0], [0.0], [0.0])
-            self.prev = (b.H0[0], b.Da[0])
+        b = M.block([0], [0.0], [0.0])                  # where the anchors were on the last substep: the first frame
+        self.prev = (b.H0[0], b.Da[0])
 
     def shape_pass(self, p, H0, Da, pull, bend=False):
         """Root to tip: each segment's rest-shape target (its rest direction carried by the parent's current frame),
@@ -732,12 +737,11 @@ class _NumpyEngine:
                     p[J] = new
             D[I] = Dp @ geom.min_rot(M.d0[I], np.einsum("kji,kj->ki", Dp, u))
 
-    def carry(self, H0, Da):
-        """Carry the strands along by the share M.carry of their anchors' move since the last substep: positions and
-        rest-shape targets turn about each chain's root and shift with it, velocities turn. They feel only the rest."""
+    def carry(self, H0, Da, H0p, Dap):
+        """Carry the strands along by the share M.carry of their anchors' move since the last substep (from H0p, Dap):
+        positions and rest-shape targets turn about each chain's root and shift with it, velocities turn. They feel only
+        the rest."""
         M = self.M
-        H0p, Dap = self.prev
-        self.prev = (H0, Da)
         B = np.where(M.carry > 0)[0]
         rows = M.row[B]
         Rf = _turn_share(Da @ np.transpose(Dap, (0, 2, 1)), M.carry_root)[rows]
@@ -855,8 +859,11 @@ class _NumpyEngine:
     def substep(self, blk, r, decay):
         M, dt = self.M, self.M.dt
         H0, Da, W = blk.H0[r], blk.Da[r], _world_row(blk.W, r)
+        H0p, Dap = self.prev
+        self.prev = (H0, Da)
+        before = self.tgt_prev.copy()                   # the targets where they were, before any carry
         if M.carries:
-            self.carry(H0, Da)
+            self.carry(H0, Da, H0p, Dap)
         if blk.wind is not None:
             u = blk.wmean[r] + blk.wind.fluctuation(self.x, blk.wdisp[r], blk.wt[r])
             v = self.v * decay[:, None] + u * M.wgain[:, None]
@@ -891,6 +898,10 @@ class _NumpyEngine:
         m = np.linalg.norm(vp, axis=1)                  # prop can push hair along at up to PUSH_SPEED, a squeeze
         vn -= vp * (1.0 - np.minimum(1.0, PUSH_SPEED / np.maximum(m, 1e-12)))[:, None]   # cannot fling it
         vt = (self.tgt - self.tgt_prev) / dt
+        turn = (Da @ np.transpose(Dap, (0, 2, 1)))[M.row]   # the targets riding rigidly with their anchors
+        rigid = (H0[M.row] + np.einsum("nij,nj->ni", turn, before - H0p[M.row]) - self.tgt_prev) / dt
+        d = vt - rigid
+        vt = rigid + d * np.minimum(1.0, TARGET_SPEED / np.maximum(np.linalg.norm(d, axis=1), 1e-12))[:, None]
         vn = vt + (vn - vt) * M.sdecay[:, None]
         rel = np.linalg.norm(vn - vt, axis=1)           # safety net for impossible configurations: never faster than
         cap = MAX_SPEED if blk.wind is None else MAX_SPEED + np.linalg.norm(u - blk.wcar[r], axis=1)
@@ -1412,11 +1423,16 @@ if HAVE_NUMBA:
 
     @_jit
     def _nb_post(n, j0, r, x, v, pl, ubl, pushedl, contl, corrl, H0r, Dar, Dg, tg, Lg, dg, ag, tgt_prev, sdec, stick, dt,
-                 ftl, use_wind, wcar, bend, bcg):
+                 ftl, use_wind, wcar, bend, bcg, H0q, Daq, bfl):
         """One chain: exact lengths, the bone frames (within bend_max of the rest shape when bend) and the new
-        velocities; the particles become the state."""
+        velocities; the particles become the state. H0q / Daq: the chain's anchor on the substep before, bfl its
+        targets then (before any carry), for TARGET_SPEED."""
         _nb_project(n, H0r, pl, Lg, corrl)
         _nb_shape_pass(n, H0r, Dar, pl, Dg, tg, Lg, dg, ag, False, bend, bcg)
+        T = np.empty((3, 3))                            # the anchor's turn over this substep
+        for a in range(3):
+            for b in range(3):
+                T[a, b] = Dar[a, 0] * Daq[b, 0] + Dar[a, 1] * Daq[b, 1] + Dar[a, 2] * Daq[b, 2]
         for jj in range(n):                             # velocities
             j = j0 + jj
             vnx, vny, vnz = (pl[jj, 0] - x[j, 0]) / dt, (pl[jj, 1] - x[j, 1]) / dt, (pl[jj, 2] - x[j, 2]) / dt
@@ -1428,6 +1444,13 @@ if HAVE_NUMBA:
             vnx, vny, vnz = vnx - vpx * fp, vny - vpy * fp, vnz - vpz * fp
             vtx, vty, vtz = (tg[jj, 0] - tgt_prev[j, 0]) / dt, (tg[jj, 1] - tgt_prev[j, 1]) / dt, \
                 (tg[jj, 2] - tgt_prev[j, 2]) / dt
+            ox, oy, oz = bfl[jj, 0] - H0q[0], bfl[jj, 1] - H0q[1], bfl[jj, 2] - H0q[2]   # riding rigidly instead
+            rx = (H0r[0] + T[0, 0] * ox + T[0, 1] * oy + T[0, 2] * oz - tgt_prev[j, 0]) / dt
+            ry = (H0r[1] + T[1, 0] * ox + T[1, 1] * oy + T[1, 2] * oz - tgt_prev[j, 1]) / dt
+            rz = (H0r[2] + T[2, 0] * ox + T[2, 1] * oy + T[2, 2] * oz - tgt_prev[j, 2]) / dt
+            ex, ey, ez = vtx - rx, vty - ry, vtz - rz
+            st = min(1.0, TARGET_SPEED / max(np.sqrt(ex * ex + ey * ey + ez * ez), 1e-12))
+            vtx, vty, vtz = rx + ex * st, ry + ey * st, rz + ez * st
             vnx, vny, vnz = (vtx + (vnx - vtx) * sdec[j], vty + (vny - vty) * sdec[j], vtz + (vnz - vtz) * sdec[j])
             rel = np.sqrt((vnx - vtx) ** 2 + (vny - vty) ** 2 + (vnz - vtz) ** 2)
             cap = MAX_SPEED
@@ -1471,6 +1494,7 @@ if HAVE_NUMBA:
             np.zeros((N, 3))
         hit, cont = np.zeros(N, np.bool_), np.zeros(N, np.bool_)
         lpush, lhit = np.zeros((nl, 3)), np.zeros(nl, np.bool_)
+        before = np.empty((N, 3))                               # the targets before this substep's carry
         tpush = SMOOTH * np.log(K + 1.0) + 1e-6                 # nearer than this (m) to a shape, a push is possible
         cut = tpush + REACH
         if rec_start >= 0:
@@ -1486,6 +1510,9 @@ if HAVE_NUMBA:
             for ci in range(cids.shape[0]):
                 c = cids[ci]
                 j0, j1 = cptr[c], cptr[c + 1]
+                for jj in range(j0, j1):
+                    for i in range(3):
+                        before[jj, i] = tgt_prev[jj, i]
                 if carries and carry[c] > 0.0:
                     if step == 0:
                         _nb_carry(j0, j1, carry[c], H0p[c], Dap[c], H0[r, c], Da[r, c], x, v, tgt_prev)
@@ -1515,9 +1542,13 @@ if HAVE_NUMBA:
             for ci in range(cids.shape[0]):
                 c = cids[ci]
                 j0, j1 = cptr[c], cptr[c + 1]
+                if step == 0:                                   # the anchor on the substep before this one
+                    hq, dq = H0p[c], Dap[c]
+                else:
+                    hq, dq = H0[r - rstride, c], Da[r - rstride, c]
                 _nb_post(j1 - j0, j0, r, x, v, p[j0:j1], ub[j0:j1], pushed[j0:j1], cont[j0:j1], corr[j0:j1], H0[r, c],
                          Da[r, c], Dst[j0:j1], tgt[j0:j1], Lc[j0:j1], d0[j0:j1], alpha[j0:j1], tgt_prev, sdec, stick, dt,
-                         ftl, use_wind, wcar, bend, bcos[j0:j1])
+                         ftl, use_wind, wcar, bend, bcos[j0:j1], hq, dq, before[j0:j1])
             if rec_every > 0 and (step + 1) % rec_every == 0:
                 f = rec_f0 + (step + 1) // rec_every - 1
                 for ci in range(cids.shape[0]):
@@ -1527,7 +1558,7 @@ if HAVE_NUMBA:
                                sk, floor_z, has_floor, samp, cand, Sb, Nb, xs, Ds, dep, who)
                 _nb_record_links(f, r, H0, chain_of, is_root, x, la, lb, lrr, len_, sc[r], sb[r], sm[r], bsc[r], bsr[r],
                                  skind, sk, floor_z, has_floor, samp, cand, Sb, Nb, dep, who)
-        if carries and nsteps > 0:                              # the next call carries from where the anchors are now
+        if nsteps > 0:                                          # the next call starts from where the anchors are now
             rl = (nsteps - 1) * rstride
             for ci in range(cids.shape[0]):
                 c = cids[ci]

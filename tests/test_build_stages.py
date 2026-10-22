@@ -804,6 +804,23 @@ def test_a_strip_that_extends_forward_holds_its_last_pose_after_it_and_nothing_b
     assert np.linalg.norm(np.array(q["values"][0]) - rest) < 2e-3            # the later entry wins
 
 
+def test_a_camera_riding_her_head_bone_stays_where_it_is_on_her_head_as_the_head_turns(make, capsys):
+    """`at = {cast, bone, point}` is a point given where it is at rest, carried by that bone's move: a close-up in front
+    of her face keeps its place on her head while a motion turns the head 40 deg (without the bone the camera stays in
+    the member's frame and the head turns away from it)."""
+    vmd = make.root / "head.vmd"
+    _vmd(vmd, {"頭": [(0, (0.0, 0.0, 0.0, 1.0)), (30, (0.0, 0.342, 0.0, 0.9397))]})
+    body = (f'[[motion.mq]]\nvmd = "{vmd}"\nbones = ["head"]\n\n[[shot]]\nname = "eye"\nfrom = 0.0\nto = 2.0\n'
+            'at = { cast = "mq", bone = "head", point = [0.0, -0.35, 1.45] }\nlook = "cast:mq.head"\nlens = 50\n')
+    code, out = make(body, until="shots")
+    assert code == 0, out.get("error")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "[list(cam().loc), list(bone('head').matrix.inverted() @ "
+                   "cam().loc)]", "--frames", "31,61", "--project", str(make.root)], capsys)
+    (world0, on_head0), (world1, on_head1) = q["values"]
+    assert np.linalg.norm(np.subtract(world1, world0)) > 0.1                     # the head turned and took it along
+    assert np.linalg.norm(np.subtract(on_head1, on_head0)) < 1e-3
+
+
 MIC_LEAN = """[pose.mq]
 feet = "floor"
 

@@ -57,7 +57,15 @@ def point(ctx, ref, frame=None):
         m = ctx.cast.get(ref["cast"])
         if m is None:
             raise BuildError(f"target {ref!r}: no cast member {ref['cast']!r}")
-        return m.root.matrix_world @ Vector(ref.get("point", (0, 0, 0)))
+        p = m.root.matrix_world @ Vector(ref.get("point", (0, 0, 0)))
+        if not ref.get("bone"):
+            return p
+        try:
+            pb = m.arm.pose.bones[S.resolve_bone(m.arm, ref["bone"])]
+        except KeyError as e:
+            raise BuildError(f"target {ref!r}: {e.args[0]}") from None
+        A = m.arm.matrix_world                           # where the point is at rest, carried by the bone's move since
+        return A @ (pb.matrix @ pb.bone.matrix_local.inverted() @ (A.inverted() @ p))   # its rest pose
     if isinstance(ref, dict) and "path" in ref:
         return path_point(ctx, ref)
     if isinstance(ref, str):

@@ -636,6 +636,7 @@ a target that rides a moving prop or a posed bone moves with it.
 | `[x, y, z]` | a world point |
 | `{prop = "car", point = [..]}` | a point in a prop's local frame (follows the prop) |
 | `{cast = "rin", point = [..]}` | a point in a cast member's own frame: its model root, at `[[cast]] at` and turned by `yaw`; x its left, y behind it, z up. A pose, a gaze or a camera written this way keeps working when the character is moved to another place in the world (a hand's `dir` and `palm` stay world directions) |
+| `{cast = "rin", bone = "head", point = [..]}` | the same point given where it is at rest, riding that bone (semantic, Blender or PMX name): carried by the bone's move from its rest pose, so a close-up camera in front of her eye stays in front of it however she dances |
 | `{path = "road:road", s = 640, offset = -6.0, z = 1.2}` | a point beside a set's path: arc length `s` (m), `offset` (m left of the centre line, or a lane name such as `"fwd1"`), `z` above the road |
 | `"car:road"` | a prop use point by name (the first match in the order look, rest, grip, sit, anchor, surface, pose); a use point that rides an object follows it |
 | `"cast:rin"`, `"cast:rin.head"` | another character's eyes, or one of their bones (a semantic name) |
@@ -1625,8 +1626,12 @@ subtree becomes a chain anchored on the bone it grows from. Trunks and plain cha
 are solved riding the keyed trunks, level by level (one `passes` entry each). Every simulated bone gets LINEAR rotation keys on
 every frame of the build, the pre-roll included, so the hair settles while the character eases into its pose; the first frame is
 settled under gravity for `settle_s` first. Strands are inextensible (exact segment lengths every substep), so the baked bones
-render the solved particles and the penetration reported is the penetration that renders. Results are cached in
-`<project>/.mk/cache/strands/` by a hash of the inputs and of the solver's source, one entry per member and level.
+render the solved particles and the penetration reported is the penetration that renders. A body pushes a strand along
+without launching it, and a lock pinched near its root (a dancer's arm sweeping it against her back) is pushed, not flung:
+the rest-shape targets the damping measures against are held within 6 m/s of riding rigidly with the anchor
+(`TARGET_SPEED`), as the pinched segments' frames flap and the targets below would otherwise swing at tens of m/s and whip
+the lock out. Results are cached in `<project>/.mk/cache/strands/` by a hash of the inputs and of the solver's source, one
+entry per member and level.
 
 ```toml
 [sim.rin]
