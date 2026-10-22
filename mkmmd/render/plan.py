@@ -16,7 +16,7 @@ from ..core import medium as MD
 from ..core import rings as RG
 from ..core import shotstyle as SS
 
-BAKE_VERSION = 3            # the bake that holds what the vector look needs (3: the [[medium]] windows)
+BAKE_VERSION = 4            # the bake that holds what the vector look needs (4: the cameras' clip range on every frame)
 
 
 class BakeError(ValueError):
@@ -42,7 +42,8 @@ def render_size(size, percent):
 
 def camera_matrices(blob, cam, k, size):
     """(view, projection) of a bake camera on bake frame `k` for a picture `size` (row-major 4x4, float64): the view takes
-    glTF's world to Blender's camera axes, the projection is Blender's lens on the fitted sensor with its shift."""
+    glTF's world to Blender's camera axes, the projection is Blender's lens on the fitted sensor with its shift, clipped
+    where the camera's clip range is on that frame."""
     o = cam["offset"] + 15 * k
     c = np.asarray(blob[o:o + 15], np.float64)
     C = np.eye(4)
@@ -52,7 +53,7 @@ def camera_matrices(blob, cam, k, size):
     fit = cam.get("fit", "AUTO")
     S = H if fit == "VERTICAL" else W if fit == "HORIZONTAL" else max(W, H)
     f = c[12] / (cam.get("sensor_height") or cam["sensor"] if fit == "VERTICAL" else cam["sensor"])
-    near, far = cam.get("clip", (0.1, 100.0))
+    near, far = (float(x) for x in blob[cam["clip_at"] + 2 * k:cam["clip_at"] + 2 * k + 2])
     P = np.array([[2 * S * f / W, 0, 2 * S * c[13] / W, 0], [0, 2 * S * f / H, 2 * S * c[14] / H, 0],
                   [0, 0, -(far + near) / (far - near), -2 * far * near / (far - near)], [0, 0, -1, 0]])
     return U @ np.linalg.inv(C), P

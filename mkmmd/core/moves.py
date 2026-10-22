@@ -94,6 +94,8 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
     "bonk_up": ((0.35, -0.1, 1.0), 0.7),
     "bonk": ((0.12, -1.0, -0.75), 0.95),
     "gun": ((-0.12, -1.0, 0.18), 0.98),
+    "float_low": ((0.62, -0.3, -0.72), 0.92),
+    "float": ((0.86, -0.32, 0.12), 0.9),
 }
 AIM = {  # a fist round a handle (a mic, a hammer): where the handle points, for the left hand, x mirrored for the right. A
     # fist holds a handle across its palm, so a straight wrist keeps it square to the forearm: the aims lean from upright
@@ -164,6 +166,8 @@ def place(name, side, marks):
         "hair_out": (eye + _v(s * 0.20, 0.16, -0.05), _v(s * 0.35, 0.7, 0.45), _v(0, 0.6, 0.8), "flat"),  # tossed back
         "hip": (chest + marks["reach"] * _v(s * 0.40, 0.08, -0.17), _v(-s * 0.15, -0.75, -0.65), _v(-s, 0, 0), "flat"),
         "gun": (out("gun"), _v(-s * 0.12, -1, 0.12), _v(-s, 0, 0), "gun"),
+        "float_low": (out("float_low"), _v(s * 0.5, -0.3, -0.8), _v(-s, 0.3, 0), "relaxed"),   # weightless: drifting
+        "float": (out("float"), _v(s, -0.3, -0.12), _v(0, 0.3, -1), "relaxed"),               # out, then up and open
     }
     if name not in P:
         raise MoveError(f"no hand place {name!r} (have {', '.join(sorted(P))})")
@@ -346,6 +350,7 @@ MOVES = {
     "finger_gun": {"hand": "places", "places": (("gun", 0.0),), "lean": 6.0, "head_tilt": 8.0, "mirror": True,
                    "wink": True, "face": [("mouth_smile", 0.6)]},
     "free": {"hand": "free"},
+    "float": {"hand": "places", "places": (("float_low", 0.0), ("float", 0.75))},
     "face": {},
 }
 BODY = ("lean", "tilt", "turn", "head_tilt", "head_turn")       # perform keys a move holds, degrees

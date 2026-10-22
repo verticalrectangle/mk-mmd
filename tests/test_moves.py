@@ -16,7 +16,7 @@ MARKS = {"arm.L": [0.093, -0.02, 1.25], "arm.R": [-0.093, -0.02, 1.25], "chest":
 BEATS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 PLACES = ("rest", "dainty", "mic", "mic_lens", "mic_up", "mic_across", "chest", "bounce", "point", "heart", "peace",
           "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny", "bonk_up", "bonk", "hair", "hair_out",
-          "hip", "gun")
+          "hip", "gun", "float_low", "float")
 
 
 def near(p):

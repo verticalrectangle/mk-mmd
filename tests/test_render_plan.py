@@ -32,15 +32,16 @@ def shot(name, start, look):
 
 def bake(objects, shots, materials=None, blocks=(), rings=None, errors=None, shift=(0.0, 0.0), point=None):
     """A bake of FRAMES frames from frame 1 at 10 fps: one camera, Blender's identity (it looks down -Z, glTF's -Y),
-    a 36 mm lens on its 36 mm sensor, its lens `shift`; a ring's point at glTF `point` on every frame."""
+    a 36 mm lens on its 36 mm sensor, its lens `shift`, clipped from 0.1 to 100 m; a ring's point at glTF `point` on
+    every frame."""
     cam = np.array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 36.0, *shift], np.float32)
-    blob, points = [np.tile(cam, FRAMES)], {}
+    blob, points = [np.tile(cam, FRAMES), np.tile(np.float32([0.1, 100.0]), FRAMES)], {}
     if point is not None:
-        points["0"] = 15 * FRAMES
+        points["0"] = 17 * FRAMES
         blob.append(np.tile(np.asarray(point, np.float32), FRAMES))
     doc = {"version": PL.BAKE_VERSION, "fps": 10, "frame0": 1, "frames": FRAMES, "shots": shots, "objects": objects,
-           "cameras": [{"name": "cam", "sensor": 36.0, "sensor_height": 24.0, "fit": "AUTO", "clip": [0.1, 100.0],
-                        "offset": 0}],
+           "cameras": [{"name": "cam", "sensor": 36.0, "sensor_height": 24.0, "fit": "AUTO", "offset": 0,
+                        "clip_at": 15 * FRAMES}],
            "blocks": list(blocks), "materials": materials if materials is not None else {"eye_l": {"texture": "glb"}},
            "rings": {"table": rings, "points": points, "errors": errors or {}}}
     return doc, np.concatenate(blob)

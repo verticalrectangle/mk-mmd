@@ -564,8 +564,8 @@ export class PassGL extends SceneGL {
     this.size(W, H);
     const cam = this.cams.get(job.camera);
     if (!cam) throw new Error(`the bake has no camera ${job.camera}`);
-    const o = cam.offset + 15 * job.k, b = this.blob;
-    const V = cameraView(b, o), [near, far] = cam.clip || [0.1, 100];
+    const o = cam.offset + 15 * job.k, b = this.blob, c = cam.clip_at + 2 * job.k;
+    const V = cameraView(b, o), near = b[c], far = b[c + 1];             // the clip range of that frame (the clip stage)
     const P = cameraProjection(b[o + 12], cam, b[o + 13], b[o + 14], W, H, near, far), VP = mul(P, V);
     const depth = [-V[2], -V[6], -V[10], -V[14]];
     const drawn = this.nodes.filter((N) => N.visible && look.draw.has(N.name));

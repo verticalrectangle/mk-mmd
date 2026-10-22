@@ -350,6 +350,7 @@ def bake(ctx, out_dir):
     morphs = {o.name: np.empty((n, len(o.data.shape_keys.key_blocks) - 1), np.float32) for o in keyed}
     kbuf = {o.name: np.empty(len(o.data.shape_keys.key_blocks), np.float32) for o in keyed}
     cam_data = {c: np.empty((n, 15), np.float32) for c in cams}
+    cam_clip = {c: np.empty((n, 2), np.float32) for c in cams}             # its clip range: keyed by the clip stage
     vis = {o.name: np.zeros(n, bool) for o in looks + [b for b, _ in blocks]}
     centres = {r["index"]: np.full((n, 3), np.nan, np.float32) for r in point_rings}
     ring_errors = {}
@@ -370,6 +371,7 @@ def bake(ctx, out_dir):
                 ob = bpy.data.objects[c]
                 cam_data[c][k, :12] = affine(gl(np.array(ob.matrix_world)))
                 cam_data[c][k, 12:] = (ob.data.lens, ob.data.shift_x, ob.data.shift_y)
+                cam_clip[c][k] = (ob.data.clip_start, ob.data.clip_end)
             for name in vis:
                 vis[name][k] = not bpy.data.objects[name].hide_render
             if flex:
@@ -462,8 +464,7 @@ def bake(ctx, out_dir):
     for c in cams:
         cd = bpy.data.objects[c].data
         index["cameras"].append({"name": c, "sensor": float(cd.sensor_width), "sensor_height": float(cd.sensor_height),
-                                 "fit": cd.sensor_fit, "clip": [float(cd.clip_start), float(cd.clip_end)],
-                                 "offset": put(cam_data[c])})
+                                 "fit": cd.sensor_fit, "offset": put(cam_data[c]), "clip_at": put(cam_clip[c])})
     for fx in flex:
         if fx.why is None and fx.geoms:
             v_at = [put(v) for v in fx.verts]
@@ -488,7 +489,7 @@ def bake(ctx, out_dir):
     for i, c in centres.items():
         ring_doc["points"][str(i)] = put(c)
     np.concatenate(blob).astype("<f4").tofile(os.path.join(part, "bake.bin"))
-    doc = {"version": 3, "fps": ctx.fps, "frame0": ctx.frame0, "frames": n, "duration": ctx.duration, "glb": "scene.glb",
+    doc = {"version": 4, "fps": ctx.fps, "frame0": ctx.frame0, "frames": n, "duration": ctx.duration, "glb": "scene.glb",
            "outputs": outputs, "cut": cut, "shots": _table(sc), "freezes": wins, **index, "objects": objects,
            "blocks": [{"name": b.name, "why": why, "shows": _ranges(vis[b.name])} for b, why in blocks],
            "materials": {m: _material(bpy.data.materials[m], wb_nodes[m]) for m in mat_names},

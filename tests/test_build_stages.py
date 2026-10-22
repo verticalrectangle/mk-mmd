@@ -821,6 +821,48 @@ def test_a_camera_riding_her_head_bone_stays_where_it_is_on_her_head_as_the_head
     assert np.linalg.norm(np.subtract(on_head1, on_head0)) < 1e-3
 
 
+CLIPPED = """[pose.mq]
+feet = "floor"
+
+[[prop]]
+name = "ground"
+card = "library:floor"
+
+[[shot]]
+name = "far"
+from = 0.0
+to = 1.0
+at = [0.0, -4.0, 1.0]
+look = [0.0, 0.0, 1.0]
+lens = 50
+
+[[shot]]
+name = "low"
+from = 1.0
+to = 2.0
+at = [0.0, -4.0, 0.15]
+look = [0.0, 0.0, 0.15]
+lens = 50
+"""
+
+
+def test_a_shot_camera_starts_half_way_to_the_nearest_thing_it_sees_and_cuts_nothing_off(make, capsys):
+    """On every frame each shot camera starts at half the depth of the nearest geometry in its view (widened by a tenth
+    on each side): 4 m in front of her at chest height that is her front, a few centimetres short of 4 m (it started at
+    2 cm, and a render that starts there sees what a model hides behind its skin from a couple of metres); 15 cm over
+    the floor it is where the bottom of the view meets the floor, 0.15 m over that side's tangent, per output."""
+    code, out = make(CLIPPED, until="shots")
+    assert code == 0, out.get("error")
+    assert out["stages"]["clip"]["cameras"] == 4
+    names = ["far@16x9", "low@16x9", "low@9x16"]
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), f"[bpy.data.objects[n].data.clip_start for n in {names!r}]",
+                   "--frames", "46,76", "--project", str(make.root)], capsys)
+    (far, _, _), (_, low, tall) = q["values"]
+    assert 1.8 < far < 2.0, far
+    assert low == pytest.approx(0.5 * 0.15 / (1.1 * 180 * 36.0 / 50.0 / 640), rel=1e-4)       # the 640 x 360 picture
+    assert tall == pytest.approx(0.5 * 0.15 / (1.1 * 320 * 36.0 / 50.0 / 640), rel=1e-4)      # 360 x 640
+
+
 MIC_LEAN = """[pose.mq]
 feet = "floor"
 

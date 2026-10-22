@@ -338,6 +338,7 @@ Models and rigs:
 - mmd_tools adds `_dummy_` / `_shadow_` helper bones and non-bone vertex groups (`mmd_edge_scale`, `mmd_vertex_order`); rig.json marks the former and quirks list the latter.
 - Many PMX hair joints are fully locked (zero angular range): Bullet swings such chains as rigid sticks. That is why a cast member's chains are solved by the sim stage instead (`physics = "mk"`).
 - A Blender started with `--factory-startup` can delete mmd_tools' bundled wheels and break PMX import everywhere; run `mk doctor --fix`.
+- MMD models hide their drawn expressions (star and heart eyes, a blush, tears, `><`) a hair behind the skin and bring them out with a morph: a camera that starts at 2 cm shows them all at once through the face from a couple of metres away. The clip stage starts every shot camera at half the depth of the nearest thing it sees on each frame, and `mk look`'s orbit views do the same ([Clip ranges](design.md#clip-ranges)); `mk build --skip clip` brings the bug back.
 
 The build:
 

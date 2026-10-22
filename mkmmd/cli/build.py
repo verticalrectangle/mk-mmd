@@ -7,8 +7,8 @@ from .. import bridge
 from .common import add_project_arg, emit, get_project, UsageError
 
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
-          "sim", "folds", "cloth", "stepped", "save", "bake"]
-BUILDING = STAGES[:-2]                     # what --until and --skip name; save and bake follow
+          "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
+BUILDING = STAGES[:-3]                     # what --until names; clip, save and bake follow
 
 HELP = """Build the project's scene from mk.toml in one Blender session and save it to [project] blend.
 
@@ -30,6 +30,8 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   folds     [folds.<cast>]            fold shapes a joint angle drives (rig.json folds), keyed from the final pose
   cloth     [cloth.<cast>]            garments' cloth copies (rig.json cloth) simulated with Blender's cloth, cached
   stepped   [[stepped]]               the cast on twos: poses held 1 / fps s at a time, the cameras on every frame
+  clip                                every shot camera starts at half the depth of the nearest geometry it sees, on
+                                      every frame (fine depth: what a model hides behind the skin stays hidden)
   save                                the .blend
   bake                                <blend>.bake/: the clip for the site's scene viewer (docs/design.md: The site),
                                       every frame's bones, morphs, objects, visibility and shot cameras, and the meshes
@@ -48,8 +50,8 @@ Examples:
 def add(sub):
     p = sub.add_parser("build", help="build the scene from mk.toml", description=HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--until", choices=BUILDING, help="stop after this stage (then save and bake)")
-    p.add_argument("--skip", action="append", default=[], choices=BUILDING + ["bake"],
+    p.add_argument("--until", choices=BUILDING, help="stop after this stage (then clip, save and bake)")
+    p.add_argument("--skip", action="append", default=[], choices=BUILDING + ["clip", "bake"],
                    help="skip a stage (repeatable); later stages need what sets, props and cast make")
     p.add_argument("--bake", action="store_true", help="only bake the saved scene ([project] blend or --out) again")
     p.add_argument("--out", help="where to save (default: [project] blend)")
@@ -67,7 +69,7 @@ def run(args):
             raise UsageError(f"no saved scene at {out}: run mk build first")
         stages, blend = ["bake"], out
     else:
-        stages = STAGES[:STAGES.index(args.until) + 1] + ["save", "bake"] if args.until else list(STAGES)
+        stages = STAGES[:STAGES.index(args.until) + 1] + ["clip", "save", "bake"] if args.until else list(STAGES)
         stages, blend = [s for s in stages if s not in args.skip], None
     t0 = time.time()
     res = bridge.run("build", {"stages": stages, "out": out, "cache": str(proj.mk_dir / "cache")}, blend=blend,

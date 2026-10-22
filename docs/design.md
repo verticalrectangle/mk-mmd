@@ -619,8 +619,9 @@ member or the camera cannot be used by a stage that runs before them):
 | folds | `[folds.<cast>]` | the fold shapes a joint angle drives (rig.json `folds`), keyed from the final pose | [Folds](#folds) |
 | cloth | `[cloth.<cast>]` | garments' cloth copies (rig.json `cloth`) simulated with Blender's cloth, the garment's faces following it | [Cloth](#cloth) |
 | stepped | `[[stepped]]` | the cast on twos: each member's whole motion held 1 / fps s at a time over a window, the cameras on every frame | [Stepped motion](#stepped-motion) |
+| clip | | every shot camera starts at half the depth of the nearest geometry it sees, keyed on every frame (follows `--until` as `save` and `bake` do) | [Clip ranges](#clip-ranges) |
 | save | | the `.blend` | |
-| bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras, the meshes, what the glb cannot carry as Blender evaluates it on each frame, what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) and the [[medium]] windows (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
+| bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras (with their clip ranges), the meshes, what the glb cannot carry as Blender evaluates it on each frame, what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) and the [[medium]] windows (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
 
 The text stage runs after `lights` and before `keys`, so a `[[key]]` can toggle a text's `hide_render` or move it. A stage
 that has nothing to read for a cast member (no `[pose.rin]`, no `[perform.rin]`) leaves it alone, and a `[pose.x]`, `[perform.x]` or `[sim.x]` named after no cast member is ignored
@@ -1172,6 +1173,7 @@ leaves it at the mic and plays with the other hand only, except `hands_up` and `
 | `hand_hip` | a pose: the hand on the hip, the elbow out, the head tilted toward it and the body leaning a little away; `smile_eyes`, `mouth_smile` |
 | `finger_gun` | a pose: the arm out ahead at the height of the eyes, the hand a finger gun (index out, the thumb up, the rest curled), leaning in 6 degrees, the head tilted toward it, winking the other eye; `mouth_smile`. Read from a three-quarter view: straight on, the hand stands in front of her face |
 | `free` | lets the hand go for the span to whatever else drives the arm (a walk VMD's swing; below) |
+| `float` | the arm drifts out and down, then up and open over three quarters of the move, weightless (the hand relaxed, palm down); played on both hands a beat apart, with `air`, `rise` and a slow `tumble`, a body floats off the ground in zero gravity |
 | `face` | only its `morph` |
 
 The four poses (`hair_flip`, `over_shoulder`, `hand_hip`, `finger_gun`) are written for the left hand and mirrored for the right:
@@ -2158,7 +2160,7 @@ shot starts on the frame `round(frame0 + from * fps)`.
 | `mount` | prop, set or object the camera rides: `at` is in its frame and its motion carries the camera. An unknown name is an error (default: the world) |
 | `at` | camera position: `[x, y, z]` in the mount's frame (the world without a mount) or a dict target, `{path = "road:road", s = 640, offset = 7, z = 1.2}` (beside a set's path), `{prop = "car", point = [x, y, z]}`, `{cast = "rin", point = [x, y, z]}`, resolved in the world on every frame (the mount does not apply to it); `keys[].at` takes either form too, and a camera between two keys moves between the world points they give on every frame (default `[0, 0, 0]`) |
 | `look` | what the camera aims at: any [target](#targets), `[x, y, z]` (world), `"cast:rin.head"`, `"cast:rin"` (the eyes), `"car:road"` (a card's use point), `{path = ...}`; read on every frame, so a moving target is followed (default: straight ahead, along the mount's -Y) |
-| `lens` | focal length in mm on a 36 mm sensor that spans the larger image side; every camera clips from 0.02 m to 5000 m (default 35) |
+| `lens` | focal length in mm on a 36 mm sensor that spans the larger image side; every camera clips at 5000 m and starts where its view begins, frame by frame (see Clip ranges, below) (default 35) |
 | `roll` | degrees about the viewing axis; positive turns the picture clockwise; keyed in `keys[].roll` (default 0) |
 | `lag` | operator lag in seconds: the aim follows its target through a critically damped filter of that time constant, applied in the mount's frame, so a camera in a car lags the subject, not the road (default 0) |
 | `follow` | `{target, axes = "x", lag = 0, from}`: the side-scroller lock. On every frame the camera's fixed position and aim point (`at` and `look` given as `[x, y, z]`, the keys' too) move by the world displacement of `target` (any [target](#targets)) since the frame of clip second `from` (default the shot's own `from`), along the world axes in `axes` only (distinct letters from `"xyz"`: `"x"` runs with her and leaves her hops to rise in the frame, `"xyz"` holds on her), eased through the critically damped filter of `lag` seconds that the `lag` key aims through. A target given as `at` or `look` already moves and is left alone; the move is added after the aim's own lag, so the camera never turns by it. It reads the target where the stages before shots put it (`walk`, `rise`, `tumble`, vehicles, motions), not a `[[key]]` or the sim. A target that names nothing, axes that are not letters from `"xyz"` and a negative lag are errors, and so is `follow` with `mount`. The report's `moves.<output>.follow_m` is the farthest it went |
@@ -2220,6 +2222,21 @@ the known ones: `shot 'storm': unknown key 'lenss' (known: ...)`); an `aspect` t
 without `subject`; a window of an effect that needs frames from a shot before `[scene] start` (`lower [scene] start`); and bad look
 tables (the message names the shot and the output: `shot 'storm' (16x9): ...`). It logs a WARNING for a plate no effect uses and for
 an object pattern that matches nothing.
+
+### Clip ranges
+
+A render tells two surfaces on one line of sight apart only down to a depth step that grows as the square of their distance
+over the camera's `clip_start`: from a 2 cm start, about 0.05 mm at 4 m. MMD models keep their drawn expressions (star and
+heart eyes, a blush, tears, `><`) a few hundredths of a millimetre behind the skin until a morph brings them out, so a camera
+that starts at 2 cm shows them all at once through her face from a couple of metres away. The clip stage (after everything
+that moves geometry, before `save`) keys every shot camera's `clip_start` (CONSTANT) on every frame it is keyed over to half
+the depth of the nearest geometry inside its view, the view widened by a tenth on each side, and never under 1 mm (1 m where
+it sees nothing): as late as it can start without cutting anything off (`mkmmd/core/clip.py`, `mkmmd/blender/depth.py`). The
+depth is exact, read coarse to fine (each drawn object's box, the boxes of chunks of 256 of its triangles, those triangles;
+geometry instanced by another object counts as its box), on the world a render sees (a freeze's held frame with the camera
+on its own). `mk look`'s orbit cameras start the same way on each frame and size, and the bake keeps every camera's clip
+range per frame for mk's own renderer. Its report: `cameras`, `frames`, `near_m` (least, median, most) and `touching`
+(frames where something was within 2 mm of a lens). `mk build --skip clip` leaves every camera at 2 cm.
 
 ### Looks: silhouette, vector and reflection
 

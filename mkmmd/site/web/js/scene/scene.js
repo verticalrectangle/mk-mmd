@@ -12,7 +12,7 @@ import { SceneGL } from "./draw.js";
 import { DraftPlayer } from "./draft.js";
 import { cameraProjection, cameraView } from "./shotcam.js";
 
-const NEAR = 0.05, FAR = 400;
+const NEAR = 0.05, FAR = 400;                // a bake older than its cameras' clip ranges
 
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 
@@ -24,7 +24,8 @@ export function shotView(bake, blob, output, t, k) {
   const c = shot && bake.cameras.find((x) => x.name === shot.camera);
   if (!c) return null;
   const out = bake.outputs.find((o) => o.name === output) || bake.outputs[0], o = c.offset + 15 * k;
-  const VP = mul(cameraProjection(blob[o + 12], c, blob[o + 13], blob[o + 14], out.size[0], out.size[1], NEAR, FAR),
+  const ci = c.clip_at, [near, far] = ci === undefined ? [NEAR, FAR] : [blob[ci + 2 * k], blob[ci + 2 * k + 1]];
+  const VP = mul(cameraProjection(blob[o + 12], c, blob[o + 13], blob[o + 14], out.size[0], out.size[1], near, far),
     cameraView(blob, o));
   const back = [blob[o + 6], blob[o + 7], blob[o + 8]], up = [blob[o + 3], blob[o + 4], blob[o + 5]];   // the camera's +Z, +Y
   return { shot, VP, key: norm3([back[0] * 0.6 + up[0] * 0.7, back[1] * 0.6 + up[1] * 0.7, back[2] * 0.6 + up[2] * 0.7]) };

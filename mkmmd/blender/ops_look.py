@@ -1,6 +1,7 @@
 """look: render quick views of a scene (never saved): through the scene camera (the cut, timeline markers
 respected), through a named camera, or from preset directions around a target point (a bone, an object, any
-expression), relative to a model's facing.
+expression), relative to a model's facing; such an orbit camera starts where its view begins on each frame and size,
+as a shot camera does (mkmmd.blender.depth).
 
 args: frames; views [{name, kind: shot|camera|orbit, camera, target (expr), facing (armature or null), yaw, elev,
 dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out (folder); hide [object names];
@@ -20,6 +21,7 @@ import numpy as np
 from mathutils import Vector
 
 from ..core import screentype as SRT
+from . import depth as DP
 from . import freeze as FRZ
 from . import scene as S
 from . import styles as ST
@@ -145,6 +147,7 @@ def look(args):
         cd.clip_start = 0.005
         tmp = bpy.data.objects.new("mk_look", cd)
         sc.collection.objects.link(tmp)
+        depth = DP.Depth()
     if args.get("layers") and looks is not None:
         for size in args["sizes"]:
             r.resolution_x, r.resolution_y = int(size["w"]), int(size["h"])
@@ -182,12 +185,15 @@ def look(args):
                 target = Vector(eval(code, ns))  # noqa: S307 - the caller's own expression
                 _orbit(tmp, target, facing, float(v.get("yaw", 0)), float(v.get("elev", 10)), float(v.get("dist", 1.0)))
                 sc.frame_set(int(f))
+                depth.frame()
             for size in args["sizes"]:
                 r.resolution_x, r.resolution_y = int(size["w"]), int(size["h"])
                 if v["kind"] == "shot" and S.bind_aspect(size["name"], sc):
                     FRZ.frame_set(sc, int(f), freezes)   # the markers switch the camera on frame change
                 elif v["kind"] != "shot":
                     S.show_aspect(size["name"], sc)      # per-output type: only this output's
+                    if v["kind"] == "orbit":
+                        cd.clip_start = depth.near(tmp, (int(size["w"]), int(size["h"])))
                 path = os.path.join(args["out"], f"{v['name']}_{size['name']}_{int(f):05d}.jpg")
                 r.filepath = path
                 kind = looks.prepare(int(f), size["name"]) if looks is not None and v["kind"] == "shot" else None
