@@ -223,7 +223,7 @@ def write_maps(shots):
 
 def _frame_fx(plan, proj, size, layers_dir, stems):
     """The plan's frame effects over one output of a look: the cut's other frames come from the plates rendered beside
-    the images (TR.fx_frames), the projected points from the layers."""
+    the images (TR.fx_frames), the projected points and the collages' figures from the layers."""
     def frame_of(g):
         shot = TR.cut_shot(plan["cuts"], g)
         if layers_dir is None or shot is None:
@@ -234,8 +234,13 @@ def _frame_fx(plan, proj, size, layers_dir, stems):
         if layers_dir is None:
             raise FileNotFoundError(f"point {key} at frame {g}: no layers were rendered")
         return CF.read_point(layers_dir, key, g, size)
+
+    def figure_of(key, g):
+        if layers_dir is None:
+            raise FileNotFoundError(f"figure {key} at frame {g}: no layers were rendered")
+        return CF.read_figure(layers_dir, key, g, size)
     return FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, frame_of=frame_of, point_of=point_of,
-                      stem_of=stems, hits=FF.project_hits(proj.root, proj.data))
+                      figure_of=figure_of, stem_of=stems, hits=FF.project_hits(proj.root, proj.data))
 
 
 def run(args):

@@ -19,19 +19,40 @@ they are applied in the order of the table. The picture work is mkmmd/framefx.py
     split     a broken digital signal: bands of the frame torn sideways, the red and blue planes pulled apart
     mosh      a datamosh: the frame before the span carried along the cut's own motion in blocks, smeared over the new
               shot as a codec does when the key frame of a cut is lost
+
+The collages cut a figure (`objects`, drawn as its coverage beside the frame by `mk render`) out of the picture and lay it
+on flat colour, its picture or a flat silhouette (`fill`); on each hit (`times`, or a `lane`, as a zoom's) they step on:
+a list of colours, fills or sizes is read at the number of hits so far, plus the number of the cell, copy, panel or
+region it paints, so a list of two colours is a chessboard that flips on every hit.
+
+    grid      the frame shrunk into `cells` x `cells`, the figure in each on a chessboard of `back`; a `piece` (a flat
+              figure in one cell) hops a knight's move on each hit
+    orbit     the figure moved to `center`, `scale` times its size, and `count` copies of it on a tilted ring round it,
+              turning
+    mirror    the frame folded about a vertical (`axes` "x"), horizontal ("y") or both ("xy") line through `center`: the
+              half with the figure in it (moved to `place` first) and its reflections, each region its own colours
+    panels    the frame cut into slanted panels across its long side, the figure in each, `delay` frames apart
+    stack     the figure in front of a stack of flat copies of it (`bands`), each `step` further and `scale` as large: a
+              banded echo, or with a `delay` the poses before
 """
+import hashlib
+
 import numpy as np
 
 from . import lanes as LN
 from . import shotstyle as SS
 
-KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split", "mosh")
+FIGURES = ("grid", "orbit", "mirror", "panels", "stack")         # the collages: a figure cut out onto flat colour
+KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
+         "mosh") + FIGURES
+PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 BLENDS = ("lighten", "darken")
 EDGES = ("left", "right", "top", "bottom")
 EASES = ("log", "smooth", "linear")
 STEMS = ("drums", "bass", "other", "vocals", "mix")
 _COMMON = {"kind", "from", "to", "strength"}
-_HITS = {"times", "lane", "min_db", "every"}            # zoom and shock fire on these
+_HITS = {"times", "lane", "min_db", "every"}            # zoom and shock fire on these, a collage steps on them
+_FIGURE = {"objects", "back", "fill", "edge"} | _HITS   # a collage's figure, its colours and the hits it steps on
 KEYS = {"lens": _COMMON | {"center", "radius", "radius_m", "shadow"},
         "echo": _COMMON | {"count", "every", "fade", "blend", "tint"},
         "slitscan": _COMMON | {"depth", "now"},
@@ -43,7 +64,13 @@ KEYS = {"lens": _COMMON | {"center", "radius", "radius_m", "shadow"},
         "tint": _COMMON | {"color", "dark", "light"},
         "halftone": _COMMON | {"cell", "angle", "level", "ink", "lift", "offset"},
         "split": _COMMON | {"bands", "shift", "share", "rgb", "hold", "seed"},
-        "mosh": _COMMON | {"block"}}
+        "mosh": _COMMON | {"block"},
+        "grid": _COMMON | _FIGURE | {"cells", "piece", "seed"},
+        "orbit": _COMMON | _FIGURE | {"center", "count", "radius", "tilt", "scale", "size", "turn", "spin"},
+        "mirror": _COMMON | _FIGURE | {"center", "axes", "place"},
+        "panels": _COMMON | _FIGURE | {"count", "slant", "size", "delay"},
+        "stack": _COMMON | _FIGURE | {"count", "step", "scale", "center", "bands", "delay"}}
+_FIGURE_DEFAULTS = {"back": "base", "fill": PICTURE, "edge": None, "min_db": None, "every": 1}
 DEFAULTS = {"lens": {"radius": 0.1, "shadow": 0.0},
             "echo": {"count": 4, "every": 3, "fade": 0.55, "blend": "lighten", "tint": None},
             "slitscan": {"depth": 24, "now": "right"},
@@ -58,8 +85,16 @@ DEFAULTS = {"lens": {"radius": 0.1, "shadow": 0.0},
             "tint": {"color": "#46E07A", "dark": "#000000", "light": "#FFFFFF"},
             "halftone": {"cell": 9.0, "angle": 45.0, "level": 0.5, "ink": "#000000", "lift": 0.35, "offset": [3.0, 2.0]},
             "split": {"bands": 14, "shift": 0.08, "share": 0.35, "rgb": 10.0, "hold": 0.05, "seed": 1},
-            "mosh": {"block": 16.0}}
+            "mosh": {"block": 16.0},
+            "grid": {**_FIGURE_DEFAULTS, "cells": 3, "piece": None, "seed": 1},
+            "orbit": {**_FIGURE_DEFAULTS, "center": [0.5, 0.5], "count": 6, "radius": 0.36, "tilt": 60.0, "scale": 1.0,
+                      "size": 0.6, "turn": 30.0, "spin": 0.0},
+            "mirror": {**_FIGURE_DEFAULTS, "center": [0.5, 0.5], "axes": "x", "place": None},
+            "panels": {**_FIGURE_DEFAULTS, "count": 3, "slant": 12.0, "size": 1.0, "delay": 0},
+            "stack": {**_FIGURE_DEFAULTS, "count": 5, "step": [-0.02, -0.006], "scale": 1.0, "center": [0.5, 0.5],
+                      "bands": ["text", "base"], "delay": 0}}
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
+AXES = ("x", "y", "xy")                                 # a mirror's fold: about a vertical line, a horizontal one, both
 
 
 class FxError(ValueError):
@@ -221,12 +256,20 @@ def normalize(spec, palette, what="fx"):
         out["seed"] = _num(out["seed"], f"{what} seed", lo=0, integer=True)
     elif kind == "mosh":
         out["block"] = _num(out["block"], f"{what} block", lo=1.0)
+    elif kind in FIGURES:
+        _figure(spec, out, palette, what)
     return out
 
 
-def _hits(spec, out, what):
-    """A zoom's or a shock's hits: `times` (clip seconds) or a `lane` of the [audio] hits file, picked at `every` /
-    `min_db` when the frames are made (FrameFx, which has the file)."""
+def _hits(spec, out, what, required=True):
+    """A zoom's or a shock's hits (a collage's steps): `times` (clip seconds) or a `lane` of the [audio] hits file, picked
+    at `every` / `min_db` when the frames are made (FrameFx, which has the file). A collage may give neither: `times` is
+    then empty and it never steps."""
+    if not required and "times" not in spec and "lane" not in spec:
+        if "min_db" in spec or "every" in spec:
+            raise FxError(f"{what}: min_db and every pick from a lane: give the `lane`")
+        out["times"] = []
+        return
     if ("times" in spec) == ("lane" in spec):
         raise FxError(f"{what}: give `times` (clip seconds) or `lane` (one of the [audio] hits file), one of them")
     if "times" in spec:
@@ -244,9 +287,78 @@ def _hits(spec, out, what):
     out.update(lane=c["lane"], min_db=c["min_db"], every=c["every"])
 
 
+def _colours(v, palette, what, picture=False):
+    """A colour or a list of them -> [rgb, ...]; with `picture`, "picture" (the figure as the frame shows it) may stand
+    for a colour, as None. Three numbers are one colour."""
+    one = isinstance(v, str) or (isinstance(v, (list, tuple)) and len(v) == 3 and all(
+        isinstance(x, (int, float)) and not isinstance(x, bool) for x in v))
+    items = [v] if one else v
+    if not isinstance(items, (list, tuple)) or not items:
+        kinds = 'a colour or "picture"' if picture else "a colour"
+        raise FxError(f"{what} = {v!r}: expected {kinds}, or a list of them")
+    return [None if picture and c == PICTURE else _colour(c, palette, what) for c in items]
+
+
+def _figure(spec, out, palette, what):
+    """A collage's keys: the figure (`objects`), its colours and fills, an edge, the hits it steps on, its layout."""
+    if "objects" not in spec:
+        raise FxError(f"{what}: `objects` is required: the figure, object patterns (`name*`, `@collection`, `prop:key`)")
+    objs = [spec["objects"]] if isinstance(spec["objects"], str) else spec["objects"]
+    if not isinstance(objs, (list, tuple)) or not objs or not all(isinstance(p, str) and p.strip() for p in objs):
+        raise FxError(f"{what}: objects = {spec['objects']!r}: expected object patterns (`name*`, `@collection`, "
+                      f"`prop:key`), a list or one")
+    out["objects"] = list(objs)
+    out["back"] = _colours(out["back"], palette, f"{what} back")
+    out["fill"] = _colours(out["fill"], palette, f"{what} fill", picture=True)
+    e = out["edge"]
+    if e is not None:
+        if not isinstance(e, dict) or "color" not in e or set(e) - {"color", "width"}:
+            raise FxError(f"{what}: edge = {e!r}: expected {{color, width}} (width in px at 1080 on the short side)")
+        out["edge"] = {"color": _colour(e["color"], palette, f"{what} edge"),
+                       "width": _num(e.get("width", 3.0), f"{what} edge width", lo=0.0)}
+    _hits(spec, out, what, required=False)
+    kind = out["kind"]
+    if kind == "grid":
+        cells = out["cells"] if isinstance(out["cells"], (list, tuple)) else [out["cells"]]
+        if not cells:
+            raise FxError(f"{what}: cells is a whole number (per side) or a list of them")
+        out["cells"] = [_num(c, f"{what} cells", 1, 16, integer=True) for c in cells]
+        out["piece"] = None if out["piece"] is None else _colour(out["piece"], palette, f"{what} piece")
+        out["seed"] = _num(out["seed"], f"{what} seed", lo=0, integer=True)
+    elif kind == "orbit":
+        out["center"] = _center(out["center"], f"{what} center")
+        out["count"] = _num(out["count"], f"{what} count", 1, 32, integer=True)
+        out["radius"] = _num(out["radius"], f"{what} radius", lo=0.0)
+        out["tilt"] = _num(out["tilt"], f"{what} tilt", 0.0, 89.0)
+        out["scale"] = _num(out["scale"], f"{what} scale", 0.25, 4.0)
+        out["size"] = _num(out["size"], f"{what} size", lo=1e-3)
+        out["turn"] = _num(out["turn"], f"{what} turn")
+        out["spin"] = _num(out["spin"], f"{what} spin")
+    elif kind == "mirror":
+        out["center"] = _center(out["center"], f"{what} center")
+        axes = [out["axes"]] if isinstance(out["axes"], str) else out["axes"]
+        if not isinstance(axes, (list, tuple)) or not axes or any(a not in AXES for a in axes):
+            raise FxError(f"{what}: axes = {out['axes']!r}: one of {', '.join(AXES)}, or a list of them")
+        out["axes"] = list(axes)
+        out["place"] = None if out["place"] is None else _pair(out["place"], f"{what} place")
+    elif kind == "panels":
+        out["count"] = _num(out["count"], f"{what} count", 2, 12, integer=True)
+        out["slant"] = _num(out["slant"], f"{what} slant", -45.0, 45.0)
+        out["size"] = _num(out["size"], f"{what} size", lo=1e-3)
+        out["delay"] = _num(out["delay"], f"{what} delay", lo=0, integer=True)
+    else:
+        out["count"] = _num(out["count"], f"{what} count", 1, 32, integer=True)
+        out["step"] = _pair(out["step"], f"{what} step")
+        out["scale"] = _num(out["scale"], f"{what} scale", 0.25, 2.0)
+        out["center"] = _center(out["center"], f"{what} center")
+        out["bands"] = _colours(out["bands"], palette, f"{what} bands", picture=True)
+        out["delay"] = _num(out["delay"], f"{what} delay", lo=0, integer=True)
+
+
 def hit_times(fx, hits):
-    """The clip seconds a zoom or a shock fires on: its `times`, or its lane's hits from `hits` ({lane: [...]}, the
-    [audio] hits file) inside its span. Raises FxError when it names a lane and there is no file or no such lane."""
+    """The clip seconds a zoom or a shock fires on (a collage steps on): its `times`, or its lane's hits from `hits`
+    ({lane: [...]}, the [audio] hits file) inside its span. Raises FxError when it names a lane and there is no file or no
+    such lane."""
     if fx.get("times") is not None:
         return list(fx["times"])
     if hits is None:
@@ -332,7 +444,8 @@ def strength(fx, t):
 def sources(fx, frame, frame0):
     """The other frames of the cut that the effect reads at `frame` (Blender frames, the clip's own only): an echo's
     copies, a slitscan's ages, a push's inside frame, a mosh's frame before its span and every frame since (the motion
-    it carries the held picture along, worked out again from its start when the frames come out of order)."""
+    it carries the held picture along, worked out again from its start when the frames come out of order), the poses
+    before of the panels and the stack of a collage with a `delay` (their figures too)."""
     k = fx["kind"]
     if k == "echo":
         out = [frame - j * fx["every"] for j in range(1, fx["count"] + 1)]
@@ -342,6 +455,8 @@ def sources(fx, frame, frame0):
         out = [fx["inside_frame"] + (frame - fx["f0"] if fx["play"] else 0)]
     elif k == "mosh":
         out = list(range(fx["f0"] - 1, frame + 1))
+    elif k in ("panels", "stack") and fx["delay"] > 0:
+        out = [frame - j * fx["delay"] for j in range(1, fx["count"] + (k == "stack"))]
     else:
         out = []
     return [f for f in out if f >= frame0]
@@ -351,6 +466,43 @@ def progress(fx, frame):
     """0 .. 1 through the effect's span: 0 on its first frame, 1 on its last."""
     n = fx["f1"] - 1 - fx["f0"]
     return 1.0 if n <= 0 else (frame - fx["f0"]) / n
+
+
+def figure_key(fx):
+    """The folder of a collage's figure layer (figure/<key>/<frame>.png), named from its object patterns: collages of the
+    same figure share it."""
+    return "f" + hashlib.sha1("\n".join(sorted(fx["objects"])).encode("utf-8")).hexdigest()[:10]
+
+
+def pick(values, i):
+    """Entry `i` of a collage's list, round and round: a list of colours, fills or sizes read at a step."""
+    return values[int(i) % len(values)]
+
+
+def step(fx, frame, times, fps, frame0):
+    """How many of a collage's hits (`times`, clip seconds) have come by `frame`: those on a frame after its first, up to
+    `frame` (a hit on its first frame is where it starts, the first entry of its lists)."""
+    return sum(1 for t in times if fx["f0"] < frame_of(t, fps, frame0) <= frame)
+
+
+KNIGHT = ((1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2))
+
+
+def piece_cell(fx, k):
+    """The (column, row) a grid's piece stands on after `k` hits: from the middle of the top row, a knight's move on each
+    hit (seeded; not straight back to the cell it came from while another is open), kept inside the grid of each step.
+    It stays put on a grid too small for a knight to move in."""
+    rng = np.random.default_rng([fx["seed"], fx["index"]])
+    n = pick(fx["cells"], 0)
+    pos, prev = ((n - 1) // 2, 0), None
+    for s in range(1, k + 1):
+        n = pick(fx["cells"], s)
+        pos = (min(pos[0], n - 1), min(pos[1], n - 1))
+        moves = [(pos[0] + dx, pos[1] + dy) for dx, dy in KNIGHT if 0 <= pos[0] + dx < n and 0 <= pos[1] + dy < n]
+        fresh = [p for p in moves if p != prev] or moves
+        if fresh:
+            prev, pos = pos, fresh[int(rng.integers(len(fresh)))]
+    return pos
 
 
 def summary(fxs):

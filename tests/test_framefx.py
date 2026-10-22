@@ -59,6 +59,12 @@ def runner(pl, frames=None, points=None):
     ({"kind": "split", "from": 0, "to": 1, "bands": 2.5}, "a whole number"),
     ({"kind": "split", "from": 0, "to": 1, "hold": 0}, "hold = 0"),
     ({"kind": "mosh", "from": 0, "to": 1, "block": 0.5}, "block = 0.5"),
+    ({"kind": "grid", "from": 0, "to": 1}, "`objects` is required"),
+    ({"kind": "grid", "from": 0, "to": 1, "objects": "a", "back": []}, "or a list of them"),
+    ({"kind": "mirror", "from": 0, "to": 1, "objects": "a", "axes": "z"}, "one of x, y, xy"),
+    ({"kind": "panels", "from": 0, "to": 1, "objects": "a", "count": 1}, "count = 1: expected 2..12"),
+    ({"kind": "stack", "from": 0, "to": 1, "objects": "a", "min_db": -3}, "give the `lane`"),
+    ({"kind": "orbit", "from": 0, "to": 1, "objects": "a", "edge": {"width": 2}}, "expected {color, width}"),
 ])
 def test_bad_fx_say_what_is_wrong(spec, frag):
     with pytest.raises(TR.TransitionError, match=frag.replace("[", r"\[").replace("]", r"\]")):
@@ -252,3 +258,126 @@ def test_a_mosh_carries_the_frame_before_the_cut_along_the_new_shots_motion_from
     late = FF.FrameFx(pl["fx"], (w, h), fps=FPS, frame0=F0, frame_of=frames.get, point_of=None)
     assert np.allclose(late.frame(F0 + 65, frames[F0 + 65]), fx.frame(F0 + 65, frames[F0 + 65]), atol=1e-4)
     assert FX.sources(pl["fx"][0], F0 + 63, F0) == list(range(F0 + 59, F0 + 64))
+
+
+# ---------------------------------------------------------------- collages
+RED, BLUE, WHITE, BLACK, GREEN = [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]
+
+
+def square(x0, x1, y0, y1, size=(W, H)):
+    """A figure's coverage: 1 over columns x0 .. x1 - 1 and rows y0 .. y1 - 1."""
+    m = np.zeros((size[1], size[0]), np.float32)
+    m[y0:y1, x0:x1] = 1.0
+    return m
+
+
+def test_a_collage_steps_on_the_hits_after_its_first_frame_and_reads_its_lists_round_and_round():
+    pl = plan([{"kind": "grid", "from": 1.0, "to": 2.0, "objects": "Fig*", "times": [1.0, 1.2, 1.5], "cells": [1, 2],
+                "back": ["#FF0000", "#0000FF"]}])
+    fx = pl["fx"][0]
+    assert [FX.step(fx, F0 + f, fx["times"], FPS, F0) for f in (30, 35, 36, 44, 45, 59)] == [0, 0, 1, 1, 2, 2]
+    blank = np.zeros((H, W), np.float32)
+    run = FF.FrameFx(pl["fx"], (W, H), fps=FPS, frame0=F0, frame_of=lambda g: None, point_of=None,
+                     figure_of=lambda key, g: blank)
+
+    def corners(f):
+        out = run.frame(F0 + f, ramp())
+        return [out[0, 0].tolist(), out[0, -1].tolist(), out[-1, 0].tolist(), out[-1, -1].tolist()]
+    assert corners(35) == [RED] * 4                              # one cell in the first colour
+    assert corners(36) == [BLUE, RED, RED, BLUE]                 # 2 x 2, cell (i, j) at the hits so far + i + j
+    assert corners(45) == [RED] * 4                              # one cell again, the list gone round
+
+
+def test_a_collage_asks_for_its_figure_on_its_frames_and_the_earlier_poses_its_delay_reads():
+    pl = plan([{"kind": "stack", "from": 1.9, "to": 2.1, "objects": ["Fig*"], "count": 2, "delay": 3},
+               {"kind": "grid", "from": 3.0, "to": 3.1, "objects": "Fig*"},
+               {"kind": "mirror", "from": 3.0, "to": 3.1, "objects": ["Other*"]}])
+    key = FX.figure_key(pl["fx"][0])
+    assert FX.figure_key(pl["fx"][1]) == key != FX.figure_key(pl["fx"][2])      # the same figure, the same layer
+    figs = {f: [(it["key"], it["shot"]) for it in items if it["kind"] == "figure"] for f, items in TR.demands(pl).items()}
+    stack = {f: v for f, v in figs.items() if f < F0 + 90}
+    assert sorted(stack) == list(range(F0 + 51, F0 + 63))       # its frames 57 .. 62 and the 3 and 6 before each
+    assert stack[F0 + 51] == [(key, "a")] and stack[F0 + 62] == [(key, "b")]   # through the shot in the cut there
+    assert TR.rel_paths({"kind": "figure", "key": key}, F0 + 62) == [f"figure/{key}/{F0 + 62:05d}.png"]
+
+    def both(shot):
+        return [{"kind": "plate", "shot": shot}, {"kind": "figure", "key": key, "objects": ["Fig*"], "shot": shot}]
+    assert TR.fx_frames(pl, [F0 + 60]) == {F0 + 57: both("a"), F0 + 54: both("a")}     # what mk look renders beside
+
+
+def test_a_grid_piece_hops_a_knight_s_move_on_each_hit_never_straight_back_and_stays_on_a_board_too_small():
+    fx = dict(FX.normalize({"kind": "grid", "from": 0, "to": 1, "objects": "a", "cells": 4, "piece": "text"}, MOON),
+              index=0)
+    path = [FX.piece_cell(fx, k) for k in range(16)]
+    assert path[0] == (1, 0) and all(0 <= c < 4 for p in path for c in p)
+    assert all(sorted((abs(a[0] - b[0]), abs(a[1] - b[1]))) == [1, 2] for a, b in zip(path, path[1:]))
+    assert all(a != c for a, c in zip(path, path[2:]))
+    assert {FX.piece_cell(dict(fx, cells=[2]), k) for k in range(5)} == {(0, 0)}
+
+
+def test_a_grid_shrinks_the_frame_into_its_cells_on_their_colours_and_draws_the_piece_flat():
+    img, m = ramp(), square(24, 40, 8, 28)                      # the figure's middle is (31.5, 17.5) of the frame
+    out = FF.grid(img, m, 2, lambda i, j: [RED, BLUE][(i + j) % 2], lambda i, j: None, piece=((1, 1), WHITE))
+    assert [out[0, 0].tolist(), out[0, 63].tolist(), out[35, 0].tolist()] == [RED, BLUE, BLUE]
+    assert out[9, 16] == pytest.approx(img[18, 32], abs=0.03)   # cell (0, 0): the picture at half size
+    assert out[9, 48] == pytest.approx(img[18, 32], abs=0.03)   # cell (1, 0)
+    assert out[27, 48].tolist() == WHITE                        # cell (1, 1): the piece
+
+
+def test_an_orbit_moves_the_figure_to_its_centre_rings_it_with_copies_and_draws_the_near_one_over_it():
+    m, grey = square(4, 8, 4, 8), [0.5, 0.5, 0.5]               # its centroid (5.5, 5.5)
+    fills = [RED, BLUE, GREEN, WHITE, BLACK]
+    out = FF.orbit(ramp(), m, grey, (31.5, 17.5), 10.0, 0.0, 0.0, 4, 1.0, 1.0, fills.__getitem__)
+    assert [out[17, 31].tolist(), out[17, 41].tolist(), out[27, 31].tolist(), out[17, 21].tolist(),
+            out[7, 31].tolist(), out[0, 0].tolist()] == [RED, BLUE, GREEN, WHITE, BLACK, grey]   # right, down, left, up
+    level = FF.orbit(ramp(), m, grey, (31.5, 17.5), 0.0, 0.0, 0.0, 2, 1.0, 1.0, fills.__getitem__)
+    near = FF.orbit(ramp(), m, grey, (31.5, 17.5), 0.0, 0.0, 0.0, 4, 1.0, 1.0, fills.__getitem__)
+    assert level[17, 31].tolist() == RED and near[17, 31].tolist() == GREEN     # copies level with it go under it
+    big = FF.orbit(ramp(), m, grey, (31.5, 17.5), 0.0, 0.0, 0.0, 0, 2.0, 1.0, fills.__getitem__)
+    cover = 1.0 - 2.0 * big[..., 1]                             # red over grey: green falls from 0.5 as it covers
+    assert float(cover.sum()) == pytest.approx(64.0, abs=1e-3)  # twice its size: four times its area
+    assert FF.centroid(cover) == pytest.approx((31.5, 17.5))
+
+
+def test_a_mirror_shows_the_side_with_the_figure_and_its_reflection_in_that_region_s_colours():
+    img, m = ramp(), square(10, 16, 10, 20)                     # centroid (12.5, 14.5)
+    out = FF.mirror(img, m, (31.5, 17.5), "x", [RED, BLUE].__getitem__, [None, WHITE].__getitem__)
+    assert out[0, 0].tolist() == RED and out[0, 63].tolist() == BLUE
+    assert np.allclose(out[10:20, 10:16], img[10:20, 10:16])   # the side with the figure, as it is
+    assert out[10:20, 48:54].tolist() == [[WHITE] * 6] * 10     # its reflection about x = 31.5, white
+    moved = FF.mirror(img, m, (31.5, 17.5), "x", [RED, BLUE].__getitem__, [WHITE, WHITE].__getitem__,
+                      place=(43.5, 14.5))
+    assert moved[0, 63].tolist() == RED and moved[0, 0].tolist() == BLUE        # moved right: that side is shown
+    assert moved[10:20, 41:47].tolist() == [[WHITE] * 6] * 10 and moved[10:20, 17:23].tolist() == [[WHITE] * 6] * 10
+    four = FF.mirror(img, m, (31.5, 17.5), "xy", [RED, BLUE, GREEN, WHITE].__getitem__, ([None] * 4).__getitem__)
+    assert [four[0, 0].tolist(), four[0, 63].tolist(), four[35, 0].tolist(), four[35, 63].tolist()] == [
+        RED, BLUE, GREEN, WHITE]                                # the figure is in the upper left quarter
+
+
+def test_panels_cut_the_long_side_and_put_the_figure_on_the_middle_line_of_each():
+    img, m = ramp(), square(10, 14, 8, 28)                      # centroid (11.5, 17.5)
+    out = FF.panels((W, H), 2, 0.0, [(img, m), (img, m)], [RED, BLUE].__getitem__, lambda j: WHITE)
+    assert out[0, 31].tolist() == RED and out[0, 32].tolist() == BLUE           # the cut falls between two pixels
+    assert out[17, 14:18].tolist() == [WHITE] * 4 and out[17, 46:50].tolist() == [WHITE] * 4
+    assert out[17, 13].tolist() == RED and out[17, 18].tolist() == RED
+    tall = FF.panels((H, W), 2, 0.0, [(None, square(10, 26, 10, 50, (H, W)))] * 2, [RED, BLUE].__getitem__,
+                     lambda j: WHITE)                            # rows, the 16 x 40 figure at half its size
+    assert tall[31, 0].tolist() == RED and tall[32, 0].tolist() == BLUE
+    rows = [int(r) for r in np.nonzero((tall == WHITE).all(-1).any(1))[0]]
+    assert rows == list(range(6, 26)) + list(range(38, 58))    # 20 rows about the middle of each, 15.5 and 47.5
+    slanted = FF.panels((W, H), 2, 20.0, [None, None], [RED, BLUE].__getitem__, lambda j: WHITE)
+    assert slanted[0, 36].tolist() == RED and slanted[35, 28].tolist() == BLUE  # leaning right going up
+
+
+def test_a_stack_lays_its_banded_copies_behind_the_figure_each_a_step_further_and_its_delay_reads_poses_before():
+    img, m = ramp(), square(20, 24, 10, 20)
+    out = FF.stack(img, m, BLACK, [(None, m, BLUE), (None, m, WHITE)], (6.0, 0.0), 1.0, (31.5, 17.5), RED)
+    assert out[15, 18:38].tolist() == [BLACK] * 2 + [RED] * 4 + [BLACK] * 2 + [BLUE] * 4 + [BLACK] * 2 + [WHITE] * 4 + [
+        BLACK] * 2
+    pl = plan([{"kind": "stack", "from": 1.0, "to": 2.0, "objects": "Fig*", "count": 2, "delay": 2, "back": "#000000",
+                "bands": ["#0000FF", "#00FF00"], "fill": "#FF0000", "step": [0.0, 0.0]}])
+    figs = {F0 + 30 + k: square(10 + k, 14 + k, 10, 20) for k in range(-4, 10)}      # it walks right, a pixel a frame
+    run = FF.FrameFx(pl["fx"], (W, H), fps=FPS, frame0=F0, frame_of=lambda g: None, point_of=None,
+                     figure_of=lambda key, g: figs[g])
+    got = run.frame(F0 + 35, ramp())[15, 9:21].tolist()
+    assert got == [BLACK] * 2 + [GREEN] * 2 + [BLUE] * 2 + [RED] * 4 + [BLACK] * 2   # 4 and 2 frames before, nearer over

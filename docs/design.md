@@ -2507,7 +2507,9 @@ folder, named by Blender frame (`<frame>.png`, five digits):
   drawn at twice the frame's size, and its frame without the figure.
 - `point/<key>/<frame>.json`: a projected anchor or centre, `p` (frame fractions from the top left), `depth` and `m` (frame heights
   per metre at that depth, which sizes things given in metres); the key is `t<i>` for transition `i`'s `center`, `i<j>` for insert
-  `j`'s `anchor`.
+  `j`'s `anchor`, `x<k>` for frame effect `k`'s.
+- `figure/<key>/<frame>.png`: a collage's figure, the coverage of its objects alone through the camera of the shot in the cut, as
+  grey ([Frame effects](#frame-effects)).
 
 Layers are claimed with an empty file like frames (the finishing file is written last), so a stopped render resumes, `--jobs N`
 shares them and the disk check counts them. `mk build` keys the camera of a shot that lends frames (`keyed` in the shot table).
@@ -2693,10 +2695,10 @@ They read the rendered frames as they are, without their effects: an echo of a f
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh` (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels` or `stack` (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
-| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's and a mosh's mix, how far a split tears. A push has none |
-| `center` | lens and push (required), zoom and shock (default the middle): `[x, y]` fractions of the frame (0, 0 the top left), or `{point = "<expression>"}`, a point of the scene ([Expressions](#expressions)) that `mk render` projects through the camera of the shot in the cut on every frame of the span (`point/x<i>/<frame>.json`) |
+| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears. A push has none |
+| `center` | lens and push (required), zoom, shock, orbit, mirror and stack (default the middle): `[x, y]` fractions of the frame (0, 0 the top left), or `{point = "<expression>"}`, a point of the scene ([Expressions](#expressions)) that `mk render` projects through the camera of the shot in the cut on every frame of the span (`point/x<i>/<frame>.json`) |
 | `radius`, `radius_m` | lens and push: the lens's Einstein radius, or the push's disc at the start; `radius` a share of the frame height (default 0.1 for a lens, 0.02 for a push), `radius_m` metres at the depth of a scene point (a hole of a known size, a pupil), one of the two |
 | `shadow` | lens: the share of the Einstein radius painted black about the centre (default 0: the scene draws its own). The lens bends the whole picture, what passes in front of its centre too (a figure there wraps into a ring, as if it were behind): key `strength` down while something passes in front that should stay whole |
 | `count`, `every`, `fade`, `blend`, `tint` | echo: `count` copies (4) of the frames `every` (3), 2 x `every` ... back, the first at opacity `fade` (0.55) and each next at `fade` times the one before; `blend` `lighten` (default: keeps the brighter, for a light figure on a dark ground) or `darken`; `tint` a colour (slot, `#hex`, ...) for the copies where they differ from the ground (default their own colours). A copy of the ground changes nothing, so only what moves leaves echoes |
@@ -2705,7 +2707,7 @@ They read the rendered frames as they are, without their effects: an echo of a f
 | `stem`, `timeline` | scope: the stem drawn, `drums`, `bass` (default), `other`, `vocals` or `mix`, from the stems cached when `timeline` (default `audio/timeline.json`) was analysed: `mk timeline analyze` makes them, and a missing cache is an error before anything is encoded |
 | `at`, `size`, `color`, `width`, `glow` | scope: the trace's centre (`[x, y]` frame fractions, default the middle), its radius as a share of the frame height (0.3), colour (`text`), line width in px at 1080 on the short side (2) and glow (0..1, 0.6); it is added to the picture |
 | `window`, `lag`, `gain` | scope: the seconds of sound drawn on a frame (0.04, the latest ending on the frame), the delay of the y axis behind the x axis in seconds (0.0025: a note draws a loop whose shape is its harmonics; 0 draws the waveform against time instead) and a gain on the stem's 99.5th percentile over the span, which fills the radius (1) |
-| `times`, `lane`, `min_db`, `every` | zoom and shock: what they fire on, one of `times` (clip seconds) or `lane`, a lane of the `[audio] hits` file (`mk timeline hits`), its hits inside the span at or above `min_db` (0 the lane's loudest), every `every`-th of them (`mkmmd/core/lanes.py`; a lane without the file is an error that says to write it) |
+| `times`, `lane`, `min_db`, `every` | zoom and shock: what they fire on, one of `times` (clip seconds) or `lane`, a lane of the `[audio] hits` file (`mk timeline hits`), its hits inside the span at or above `min_db` (0 the lane's loudest), every `every`-th of them (`mkmmd/core/lanes.py`; a lane without the file is an error that says to write it). A collage steps on them (and without either never steps) |
 | `amount`, `attack`, `decay` | zoom: a punch on every hit, the picture jumping in by `amount` (0.06: 6 %) about `center` over `attack` s (0.02, eased out) and coming back as exp(-t / `decay`) (0.16 s); the strongest hit counts, they do not stack |
 | `speed`, `width`, `amount`, `life`, `color`, `glow` | shock: a ring runs out from `center` on every hit at `speed` frame heights a second (1.6), its front `width` (0.035 frame heights) wide pushing the picture out ahead of it and pulling it in behind by up to `amount` (0.012 frame heights), lit in `color` (`text`) at `glow` (0.6); it fades as (1 - t / `life`)² and is gone after `life` (0.55 s) |
 | `at`, `size`, `slant`, `angle`, `color`, `alpha`, `dir`, `in`, `out`, `shutter` | slab: a bar of `color` (`love`) at `alpha` (1) resting with its centre at `at` (frame fractions), `size` `[w, h]` frame heights (`[1.2, 0.18]`), its sides leaning `slant` degrees (18: to the right going up, as italics) and the whole turned `angle` degrees counter-clockwise (-8). It travels `dir` (`right`, `left`, `up`, `down`): in from the other side over `in` s (0.1, slamming: an ease-out) from fully off the frame, rests, and leaves the way it travels over the last `out` s (0.12, flung: an ease-in), drawn at 8 places over `shutter` frames (1) of its motion so it streaks. Persona's panels; stack a few, a thin one behind a thick one |
@@ -2713,6 +2715,14 @@ They read the rendered frames as they are, without their effects: an echo of a f
 | `cell`, `angle`, `level`, `ink`, `lift`, `offset` | halftone: comic print. Where the luma is under `level` (0.5) the picture is lifted toward white by `lift` (0.35) x its darkness and screened with round dots of `ink` (black) on a grid `cell` px at 1080 apart (9) turned `angle` degrees (45), a dot's area growing with the darkness until the dots merge into solid ink at black; the lights stay clean. Then the red plate is printed `offset` `[x, y]` px at 1080 off (`[3, 2]`) and the blue as far the other way: a press out of register |
 | `bands`, `shift`, `share`, `rgb`, `hold`, `seed` | split: a broken digital signal. The frame is cut into `bands` (14) bands of random heights, `share` (0.35) of them torn sideways by up to `shift` (0.08 of the frame width; what leaves one side comes in at the other), the red and blue planes pulled `rgb` px at 1080 apart (10) in a torn band and a third of that everywhere else. A tear holds `hold` seconds (0.05), then the signal breaks another way; the same `seed` (1) breaks the same frames the same way |
 | `block` | mosh: a datamosh. The cut's frame before the span is held and carried along the cut's own motion from each frame to the next since the span's first frame (Farneback optical flow on the frames at a quarter size, averaged over `block` px at 1080 squares, 16, so it moves in chunks as a codec's motion vectors do), and mixed over the real frame by `strength`. Started on a cut it is the classic one: the outgoing picture smeared by the incoming shot's motion, as when the key frame of a cut is lost. Frames asked out of order are worked out again from the span's start |
+| `objects` | a collage (required): its figure, object patterns as a look's `hide` takes (`"Rin_*"`, `"@collection"`, `"prop:key"`; one or a list). `mk render` draws their coverage alone through the camera of the shot in the cut beside each frame of the span (`figure/<key>/<frame>.png`, the key named from the patterns, so collages of the same figure share it) and the collage cuts the figure out of the picture with it: the figure as the frame shows it, look and lights and all |
+| `back`, `fill` | a collage: the flat colour behind (default `base`) and how the figure is drawn, `"picture"` (default: as the frame shows it) or a flat colour (a silhouette). Either may be a list, read at the step: the number of hits so far (a hit on the span's first frame is where it starts) plus the number of the cell, copy, panel or region drawn, round and round. So `back = ["love", "base"]` is a chessboard in a grid that flips on every hit, and one colour on every hit of an orbit |
+| `edge` | a collage: `{color, width}`, an outline round every figure and copy, `width` px at 1080 on the short side (default 3); default none |
+| `cells`, `piece`, `seed` | grid: the frame shrunk into `cells` x `cells` (3, or a list read at the step), the figure in each on its colour; a `piece` colour draws one cell's figure flat in it, the cell hopping a knight's move on every hit (from the middle of the top row; `seed` 1 picks among the moves, never straight back while another is open) |
+| `count`, `radius`, `tilt`, `scale`, `size`, `turn`, `spin` | orbit: the figure moved to `center`, `scale` times its size (1), and `count` (6) copies of it, `size` times as large again (0.6), on a ring of `radius` (0.36 of the frame's short side) round it tilted `tilt` degrees from face-on (60): an ellipse whose near half is drawn over the figure and a little larger, its far half under it and smaller. The ring turns `spin` degrees a second (0) and `turn` more on every hit (30); copy j is drawn `fill` entry step + j |
+| `axes`, `place` | mirror: the frame folded about the vertical line through `center` (`axes` `"x"`, default), the horizontal one (`"y"`) or both (`"xy"`; a list is read at the step): the side or quarter with the figure's centroid is shown as it is, the others are its reflections, region j (0 that side, 1 across the vertical line, 2 across the horizontal, 3 both) drawn in its own `back` and `fill` entry step + j. `place` `[x, y]` (frame fractions) moves the figure's centroid there first: beside the fold, two of her face each other |
+| `count`, `slant`, `size`, `delay` | panels: the frame cut into `count` panels (3, 2 .. 12) across its long side, columns of a wide or square frame and rows of a tall one, by lines leaning `slant` degrees (12: to the right going up, as italics), panel j its own `back` and `fill` entry step + j with the figure moved onto its middle line, `size` times its size (1; and `count` times smaller in a row, so a figure framed for the whole frame fits one). With a `delay` (frames, default 0) panel j shows the figure j x `delay` frames before |
+| `count`, `step`, `scale`, `bands`, `delay` | stack: a banded echo. The figure in front (`fill`, on `back`) and `count` (5) copies of it behind, copy j `step` `[dx, dy]` further per copy (`[-0.02, -0.006]` of the frame's short side), `scale` ** j as large about `center` (1; under 1 the stack shrinks toward it, a vanishing point) and drawn `bands` entry step + j - 1 (`["text", "base"]`, colours or `"picture"`); with a `delay` (frames, default 0) copy j is the figure j x `delay` frames before, a trail of the poses before |
 
 ```toml
 [[fx]]                        # the hole bends the stars behind it, its mass pumping with the kicks
@@ -2772,12 +2782,24 @@ offset = [4, 3]
 kind = "mosh"
 from = 18.21
 to = 18.97
+
+[[fx]]                        # a chessboard of her on the snare roll: it flips on every hit, a white knight hops across it
+kind = "grid"
+from = 28.83
+to = 29.51
+objects = "Reisen*"
+lane = "snare"
+back = ["love", "base"]
+cells = [2, 3, 4]
+piece = "text"
 ```
 
-`mk render` draws the point layers of a scene centre with the other layers; `mk post` reads the frames an echo, a slitscan, a
-push or a mosh needs from the cut it rendered, and `mk look`, which draws only the frames asked for, renders those beside them
-as plates of the shot in the cut there (`TR.fx_frames`). The plan, `mk build`'s shots report (`_cut_effects.fx`) and `mk post`'s
-report (`effects.fx`) list them.
+`mk render` draws the point layers of a scene centre and the figure layers of a collage with the other layers; `mk post` reads
+the frames an echo, a slitscan, a push, a mosh or a collage's `delay` needs from the cut it rendered, and `mk look`, which draws
+only the frames asked for, renders those beside them as plates of the shot in the cut there, with a collage's figure on them
+(`TR.fx_frames`). The plan, `mk build`'s shots report (`_cut_effects.fx`) and `mk post`'s report (`effects.fx`) list them. A
+collage cuts its figure out of the picture as the effects before it in the table left it, but with the figure's coverage as
+it was rendered: put it before an effect that moves the picture (a zoom, a lens, a shock), which then moves the collage.
 
 ## Text
 

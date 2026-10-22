@@ -186,7 +186,11 @@ fingertip bone's `.tail` and the prop.
   first frame: the seam of a loop), `scope` (a stem as an oscilloscope trace), `zoom` (a punch on every kick), `shock` (a pressure ring
   running out from a point), `slab` (Persona's slanted panels slamming in and flung off), `tint` (the Dark Hour's green over a stop),
   `halftone` (comic print: Ben-Day dots in the shadows, the plates off register), `split` (a broken signal: torn bands, RGB apart) and
-  `mosh` (a datamosh: the frame before a cut dragged along the new shot's motion).
+  `mosh` (a datamosh: the frame before a cut dragged along the new shot's motion). The collages cut a figure (`objects = "Rin_*"`) out
+  onto flat colour and step on the hits: `grid` (a chessboard of clones, a knight hopping across it), `orbit` (clones on a ring round
+  her), `mirror` (folded about a line: with `place` beside it, two of her face each other), `panels` (slanted split screen) and `stack`
+  (a banded echo); a list of `back` or `fill` colours flips on every hit. Give a collage a medium or close framing (a far one leaves
+  tiny clones; an orbit's `scale` brings her near) and put it first in the table, before a zoom or a shock that should move it.
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
   transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round

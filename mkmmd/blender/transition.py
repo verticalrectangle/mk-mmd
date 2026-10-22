@@ -7,12 +7,12 @@
 
 An item is one of the plan's demands: a `plate` (a shot seen through its own camera and look, as the cut would show it),
 a `matte` (a silhouette shot's figure alone as coverage, and its frame without the figure), a `bare` frame (a glitch's shot
-with the glitch's objects hidden: what is left when its figure has gone), a `point` (a world point, an expression of the
-`mk q` language, seen through a shot's camera: its place in the frame, `p`, and `m`, how many frame heights a metre spans
-at its depth, which turns a size in metres into pixels). Each is claimed with an empty file before it is drawn, so a
-stopped render resumes and several Blender processes share the frames; the file that marks an item finished is written
-last. Cameras: the shot table's camera of the shot for the output aspect, which `mk build` keyed over the frames the plan
-needs (`keyed` in the table)."""
+with the glitch's objects hidden: what is left when its figure has gone), a `figure` (a collage's objects alone as
+coverage), a `point` (a world point, an expression of the `mk q` language, seen through a shot's camera: its place in the
+frame, `p`, and `m`, how many frame heights a metre spans at its depth, which turns a size in metres into pixels). Each is
+claimed with an empty file before it is drawn, so a stopped render resumes and several Blender processes share the frames;
+the file that marks an item finished is written last. Cameras: the shot table's camera of the shot for the output aspect,
+which `mk build` keyed over the frames the plan needs (`keyed` in the table)."""
 import contextlib
 import json
 import math
@@ -144,6 +144,14 @@ class Layers:
             self._plate(item, paths)
         finally:
             rs.run()
+
+    def _figure(self, item, paths):
+        names = SS.select(ST.object_records(self.sc), item["objects"])
+        a = self.looks.coverage(names)
+        ST._save(paths[0], np.repeat(a[..., None], 3, axis=2))          # the coverage as grey, read back as such
+        if not names or float(a.max()) <= 0.0:
+            what = f"no object matches {item['objects']}" if not names else "the figure is not in the frame"
+            print(f"WARNING figure {item['key']} frame {self.frame}: {what}", flush=True)
 
     def _point(self, item, paths):
         sc = self.sc

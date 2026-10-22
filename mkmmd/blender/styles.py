@@ -613,15 +613,21 @@ class Looks:
 
     def matte(self, scale=2):
         """Coverage (h, w) in 0..1 of the subject alone, without cords or type: the figure a transition turns into a
-        window. Antialiased by Workbench like the flat pass it is cut from, and drawn `scale` times the frame's size: the
-        figure is zoomed far past the frame's resolution, so its edge wants every pixel of detail it can have."""
+        window. Drawn `scale` times the frame's size: the figure is zoomed far past the frame's resolution, so its edge
+        wants every pixel of detail it can have."""
+        return self.coverage(self.cl["subject"], scale)
+
+    def coverage(self, names, scale=1):
+        """Coverage (h, w) in 0..1 of the named objects alone (the rest hidden, and those the scene hides on this frame),
+        antialiased by Workbench like the flat pass, `scale` times the frame's size: a matte, a collage's figure."""
         rs = Restore()
         try:
             self._film(rs, WORKBENCH, "Standard")
             r = self.sc.render
-            rs.attr(r, "resolution_x", r.resolution_x * int(scale))
-            rs.attr(r, "resolution_y", r.resolution_y * int(scale))
-            self._visibility(rs, show=self.cl["subject"])
+            if scale != 1:
+                rs.attr(r, "resolution_x", r.resolution_x * int(scale))
+                rs.attr(r, "resolution_y", r.resolution_y * int(scale))
+            self._visibility(rs, show=names)
             return np.clip(self._shoot("matte")[..., 3] / SS.ALPHA_FULL, 0.0, 1.0).astype(np.float32)
         finally:
             rs.run()

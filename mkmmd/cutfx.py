@@ -46,6 +46,19 @@ def read_point(frames_dir, key, frame, size):
                                 f"(mk render makes it)") from None
 
 
+def read_figure(frames_dir, key, frame, size):
+    """The coverage (h, w) float32 in 0..1 of a collage's figure, figure/<key>/<frame>.png in an output's frame folder,
+    at `size` (width, height); a FileNotFoundError when it is missing, empty or unreadable."""
+    path = Path(frames_dir) / TR.figure_rel(key, frame)
+    try:
+        im = Image.open(path).convert("L")
+        if im.size != tuple(size):
+            im = im.resize(tuple(size), Image.BILINEAR)
+        return np.asarray(im, np.float32) / 255.0
+    except (OSError, ValueError):
+        raise FileNotFoundError(f"{path}: layer missing or unreadable (mk render makes it)") from None
+
+
 class CutFx:
     """The effects of a plan over one output's frames. `frames_dir` holds the cut's frames and the layers, `size` is
     (width, height) of the frames being graded, `output` the aspect's name (for an insert's per-aspect geometry)."""

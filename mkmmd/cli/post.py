@@ -172,7 +172,8 @@ def run(args):
             ffx = FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, stem_of=stems,
                              hits=FF.project_hits(proj.root, proj.data),
                              frame_of=lambda g, files=files, size=size: P.read(files[g], size) if g in files else None,
-                             point_of=lambda key, g, src=src, size=size: CF.read_point(src, key, g, size))
+                             point_of=lambda key, g, src=src, size=size: CF.read_point(src, key, g, size),
+                             figure_of=lambda key, g, src=src, size=size: CF.read_figure(src, key, g, size))
         suffix = "" if args.preset == "final" else f"_{args.preset}"
         out = od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"
         ff = None if still else encode(frames, size, proj.fps, out, audio, args.crf)

@@ -14,13 +14,14 @@ each one needs rendered and the files those frames are stored in. `mk build` (ke
                     pop = {dur, overshoot}, out = "pop" | "expand", expand = {dur, turn, ease}, aspect.<output>
     [[glitch]]      from, to, objects, seed = 1, shift = 0.06, split = 6, colors = ["love", "foam"]
     [[fx]]          from, to, kind = "lens" | "echo" | "slitscan" | "push" | "scope" | "zoom" | "shock" | "slab" | "tint"
-                    (mkmmd.core.framefx); unlike the others they may overlap one another and any window, and stack in
-                    table order
+                    | ... | "grid" | "orbit" | "mirror" | "panels" | "stack" (mkmmd.core.framefx); unlike the others
+                    they may overlap one another and any window, and stack in table order
 A window is a run of frames over which an effect changes the picture: the `dur` seconds that END at the cut (`at`) for a
 transition, the whole `from`..`to` for an insert or a glitch. Frames of the other shot inside a window are *plates*,
 rendered next to the cut's frames (`plate/<shot>/<frame>.png`); the silhouette whose figure is the matte of an expand /
 collapse is rendered as `matte/` (its coverage) and `back/` (its frame without the figure); a glitch's shot with its
-objects hidden is `bare/<key>/<frame>.png`; anchors and centres that need Blender (a bone seen through a camera) are
+objects hidden is `bare/<key>/<frame>.png`; a collage's figure, its objects' coverage through the camera of the shot in
+the cut, is `figure/<key>/<frame>.png`; anchors and centres that need Blender (a bone seen through a camera) are
 `point/<key>/<frame>.json`: {"p": [x, y] frame fractions, "depth", "m": frame heights per metre there}."""
 import json
 import math
@@ -35,7 +36,7 @@ SHAPES = ("thought",)
 SLASH_DIRS = ("right", "left")
 WHIP_DIRS = ("left", "right", "up", "down")   # the way the pictures travel: a pan to the right sends them left
 MIN_WINDOW = 2                          # frames
-LAYER_DIRS = ("plate", "matte", "back", "bare", "point")      # folders of an output's frame folder that hold layers
+LAYER_DIRS = ("plate", "matte", "back", "bare", "point", "figure")    # folders of an output's frame folder that hold layers
 _GEOMETRY = {"size", "offset", "ratio"}  # the insert keys an `aspect.<output>` table may override
 
 _COMMON = {"at", "kind", "dur", "ease"}
@@ -412,7 +413,10 @@ def demands(pl, frames=None):
         {"kind": "bare", "shot": S, "key", "hide"} S with the objects `hide` matches hidden (bare/<key>/): a glitch's
                                                     shot, its figure gone
         {"kind": "point", "key", "expr", "shot"}   the world point `expr` (the `mk q` expression language) seen through
-                                                    S's camera, as fractions of the frame (point/<key>/)"""
+                                                    S's camera, as fractions of the frame (point/<key>/)
+        {"kind": "figure", "key", "objects", "shot"}  the coverage of the objects `objects` matches, alone, through S's
+                                                    camera (figure/<key>/): a collage's figure, on its frames and the
+                                                    frames it reads"""
     want = None if frames is None else set(int(f) for f in frames)
     out = {}
 
@@ -449,13 +453,27 @@ def demands(pl, frames=None):
                 shot = cut_shot(pl["cuts"], f)
                 if shot is not None:
                     add(f, {"kind": "point", "key": FX.point_key(fx), "expr": fx["center"]["expr"], "shot": shot})
+        if fx["kind"] in FX.FIGURES:
+            for f in range(fx["f0"], fx["f1"]):
+                for g in [f] + FX.sources(fx, f, pl["frame0"]):
+                    item = figure_item(pl, fx, g)
+                    if item is not None:
+                        add(g, item)
     return dict(sorted(out.items()))
 
 
+def figure_item(pl, fx, frame):
+    """The layer item of a collage's figure on `frame` (through the shot in the cut there), None outside the cut."""
+    shot = cut_shot(pl["cuts"], frame)
+    if shot is None:
+        return None
+    return {"kind": "figure", "key": FX.figure_key(fx), "objects": fx["objects"], "shot": shot}
+
+
 def fx_frames(pl, frames):
-    """{frame: [plate items]}: the cut's own frames that the frame effects on `frames` read (an echo's copies, a
-    slitscan's ages, a push's inside), as plates of the shot in the cut there. `mk post` has them all already; `mk look`,
-    which draws only the frames asked for, renders these beside them."""
+    """{frame: [items]}: the cut's own frames that the frame effects on `frames` read (an echo's copies, a slitscan's
+    ages, a push's inside, a collage's poses before), as plates of the shot in the cut there, with a collage's figure on
+    them. `mk post` has them all already; `mk look`, which draws only the frames asked for, renders these beside them."""
     out = {}
     for f in sorted(set(int(x) for x in frames)):
         for fx in FX.at(pl.get("fx") or [], f):
@@ -463,9 +481,10 @@ def fx_frames(pl, frames):
                 shot = cut_shot(pl["cuts"], g)
                 if shot is not None and g != f:
                     bucket = out.setdefault(g, [])
-                    item = {"kind": "plate", "shot": shot}
-                    if item not in bucket:
-                        bucket.append(item)
+                    items = [{"kind": "plate", "shot": shot}]
+                    if fx["kind"] in FX.FIGURES:
+                        items.append(figure_item(pl, fx, g))
+                    bucket += [it for it in items if it not in bucket]
     return out
 
 
@@ -494,6 +513,8 @@ def rel_paths(item, frame):
         return [f"point/{item['key']}/{f}.json"]
     if item["kind"] == "bare":
         return [f"bare/{item['key']}/{f}.png"]
+    if item["kind"] == "figure":
+        return [f"figure/{item['key']}/{f}.png"]
     raise ValueError(f"unknown item {item!r}")
 
 
@@ -515,6 +536,10 @@ def bare_rel(key, frame):
 
 def point_rel(key, frame):
     return rel_paths({"kind": "point", "key": key}, frame)[0]
+
+
+def figure_rel(key, frame):
+    return rel_paths({"kind": "figure", "key": key}, frame)[0]
 
 
 def pending_items(frames_dir, dem):

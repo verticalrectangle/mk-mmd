@@ -1797,6 +1797,41 @@ def test_a_medium_window_draws_the_lit_shot_in_its_own_look_over_its_frames_and_
     assert yellow("9x16", "53") == [0.0]
 
 
+COLLAGE = MEDIUM.split("[[medium]]")[0] + """[[fx]]
+kind = "mirror"
+from = 0.5
+to = 1.0
+objects = "Mq_*"
+back = ["#FFD21F", "#1B2A6B"]
+fill = ["picture", "#FFFFFF"]
+place = [0.3, 0.55]
+"""
+
+
+def test_a_collage_cuts_her_figure_out_of_the_frame_and_folds_it_onto_flat_colour(make, capsys, tmp_path):
+    """mk look (as mk render) draws her coverage beside the frame, and the mirror lays her picture on yellow with its
+    centroid at 0.3 of the width and its reflection, white on navy, across the middle: the shape her coverage has."""
+    import numpy as np
+    from PIL import Image
+    code, out = make(COLLAGE)
+    assert code == 0, out.get("error")
+    code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", "50", "--output", "16x9", "--size", "320",
+                      "--out", str(tmp_path / "look"), "--project", str(make.root)], capsys)
+    assert code == 0, look.get("error")
+    img = np.asarray(Image.open(look["images"][0]).convert("RGB"), int)                     # 320 x 180
+    [layer] = (tmp_path / "look" / "layers" / "16x9" / "figure").rglob("00050.png")
+    cover = np.asarray(Image.open(layer).convert("L"), float) / 255.0 > 0.5
+    assert cover.shape == (180, 320) and 0.01 < cover.mean() < 0.3                           # her, in the shot's camera
+    yellow, white = np.abs(img - (255, 210, 31)).max(-1) < 40, (img > 225).all(-1)
+    navy = np.abs(img - (27, 42, 107)).max(-1) < 40
+    assert yellow[:, :160].mean() > 0.7 and (navy | white)[:, 160:].mean() > 0.9
+    shown = np.abs(img[:, :159] - (255, 210, 31)).max(-1) > 120     # her picture; the JPEG smears colour a pixel
+    folded = white[:, 161:][:, ::-1]                                # across the fold, so its two columns are left out
+    assert np.nonzero(shown)[1].mean() == pytest.approx(0.3 * 320 - 0.5, abs=6.0)
+    assert (shown & folded).sum() / (shown | folded).sum() > 0.85                            # her reflection
+    assert abs(int(cover.sum()) - int(shown.sum())) < 0.05 * cover.sum()                    # her coverage, moved
+
+
 STEPPED = """
 [[stepped]]
 from = 0.4
