@@ -178,7 +178,10 @@ fingertip bone's `.tail` and the prop.
 - **Freezes**: `[[freeze]] {from, to}` holds the world while the shot's camera goes on moving (a hit-stop orbit); `mk look` and `mk render` show it, `mk q`
   reads the timeline as it is.
 - **Transitions and inserts**: composited by `mk post` from layers `mk render` draws next to the frames. Windows may not overlap and must lie inside one shot of the
-  cut; the build refuses a window that starts before `[scene] start`. Preview a frame inside one with `mk look`.
+  cut (a `spin` straddles its cut: the frame spun up into it, the next one down to rest after it); the build refuses a window that starts before `[scene] start`.
+  A `slice` cuts the frame through the figure (`center = "figure"`) and parts it onto the next shot, white `edge`s like a sticker's; a split screen is
+  `[[insert]] shape = "split"` (another shot or a video beside the host, sliding in, trading sides on a hit, `aspect.9x16` top and bottom). Preview a frame
+  inside one with `mk look`.
 - **Glitches** ([Glitches](design.md#glitches)): `[[glitch]] {from, to, objects}` makes a character (its meshes, `"Rin_*"`, and what it holds) break up in
   jumping slices and colour ghosts and vanish by `to`; the build keeps it hidden after that. Start it on a hit; `seed` gives another take.
 - **Frame effects** ([Frame effects](design.md#frame-effects)): `[[fx]]` bends, smears and draws over the finished pictures: `lens` (a black hole's
@@ -186,10 +189,14 @@ fingertip bone's `.tail` and the prop.
   first frame: the seam of a loop), `scope` (a stem as an oscilloscope trace), `zoom` (a punch on every kick), `shock` (a pressure ring
   running out from a point), `slab` (Persona's slanted panels slamming in and flung off), `tint` (the Dark Hour's green over a stop),
   `halftone` (comic print: Ben-Day dots in the shadows, the plates off register), `split` (a broken signal: torn bands, RGB apart) and
-  `mosh` (a datamosh: the frame before a cut dragged along the new shot's motion). The collages cut a figure (`objects = "Rin_*"`) out
+  `mosh` (a datamosh: the frame before a cut dragged along the new shot's motion; with a `flow`, a drift, zoom, swirl or noise,
+  a still's own picture dragged in blocks, and `mask = "ground"` keeps her clean). The collages cut a figure (`objects = "Rin_*"`) out
   onto flat colour and step on the hits: `grid` (a chessboard of clones, a knight hopping across it), `orbit` (clones on a ring round
-  her), `mirror` (folded about a line: with `place` beside it, two of her face each other), `panels` (slanted split screen) and `stack`
-  (a banded echo); a list of `back` or `fill` colours flips on every hit. Give a collage a medium or close framing (a far one leaves
+  her), `mirror` (folded about a line: with `place` beside it, two of her face each other), `panels` (slanted split screen), `stack`
+  (a banded echo) and `footage` (her as a sticker, a white `edge` and a drop `shadow`, over a video `mk ref footage` fetches from
+  Pexels); a list of `back` or `fill` colours flips on every hit, `cells = [1, [2, 1], [2, 2], [4, 2], [4, 4]]` with `divide` makes
+  the grid divide like cells on the hits, `fill = "silkscreen"` prints her as a Warhol, `keys` move her (a stand-up tipping over
+  flat) and `[fx.aspect.<output>]` gives an output its own keys. Give a collage a medium or close framing (a far one leaves
   tiny clones; an orbit's `scale` brings her near) and put it first in the table, before a zoom or a shock that should move it.
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
@@ -285,7 +292,7 @@ booms of a hits lane overtones a phone can play, and the report's `boom_phone_db
 
 ## 10. Credits
 
-`mk assets credits --out CREDITS.md` builds the credits from the cast and `[credits] assets`; put what only the project knows (the song, a print made for it, the palette, tools) in
+`mk assets credits --out CREDITS.md` builds the credits from the cast, the footage and split-insert videos and `[credits] assets`; put what only the project knows (the song, a print made for it, the palette, tools) in
 `[credits] lines`. It exits 1 while any asset is unreviewed or has no author or credit line.
 
 To publish the result, `mk export web` writes `out/web/`: the scene and its timeline as a static page, with

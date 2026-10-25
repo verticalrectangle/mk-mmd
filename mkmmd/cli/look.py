@@ -9,10 +9,13 @@ from PIL import Image, ImageDraw, ImageFont
 from .. import bridge
 from .. import config as CFG
 from .. import cutfx as CF
+from .. import footage as FT
 from .. import framefx as FF
+from .. import picturefx as PFX
 from .. import pixmap as PX
 from .. import post as P
 from ..core import cast as CN
+from ..core import framefx as FX
 from ..core import screentype as SRT
 from ..core import transition as TR
 from ..ref.photos import ascii_text
@@ -221,9 +224,9 @@ def write_maps(shots):
     return out
 
 
-def _frame_fx(plan, proj, size, layers_dir, stems):
+def _frame_fx(plan, proj, size, layers_dir, stems, output):
     """The plan's frame effects over one output of a look: the cut's other frames come from the plates rendered beside
-    the images (TR.fx_frames), the projected points and the collages' figures from the layers."""
+    the images (TR.fx_frames), the projected points and the collages' figures from the layers, footage from its clips."""
     def frame_of(g):
         shot = TR.cut_shot(plan["cuts"], g)
         if layers_dir is None or shot is None:
@@ -239,8 +242,12 @@ def _frame_fx(plan, proj, size, layers_dir, stems):
         if layers_dir is None:
             raise FileNotFoundError(f"figure {key} at frame {g}: no layers were rendered")
         return CF.read_figure(layers_dir, key, g, size)
-    return FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, frame_of=frame_of, point_of=point_of,
-                      figure_of=figure_of, stem_of=stems, hits=FF.project_hits(proj.root, proj.data))
+    try:
+        return FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, frame_of=frame_of, point_of=point_of,
+                          figure_of=figure_of, stem_of=stems, hits=FF.project_hits(proj.root, proj.data), output=output,
+                          footage_of=FT.source(proj.root), font_of=PFX.font_source(proj.root))
+    except FX.FxError as e:
+        raise UsageError(str(e)) from None
 
 
 def run(args):
@@ -278,10 +285,11 @@ def run(args):
     if TR.has_effects(plan):
         want = {int(f) for f in frames}
         for tr in plan["transitions"]:               # an expand / collapse also needs the frame where it fills the frame
-            if tr["matte"] is not None and any(f in want for f in range(tr["first"], tr["last"] + 1)):
+            if tr["kind"] in ("expand", "collapse") and any(f in want for f in range(tr["first"], tr["last"] + 1)):
                 want.add(TR.covering_frame(tr))
         dem = TR.demands(plan, want)
-        for g, items in TR.fx_frames(plan, frames).items():  # the cut's frames an echo, a slitscan or a push reads
+        hits = FF.project_hits(proj.root, proj.data) if plan.get("fx") else None   # a booth's captures on a lane
+        for g, items in TR.fx_frames(plan, frames, hits).items():  # the cut's frames an echo, a film, a booth reads
             bucket = dem.setdefault(g, [])
             bucket += [it for it in items if it not in bucket]
         if dem:
@@ -303,15 +311,16 @@ def run(args):
                 continue
             size, f = Image.open(s["path"]).size, int(s["frame"])
             fx = ffx = None
-            if layers and tag == "a":
+            if tag == "a" and TR.has_effects(plan):  # a spin draws no layers: the cut's own frames
                 fx = fxs.get(s["size"])
                 if fx is None:
-                    fx = fxs[s["size"]] = CF.CutFx(plan, Path(layers["dir"]) / s["size"], size, s["size"])
+                    fx = fxs[s["size"]] = CF.CutFx(plan, out / "layers" / s["size"], size, s["size"],
+                                                   footage_of=FT.source(proj.root))
             if stems is not None and tag == "a":
                 ffx = ffxs.get(s["size"])
                 if ffx is None:
                     ffx = ffxs[s["size"]] = _frame_fx(plan, proj, size, Path(layers["dir"]) / s["size"] if layers else None,
-                                                      stems)
+                                                      stems, s["size"])
             has_fx = fx is not None and fx.active(f)
             has_ffx = ffx is not None and ffx.active(f)
             layer = P.read_rgba(s["screen"], size) if s.get("screen") else None
@@ -327,7 +336,7 @@ def run(args):
             if has_ffx:
                 try:
                     im = ffx.frame(f, im)
-                except FileNotFoundError as e:
+                except (FileNotFoundError, FX.FxError) as e:
                     raise UsageError(str(e)) from None
             if has_fx or has_ffx:
                 effects.append({"frame": s["frame"], "size": s["size"]})

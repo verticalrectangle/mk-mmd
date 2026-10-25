@@ -301,6 +301,55 @@ def test_rock_hips_shift_the_weight_from_foot_to_foot_and_crouch_lowers_the_hips
         assert np.abs(left[k] - mid[k]).max() < 0.002 and np.abs(low[k] - mid[k]).max() < 0.002    # the feet stay put
 
 
+HINGE = """[pose.mq]
+feet = "floor"
+hips = { shift = [0.0, 0.08, -0.05], pitch = 30 }
+lean = 40
+"""
+
+
+def test_hips_pitch_tips_the_pelvis_forward_about_the_waist_with_the_feet_planted(make, capsys):
+    import numpy as np
+    code, out = make(HINGE, until="perform")
+    assert code == 0, out.get("error")
+    expr = ("[list(bone('lower_body').head), list((bone('leg.L').head + bone('leg.R').head) / 2), "
+            "list(bone('ankle.L').head), list(bone('ankle.R').head)]")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "1,40", "--project", str(make.root)],
+                  capsys)                                         # the rest pose, and the base pose after the settle
+    assert code == 0, q
+    rest, posed = ([np.array(p) for p in v] for v in q["values"])
+    a0, a1 = rest[1] - rest[0], posed[1] - posed[0]               # waist -> hip joints, translation taken out
+    tilt = np.degrees(np.arctan2(a1[1], -a1[2]) - np.arctan2(a0[1], -a0[2]))
+    assert tilt == pytest.approx(30.0, abs=2.0)                    # the hip joints swing back: the pelvis tips forward
+    for k in (2, 3):
+        assert np.abs(posed[k] - rest[k]).max() < 0.003            # the feet stay planted
+
+
+SWAY_SPANS = """[pose.mq]
+feet = "floor"
+[perform.mq]
+rock = [{ deg = 0.0, period = 1.6, hips = 0.04, to = 0.6, ease = 0.2 },
+        { deg = 0.0, period = 1.6, hips = -0.02, from = 1.4, ease = 0.2 },
+        { deg = 8.0, period = 1.6, from = 1.4, ease = 0.2 }]
+"""
+
+
+def test_rocks_sway_only_inside_their_spans_and_a_list_of_them_adds_up(make, capsys):
+    import numpy as np
+    code, out = make(SWAY_SPANS, until="perform")
+    assert code == 0, out.get("error")
+    expr = "[bone('center').head.x, bone('head').head.x]"
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "43,55,61,88", "--project", str(make.root)],
+                  capsys)                                         # t 0.4, 0.8 (the sine's zero), 1.0, 1.9
+    assert code == 0, q
+    early, zero, between, late = (np.array(v) for v in q["values"])
+    assert early[0] - zero[0] == pytest.approx(0.04, abs=0.004)        # the first span's hips, at the sine's peak
+    assert between[0] - zero[0] == pytest.approx(0.0, abs=0.002)       # both spans shut, though the sine is at -0.71
+    assert between[1] - between[0] == pytest.approx(zero[1] - zero[0], abs=0.004)    # ... and no lean either
+    assert late[0] - zero[0] == pytest.approx(-0.02 * np.sin(2 * np.pi * 1.9 / 1.6), abs=0.003)   # the second span's hips
+    assert (late[1] - late[0]) - (zero[1] - zero[0]) > 0.02            # the third leans the body to her left over them
+
+
 TRAFFIC = """
 [[set]]
 name = "road"
@@ -727,26 +776,82 @@ def _vmd(path, keys):
     path.write_bytes(out + struct.pack("<4I", 0, 0, 0, 0))
 
 
-def test_a_hand_let_go_follows_the_arm_strip_and_the_ik_holds_it_before_and_after(make, capsys):
+def test_a_hand_let_go_follows_the_arm_strip_and_the_ik_lets_go_and_takes_over_where_the_strip_has_it(make, capsys):
     """A `free` move eases the arm IK off over its span, so a VMD strip of the arms (a walk's swing) drives the arm there,
     the pose stage's own forearm key composing with the strip; before and after it the IK holds the hand at its rest
-    place though the strip goes on (it holds its pose over the whole clip)."""
+    place though the strip goes on (it holds its pose over the whole clip). The hand travels to where the strip has it
+    and back at the human pace, and while the IK eases off and on its goal and pole are on the strip's hand and elbow:
+    the arm is the strip's there too (the goal used to wait at the rest place, so the arm swept between the two)."""
     vmd = make.root / "arm.vmd"
-    up, fold = (0.0, 0.0, 0.4226, 0.9063), (0.0, 0.6428, 0.0, 0.766)          # the arm raised 50 deg, the elbow bent 80
-    _vmd(vmd, {"左腕": [(0, up), (60, up)], "左ひじ": [(0, fold), (60, fold)]})
+    up, low = (0.0, 0.0, 0.4226, 0.9063), (0.0, 0.0, 0.2588, 0.9659)          # the arm raised 50 deg, then 30
+    fold = (0.0, 0.6428, 0.0, 0.766)                                            # the elbow bent 80 deg
+    _vmd(vmd, {"左腕": [(0, up), (60, low)], "左ひじ": [(0, fold), (60, fold)]})
     moves = ('\n[[move.mq]]\nname = "rest"\nhand = "L"\nplace = "rest"\n'
-             '\n[[move.mq]]\nname = "free"\nt = 0.5\ndur = 1.0\nhand = "L"\n')
-    wrist = {}
+             '\n[[move.mq]]\nname = "free"\nt = 0.5\ndur = 0.8\nhand = "L"\n')
+    got = {}
     for run, extra in (("strip", ""), ("free", moves)):
         code, out = make(FREE.format(vmd=vmd, moves=extra), until="motion")
         assert code == 0, out.get("error")
-        code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "40,61,85",
-                       "--project", str(make.root)], capsys)                    # t 0.3 (held), 1.0 (let go), 1.8 (held)
-        wrist[run] = [np.array(v) for v in q["values"]]
-    before, free, after = wrist["free"]
-    assert np.linalg.norm(free - wrist["strip"][1]) < 2e-3                     # let go: the strip's arm, elbow and all
-    assert np.linalg.norm(after - before) < 5e-3                               # held at the rest place on both sides ...
-    assert np.linalg.norm(before - wrist["strip"][0]) > 0.1                    # ... though the strip is raising the arm
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), "[list(bone(b).head) for b in ('wrist.L', 'elbow.L')]",
+                       "--frames", "34,49,61,67,88", "--project", str(make.root)], capsys)
+        got[run] = [[np.array(p) for p in v] for v in q["values"]]       # t 0.1, 0.6 and 1.2 (the IK half on), 1.0, 1.9
+    (before, _), (off_w, off_e), (free, _), (on_w, on_e), (after, _) = got["free"]
+    strip = got["strip"]
+    assert np.linalg.norm(free - strip[2][0]) < 2e-3                            # let go: the strip's arm, elbow and all
+    for (w, e), (sw, se) in (((off_w, off_e), strip[1]), ((on_w, on_e), strip[3])):
+        assert np.linalg.norm(w - sw) < 5e-3 and np.linalg.norm(e - se) < 0.01   # the IK half on: still the strip's arm
+    assert np.linalg.norm(after - before) < 5e-3                                # held at the rest place on both sides ...
+    assert np.linalg.norm(before - strip[0][0]) > 0.1                           # ... though the strip is raising the arm
+
+
+def test_a_hand_let_go_to_a_strip_that_plays_its_fingers_curls_them_as_the_strip_does_not_more(make, capsys):
+    """The action of a member with a hand let go blends with Combine, so the hand's own finger keys (a rest place's
+    relaxed curl) used to compose with the strip's fingers: a strip's curl of 40 deg became 54. While the hand is let
+    go its finger keys give way by its IK share, as its arm does; outside the span the hand's own curl is back."""
+    vmd = make.root / "hand.vmd"
+    curl = (0.0, 0.0, 0.3420, 0.9397)                                           # the index's base joint, 40 deg
+    _vmd(vmd, {"左腕": [(0, (0.0, 0.0, 0.4226, 0.9063)), (60, (0.0, 0.0, 0.4226, 0.9063))], "左人指１": [(0, curl), (60, curl)]})
+    strip = ('[pose.mq]\nfeet = "floor"\n\n[[motion.mq]]\nvmd = "{vmd}"\nbones = ["arms", "index1.L"]\nstart = 0.2\n'
+             'from = 0\nto = 42\nextend = "none"\nblend_in = 0.25\nblend_out = 0.25\n{moves}')   # 0.2-1.6 s, full 0.45-1.35
+    moves = ('\n[[move.mq]]\nname = "rest"\nhand = "L"\nplace = "rest"\n'
+             '\n[[move.mq]]\nname = "free"\nt = 0.5\ndur = 0.8\nhand = "L"\n')
+    got = {}
+    for run, extra in (("strip", ""), ("free", moves)):
+        code, out = make(strip.format(vmd=vmd, moves=extra), until="motion")
+        assert code == 0, out.get("error")
+        assert not warnings(out), warnings(out)                                 # the strip covers the span fully
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), "math.degrees(bone('index1.L').local_quat.angle)",
+                       "--frames", "34,61", "--project", str(make.root)], capsys)   # t 0.1 (held), 1.0 (let go)
+        got[run] = q["values"]
+    assert got["strip"][1] == pytest.approx(40.0, abs=0.5)
+    assert got["free"][1] == pytest.approx(got["strip"][1], abs=0.5)            # the strip's curl, not 40 + 14
+    assert got["free"][0] == pytest.approx(14.0, abs=1.0)                        # the rest place's relaxed curl outside
+
+
+def test_a_strip_plays_a_share_of_its_motion_and_a_mirrored_one_plays_it_on_the_other_side(make, capsys):
+    """`influence = 0.5` plays half the motion (the arm raised half as far, eased in and out over the blends);
+    `mirror = true` plays it left for right: the right arm raised as the motion raises the left."""
+    vmd = make.root / "arm.vmd"
+    _vmd(vmd, {"左腕": [(0, (0.0, 0.0, 0.4226, 0.9063)), (60, (0.0, 0.0, 0.4226, 0.9063))]})     # raised 50 deg
+    expr = "[list(bone(b).head) for b in ('arm.L', 'wrist.L', 'arm.R', 'wrist.R')]"
+    got = {}
+    for run, extra in (("rest", None), ("full", ""), ("half", "influence = 0.5\n"), ("mirror", "mirror = true\n")):
+        code, out = make('[pose.mq]\nfeet = "floor"\n' if extra is None else FREE.format(vmd=vmd, moves=extra),
+                         until="motion")
+        assert code == 0, out.get("error")
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "61", "--project", str(make.root)],
+                      capsys)
+        got[run] = [np.array(p) for p in q["values"][0]]
+
+    def raised(run, side):
+        i = 0 if side == "L" else 2
+        a, b = got[run][i + 1] - got[run][i], got["rest"][i + 1] - got["rest"][i]
+        return float(np.degrees(np.arccos(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1.0, 1.0))))
+    assert raised("full", "L") == pytest.approx(50.0, abs=5.0) and raised("full", "R") < 1.0
+    assert raised("half", "L") == pytest.approx(raised("full", "L") / 2, abs=3.0)
+    assert raised("mirror", "R") == pytest.approx(raised("full", "L"), abs=1.0) and raised("mirror", "L") < 1.0
+    code, out = make(FREE.format(vmd=vmd, moves="influence = 0\n"), until="motion")
+    assert code == 3 and "influence = 0" in out["error"]
 
 
 def test_a_strip_eases_in_and_out_over_its_blends(make, capsys):

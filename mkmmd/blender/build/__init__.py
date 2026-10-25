@@ -49,6 +49,8 @@ class Member:
         self.pmx = None             # the model file the cast stage imported
         self.base = {}              # world-axis base rotations (bone -> Quaternion) the pose stage keyed
         self.ik = {}                # side -> (target empty, pole empty)
+        self.hands = {}             # side -> the arm rig the pose stage keyed (goal, pole, constraints, ride, hand table)
+        self.moves = None           # what the pose stage compiled the [[move]] entries from (pose.free_hands again)
         self.seat = None            # world seat frame used by the pose stage
 
 

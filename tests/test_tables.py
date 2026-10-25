@@ -66,7 +66,7 @@ POSE_ALL = """
 sit = {hip = [0, 0, 0.5], facing = [0, -1, 0], floor_z = 0.0, pelvis_deg = 6, back_deg = 0}
 sit_offset = [0, 0.03, 0]
 feet = {L = [0.1, 0.0], R = {cast = "rin", point = [0, 0, 0]}}
-hips = {shift = [0, 0, -0.03], roll = 3, yaw = -4}
+hips = {shift = [0, 0, -0.03], roll = 3, yaw = -4, pitch = 10}
 toes = {L = -8, R = 10}
 lean = 12
 turn = -6
@@ -130,8 +130,8 @@ lean = [[0, 0], [1, 5]]
 turn = [[0, 0]]
 tilt = [[0, 0]]
 head_tilt = [[0, 0]]
-rock = {deg = 3, period = 4, phase = 0}
-head_rock = {deg = 3, period = 4, phase = 0}
+rock = [{deg = 3, period = 4, phase = 0, hips = 0.02, from = 0.5, to = 2.0, ease = 0.3}, {deg = 1, axis = "turn"}]
+head_rock = {deg = 3, period = 4, phase = 0, from = 0.5, to = 2.0, ease = 0.3}
 blink = {per_min = 15, seed = 1, extra = [[1.0, 0.2]]}
 lids = 0.1
 sing = {timeline = "t.json", lines = [1, 2], mouth = 0.8, lead = -0.03, voice = "en-gb"}

@@ -1,4 +1,5 @@
-"""mk ref: measure how real people move in reference clips and turn it into performance parameters; fetch reference photos."""
+"""mk ref: measure how real people move in reference clips and turn it into performance parameters; fetch reference photos
+and stock footage."""
 import argparse
 from pathlib import Path
 
@@ -27,6 +28,12 @@ with their licence, author and page, downloads thumbnails into <project>/refs/<s
 ~/.cache/mk/ref/photos/<set>/) with SOURCES.json and a contact sheet to look at. They are visual references only: never
 textures, never in a render. Compare a model with them side by side: `mk look ... --ref refs/<set>/photo.jpg`.
 
+Footage (the `footage` frame effect lays a figure over a video): `mk ref footage ID...` downloads each Pexels video's
+best rendition (the largest with a short side of at least --min-height under the 150 MB cap) into
+<project>/footage/pexels_<id>.mp4 and registers it in the asset registry as `pexels_<id>` (kind reference: author, their
+page, the video's page, the Pexels License and what it forbids, a credit line), so `[[fx]] clip = "pexels_<id>"` names it
+and `mk assets credits` credits it. Find the ids with `mk ref search`.
+
 Examples:
   mk ref search 'woman singing in car' --n 20
   mk ref add 8042695 6954269 --set singing --note 'front-on, studio light'
@@ -35,6 +42,8 @@ Examples:
   mk ref sheet --set singing                   # landmarks drawn on frames at the measured events
   mk ref clean --set singing                   # delete downloads, tracks and the sheet
   mk ref photos 'Dodge 600 convertible' --set dodge600 --n 12     # photos to model a car from
+  mk ref search 'driving forest road pov' --min-height 1080        # then:
+  mk ref footage 4254119                                           # footage/pexels_4254119.mp4, asset pexels_4254119
 """
 
 SET_HELP = f"reference set (default {store.DEFAULT_SET!r})"
@@ -61,6 +70,14 @@ def add(sub):
     se.add_argument("--min-height", type=int, default=720, help="smallest short side of a usable rendition, px (default 720)")
     se.add_argument("--orientation", choices=("landscape", "portrait", "any"), default="landscape",
                     help="shape of the clips (default landscape)")
+
+    fo = s.add_parser("footage", help="Pexels videos into <project>/footage/, registered as assets for [[fx]] footage")
+    fo.add_argument("ids", nargs="+", type=int, metavar="ID", help="Pexels video ids (mk ref search finds them)")
+    fo.add_argument("--min-height", type=int, default=1080, help="smallest short side of the rendition, px (default "
+                    "1080; the largest rendition under the 150 MB cap is taken)")
+    fo.add_argument("--orientation", choices=("landscape", "portrait", "square"),
+                    help="refuse a video of another shape (default: any)")
+    add_project_arg(fo)
 
     ad = s.add_parser("add", help="remember clips in a reference set (id, author, url, license note, why)")
     ad.add_argument("ids", nargs="+", type=int, metavar="ID", help="Pexels video ids")
@@ -123,10 +140,46 @@ def _photos(args):
     return CHECK_FAILED if res["failed"] else 0
 
 
+def _footage(args):
+    """Pexels videos into <project>/footage/pexels_<id>.mp4, each registered as the asset pexels_<id> (kind reference)."""
+    from .. import assets as A
+    from .. import footage as FT
+    from ..ref import footage as RF
+    proj = get_project(args, required=True)
+    got, failed = RF.fetch(args.ids, proj.root / RF.FOLDER, args.min_height, args.orientation)
+    reg, clips = A.Registry(), []
+    for g in got:
+        try:
+            clip = FT.Clip(g["path"])
+        except FT.FootageError as e:
+            failed.append({"id": g["id"], "error": f"the download does not play: {e}"})
+            continue
+        e = RF.entry(g["video"], g["path"], g["rendition"])
+        e["extra"].update(frames=clip.count, fps=round(clip.fps, 3), duration_s=round(clip.duration, 3))
+        if any(x["slug"] == e["slug"] for x in reg.entries):            # again: fields added by hand stay, tags merge
+            e["tags"] = list(dict.fromkeys((reg.get(e["slug"]).get("tags") or []) + e["tags"]))
+            reg.update(e["slug"], **{k: v for k, v in e.items() if k != "slug"})
+        else:
+            reg.add(e)
+        clips.append({"id": g["id"], "slug": e["slug"], "path": str(g["path"].relative_to(proj.root)),
+                      "downloaded": g["downloaded"], "mb": round(g["bytes"] / 1e6, 1), "rendition": e["extra"]["rendition"],
+                      "size": list(clip.size), "fps": round(clip.fps, 3), "seconds": round(clip.duration, 2),
+                      "orientation": RF.orientation(*clip.size), "name": e["name"], "author": e["author"],
+                      "url": e["source_url"], "credit": e["credit"]})
+    if clips:
+        reg.save()
+    emit({"project": proj.name, "folder": str(proj.root / RF.FOLDER), "registry": str(reg.path), "clips": clips,
+          "failed": failed, "note": "use one as [[fx]] kind = \"footage\", clip = \"<slug>\"; `mk assets credits` credits "
+          "the clips a project's footage names"})
+    return CHECK_FAILED if failed else 0
+
+
 def _run(args):
     act = args.action
     if act == "photos":
         return _photos(args)
+    if act == "footage":
+        return _footage(args)
     if act == "search":
         from ..ref import pexels
         res = pexels.search(args.query, args.n, args.min_height, args.orientation)

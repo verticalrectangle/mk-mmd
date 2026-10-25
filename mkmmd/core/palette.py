@@ -51,3 +51,11 @@ def resolve(colour, palette):
     if colour not in palette:
         raise KeyError(f"colour {colour!r} is neither a hex value nor a palette slot ({sorted(palette)})")
     return palette[colour]
+
+
+def darkest(palette):
+    """The palette's darkest colour by luminance (hex): `base` in the dark Rosé Pines, `text` in Dawn, a light palette."""
+    def luminance(hexstr):
+        r, g, b = linear(hexstr)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return min(palette.values(), key=luminance)

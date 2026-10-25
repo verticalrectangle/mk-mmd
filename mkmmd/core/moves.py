@@ -23,7 +23,9 @@ Every place is made natural before it is keyed (`resolve`):
   (TOUCH, else straight out from the body's axis); a touching place (a pat on the chest, hands over the ears) ends on the
   surface, any other one where it was asked unless that is too close to, or inside, the body.
 A hand that has played its move goes back to its rest place (`rest`: hanging by the hip; `dainty`: resting lightly on
-the front of the skirt or thighs, the two hands together; `mic`: holding a mic at the mouth) when it has time to stay there
+the front of the skirt or thighs, the two hands together, and a dainty hand alone, its partner away or resting elsewhere,
+rests on its own thigh instead, `dainty_one`, its wrist straight and its elbow out, `_alone`; `mic`: holding a mic at the
+mouth) when it has time to stay there
 REST_MIN seconds before its next move, else it goes straight on to that move. A hand travels at a human pace (`travel`:
 TRAVEL_MIN, plus its wrist's way at TRAVEL_SPEED, or as long as its palm takes to turn over at TURN_SPEED) and reaches
 each move's first place on the move's time, so it sets off before it, leaving the place it holds early if it must; a
@@ -34,8 +36,13 @@ move leaves it at the mic (except one that raises it, `hands_up`, `flung`), and 
 (`heart_push`) is refused.
 
 A `free` move lets its hand go for the span: the arm IK eases off over FREE_EASE seconds and back on, and between the
-arm follows whatever else drives it, a `[[motion]]` strip (a walk's arm swing); the hand's goal waits at its rest place
-meanwhile, so the hand comes back from there. `compile` gives such a hand `ik` keys, the share of its IK it feels."""
+arm follows whatever else drives it, a `[[motion]]` strip (a walk's arm swing, a singing motion's gestures). Given where
+the strip has the hand over the span (`compile`'s `strip`: samples of its wrist, the hand's direction and its palm), the
+hand's goal follows them: the hand travels to where the strip has it at the span's start (setting off early, at the
+human pace, as to any place), the goal stays on the strip's hand while the IK eases off and back, so nothing moves where
+the IK lets go and takes over, and it leaves the strip as late as still gets it to its next move on time (at the span's
+end, or before). Without samples the goal waits at its rest place meanwhile, so the hand comes back from there.
+`compile` gives such a hand `ik` keys, the share of its IK it feels, over the stretch it is let go."""
 import math
 
 import numpy as np
@@ -62,6 +69,9 @@ SWING = math.radians(70.0)       # how far up and away an arm held out starts it
 SWING_STEP = math.radians(2.0)   # ... and its step
 MARGIN = 0.012                   # m: the room a place that does not touch keeps from the body and clothes (`clear`)
 TOUCH_MARGIN = 0.003             # m: ... and a touching one
+STRAIGHT = {"dainty_one": 12.0}  # degrees: places whose hand continues its forearm closer than WRIST (alone on a thigh)
+POLES = {"dainty_one": (0.45, 0.0, 0.10)}   # places that hold the elbow their own way: its pole from the arm joint, (out,
+                                            # behind, below) as AR.POLE (the default): alone on the skirt, the elbow out
 SHAPES = {                       # finger shapes (mkmmd.core.fingers tables) the moves use
     "relaxed": "relaxed", "flat": "flat", "fist": "fist", "point": "point", "curled": "curled",
     "peace": {"index": [0, 0, 0], "middle": [0, 0, 0], "ring": [80, 95, 65], "little": [80, 95, 65],
@@ -109,6 +119,7 @@ AIM = {  # a fist round a handle (a mic, a hammer): where the handle points, for
 }
 TOUCH = {  # a place on the body: the way the hand comes in to it, for the left hand, x mirrored for the right
     "chest": (0.0, -1.0, 0.0),
+    "dainty_one": (0.5, -1.0, 0.0),
     "ears": (1.0, 0.0, 0.0),
     "dainty": (0.0, -1.0, 0.0),
     "hair": (1.0, 0.0, 0.0),
@@ -142,6 +153,8 @@ def place(name, side, marks):
         "rest": (out("rest"), _v(0, 0, -1), _v(-s, 0, 0), "relaxed"),
         "dainty": (chest + marks["reach"] * _v(s * 0.186, -0.1, -0.461), _v(-s * 0.6, -0.15, -0.78), _v(0, 1, 0),
                    "relaxed"),                         # written inside: the approach rests it on the skirt or thighs
+        "dainty_one": (chest + marks["reach"] * _v(s * 0.27, -0.05, -0.49), _v(-s * 0.2, -0.15, -0.97), _v(-s * 0.5, 1, 0),
+                       "relaxed"),                     # alone on the skirt: on its own thigh, down along it
         "mic": (mouth + _v(s * 0.03, -0.10, -0.13), _v(-s * 0.45, -0.45, 0.77), _v(-s, 0, 0), "curled"),   # under the lips
         "mic_lens": (out("mic_lens"), _v(0, -1, 0), _v(-s, 0, 0), "curled"),
         "mic_up": (out("mic_up"), _v(0, 0, 1), _v(-s, 0, 0), "curled"),
@@ -174,14 +187,27 @@ def place(name, side, marks):
     return P[name]
 
 
-def forearm(side, marks, wrist):
-    """The forearm's direction (elbow -> wrist, unit) an arm IK with the pose stage's default pole gives the hand `side`
-    for its wrist at `wrist`."""
+def elbow(side, marks, wrist, pole=None):
+    """Where an arm IK puts the elbow of the hand `side` for its wrist at `wrist`: with the pole the pose stage gives it
+    by default (mkmmd.core.armreach.POLE), or `pole`, (out, behind, below) from the arm joint as that one (POLES)."""
     s = 1.0 if side == "L" else -1.0
+    o = AR.POLE if pole is None else pole
     S = np.asarray(marks[f"arm.{side}"], float)
-    P = S + _v(s * AR.POLE[0], AR.POLE[1], -AR.POLE[2])
-    W = np.asarray(wrist, float)
-    return _unit(W - AR.pole_elbow(S, W, marks["upper"], marks["fore"], P))
+    return AR.pole_elbow(S, np.asarray(wrist, float), marks["upper"], marks["fore"], S + _v(s * o[0], o[1], -o[2]))
+
+
+def forearm(side, marks, wrist, pole=None):
+    """The forearm's direction (elbow -> wrist, unit) an arm IK gives the hand `side` for its wrist at `wrist` (`elbow`)."""
+    return _unit(np.asarray(wrist, float) - elbow(side, marks, wrist, pole))
+
+
+def elbow_pole(name, side, marks):
+    """The point (in the character's frame) the elbow's pole goes to at a place that holds the elbow its own way (POLES),
+    None at the others (the pose stage's own pole)."""
+    if not isinstance(name, str) or name not in POLES:
+        return None
+    s, o = (1.0 if side == "L" else -1.0), POLES[name]
+    return np.asarray(marks[f"arm.{side}"], float) + _v(s * o[0], o[1], -o[2])
 
 
 def _turn(v, axis, ang):
@@ -279,14 +305,14 @@ def resolve(name, side, marks, clear=None):
     s = 1.0 if side == "L" else -1.0
 
     def orient(at):
-        f = forearm(side, marks, at)
+        f = forearm(side, marks, at, POLES.get(name))
         if name in AIM:
             a = AIM[name]
             return aimed(side, f, (s * a[0], a[1], a[2])) + (f,)
         if name in SHAPED:
             dd = _unit(d)
             return dd, _unit(np.asarray(p, float) - (np.asarray(p, float) @ dd) * dd), f
-        return natural(d, p, f) + (f,)
+        return natural(d, p, f, STRAIGHT.get(name, WRIST)) + (f,)
 
     dd, pp, f = orient(pt)
     moved = 0.0
@@ -357,9 +383,10 @@ BODY = ("lean", "tilt", "turn", "head_tilt", "head_turn")       # perform keys a
 MIRRORED = ("tilt", "turn", "head_tilt", "head_turn")           # ... those that a mirrored move turns the other way
 KEYS = {"name", "t", "dur", "hand", "morph", "value", "hits"}
 REST_PLACES = ("rest", "dainty", "mic")
+STRIP = "strip"                  # the place of a hand on a strip: (STRIP, i) is its i-th sample
 
 
-def compile(entries, marks, beats=(), yaw=0.0, clear=None):
+def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None):
     """The keys of one cast member's moves: {"hands": {side: [key]}, "ik": {side: [[t, share]]} (only the hands a `free`
     move lets go), "lean", "tilt", "turn", "head_tilt", "head_turn": [[t, deg]] (BODY), "twitch": [...], "expressions":
     [{morph, keys}], "places": {side: {place: {moved_mm, wrist_deg}}}}. `entries` are its `[[move]]` tables {name, t, dur
@@ -367,7 +394,10 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
     "rest"); `marks` its landmarks (MARKS); `beats` clip seconds (a beat move pats on each inside it, or on its entry's
     `hits`: clip seconds inside it); `yaw` the member's (degrees: hand directions are turned into the world);
     `clear(points)` the smallest distance from points (n, 3) in the character's frame to what a hand stays off, its body
-    and clothes (None: hands are not kept off anything)."""
+    and clothes (None: hands are not kept off anything). `strip` {side: {"t", "at", "dir", "palm"}}: where a motion strip
+    has that hand at clip seconds `t` over the spans its `free` moves let it go (the wrist joint, the way the hand points
+    and the way its palm faces, in the character's frame): its goal follows them there (module docstring). A key on the
+    strip has `"strip": True` and no fingers (the strip's own play)."""
     rest, told = {"L": "rest", "R": "rest"}, set()                    # told: hands given a rest place of their own
     for e in entries:
         if isinstance(e, dict) and e.get("name") == "rest":
@@ -377,6 +407,9 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
             rest[e["hand"]] = e["place"]
             told.add(e["hand"])
     entries = [e for e in entries if not (isinstance(e, dict) and e.get("name") == "rest")]
+    for sd, other in (("L", "R"), ("R", "L")):
+        if rest[sd] == "dainty" and rest[other] != "dainty":
+            rest[sd] = "dainty_one"                                   # alone on the skirt: its partner rests elsewhere
     missing = [k for k in MARKS if k not in marks]
     if missing:
         raise MoveError(f"landmarks missing: {missing}")
@@ -412,7 +445,8 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
         if m.get("hand") == "free":
             if rest[hand] == "mic":
                 raise MoveError(f"{what}: the {hand} hand holds the mic and is never let go")
-            plays[hand].append((t0, t1, [(t0, rest[hand], (0, 0, 0))], False))     # its goal waits at the rest place
+            on = _strip_seq((strip or {}).get(hand), t0, t1)                 # on the strip, or its goal waits at rest
+            plays[hand].append((t0, t1, on or [(t0, rest[hand], (0, 0, 0))], False))
             frees[hand].append((t0, t1))
         elif m.get("hand") == "places":
             for side in sides:
@@ -446,20 +480,30 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None):
         for morph, value in (m.get("face", []) + wink
                              + ([(str(e["morph"]), float(e.get("value", 1.0)))] if "morph" in e else [])):
             faces.setdefault(morph, []).append([t0, t1, value])
+    made = {"L": {}, "R": {}}
+
+    def at(side, name):
+        if isinstance(name, tuple):                                           # (STRIP, i): where the strip has the hand
+            s, i = strip[side], name[1]
+            return np.asarray(s["at"][i], float), _unit(s["dir"][i]), _unit(s["palm"][i]), None, 0.0, 0.0, None
+        if name not in made[side]:                                            # resolved, and its elbow's pole if it has one
+            made[side][name] = resolve(name, side, marks, clear) + (elbow_pole(name, side, marks),)
+        return made[side][name]
+
+    if rest["L"] == rest["R"] == "dainty":                                    # a pose for two: alone, on its own thigh
+        alone = {sd: _alone(plays[sd], plays["R" if sd == "L" else "L"], sd, at) for sd in ("L", "R")}
+        for sd in ("L", "R"):
+            plays[sd] += alone[sd]
     for side in ("L", "R"):
-        made = {}
-
-        def at(name, side=side, made=made):
-            if name not in made:
-                made[name] = resolve(name, side, marks, clear)
-            return made[name]
-
-        out["hands"][side] = _hand(sorted(plays[side], key=lambda p: p[0]), side, rest[side], world, at, side in told,
-                                   fore=lambda w, side=side: forearm(side, marks, w))
+        left = {}                                                             # a free move's start: when it leaves the strip
+        out["hands"][side] = _hand(sorted(plays[side], key=lambda p: p[0]), side, rest[side], world,
+                                   lambda name, side=side: at(side, name), side in told,
+                                   fore=lambda w, side=side: forearm(side, marks, w), left=left)
         out["places"][side] = {n: {"moved_mm": round(r[4] * 1000.0, 1), "wrist_deg": round(r[5], 1)}
-                               for n, r in sorted(made.items())}
-        if frees[side]:
-            out["ik"][side] = ik_keys(frees[side])
+                               for n, r in sorted(made[side].items())}
+        spans = [(t0, left.get(t0, t1)) for t0, t1 in frees[side]]
+        if any(t1 - t0 > 1e-3 for t0, t1 in spans):
+            out["ik"][side] = ik_keys([(t0, t1) for t0, t1 in spans if t1 - t0 > 1e-3])
     body.sort(key=lambda b: b[0])
     for (a0, a1, _, wa), (b0, _, _, wb) in zip(body, body[1:]):
         if b0 < a1 - 1e-6:
@@ -515,13 +559,65 @@ def fling(a, b):
     return FLING_MIN + float(np.linalg.norm(np.asarray(b[0], float) - np.asarray(a[0], float))) / FLING_SPEED
 
 
-def _hand(spans, side, rest, world, at, told=False, fore=None):
-    """The keys of one hand: its moves' places on their times (`at(place)` resolves one), travelling between them at a
+def _alone(mine, theirs, side, at):
+    """The plays (t0, t1, [(t, place, offset)], False) that rest a dainty hand whose partner rests there too on its own
+    thigh ("dainty_one") while it is alone: the partner away from the skirt front (from when it sets off on a move, or is
+    let go, to when it is back), outside this hand's own moves and the trips they need. It glides there from the two-hand
+    spot as its partner leaves, arriving as the partner gets to its move, and is back on the spot as its partner is. The
+    partner's absences closer than the hand's round trip plus REST_MIN are one (it does not go back for a moment), and a
+    stretch shorter than REST_MIN is left out (it stays on the two-hand spot). `mine` and `theirs` are plays (t0, t1,
+    [(t, place, offset)], react); `at(side, place)` resolves one."""
+    other = "R" if side == "L" else "L"
+    one = at(side, "dainty_one")
+    trip = travel(at(side, "dainty"), one)
+    away = []                                                        # [it leaves, it is back, it gets to its move]
+    for t0, t1, seq, react in sorted(theirs, key=lambda p: p[0]):
+        home = at(other, "dainty")
+        a = t0 if react else seq[0][0] - travel(home, at(other, seq[0][1]))
+        b = t1 + travel(at(other, seq[-1][1]), home)
+        if away and a - away[-1][1] < REST_MIN + 2.0 * trip:
+            away[-1][1] = max(away[-1][1], b)
+        else:
+            away.append([a, b, max(seq[0][0], a + trip)])
+    own = [(t0 if react else seq[0][0] - travel(one, at(side, seq[0][1])), t1 + travel(at(side, seq[-1][1]), one))
+           for t0, t1, seq, react in mine]
+    out = []
+    for a, b, there in away:
+        pieces = [(a, b - trip)]
+        for c, d in own:
+            pieces = [q for p, r in pieces for q in ((p, min(r, c)), (max(p, d), r)) if q[1] > q[0]]
+        for p, r in pieces:
+            if r - p < REST_MIN:
+                continue
+            glide = abs(p - a) < 1e-9 and there < r                  # from the two-hand spot, with its partner
+            seq = [(p, "dainty", (0, 0, 0)), (there, "dainty_one", (0, 0, 0))] if glide else [(p, "dainty_one", (0, 0, 0))]
+            out.append((p, r, seq, False))
+    return out
+
+
+def _strip_seq(s, t0, t1):
+    """The places of a hand on a strip over a free move's span (t0, t1): its samples there, [(t, (STRIP, i), no offset)]
+    (`s` the side's samples {"t", ...} or None: none)."""
+    if s is None:
+        return []
+    return [(float(t), (STRIP, i), (0, 0, 0)) for i, t in enumerate(s["t"]) if t0 - 1e-6 <= float(t) <= t1 + 1e-6]
+
+
+def _said(place):
+    """A place as an error message names it."""
+    return "the strip" if isinstance(place, tuple) else repr(place)
+
+
+def _hand(spans, side, rest, world, at, told=False, fore=None, left=None):
+    """The keys of one hand: its moves' places on their times (`at(place)` resolves one, as `resolve` with the place's
+    elbow pole or None after it: a key at a place with a pole of its own carries it, `pole`), travelling between them at a
     human pace (`travel`), home to `rest` between two moves when it can stay there REST_MIN seconds. `spans` are (t0, t1,
     [(t, place, offset)], react): a reacting move's hand leaves where it is on t0 and arrives when `fling` gets it there.
     A hand with no move waits at its rest place when it has one of its own (`told`: a rest entry), else it is left alone.
     With `fore` (wrist point -> its forearm's direction) a trip whose hand would fold over its wrist on the way passes a
-    key halfway (`_via`)."""
+    key halfway (`_via`). A free move on a strip (its places the strip's samples) keeps the hand on the strip to the end
+    of the move, or leaves it at the last sample from which the hand still gets to the next move on time; `left` (a dict)
+    gets {the move's t0: when it leaves}."""
     grip = SHAPES["curled"] if rest == "mic" else None             # a mic hand never lets go of the mic
     keys = []
 
@@ -530,9 +626,16 @@ def _hand(spans, side, rest, world, at, told=False, fore=None):
         return np.asarray(point, float) + np.asarray(off, float), d, palm
 
     def key(t, name, off=(0, 0, 0)):
-        point, d, palm, shape, *_ = at(name)
-        keys.append({"t": round(t, 4), "at": [round(float(p + o), 4) for p, o in zip(point, off)], "dir": world(d),
-                     "palm": world(palm), "fingers": grip if grip is not None else SHAPES[shape], "_d": d, "_p": palm})
+        point, d, palm, shape, *more = at(name)
+        k = {"t": round(t, 4), "at": [round(float(p + o), 4) for p, o in zip(point, off)], "dir": world(d),
+             "palm": world(palm), "_d": d, "_p": palm}
+        if shape is None:
+            k["strip"] = True                                        # on a strip: the fingers are the strip's
+        else:
+            k["fingers"] = grip if grip is not None else SHAPES[shape]
+        if len(more) > 2 and more[2] is not None:
+            k["pole"] = [round(float(v), 4) for v in more[2]]        # the elbow held its own way there (POLES)
+        keys.append(k)
 
     if not spans and (rest != "rest" or told):
         key(0.0, rest)                                               # it waits there from the start
@@ -558,24 +661,39 @@ def _hand(spans, side, rest, world, at, told=False, fore=None):
     def trip(k, a, b):
         return fling(a, b) if plan[k][3] else travel(a, b)
 
-    for k, (_, t1, seq, _) in enumerate(plan):
+    for k, (t0, t1, seq, _) in enumerate(plan):
         if not straight[k]:                                          # it sets off from home to arrive on time
             leave = seq[0][0] - trip(k, home, where(*seq[0][1:]))
-            key(max(leave, 0.0) if k == 0 else leave, rest)
+            leave = max(leave, 0.0) if k == 0 else leave
+            if leave < seq[0][0] - 1e-6:
+                key(leave, rest)
+        on = isinstance(seq[0][1], tuple)                            # on a strip: it stays as long as it can
+        if on and k + 1 < len(plan) and straight[k + 1]:
+            nt, nplace, noff = plan[k + 1][2][0]
+            dest = where(nplace, noff)
+            ok = [j for j, (t, p, off) in enumerate(seq) if t + trip(k + 1, where(p, off), dest) <= nt + 1e-6]
+            if not ok:
+                raise MoveError(f"the {side} hand needs {trip(k + 1, where(*seq[0][1:]), dest):.2f} s to get from the "
+                                f"strip (at {seq[0][0]:g} s) to {_said(nplace)} (at {nt:g} s): let it go later or start "
+                                f"the next move later")
+            seq = seq[:ok[-1] + 1]
         for t, p, off in seq:
             key(t, p, off)
-        last, lt, end = where(*seq[-1][1:]), seq[-1][0], t1        # the last place holds to the end of the move ...
+        if on and left is not None:
+            left[t0] = seq[-1][0]
+        last, lt = where(*seq[-1][1:]), seq[-1][0]
+        end = lt if on else t1                                       # the last place holds to the end of the move ...
         if k + 1 < len(plan) and straight[k + 1]:
             nt, nplace, noff = plan[k + 1][2][0]
             need = trip(k + 1, last, where(nplace, noff))
-            end = min(t1, nt - need)                                 # ... or the hand leaves it in time for the next
+            end = min(end, nt - need)                                # ... or the hand leaves it in time for the next
             if end < lt - 1e-6:
-                raise MoveError(f"the {side} hand needs {need:.2f} s to get from {seq[-1][1]!r} (at {lt:g} s) to "
-                                f"{nplace!r} (at {nt:g} s) and has {nt - lt:.2f} s: start the next move later")
+                raise MoveError(f"the {side} hand needs {need:.2f} s to get from {_said(seq[-1][1])} (at {lt:g} s) to "
+                                f"{_said(nplace)} (at {nt:g} s) and has {nt - lt:.2f} s: start the next move later")
         if end - lt > 1e-6:
             key(end, seq[-1][1], seq[-1][2])
         if k + 1 == len(plan) or not straight[k + 1]:
-            key(t1 + travel(last, home), rest)
+            key(max(t1, lt) + travel(last, home), rest)
     return _via(keys, world, fore)
 
 
@@ -605,8 +723,8 @@ def _via(keys, world, fore):
     out = []
     for a, b in zip(keys, keys[1:] + [None]):
         out.append({k: v for k, v in a.items() if k not in ("_d", "_p")})
-        if fore is None or b is None or b["t"] - a["t"] < 1e-3:
-            continue
+        if fore is None or b is None or b["t"] - a["t"] < 1e-3 or (a.get("strip") and b.get("strip")):
+            continue                                                 # (along a strip the hand is the strip's)
         mid = 0.5 * (np.asarray(a["at"], float) + np.asarray(b["at"], float))
         f = fore(mid)
         d, p = halfway((a["_d"], a["_p"]), (b["_d"], b["_p"]))

@@ -158,7 +158,8 @@ def music(root, cache_dir):
             for tr in plan["transitions"]:
                 effects.append({"kind": "transition", "label": tr["kind"], "from": secs(tr["first"]), "to": secs(tr["last"] + 1)})
             for ins in plan["inserts"]:
-                effects.append({"kind": "insert", "label": str(ins["shot"]), "from": secs(ins["f0"]), "to": secs(ins["f1"])})
+                label = ins["shot"] if ins["shot"] is not None else ins["clip"]["src"]     # a split's video half
+                effects.append({"kind": "insert", "label": str(label), "from": secs(ins["f0"]), "to": secs(ins["f1"])})
             for g in plan["glitches"]:
                 effects.append({"kind": "glitch", "label": "glitch", "from": secs(g["f0"]), "to": secs(g["f1"])})
             for fx in plan.get("fx") or []:

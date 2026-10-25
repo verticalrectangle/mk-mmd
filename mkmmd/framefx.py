@@ -9,6 +9,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import footage as FT
+from . import picturefx as PF
 from .core import framefx as FX
 from .core import lanes as LN
 
@@ -18,10 +20,16 @@ CACHE = 64                       # decoded frames kept for echoes and slitscans
 SLAB_SAMPLES = 8                 # positions a moving slab is drawn at over its shutter (motion blur)
 SHOCK_RIM = 0.6                  # the lit front of a shock ring, as a share of its width
 MOSH_SCALE = 0.25                # a mosh's optical flow is worked out on pictures this share of the frame's size
+MOSH_PATCH = 6                   # blocks across a patch of a made-up flow's stuck blocks
+MOSH_SOLID = 0.98                # a masked mosh's blocks take nothing from pixels its mask gives less than this
 DOT = 0.72                       # a halftone dot's radius at full darkness, in cells: the dots merge into solid ink
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
 SHRINK_BY_AREA = 0.75            # a figure laid smaller than this is shrunk by area first (no shimmer in fine hair)
 DEPTH_SCALE = 0.3                # how much larger an orbit's nearest copy is, and smaller its farthest, at a tilt of 90
+SILK_KEY = 0.2                   # the share of a figure's luma a silkscreen's key plate prints (its darkest band)
+SILK_SOFT = 1.5                  # px at 1080 on the short side: the luma smoothed before a silkscreen cuts it in bands
+SILK_LINE = 4.0                  # px at 1080: the reach of a silkscreen's lines (the key where luma dips under its mean)
+SILK_DEPTH = 0.06                # how far under its mean over SILK_LINE the luma of a line lies
 
 
 def scale_about(img, c, z):
@@ -281,6 +289,94 @@ def mosh_step(held, prev, cur, block):
                      borderMode=cv2.BORDER_REPLICATE)
 
 
+def _block_of(n, b):
+    """The block (0, 1, ...) each of `n` pixels along a side lies in, blocks of `b` px (1 or more, a fraction too) from
+    its first pixel."""
+    return (np.arange(n) / b).astype(np.int64)
+
+
+def mosh_flow(flow, size, block, px, index):
+    """A mosh's made-up motion over pictures of `size` (w, h), as a codec's motion vectors: (moves, b), each block's
+    move per step in whole px ((rows, cols, 2) int32, x right, y down) and b, the blocks' side in px (`block`, a
+    fraction too: a frame of another size of the same shape is cut into the same blocks and moshed the same way, its
+    moves rounded at its own size). The flow's kind at each block's middle, its `amount` (px at 1080, `px` px each) the
+    farthest move: `drift` the same move everywhere, `angle` degrees counter-clockwise from the right; `zoom` the
+    picture pushed out from `center` ([x, y] frame fractions) as a camera pushing in does, the frame's farthest corner
+    from it moving most (drawn in toward it with a negative amount); `swirl` round it, counter-clockwise on screen
+    (clockwise with a negative amount); `noise` a smooth random field whose swirls are `size` frame heights across.
+    Each block's move is then off by up to `jitter` x amount at random (a motion search's errors), and a share `stuck`
+    of the blocks, in patches, does not move at all (skip blocks). Seeded by the flow's `seed` and the entry's `index`,
+    each part on its own: another `jitter` or `stuck` leaves the rest as it was, and a larger `stuck` holds more of the
+    same patches."""
+    w, h = int(size[0]), int(size[1])
+    b = max(float(block), 1.0)
+    gw, gh = int(_block_of(w, b)[-1]) + 1, int(_block_of(h, b)[-1]) + 1
+    amount, kind, seed = flow["amount"] * px, flow["kind"], [flow["seed"], index]
+    xs, ys = np.meshgrid((np.arange(gw) + 0.5) * b - 0.5, (np.arange(gh) + 0.5) * b - 0.5)
+    if kind == "drift":
+        a = math.radians(flow["angle"])
+        v = np.stack([np.full_like(xs, amount * math.cos(a)), np.full_like(xs, -amount * math.sin(a))], -1)
+    elif kind == "noise":
+        cell = flow["size"] * h
+        lattice = np.random.default_rng(seed + [0]).standard_normal(
+            (int(math.ceil(h / cell)) + 2, int(math.ceil(w / cell)) + 2, 2))
+        v = cv2.resize(lattice.astype(np.float32), (gw, gh), interpolation=cv2.INTER_CUBIC).astype(np.float64)
+        v *= amount / max(float(np.hypot(v[..., 0], v[..., 1]).max()), 1e-9)
+    else:
+        cx, cy = flow["center"][0] * w - 0.5, flow["center"][1] * h - 0.5
+        reach = max(math.hypot(x - cx, y - cy) for x in (-0.5, w - 0.5) for y in (-0.5, h - 0.5))
+        dx, dy = (xs - cx) * (amount / reach), (ys - cy) * (amount / reach)
+        v = np.stack([dx, dy] if kind == "zoom" else [dy, -dx], -1)
+    rng = np.random.default_rng(seed + [1])
+    r = np.sqrt(rng.random((gh, gw))) * (flow["jitter"] * abs(amount))
+    t = rng.random((gh, gw)) * (2.0 * math.pi)
+    v = v + np.stack([r * np.cos(t), r * np.sin(t)], -1)
+    n = int(round(flow["stuck"] * gw * gh))
+    if n:
+        patches = np.random.default_rng(seed + [2]).standard_normal(
+            (-(-gh // MOSH_PATCH) + 1, -(-gw // MOSH_PATCH) + 1))
+        s = cv2.resize(patches.astype(np.float32), (gw, gh), interpolation=cv2.INTER_CUBIC)
+        v[np.unravel_index(np.argsort(s, axis=None, kind="stable")[:n], (gh, gw))] = 0.0
+    return np.rint(v).astype(np.int32), b
+
+
+def mosh_stay(moves, b, outside):
+    """Block `moves` (mosh_flow's, blocks of b px) with every block whose source (the block its move behind it, the
+    frame's edge repeated past the frame) holds a pixel of `outside` ((h, w) bool) kept still: a masked mosh moves the
+    picture of its region alone, and what lies outside it never smears in."""
+    h, w = outside.shape
+    gh, gw = moves.shape[:2]
+    s = np.zeros((h + 1, w + 1), np.int64)
+    s[1:, 1:] = np.cumsum(np.cumsum(outside, 0, dtype=np.int64), 1)
+    bx, by = _block_of(w, b), _block_of(h, b)
+    cols, rows = np.arange(gw), np.arange(gh)
+    x0 = np.searchsorted(bx, cols)[None, :] - moves[..., 0]
+    x1 = np.searchsorted(bx, cols, side="right")[None, :] - moves[..., 0]
+    y0 = np.searchsorted(by, rows)[:, None] - moves[..., 1]
+    y1 = np.searchsorted(by, rows, side="right")[:, None] - moves[..., 1]
+    ax, cx = np.clip(x0, 0, w - 1), np.clip(x1 - 1, 0, w - 1) + 1
+    ay, cy = np.clip(y0, 0, h - 1), np.clip(y1 - 1, 0, h - 1) + 1
+    out = moves.copy()
+    out[(s[cy, cx] - s[ay, cx] - s[cy, ax] + s[ay, ax]) > 0] = 0
+    return out
+
+
+def mosh_carry(held, moves, b, steps):
+    """`held` carried `steps` steps along block `moves` (mosh_flow's, blocks of b px): each pixel takes what stood its
+    block's move behind it, a whole pixel, so the picture moves in sharp chunks as a P-frame's blocks do, a block that
+    pulls from one that stays smearing that one's edge out in a trail; past the frame's edge its edge repeats."""
+    out = np.ascontiguousarray(held, np.float32)
+    if steps < 1 or not moves.any():
+        return out
+    h, w = out.shape[:2]
+    full = moves[_block_of(h, b)[:, None], _block_of(w, b)[None, :]].astype(np.float32)
+    xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    mx, my = xs - full[..., 0], ys - full[..., 1]
+    for _ in range(int(steps)):
+        out = cv2.remap(out, mx, my, cv2.INTER_NEAREST, borderMode=cv2.BORDER_REPLICATE)
+    return out
+
+
 # ================================================================================================= collages
 def centroid(m):
     """The centre (x, y) in pixels of a coverage (h, w), its coverage-weighted mean; None when nothing is covered."""
@@ -296,9 +392,33 @@ def _flat(size, colour):
 
 
 def _grow(a, width):
-    """Coverage `a` grown by `width` px all round: laid under a figure it shows as an outline."""
-    r = max(int(round(width)), 1)
-    return cv2.dilate(a, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+    """Coverage `a` grown by `width` px all round, antialiased, its outline rounded where it bends in as a die cut's is:
+    laid under a figure it shows as an outline, or a sticker's border."""
+    r = max(float(width), 0.5)
+    inside = (a >= 0.5).astype(np.uint8)
+    if not inside.any():
+        return a
+    d = cv2.distanceTransform(1 - inside, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)            # px from the figure
+    g = np.clip(np.float32(r + 0.5) - d, 0.0, 1.0)
+    if r >= 3.0:
+        sig = 0.25 * r
+        g = np.clip((cv2.GaussianBlur(g, (0, 0), sig) - 0.5) * np.float32(sig * 2.5066) + 0.5, 0.0, 1.0)
+    return np.maximum(g, a)
+
+
+def _warp(src, M, size):
+    """`src` ((h, w) or (h, w, 3)) carried by the affine map `M` (2 x 3, its pixels to the picture's) into a picture of
+    `size` (nothing outside it), shrunk by area first when M shrinks it under SHRINK_BY_AREA."""
+    M = np.asarray(M, np.float64)
+    s = math.sqrt(abs(M[0, 0] * M[1, 1] - M[0, 1] * M[1, 0]))
+    src = np.ascontiguousarray(src, np.float32)
+    if s < SHRINK_BY_AREA:
+        sw, sh = max(int(round(src.shape[1] * s)), 1), max(int(round(src.shape[0] * s)), 1)
+        k = np.array([sw / src.shape[1], sh / src.shape[0]])
+        src = cv2.resize(src, (sw, sh), interpolation=cv2.INTER_AREA)
+        M = np.hstack([M[:, :2] / k, (M[:, 2] + M[:, :2] @ (0.5 / k - 0.5))[:, None]])
+    return cv2.warpAffine(src, M.astype(np.float32), (int(size[0]), int(size[1])), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
 def _laid(src, s, a, p, size):
@@ -307,24 +427,92 @@ def _laid(src, s, a, p, size):
     w, h = size
     if abs(s - 1.0) < 1e-9 and abs(p[0] - a[0]) < 1e-6 and abs(p[1] - a[1]) < 1e-6 and src.shape[:2] == (h, w):
         return src
-    if s < SHRINK_BY_AREA:
-        sw, sh = max(int(round(src.shape[1] * s)), 1), max(int(round(src.shape[0] * s)), 1)
-        kx, ky = sw / src.shape[1], sh / src.shape[0]
-        src = cv2.resize(src, (sw, sh), interpolation=cv2.INTER_AREA)
-        M = np.float32([[1.0, 0.0, p[0] - ((a[0] + 0.5) * kx - 0.5)], [0.0, 1.0, p[1] - ((a[1] + 0.5) * ky - 0.5)]])
-    else:
-        M = np.float32([[s, 0.0, p[0] - s * a[0]], [0.0, s, p[1] - s * a[1]]])
-    return cv2.warpAffine(src, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return _warp(src, [[s, 0.0, p[0] - s * a[0]], [0.0, s, p[1] - s * a[1]]], size)
 
 
-def _paste(dst, pic, m, fill, s=1.0, a=(0.0, 0.0), p=(0.0, 0.0), edge=None):
+def _cast(dst, cov, shadow, s=1.0):
+    """`dst` under the drop shadow of a coverage `cov`: shadow = (colour, (dx, dy) px, blur px (a Gaussian's sigma),
+    alpha), its offset and blur `s` times as large (a smaller copy casts a smaller shadow)."""
+    colour, (dx, dy), blur, alpha = shadow
+    sh = plate_shift(cov, dx * s, dy * s)
+    if blur * s > 0.3:
+        sh = cv2.GaussianBlur(sh, (0, 0), blur * s)
+    a = (np.float32(alpha) * sh)[..., None]
+    return (dst * (1.0 - a) + np.asarray(colour, np.float32) * a).astype(np.float32)
+
+
+def silk_levels(L, m, n):
+    """The luma thresholds (n - 1, rising) of a silkscreen print in `n` inks: quantiles of the figure's own luma `L` where
+    its coverage `m` is over half, the darkest band SILK_KEY of it and the others in equal shares, each half a code value
+    up (a flat area the quantile falls on prints in the band below, not half way between two inks); None for no figure."""
+    vals = L[m > 0.5]
+    if vals.size == 0:
+        return None
+    qs = [SILK_KEY] + [SILK_KEY + (1.0 - SILK_KEY) * j / (n - 1) for j in range(1, n - 1)]
+    return np.quantile(vals[::max(1, vals.size // 200000)], qs) + 0.5 / 255.0
+
+
+def _within(x, m, sigma):
+    """`x` (h, w) blurred `sigma` px inside the coverage `m` (a normalised convolution: what lies outside the figure does
+    not bleed in at its edge)."""
+    den = cv2.GaussianBlur(np.ascontiguousarray(m, np.float32), (0, 0), sigma)
+    return cv2.GaussianBlur(np.ascontiguousarray(x * m, np.float32), (0, 0), sigma) / np.maximum(den, np.float32(1e-4))
+
+
+def silk_bands(pic, m, n, soft, line=0.0):
+    """A silkscreen print of a figure (picture `pic`, coverage `m`) in `n` inks as coverages over the picture: (key,
+    steps), key the key plate inside the figure: its darkest band (SILK_KEY of its luma) and, with `line` (px), the
+    lines, eyes and creases, where the luma lies SILK_DEPTH under its mean over `line` px round it; steps[j] where the
+    luma is past threshold j + 1 (band j + 2's ink over band j + 1's). Each a hard edge antialiased over a pixel: no
+    gradient inside a band. The luma is smoothed `soft` px first (inside the figure), so the bands print as shapes."""
+    L = np.ascontiguousarray(np.asarray(pic, np.float32) @ LUMA)
+    if soft > 0:
+        L = _within(L, m, soft)
+    lv = silk_levels(L, m, n)
+    if lv is None:
+        return np.zeros_like(m), [np.zeros_like(m) for _ in range(n - 2)]
+    gx, gy = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=1), cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=1)
+    g = np.float32(0.5) * np.sqrt(gx * gx + gy * gy) + np.float32(1e-4)    # luma per px across a band's edge
+
+    def past(t):
+        return np.clip((L - t) / g + 0.5, 0.0, 1.0)
+    key = 1.0 - past(np.float32(lv[0]))
+    if line > 0:
+        key = np.maximum(key, 1.0 - past(_within(L, m, line) - np.float32(SILK_DEPTH)))
+    return key * m, [past(np.float32(t)) for t in lv[1:]]
+
+
+def silk_print(dst, cov, key, steps, inks, offset):
+    """`dst` with a figure printed in flat inks (coverage `cov`; `key` and `steps` from silk_bands, laid as it is): the
+    colour plates first, inks[1] and each next ink where its step is, then the key plate in inks[0] printed `offset`
+    (dx, dy) px off register, so the band under it shows where it misses and it prints on the ground past the figure."""
+    inks = [np.asarray(c, np.float32) for c in inks]
+    colour = np.empty(dst.shape, np.float32)
+    colour[:] = inks[1]
+    for j, st in enumerate(steps):
+        colour += (inks[j + 2] - inks[j + 1]) * st[..., None]
+    c = cov[..., None]
+    out = dst * (1.0 - c) + colour * c
+    k = (plate_shift(key, offset[0], offset[1]) if offset[0] or offset[1] else key)[..., None]
+    return (out * (1.0 - k) + inks[0] * k).astype(np.float32)
+
+
+def _paste(dst, pic, m, fill, s=1.0, a=(0.0, 0.0), p=(0.0, 0.0), edge=None, shadow=None):
     """`dst` with a figure laid on it: coverage `m` scaled `s` about pixel `a` and put with `a` at pixel `p`, drawn as its
-    picture `pic` (`fill` None) or in the flat colour `fill`, over an `edge` (colour, width px) grown round it."""
+    picture `pic` (`fill` None), in the flat colour `fill`, or printed (`fill` a silkscreen: {inks, offset px, soft px}),
+    over an `edge` (colour, width px) grown round it, the two casting a `shadow` (colour, (dx, dy) px, blur px, alpha)."""
     size = (dst.shape[1], dst.shape[0])
     cov = _laid(m, s, a, p, size)
-    if edge is not None and edge[1] > 0:
-        g = _grow(cov, edge[1])[..., None]
+    ring = None if edge is None or edge[1] <= 0 else _grow(cov, edge[1])
+    if shadow is not None and shadow[3] > 0:
+        dst = _cast(dst, cov if ring is None else ring, shadow, s)
+    if ring is not None:
+        g = ring[..., None]
         dst = dst * (1.0 - g) + np.asarray(edge[0], np.float32) * g
+    if isinstance(fill, dict):
+        key, steps = silk_bands(pic, m, len(fill["inks"]), fill["soft"], fill["line"])
+        return silk_print(dst, cov, _laid(key, s, a, p, size), [_laid(x, s, a, p, size) for x in steps], fill["inks"],
+                          fill["offset"])
     if fill is None:
         rgb = _laid(pic * m[..., None], s, a, p, size)
     else:
@@ -332,33 +520,106 @@ def _paste(dst, pic, m, fill, s=1.0, a=(0.0, 0.0), p=(0.0, 0.0), edge=None):
     return (rgb + dst * (1.0 - cov[..., None])).astype(np.float32)
 
 
-def grid(img, m, n, colour_at, fill_at, piece=None, edge=None):
-    """The frame shrunk into `n` x `n` cells, each the figure (coverage `m` of `img`) on a flat colour: colour_at(i, j)
-    and fill_at(i, j) (None: the figure's picture, else a flat colour) of the cell in column i, row j; `piece` ((i, j),
-    colour) draws that cell's figure flat in its colour; an `edge` (colour, width px) round each figure."""
+def _part(W, H, x, y, tw, th):
+    """Where a tw x th tile put with its top left at (x, y) meets a W x H picture: (picture slices, tile slices), None
+    when it falls outside."""
+    x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + tw, W), min(y + th, H)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return (slice(y0, y1), slice(x0, x1)), (slice(y0 - y, y1 - y), slice(x0 - x, x1 - x))
+
+
+def cells(img, m, boxes, colour_at, fill_at, piece=None, edge=None, shadow=None):
+    """Boxes of a frame each showing the whole frame contain-fitted and centred in it, the figure (coverage `m` of `img`)
+    on a flat colour: boxes [((x0, y0, x1, y1) frame fractions, (i, j)), ...] drawn in order, each in colour_at(i, j)
+    with the figure drawn fill_at(i, j) (None: its picture; a colour; a silkscreen {inks, offset px, soft px}) over an
+    `edge` (colour, width px) and its `shadow` (colour, (dx, dy) px, blur px, alpha; scaled with the figure); `piece`
+    ((i, j), colour) draws that cell's figure flat in its colour. The boxes of one call are of one size (a layout, or a
+    step's cells on their way), so the figure is shrunk once."""
     h, w = m.shape
-    cw, ch = -(-w // n), -(-h // n)
-    sm = cv2.resize(np.ascontiguousarray(m, np.float32), (cw, ch), interpolation=cv2.INTER_AREA)
-    sp = cv2.resize(img * m[..., None], (cw, ch), interpolation=cv2.INTER_AREA)
-    ring = None if edge is None or edge[1] <= 0 else _grow(sm, edge[1])[..., None]
-    out = np.empty((ch * n, cw * n, 3), np.float32)
-    for j in range(n):
-        for i in range(n):
-            tile = _flat((cw, ch), colour_at(i, j))
-            if ring is not None:
-                tile = tile * (1.0 - ring) + np.asarray(edge[0], np.float32) * ring
-            fill = piece[1] if piece is not None and tuple(piece[0]) == (i, j) else fill_at(i, j)
-            rgb = sp if fill is None else np.asarray(fill, np.float32) * sm[..., None]
-            out[j * ch:(j + 1) * ch, i * cw:(i + 1) * cw] = rgb + tile * (1.0 - sm[..., None])
-    return out if out.shape[:2] == (h, w) else cv2.resize(out, (w, h), interpolation=cv2.INTER_AREA)
+    out = np.zeros((h, w, 3), np.float32)
+    if not boxes:
+        return out
+    x0, y0, x1, y1 = boxes[0][0]
+    s = min(x1 - x0, y1 - y0)                                           # the frame in a box, contain-fitted
+    sw, sh = max(int(round(w * s)), 1), max(int(round(h * s)), 1)
+    ew = 0.0 if edge is None else edge[1]
+    reach = 0.0 if shadow is None else math.hypot(*shadow[1]) * s + 3.0 * shadow[2] * s
+    silks = [f for f in (fill_at(*b[1]) for b in boxes) if isinstance(f, dict)]
+    pad = int(math.ceil(ew + reach + max([math.hypot(*f["offset"]) for f in silks] or [0.0]))) + 2
+    tw, th = sw + 2 * pad, sh + 2 * pad
+
+    def tile(x):
+        t = np.zeros((th, tw) + x.shape[2:], np.float32)
+        t[pad:pad + sh, pad:pad + sw] = cv2.resize(np.ascontiguousarray(x, np.float32), (sw, sh),
+                                                   interpolation=cv2.INTER_AREA)
+        return t
+    cov, pic = tile(m), tile(img * m[..., None])
+    ring = None if ew <= 0 else _grow(cov, ew)
+    under = cov if ring is None else ring
+    dark = None
+    if shadow is not None and shadow[3] > 0:
+        dark = plate_shift(under, shadow[1][0] * s, shadow[1][1] * s)
+        if shadow[2] * s > 0.3:
+            dark = cv2.GaussianBlur(dark, (0, 0), shadow[2] * s)
+        dark = np.float32(shadow[3]) * dark
+    bands = {}                                       # (inks, key offset) -> the key plate shifted, the colour steps
+    for f in silks:
+        n, off = len(f["inks"]), (float(f["offset"][0]), float(f["offset"][1]))
+        if (n, off) not in bands:
+            key, steps = silk_bands(img, m, n, f["soft"], f["line"])
+            key = tile(key)
+            bands[n, off] = (plate_shift(key, *off) if off[0] or off[1] else key, [tile(st) for st in steps])
+    spans = []
+    for (bx0, by0, bx1, by1), (i, j) in boxes:                      # the grounds first, in order
+        X0, Y0, X1, Y1 = int(round(bx0 * w)), int(round(by0 * h)), int(round(bx1 * w)), int(round(by1 * h))
+        if X1 > X0 and Y1 > Y0:
+            out[Y0:Y1, X0:X1] = np.asarray(colour_at(i, j), np.float32)
+            spans.append(((X0, Y0, X1, Y1), ((bx0 + bx1) * w / 2.0, (by0 + by1) * h / 2.0), (i, j)))
+    for (X0, Y0, X1, Y1), (cx, cy), (i, j) in spans:              # then each figure inside its box: copies on their
+        part = _part(X1 - X0, Y1 - Y0, int(round(cx - sw / 2.0)) - pad - X0,       # way overlap, none is cut off
+                     int(round(cy - sh / 2.0)) - pad - Y0, tw, th)
+        if part is None:
+            continue
+        rs, ts = part
+        region = out[Y0:Y1, X0:X1]
+        sub = region[rs]
+        if dark is not None:
+            a = dark[ts][..., None]
+            sub = sub * (1.0 - a) + np.asarray(shadow[0], np.float32) * a
+        if ring is not None:
+            g = ring[ts][..., None]
+            sub = sub * (1.0 - g) + np.asarray(edge[0], np.float32) * g
+        fill = piece[1] if piece is not None and tuple(piece[0]) == (i, j) else fill_at(i, j)
+        c = cov[ts]
+        if isinstance(fill, dict):
+            key, steps = bands[len(fill["inks"]), (float(fill["offset"][0]), float(fill["offset"][1]))]
+            sub = silk_print(sub, c, key[ts], [st[ts] for st in steps], fill["inks"], (0.0, 0.0))
+        elif fill is None:
+            sub = pic[ts] + sub * (1.0 - c[..., None])
+        else:
+            sub = np.asarray(fill, np.float32) * c[..., None] + sub * (1.0 - c[..., None])
+        region[rs] = sub
+    return out
 
 
-def orbit(img, m, back, centre, radius, tilt, theta0, count, scale, size, fill_at, edge=None):
+def grid(img, m, n, colour_at, fill_at, piece=None, edge=None, shadow=None):
+    """The frame shrunk into cells, `n` x `n` (or n = (columns, rows)), each the whole frame contain-fitted and centred
+    in its cell, the figure (coverage `m` of `img`) on a flat colour: colour_at(i, j) and fill_at(i, j) (None: the
+    figure's picture; a colour; a silkscreen) of the cell in column i, row j; `piece` ((i, j), colour) draws that cell's
+    figure flat in its colour; an `edge` (colour, width px) round each figure and its `shadow`."""
+    d = FX.dims(n)
+    return cells(img, m, [(FX.box(d, i, j), (i, j)) for j in range(d[1]) for i in range(d[0])], colour_at, fill_at,
+                 piece, edge, shadow)
+
+
+
+def orbit(img, m, back, centre, radius, tilt, theta0, count, scale, size, fill_at, edge=None, shadow=None):
     """The figure (coverage `m` of `img`) moved to pixel `centre` on a flat `back`, `scale` times its size, and `count`
     copies of it, `size` times as large again, on a ring of `radius` px round it tilted `tilt` degrees from face-on: an
     ellipse whose near half (the lower on screen) is drawn over the figure and larger, its far half under it and smaller.
     Copy j (1 .. count) stands at angle theta0 + 2 pi (j - 1) / count, radians clockwise on screen from the right;
-    fill_at(0) is the figure's fill and fill_at(j) copy j's (None: its picture)."""
+    fill_at(0) is the figure's fill and fill_at(j) copy j's (None: its picture); each with its `edge` and `shadow`."""
     h, w = m.shape
     out = _flat((w, h), back)
     a = centroid(m)
@@ -372,16 +633,16 @@ def orbit(img, m, back, centre, radius, tilt, theta0, count, scale, size, fill_a
         order.append((depth, 0, j, (centre[0] + radius * math.cos(th), centre[1] + radius * ct * math.sin(th)),
                       scale * size * (1.0 + DEPTH_SCALE * st * depth)))
     for _, _, j, p, s in sorted(order, key=lambda o: (o[0], o[1])):
-        out = _paste(out, img, m, fill_at(j), s, a, p, edge)
+        out = _paste(out, img, m, fill_at(j), s, a, p, edge, shadow)
     return out
 
 
-def mirror(img, m, centre, axes, colour_at, fill_at, place=None, edge=None):
+def mirror(img, m, centre, axes, colour_at, fill_at, place=None, edge=None, shadow=None):
     """The figure (coverage `m` of `img`; its centroid moved to pixel `place` when one is given) on flat colour, folded
     about the vertical line through pixel `centre` (`axes` "x"), the horizontal one ("y") or both ("xy"): the side or
     quarter the figure's centroid is on is shown as it is, the others are its reflections. Region j (0 that side, 1
     across the vertical line, 2 across the horizontal, 3 across both) is colour_at(j) with the figure drawn fill_at(j)
-    (None: its picture)."""
+    (None: its picture), with its `edge` and `shadow`."""
     h, w = m.shape
     a = centroid(m)
     p = (centre[0] - 1.0, centre[1] - 1.0) if a is None else a if place is None else (float(place[0]), float(place[1]))
@@ -395,7 +656,7 @@ def mirror(img, m, centre, axes, colour_at, fill_at, place=None, edge=None):
     for j in np.unique(region):
         j = int(j)
         bg = colour_at(j)
-        comp = _flat((w, h), bg) if a is None else _paste(_flat((w, h), bg), img, m, fill_at(j), 1.0, a, p, edge)
+        comp = _flat((w, h), bg) if a is None else _paste(_flat((w, h), bg), img, m, fill_at(j), 1.0, a, p, edge, shadow)
         if j:
             comp = cv2.remap(comp, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
                              borderValue=tuple(float(c) for c in bg))
@@ -404,12 +665,13 @@ def mirror(img, m, centre, axes, colour_at, fill_at, place=None, edge=None):
     return out
 
 
-def panels(size, n, slant, figures, colour_at, fill_at, scale=1.0, edge=None):
+def panels(size, n, slant, figures, colour_at, fill_at, scale=1.0, edge=None, shadow=None):
     """The frame cut into `n` panels across its long side (columns of a wide or square frame, rows of a tall one) by lines
     leaning `slant` degrees (a column's edges to the right going up, as italics do; a row's rising to the right): panel j
     is a flat colour_at(j) with figures[j] = (picture, coverage) on it, moved so its centroid sits on the panel's middle
     line and `scale` times its size (and n times smaller in the rows of a tall frame, so a figure framed for the whole
-    frame fits one), drawn fill_at(j) (None: its picture); a figure None leaves its panel plain."""
+    frame fits one), drawn fill_at(j) (None: its picture) with its `edge` and `shadow`; a figure None leaves its panel
+    plain."""
     w, h = size
     tall = h > w
     span, tn = (h if tall else w), math.tan(math.radians(slant))
@@ -430,23 +692,23 @@ def panels(size, n, slant, figures, colour_at, fill_at, scale=1.0, edge=None):
         if a is not None:
             mid = (lo + hi) / 2.0 - 0.5                                  # the middle line, in pixel centres
             p = (a[0], mid - (a[0] + 0.5 - w / 2.0) * tn) if tall else (mid - (a[1] + 0.5 - h / 2.0) * tn, a[1])
-            tile = _paste(tile, fig[0], fig[1], fill_at(j), s, a, p, edge)
+            tile = _paste(tile, fig[0], fig[1], fill_at(j), s, a, p, edge, shadow)
         out += tile * cov[..., None]
     return out
 
 
-def stack(img, m, back, copies, step, scale, centre, fill, edge=None):
+def stack(img, m, back, copies, step, scale, centre, fill, edge=None, shadow=None):
     """The figure (coverage `m` of `img`, drawn `fill`: None its picture) on a flat `back`, in front of a stack of copies,
     the farthest drawn first: copies[j - 1] = (picture, coverage, fill) is copy j, `scale` ** j times as large about pixel
-    `centre` and j x `step` (dx, dy) px further; a copy without coverage is left out."""
+    `centre` and j x `step` (dx, dy) px further; a copy without coverage is left out. Each with its `edge` and `shadow`."""
     h, w = m.shape
     out = _flat((w, h), back)
     c = (float(centre[0]), float(centre[1]))
     for j in range(len(copies), 0, -1):
         pic, cov, f = copies[j - 1]
         if cov is not None:
-            out = _paste(out, pic, cov, f, scale ** j, c, (c[0] + j * step[0], c[1] + j * step[1]), edge)
-    return _paste(out, img, m, fill, edge=edge)
+            out = _paste(out, pic, cov, f, scale ** j, c, (c[0] + j * step[0], c[1] + j * step[1]), edge, shadow)
+    return _paste(out, img, m, fill, edge=edge, shadow=shadow)
 
 
 def stem_source(root, cache_dir):
@@ -493,29 +755,60 @@ def project_hits(root, data):
         raise FileNotFoundError(str(e)) from None
 
 
+def clip_of(fx, footage_of):
+    """A footage entry's clip (`footage_of(clip)`, mkmmd.footage.source) with its span checked against its length: a
+    FootageError naming the entry when the clip is missing or unreadable, or its span starts past its end without
+    `loop`."""
+    try:
+        clip = footage_of(fx["clip"])
+        clip.index(0.0, fx["in"], fx["rate"], fx["loop"])
+    except FT.FootageError as e:
+        raise FT.FootageError(f"fx {fx['index']} (footage): {e}") from None
+    return clip
+
+
+def check_footage(fxs, footage_of):
+    """Every footage entry's clip (its `aspect.<output>` entries' too) opened and its span checked, before anything is
+    drawn (`mk post` calls it before it encodes): a FootageError says what is wrong."""
+    for fx in fxs:
+        for e in [fx, *(fx.get("aspect") or {}).values()]:
+            if e["kind"] == "footage":
+                clip_of(e, footage_of)
+
+
 # ================================================================================================= over a cut
-class FrameFx:
+class FrameFx(PF.PictureFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
-    size       (width, height) of the pictures
-    frame_of   callable(Blender frame) -> picture or None: the cut's frame there, for echoes, slitscans, pushes, moshes
-               and the poses before of a collage
-    point_of   callable(key, frame) -> ((x, y) px, frame heights per metre at its depth): a projected scene point
-    figure_of  callable(key, frame) -> coverage (h, w): a collage's figure (mkmmd.cutfx.read_figure; None: a collage is
-               an error)
-    stem_of    callable(timeline, stem name) -> (mono float32 samples, sample rate, song seconds before clip time 0 in
-               them), for scopes (None: a scope is an error); `stem_source` makes one for a project
-    hits       the project's [audio] hits file ({lane: [...]}, mkmmd.core.lanes), for zooms, shocks and collages on a
-               lane"""
+    size        (width, height) of the pictures
+    frame_of    callable(Blender frame) -> picture or None: the cut's frame there, for echoes, slitscans, pushes, moshes
+                and the poses before of a collage
+    point_of    callable(key, frame) -> ((x, y) px, frame heights per metre at its depth): a projected scene point
+    figure_of   callable(key, frame) -> coverage (h, w): a collage's figure, the figure a pixel sort or a mosh is masked by
+                (mkmmd.cutfx.read_figure; None: those are an error)
+    stem_of     callable(timeline, stem name) -> (mono float32 samples, sample rate, song seconds before clip time 0 in
+                them), for scopes (None: a scope is an error); `stem_source` makes one for a project
+    hits        the project's [audio] hits file ({lane: [...]}, mkmmd.core.lanes), for zooms, shocks and collages on a
+                lane
+    output      the output's name: entries draw as their `aspect.<output>` tables say (FX.for_output)
+    footage_of  callable(clip) -> mkmmd.footage.Clip, for footage (mkmmd.footage.source(root); None: footage is an
+                error)
+    font_of     callable(font or None) -> a font file, for camcorders and booth captions (mkmmd.picturefx.font_source;
+                None: the asset registry's, and files as they are given)"""
 
-    def __init__(self, fxs, size, *, fps, frame0, frame_of, point_of, figure_of=None, stem_of=None, hits=None):
-        self.fxs, self.size, self.fps, self.frame0 = fxs, (int(size[0]), int(size[1])), float(fps), int(frame0)
+    def __init__(self, fxs, size, *, fps, frame0, frame_of, point_of, figure_of=None, stem_of=None, hits=None,
+                 output=None, footage_of=None, font_of=None):
+        self.fxs = [FX.for_output(fx, output) for fx in fxs]
+        self.size, self.fps, self.frame0, self.output = (int(size[0]), int(size[1])), float(fps), int(frame0), output
         self._frame_of, self._point_of, self._figure_of = frame_of, point_of, figure_of
-        self._stem_of, self._hits = stem_of, hits
+        self._stem_of, self._hits, self._footage_of = stem_of, hits, footage_of
         self.px = min(self.size) / 1080.0
         self._cache = OrderedDict()
         self._gain, self._times = {}, {}
         self._held = {}                  # a mosh's index -> (frame, the picture it holds there)
+        self._flows = {}                 # a mosh's index -> (its made-up flow's block moves, block px)
+        self._pivots = {}                # a collage's index -> the pixel its figure's moves turn about
+        self._picture_init(font_of)
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))
@@ -523,8 +816,17 @@ class FrameFx:
     def frame(self, frame, img):
         """`img` (the cut's frame `frame`, its cut effects composited) with every effect on that frame, in table order."""
         for fx in FX.at(self.fxs, frame):
-            img = getattr(self, "_" + fx["kind"])(fx, frame, img)
+            img = self._apply(fx, frame, img)
         return img
+
+    def _apply(self, fx, frame, img):
+        """`img` with the effect `fx` on `frame`, kept inside its `rect` (the frame outside it as it was, and a pixel the
+        effect left as it was stays exactly so across a feathered edge: a figure a masked effect keeps)."""
+        out = getattr(self, "_" + fx["kind"])(fx, frame, img)
+        if fx.get("rect") is None:
+            return out
+        m = PF.rect_mask(self.size, tuple(fx["rect"]), fx["feather"] * self.px)[..., None]
+        return (img + (out - img) * m).astype(np.float32)
 
     # ---------------------------------------------------------------- inputs
     def _get(self, f):
@@ -660,18 +962,38 @@ class FrameFx:
         return split(img, rng, fx["bands"], fx["shift"] * self.size[0] * s, fx["share"], fx["rgb"] * self.px * s)
 
     def _mosh(self, fx, frame, img):
+        """The held picture mixed over the frame by the strength, and with a `mask` by the figure's coverage too: the
+        figure's outline as antialiased as it is, a figure under a ground mask left exactly as it was."""
         held = self._moshed(fx, frame, img)
         s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
-        return img if s <= 0.0 else (img * (1.0 - s) + held * s).astype(np.float32)
+        if s <= 0.0:
+            return img
+        region = self._masked(fx, frame)
+        if region is None:
+            return (img * (1.0 - s) + held * s).astype(np.float32)
+        a = (np.float32(s) * region)[..., None]
+        return (img * (1.0 - a) + held * a).astype(np.float32)
 
     def _moshed(self, fx, frame, img):
-        """The picture a mosh holds at `frame`: the cut's frame before its span (its first when the clip starts inside
-        it), carried along the cut's own motion from each frame to the next since its first frame (the motion across the
-        cut itself is the key frame a mosh loses); one step on from the frame before when that was the last asked, else
-        worked out again from the start."""
+        """The picture a mosh holds at `frame`. With a `flow`: the span's first frame as it reached the mosh, carried
+        `steps` steps along the flow's block moves on that frame and as many more on each frame after (a P-frame played
+        again and again: a still moshes too). Without: the cut's frame before its span (its first when the clip starts
+        inside it), carried along the cut's own motion from each frame to the next since its first frame (the motion
+        across the cut itself is the key frame a mosh loses). One step on from the frame before when that was the last
+        asked, else worked out again from the start."""
         i, f0 = fx["index"], fx["f0"]
-        pic = lambda g: (img if g == frame else None) if self._get(g) is None else self._get(g)     # noqa: E731
         state = self._held.get(i)
+        if fx["flow"] is not None:
+            moves, b = self._flow(fx)
+            if state is not None and state[0] == frame - 1:
+                held, n = state[1], 1
+            else:
+                held, n = self._reached(fx, f0, frame, img), frame - f0 + 1
+                held = img if held is None else held
+            held = mosh_carry(held, moves, b, n * fx["flow"]["steps"])
+            self._held[i] = (frame, held)
+            return held
+        pic = lambda g: (img if g == frame else None) if self._get(g) is None else self._get(g)     # noqa: E731
         if state is not None and state[0] == frame - 1:
             held, first = state[1], frame
         else:
@@ -686,6 +1008,19 @@ class FrameFx:
         self._held[i] = (frame, held)
         return held
 
+    def _flow(self, fx):
+        """(block moves, block px) of a mosh's made-up flow on this output's pictures (mosh_flow); with a `mask`, the
+        blocks whose source holds anything of the rest on the span's first frame (the figure's outline included) are
+        kept still (mosh_stay): the figure's colours never smear into the ground, nor the ground's into her."""
+        got = self._flows.get(fx["index"])
+        if got is None:
+            moves, b = mosh_flow(fx["flow"], self.size, fx["block"] * self.px, self.px, fx["index"])
+            region = self._masked(fx, fx["f0"])
+            if region is not None:
+                moves = mosh_stay(moves, b, region < MOSH_SOLID)
+            got = self._flows[fx["index"]] = (moves, b)
+        return got
+
     # ---------------------------------------------------------------- collages
     def _figure(self, fx, frame):
         """The coverage of a collage's figure on `frame` (a FileNotFoundError when its layer is missing), None before the
@@ -697,66 +1032,130 @@ class FrameFx:
         return self._figure_of(FX.figure_key(fx), frame)
 
     def _collage(self, fx, frame, img, draw):
-        """`img` with the collage `draw(k, m)` makes (k the hits so far, m the figure) mixed in by the strength."""
-        out = draw(FX.step(fx, frame, self._hit_times(fx), self.fps, self.frame0), self._figure(fx, frame))
+        """`img` with the collage `draw(k, pic, m)` makes (k the hits so far; the figure's picture and coverage on
+        `frame`, moved by its `keys`) mixed in by the strength."""
+        pic, m = self._posed(fx, frame, img, self._figure(fx, frame))
+        out = draw(FX.step(fx, frame, self._hit_times(fx), self.fps, self.frame0), pic, m)
         s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
         return out if s >= 1.0 else (img * (1.0 - s) + out * s).astype(np.float32)
+
+    def _posed(self, fx, g, pic, m):
+        """A collage's figure (picture or None, coverage) on frame `g` moved by its `keys` at that frame: turned, scaled
+        and shifted about its pivot (as it is at rest)."""
+        if not fx["keys"] or m is None:
+            return pic, m
+        mv = FX.move_at(fx["keys"], self._t(g))
+        if mv == FX.MOVE:
+            return pic, m
+        M = FX.move_matrix(mv, self._pivot(fx), self.size[1])
+        return (None if pic is None else _warp(pic, M, self.size)), _warp(m, M, self.size)
+
+    def _pivot(self, fx):
+        """The pixel a collage's figure turns and scales about: `pivot` [x, y] (frame fractions), or found on the figure
+        on the span's first frame, the middle of its box's bottom edge (`base`) or its centroid (`center`)."""
+        got = self._pivots.get(fx["index"])
+        if got is None:
+            w, h = self.size
+            pv = fx["pivot"]
+            if not isinstance(pv, str):
+                got = (pv[0] * w - 0.5, pv[1] * h - 0.5)
+            else:
+                m = self._figure(fx, fx["f0"])
+                if m is None or not (m >= 0.5).any():
+                    raise FX.FxError(f"fx {fx['index']} ({fx['kind']}): pivot {pv!r}: the figure is not in the frame on "
+                                     f"the span's first frame ({fx['f0']}): give pivot = [x, y]")
+                if pv == "center":
+                    got = centroid(m)
+                else:
+                    ys, xs = np.nonzero(m >= 0.5)
+                    got = ((xs.min() + xs.max()) / 2.0, ys.max() + 0.5)
+            self._pivots[fx["index"]] = got
+        return got
 
     def _edge(self, fx):
         e = fx["edge"]
         return None if e is None else (e["color"], e["width"] * self.px)
 
+    def _shadow(self, fx):
+        s, h = fx["shadow"], self.size[1]
+        return None if s is None else (s["color"], (s["offset"][0] * h, s["offset"][1] * h), s["blur"] * self.px,
+                                       s["alpha"])
+
+    def _fill(self, fx, i, values=None):
+        """Entry `i` of a collage's fills (`values`, default its `fill`) as the picture code takes it: None (its picture),
+        a colour, or a silkscreen {inks: entry i of `inks`, offset, soft and line px}."""
+        f = FX.pick(fx["fill"] if values is None else values, i)
+        if f != FX.SILK:
+            return f
+        return {"inks": FX.pick(fx["inks"], i), "offset": (fx["offset"][0] * self.px, fx["offset"][1] * self.px),
+                "soft": SILK_SOFT * self.px, "line": SILK_LINE * self.px}
+
     def _before(self, fx, frame, j, fill):
-        """(picture, coverage) of a collage's copy or panel j, `delay` frames apart: frame `frame` - j x delay, its
-        picture only when it is drawn as such (`fill` None); (None, None) before the clip."""
+        """(picture, coverage) of a collage's copy or panel j, `delay` frames apart: the figure on frame `frame` - j x
+        delay, moved by its keys there, its picture only when it is drawn from it (`fill` None or a silkscreen); (None,
+        None) before the clip."""
         g = frame - j * fx["delay"]
         m = self._figure(fx, g)
-        if m is None or fill is not None:
-            return None, m
+        if m is None:
+            return None, None
+        if fill is not None and fill != FX.SILK:
+            return self._posed(fx, g, None, m)
         pic = self._get(g)
-        return (pic, m) if pic is not None else (None, None)
+        return self._posed(fx, g, pic, m) if pic is not None else (None, None)
 
     def _grid(self, fx, frame, img):
-        def draw(k, m):
+        def draw(k, pic, m):
             piece = None if fx["piece"] is None else (FX.piece_cell(fx, k), fx["piece"])
-            return grid(img, m, FX.pick(fx["cells"], k), lambda i, j: FX.pick(fx["back"], k + i + j),
-                        lambda i, j: FX.pick(fx["fill"], k + i + j), piece, self._edge(fx))
+            boxes = FX.grid_cells(fx, frame, self._hit_times(fx), self.fps, self.frame0)
+            return cells(pic, m, boxes, lambda i, j: FX.pick(fx["back"], k + i + j),
+                         lambda i, j: self._fill(fx, k + i + j), piece, self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
 
     def _orbit(self, fx, frame, img):
-        def draw(k, m):
+        def draw(k, pic, m):
             theta0 = math.radians(fx["spin"] * (self._t(frame) - fx["from"]) + fx["turn"] * k)
-            return orbit(img, m, FX.pick(fx["back"], k), self._at(fx, frame)[0], fx["radius"] * min(self.size),
-                         fx["tilt"], theta0, fx["count"], fx["scale"], fx["size"], lambda j: FX.pick(fx["fill"], k + j),
-                         self._edge(fx))
+            return orbit(pic, m, FX.pick(fx["back"], k), self._at(fx, frame)[0], fx["radius"] * min(self.size),
+                         fx["tilt"], theta0, fx["count"], fx["scale"], fx["size"], lambda j: self._fill(fx, k + j),
+                         self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
 
     def _mirror(self, fx, frame, img):
-        def draw(k, m):
+        def draw(k, pic, m):
             w, h = self.size
             place = None if fx["place"] is None else (fx["place"][0] * w - 0.5, fx["place"][1] * h - 0.5)
-            return mirror(img, m, self._at(fx, frame)[0], FX.pick(fx["axes"], k), lambda j: FX.pick(fx["back"], k + j),
-                          lambda j: FX.pick(fx["fill"], k + j), place, self._edge(fx))
+            return mirror(pic, m, self._at(fx, frame)[0], FX.pick(fx["axes"], k), lambda j: FX.pick(fx["back"], k + j),
+                          lambda j: self._fill(fx, k + j), place, self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
 
     def _panels(self, fx, frame, img):
-        def draw(k, m):
-            figures = [(img, m)]
+        def draw(k, pic, m):
+            figures = [(pic, m)]
             for j in range(1, fx["count"]):
-                pic, cov = (img, m) if fx["delay"] == 0 else self._before(fx, frame, j, FX.pick(fx["fill"], k + j))
-                figures.append(None if cov is None else (pic, cov))
+                p, cov = (pic, m) if fx["delay"] == 0 else self._before(fx, frame, j, FX.pick(fx["fill"], k + j))
+                figures.append(None if cov is None else (p, cov))
             return panels(self.size, fx["count"], fx["slant"], figures, lambda j: FX.pick(fx["back"], k + j),
-                          lambda j: FX.pick(fx["fill"], k + j), fx["size"], self._edge(fx))
+                          lambda j: self._fill(fx, k + j), fx["size"], self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
 
     def _stack(self, fx, frame, img):
-        def draw(k, m):
+        def draw(k, pic, m):
             copies = []
             for j in range(1, fx["count"] + 1):
-                f = FX.pick(fx["bands"], k + j - 1)
-                pic, cov = (img, m) if fx["delay"] == 0 else self._before(fx, frame, j, f)
-                copies.append((pic, cov, f))
+                p, cov = (pic, m) if fx["delay"] == 0 else self._before(fx, frame, j, FX.pick(fx["bands"], k + j - 1))
+                copies.append((p, cov, self._fill(fx, k + j - 1, fx["bands"])))
             unit = min(self.size)
-            return stack(img, m, FX.pick(fx["back"], k), copies, (fx["step"][0] * unit, fx["step"][1] * unit),
-                         fx["scale"], self._at(fx, frame)[0], FX.pick(fx["fill"], k), self._edge(fx))
+            return stack(pic, m, FX.pick(fx["back"], k), copies, (fx["step"][0] * unit, fx["step"][1] * unit),
+                         fx["scale"], self._at(fx, frame)[0], self._fill(fx, k), self._edge(fx), self._shadow(fx))
+        return self._collage(fx, frame, img, draw)
+
+    def _footage(self, fx, frame, img):
+        """The figure laid over the clip's picture at this frame (fitted to the output, `back` round a contained one)."""
+        if self._footage_of is None:
+            raise FileNotFoundError(f"fx {fx['index']} (footage): no footage to read")
+        clip = clip_of(fx, self._footage_of)
+
+        def draw(k, pic, m):
+            plate = clip.picture((frame - fx["f0"]) / self.fps, self.size, fx["in"], fx["rate"], fx["loop"], fx["fit"],
+                                 fx["focus"], fx["mirror"], FX.pick(fx["back"], k))
+            return _paste(plate, pic, m, self._fill(fx, k), edge=self._edge(fx), shadow=self._shadow(fx))
         return self._collage(fx, frame, img, draw)

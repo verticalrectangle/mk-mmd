@@ -54,6 +54,25 @@ def test_vmd_tempo_finds_a_clear_beat(tmp_path):
     assert abs(period_f - period) < 0.5 and contrast > 1.2
 
 
+def test_a_mirrored_vmd_plays_each_side_s_keys_on_the_other_reflected_through_the_middle(tmp_path):
+    """`[[motion]] mirror = true` (vmd.mirror): 左 and 右 trade bones, positions flip their x and rotations reflect
+    through the body's middle plane, as MMD mirrors a motion: twice is the motion itself, and the facial keys stay."""
+    raise_l = (0.0, 0.1, 0.4226, 0.9001)                              # the left arm raised, a little turned
+    src = _vmd_bytes(bones=[("左腕", 0, (0, 0, 0), raise_l), ("右足ＩＫ", 5, (0.5, 0.0, -1.0), (0, 0, 0, 1)),
+                            ("センター", 3, (1.0, 2.0, 3.0), (0.2, 0.3, 0.1, 0.9274))],
+                     morphs=[("ウィンク", 4, 1.0)])
+    p = tmp_path / "m.vmd"
+    p.write_bytes(vmd.mirror(src))
+    m = vmd.read(p)
+    assert set(m.bones) == {"右腕", "左足ＩＫ", "センター"}
+    q = m.bones["右腕"][2][0]
+    assert np.allclose(q, [raise_l[0], -raise_l[1], -raise_l[2], raise_l[3]], atol=1e-6)
+    assert np.allclose(m.bones["左足ＩＫ"][1][0], [-0.5, 0.0, -1.0]) and np.allclose(m.bones["センター"][1][0], [-1, 2, 3])
+    assert np.allclose(m.bones["センター"][2][0], [0.2, -0.3, -0.1, 0.9274], atol=1e-6)
+    assert list(m.morphs) == ["ウィンク"]
+    assert vmd.mirror(vmd.mirror(src)) == src
+
+
 def test_families_classify_common_names():
     assert families.classify("後髪1-1.R") == "back_hair"
     assert families.classify("前髪_0_1.L") == "bangs"

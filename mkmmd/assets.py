@@ -9,8 +9,8 @@ from pathlib import Path
 from . import config as CFG
 
 KINDS = ("model", "motion", "prop", "vehicle", "audio", "reference", "texture", "font", "other")
-FIELDS = ("slug", "kind", "path", "name", "author", "source_url", "license", "restrictions", "credit", "rig", "tags",
-          "readmes", "extra")
+FIELDS = ("slug", "kind", "path", "name", "author", "author_url", "source_url", "license", "restrictions", "credit", "rig",
+          "tags", "readmes", "extra")
 README_EXT = {".txt", ".md", ".html", ".htm", ".rtf"}
 LICENSE_WORDS = re.compile(r"利用規約|規約|禁止|クレジット|著作|配布|改変|license|licence|credit|terms|prohibit|"
                            r"commercial|redistribut|R-18|R18|政治|宗教", re.IGNORECASE)
@@ -124,14 +124,16 @@ class Registry:
         return p if p.is_absolute() else self.root / p
 
     def credits(self, slugs):
-        """Markdown credits for the given assets, grouped by kind; problems list what is still unreviewed."""
+        """Markdown credits for the given assets, grouped by kind, a line two assets share (a font family's weights) once;
+        problems list what is still unreviewed."""
         groups, problems = {}, []
         for s in slugs:
             e = self.get(s)
             line = e.get("credit") or " / ".join(x for x in (e.get("name"), e.get("author")) if x)
             if e.get("source_url"):
                 line += f" <{e['source_url']}>"
-            groups.setdefault(e["kind"], []).append(line)
+            if line not in groups.setdefault(e["kind"], []):
+                groups[e["kind"]].append(line)
             if not e.get("license") or e.get("license") == "unreviewed":
                 problems.append(f"{s}: license not reviewed")
             if not e.get("credit") and not e.get("author"):

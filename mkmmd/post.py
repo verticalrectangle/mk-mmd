@@ -11,8 +11,9 @@ display space (0..1, sRGB as rendered through the view transform).
                                       (their own saturation) where they are seen: a black-and-white picture with her eyes
                                       in colour (mkmmd.core.keep; the mask `keep/<frame>.png` mk render draws)
   split = {shadows = "iris", highlights = "gold", amount = 0.06}   split toning toward palette slots
-  floor = "base", toe = 0.12          the darkest colour allowed: luminance below floor + toe is lifted smoothly into
-                                      that band and tinted toward the floor colour, so nothing in the frame is black
+  floor = <darkest>, toe = 0.12       the darkest colour allowed (default: the palette's darkest slot, `base` in the dark
+                                      palettes, `text` in Dawn): luminance below floor + toe is lifted smoothly into that
+                                      band and tinted toward the floor colour, so nothing in the frame is black
   halation = {strength = 0.22, radius = 0.012, threshold = 0.72, tint = "rose"}   glow around highlights (radius as a
                                       fraction of the frame height), tinted like film halation
   vignette = 0.12                     corner darkening (fraction)
@@ -23,7 +24,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from .core.palette import resolve, srgb
+from .core.palette import darkest, resolve, srgb
 
 Y_W = np.array([0.2126, 0.7152, 0.0722], np.float32)
 
@@ -96,7 +97,7 @@ class Grade:
         yy, xx = np.mgrid[0:self.h, 0:self.w].astype(np.float32)
         r = np.hypot((xx - self.w / 2) / (self.w / 2), (yy - self.h / 2) / (self.h / 2)) / np.sqrt(2)
         self.vig = (1.0 - v * np.clip(r, 0, 1) ** 2.2)[..., None].astype(np.float32)
-        fl = self.spec.get("floor", "base")
+        fl = self.spec["floor"] if "floor" in self.spec else darkest(palette)
         self.floor = np.array(srgb(resolve(fl, palette)), np.float32) if fl else None
         self.toe = float(self.spec.get("toe", 0.12))
         self.keep_sat = float((self.spec.get("keep") or {}).get("saturation", 1.0))

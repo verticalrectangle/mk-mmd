@@ -3,8 +3,10 @@ does the prop stay out of the body (docs/design.md: Checks).
 
 `strum` replays the project's own strum spec (`[perform.<cast>] strum`, mkmmd.core.strum.plan) on the timeline and measures the
 scene against it: where the pick tip really is (the pick object rides the wrist, so the arm's reach is in the numbers) in the
-frame of the prop, against the strings of the card's `use.grip` entries. `prop_body` sinks the prop's own geometry into the
-character's collision bodies (rig.json, the shapes the hair collides with)."""
+frame of the prop, against the strings of the card's `use.grip` entries; a picking spec (`rhythm = "notes"`) is measured
+against the string each note is played on (the fretting hand's `notes`, mkmmd.core.fretting.line, replayed the same way).
+`prop_body` sinks the prop's own geometry into the character's collision bodies (rig.json, the shapes the hair collides
+with)."""
 import json
 
 import numpy as np
@@ -56,17 +58,45 @@ def _seg_dist(P, A, B):
     return np.linalg.norm(P - (A + t[:, None] * ab), axis=1)
 
 
+def _picked(ctx, cast, side, prop, neck, entry):
+    """[(t, c, w, string)] of a picking spec: the bass line of the cast member's other hand (`[pose.<cast>.hands.<other>]
+    notes`) placed on the card's neck, each note on the strum axis (mkmmd.core.strum.pick_notes)."""
+    from ..core import lanes as LN
+    other = "L" if side == "R" else "R"
+    h = (((ctx.project.data.get("pose") or {}).get(cast) or {}).get("hands") or {}).get(other) or {}
+    spec = h.get("notes")
+    if spec is None:
+        raise CheckError(f"strum: rhythm = \"notes\" picks the bass line of [pose.{cast}.hands.{other}] notes, which has none")
+    if str(h.get("grip", "")).partition(":")[0] != prop:
+        raise CheckError(f"strum: the fretting hand [pose.{cast}.hands.{other}] does not grip {prop!r}")
+    hits = None
+    if hasattr(spec, "get") and spec.get("lane") is not None:
+        hits_file = (ctx.project.data.get("audio") or {}).get("hits")
+        if not hits_file:
+            raise CheckError("strum: the notes lane reads the [audio] hits file, and the project names none")
+        try:
+            hits = LN.load(ctx.project.path(hits_file))
+        except LN.LaneError as e:
+            raise CheckError(f"strum: {e}") from None
+    try:
+        placed, _keys = FR.line(spec, neck, hits)
+    except FR.FrettingError as e:
+        raise CheckError(f"strum: [pose.{cast}.hands.{other}] {e}") from None
+    return SM.pick_notes(placed, neck, entry)
+
+
 @metric
 class Strum(Metric):
     name = "strum"
     doc = ("The pick against the strings at every stroke of a strum spec: the largest distance (mm) of the pick tip from the "
-           "nearest string at the strike of a DOWN stroke (the pick meets the low E at its strike time), with the timing of "
-           "the strikes in `detail` (when the tip really crosses the first string against the planned strike time). The "
+           "nearest string at the strike of a DOWN stroke (the pick meets the lowest string at its strike time), with the "
+           "timing of the strikes in `detail` (when the tip really crosses the first string against the planned strike time). "
+           "A picking spec (rhythm \"notes\") is judged at every stroke against the string its note is played on. The "
            "strokes are the project's: `[perform.<cast>] strum` replayed on its timeline.")
     args = {"cast": "cast member whose strum is checked (default: the only one)", "hand": "R (default) | L: the pick hand",
             "pick": "the pick object (default <prop>_pick, built with the guitar)",
             "tip": "metres from the pick object's origin to its tip along its x (default: the card's pick.tip, 0.008)",
-            "strokes": "down (default: the value is the worst down stroke) | all"}
+            "strokes": "down (the default for a strum: the value is the worst down stroke) | all (the default for picking)"}
     default_max = 10.0
 
     def needs(self, args, ctx, need):
@@ -90,7 +120,8 @@ class Strum(Metric):
         centre = np.asarray(entry["center"], float)
         tip_off = float(args.get("tip", (entry.get("pick") or {}).get("tip", 0.008)))
         s_c = float(centre @ a)
-        A = np.array([FR.string_point(neck, s, s_c) for s in range(6, 0, -1)])
+        n_str = len(neck["strings"])
+        A = np.array([FR.string_point(neck, s, s_c) for s in range(n_str, 0, -1)])
         sigma = abs(float((A[-1] - A[0]) @ c)) / 2.0
         strings = [(np.asarray(g["nut"], float), np.asarray(g["bridge"], float)) for g in neck["strings"]]
         SA, SB = np.array([p[0] for p in strings]), np.array([p[1] for p in strings])
@@ -102,12 +133,15 @@ class Strum(Metric):
         u = (tip - centre) @ c
         h = (tip - centre) @ n
         tl = _timeline(ctx, st["specs"])
-        strokes = sorted((s for sp in st["specs"] for s in SM.plan(sp, tl, ctx.project.duration)), key=lambda s: s.t)
+        picking = any(SM.picking(sp) for sp in st["specs"])
+        picked = _picked(ctx, st["cast"], args.get("hand", "R"), st["prop"], neck, entry) if picking else None
+        strokes = sorted((s for sp in st["specs"] for s in SM.plan(sp, tl, ctx.project.duration, picked)), key=lambda s: s.t)
         rows = []
         for s in strokes:
             if not (ts[0] <= s.t <= ts[-1]):
                 continue
-            level = -s.dir * sigma
+            c0, w0 = SM.geometry(s, sigma)
+            level = c0 - s.dir * w0                            # the first string's near side (a picked string's own)
             near = np.where((ts >= s.t - 0.12) & (ts <= s.t + 0.12))[0]
             cross = None
             for k in near[:-1]:
@@ -116,12 +150,20 @@ class Strum(Metric):
                     break
             t_ref = cross if cross is not None else s.t
             p = np.array([np.interp(t_ref, ts, tip[:, i]) for i in range(3)])
-            d = float(_seg_dist(p, SA, SB).min()) * 1000.0
-            rows.append({"t": round(s.t, 3), "dir": s.dir, "accent": s.accent, "dist_mm": round(d, 2),
-                         "error_ms": None if cross is None else round((cross - s.t) * 1000.0, 1)})
+            if s.string is None:
+                d = float(_seg_dist(p, SA, SB).min()) * 1000.0
+            else:                                              # the string the note is played on
+                k = n_str - int(s.string)
+                d = float(_seg_dist(p, SA[k:k + 1], SB[k:k + 1])[0]) * 1000.0
+            row = {"t": round(s.t, 3), "dir": s.dir, "accent": s.accent, "dist_mm": round(d, 2),
+                   "error_ms": None if cross is None else round((cross - s.t) * 1000.0, 1)}
+            if s.string is not None:
+                row["string"] = int(s.string)
+            rows.append(row)
         if not rows:
             raise CheckError("strum: no stroke of the spec falls inside the checked frames")
-        want = [r for r in rows if r["dir"] > 0] if args.get("strokes", "down") == "down" else rows
+        which = args.get("strokes", "all" if picking else "down")
+        want = [r for r in rows if r["dir"] > 0] if which == "down" else rows
         miss = [r for r in rows if r["error_ms"] is None]
         err = np.array([r["error_ms"] for r in rows if r["error_ms"] is not None], float)
         stats = {}
@@ -132,12 +174,15 @@ class Strum(Metric):
         vals = [(r["dist_mm"] if r["error_ms"] is not None else max(r["dist_mm"], 50.0)) for r in want]
         k = int(np.argmax(vals))
         worst = sorted(want, key=lambda r: -r["dist_mm"])[:5]
-        return float(vals[k]), {"at_frame": int(round(ctx.project.frame(want[k]["t"]))), "strokes": len(rows),
-                                "down": sum(1 for r in rows if r["dir"] > 0), "missed": len(miss),
-                                "timing": stats, "sigma_mm": round(sigma * 1000.0, 1),
-                                "tip_range_mm": {"u": [round(float(u.min()) * 1000, 1), round(float(u.max()) * 1000, 1)],
-                                                 "h": [round(float(h.min()) * 1000, 1), round(float(h.max()) * 1000, 1)]},
-                                "worst": worst, "missed_strokes": [r["t"] for r in miss][:8]}
+        detail = {"at_frame": int(round(ctx.project.frame(want[k]["t"]))), "strokes": len(rows),
+                  "down": sum(1 for r in rows if r["dir"] > 0), "missed": len(miss),
+                  "timing": stats, "sigma_mm": round(sigma * 1000.0, 1),
+                  "tip_range_mm": {"u": [round(float(u.min()) * 1000, 1), round(float(u.max()) * 1000, 1)],
+                                   "h": [round(float(h.min()) * 1000, 1), round(float(h.max()) * 1000, 1)]},
+                  "worst": worst, "missed_strokes": [r["t"] for r in miss][:8]}
+        if picking:
+            detail["picked_strings"] = sorted({r["string"] for r in rows if "string" in r})
+        return float(vals[k]), detail
 
 
 TRUNK = ("upper_body", "upper_body2", "lower_body", "neck", "head", "leg.L", "leg.R", "knee.L", "knee.R")

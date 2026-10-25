@@ -9,9 +9,12 @@ import numpy as np
 from PIL import Image
 
 from .. import cutfx as CF
+from .. import footage as FT
 from .. import framefx as FF
 from .. import master as MS
+from .. import picturefx as PFX
 from .. import post as P
+from ..core import framefx as FX
 from ..core import keep as KP
 from ..core import palette as PAL
 from ..core import screentype as SRT
@@ -131,6 +134,11 @@ def run(args):
                 stems(spec["timeline"], spec["stem"])
             except FileNotFoundError as e:
                 raise UsageError(f"fx {spec['index']}: {e}") from None
+    footage = FT.source(proj.root)
+    try:                                                       # and every footage clip opens and plays where it starts
+        FF.check_footage((plan or {}).get("fx") or [], footage)
+    except FT.FootageError as e:
+        raise UsageError(str(e)) from None
     for o in outs:
         src = proj.root / "renders" / args.preset / o.name
         files = {int(p.stem): p for p in src.glob("*.png") if p.stat().st_size > 0} if src.exists() else {}
@@ -156,7 +164,7 @@ def run(args):
             streaks = P.Streaks({} if st_spec is True else dict(st_spec), pal, size) if st_spec else None
         except (ValueError, KeyError) as e:
             raise UsageError(str(e).strip('"')) from None
-        fx = CF.CutFx(plan, src, size, o.name) if TR.has_effects(plan) else None
+        fx = CF.CutFx(plan, src, size, o.name, footage_of=footage) if TR.has_effects(plan) else None
         if fx:
             lacking = fx.missing(frames)
             if lacking and not args.allow_gaps:
@@ -169,15 +177,20 @@ def run(args):
                     raise UsageError(str(e)) from None
         ffx = None
         if (plan or {}).get("fx"):
-            ffx = FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, stem_of=stems,
-                             hits=FF.project_hits(proj.root, proj.data),
-                             frame_of=lambda g, files=files, size=size: P.read(files[g], size) if g in files else None,
-                             point_of=lambda key, g, src=src, size=size: CF.read_point(src, key, g, size),
-                             figure_of=lambda key, g, src=src, size=size: CF.read_figure(src, key, g, size))
+            try:
+                ffx = FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, stem_of=stems,
+                                 hits=FF.project_hits(proj.root, proj.data), output=o.name, footage_of=footage,
+                                 font_of=PFX.font_source(proj.root),
+                                 frame_of=lambda g, files=files, size=size: P.read(files[g], size) if g in files else None,
+                                 point_of=lambda key, g, src=src, size=size: CF.read_point(src, key, g, size),
+                                 figure_of=lambda key, g, src=src, size=size: CF.read_figure(src, key, g, size))
+            except FX.FxError as e:
+                raise UsageError(str(e)) from None
         suffix = "" if args.preset == "final" else f"_{args.preset}"
         out = od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"
         ff = None if still else encode(frames, size, proj.fps, out, audio, args.crf)
-        prev, prev_layer, prev_keep, lmin, bare, typed, kept = None, None, None, 1.0, 0, 0, 0
+        lead = P.read(files[min(files)], size)                  # stands in for frames before the first one rendered
+        prev, prev_layer, prev_keep, lmin, bare, typed, kept = lead, None, None, 1.0, 0, 0, 0
         for k, f in enumerate(frames):
             raw = P.read(files[f], size) if f in files else prev
             layer = P.read_rgba(src / SRT.layer_rel(f), size) if f in files else prev_layer
@@ -192,6 +205,8 @@ def run(args):
             if ffx and ffx.active(f):
                 try:
                     img = ffx.frame(f, img)
+                except (FT.FootageError, FX.FxError) as e:           # a clip that fails, a pivot with no figure
+                    raise UsageError(str(e)) from None
                 except FileNotFoundError:                         # a point or a frame missing (allowed): left out there
                     bare += 1
             if streaks is not None:                               # lens streaks: from the picture's lights, not the type

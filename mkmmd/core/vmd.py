@@ -111,6 +111,34 @@ def read(path):
     return Motion(model, bones, morphs, camera)
 
 
+SIDES = str.maketrans({"左": "右", "右": "左"})
+
+
+def mirror(data):
+    """The bytes of a VMD (`data`) mirrored left for right, as MMD mirrors a motion: every bone key's name with 左 and
+    右 traded (the other side's bone, the same length in cp932), its position's x negated and its rotation reflected
+    through the body's middle plane, (x, y, z, w) -> (x, -y, -z, w) (VMD rotations are in the world's axes, so a
+    twist bone's turn about its own axis becomes the same turn about the other side's). The facial keys and the
+    sections after them are kept as they are."""
+    if not data[:30].split(b"\0")[0].startswith(b"Vocaloid Motion Data"):
+        raise ValueError("not a VMD file")
+    out = bytearray(data)
+    (n,) = struct.unpack_from("<I", data, 50)
+    off = 54
+    for _ in range(n):
+        raw = data[off:off + 15].split(b"\0")[0]
+        try:
+            swapped = raw.decode("cp932").translate(SIDES).encode("cp932")
+        except UnicodeError:
+            swapped = raw
+        if len(swapped) == len(raw):
+            out[off:off + len(raw)] = swapped
+        fr, px, py, pz, qx, qy, qz, qw = struct.unpack_from("<I7f", data, off + 15)
+        struct.pack_into("<I7f", out, off + 15, fr, -px, py, pz, qx, -qy, -qz, qw)
+        off += 111
+    return bytes(out)
+
+
 # ---------------------------------------------------------------- analysis
 def sample_position(track, nf):
     fr, pos, _ = track

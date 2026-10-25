@@ -11,15 +11,20 @@
                        ("arms": shoulders, arms, elbows, wrists and their twist bones, not the fingers)
   morphs = true        also play the VMD's facial keys
   blend_in, blend_out  seconds; influence ramps on the strip
+  influence = 1.0      the share of the motion the strip plays (0..1, eased in and out over the blends): a torso strip
+                       at 0.5 turns and leans the body half as far as the motion does
+  mirror = false       true: the motion mirrored left for right (core.vmd.mirror), the other hand's gestures
   extend = "hold"      "hold": the strip's first and last poses stay before and after it; "forward": only its last pose
                        stays, after it (a dance paused between two strips, the later one picking up where it stopped);
                        "none": it acts on its own frames only
 Each entry is a track of its own, a later entry's above an earlier one's (where both play, the later one wins).
 Strips play in a track under the active action: pose / perform keys win where both key a bone, except on a member with a
 hand a `free` move lets go, whose own keys compose with its strips (the action's blend type is Combine: a walk strip's
-arm swing under the pose stage's forearm pre-bend, which goes with the IK)."""
+arm swing under the pose stage's forearm pre-bend, which goes with the IK). Once the strips are laid, the hands let go to
+them are keyed again where the strips have them (mkmmd.blender.build.pose.free_hands)."""
 import json
 import os
+import tempfile
 
 import bpy
 import numpy as np
@@ -28,6 +33,7 @@ from ...core import timeline as TL
 from ...core import vmd as V
 from .. import scene as S
 from . import BuildError
+from . import pose as POSE
 
 UPPER = {"upper_body", "upper_body2", "upper_body3", "neck", "head", "eyes", "eye", "shoulder_p", "shoulder",
          "shoulder_c", "arm", "arm_twist", "elbow", "wrist_twist", "wrist", "thumb", "index", "middle", "ring",
@@ -116,7 +122,7 @@ def mask_action(act, arm, which):
 
 
 def nla_strip(id_data, action, start, scale=1.0, src_start=None, src_end=None, track="motion", blend_in=0.0,
-              blend_out=0.0, extend="hold"):
+              blend_out=0.0, extend="hold", influence=1.0):
     ad = id_data.animation_data or id_data.animation_data_create()
     tr = ad.nla_tracks.get(track) or ad.nla_tracks.new()
     tr.name = track
@@ -131,7 +137,26 @@ def nla_strip(id_data, action, start, scale=1.0, src_start=None, src_end=None, t
     s.blend_in, s.blend_out = blend_in, blend_out
     s.blend_type = "REPLACE"
     s.extrapolation = EXTEND[extend]           # "hold": first and last poses before and after; "forward": the last after
+    if influence < 1.0:                        # a share of the motion: the influence keyed, eased over the blends
+        s.use_animated_influence = True        # (Blender then reads the curve, not the blends)
+        fc = s.fcurves.find("influence")
+        fc.keyframe_points.clear()
+        a, b = s.frame_start, s.frame_end
+        for f, v in sorted({a: 0.0 if blend_in else influence, a + blend_in: influence, b - blend_out: influence,
+                            b: 0.0 if blend_out else influence}.items()):
+            fc.keyframe_points.insert(f, v, options={"FAST"}).interpolation = "BEZIER"
+        fc.update()
     return s
+
+
+def _mirrored(path):
+    """A temporary copy of the VMD at `path` mirrored left for right (core.vmd.mirror); the caller removes it."""
+    with open(path, "rb") as fh:
+        data = V.mirror(fh.read())
+    fd, out = tempfile.mkstemp(suffix=".vmd")
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+    return out
 
 
 def beat_fit(path, timeline, fps, start_t, src_from):
@@ -163,12 +188,19 @@ def run(ctx):
         for i, it in enumerate(items if isinstance(items, list) else [items]):
             path = _vmd_path(ctx, it["vmd"])
             key = f"{name}_{i}_{os.path.splitext(os.path.basename(path))[0]}"[:50]
-            act, mact = import_vmd(m, path, key)
+            src = _mirrored(path) if it.get("mirror") else path
+            try:
+                act, mact = import_vmd(m, src, key)
+            finally:
+                if src != path:
+                    os.unlink(src)
             if act is None:
                 raise BuildError(f"motion {path}: no bone keys")
             src_from = float(it.get("from", act.frame_range[0]))
             src_to = float(it.get("to", act.frame_range[1]))
             info = {"vmd": os.path.basename(path), "source": [src_from, src_to]}
+            if it.get("mirror"):
+                info["mirror"] = True
             if it.get("retime") == "beats":
                 tl = ctx.timeline(it, f"motion.{name}[{i}] retime = \"beats\"")
                 scale, start_rel, fit = beat_fit(path, tl, ctx.fps, float(it.get("start", 0.0)), src_from)
@@ -181,10 +213,16 @@ def run(ctx):
             extend = it.get("extend", "hold")
             if extend not in EXTEND:
                 raise BuildError(f"motion.{name}[{i}] extend = {extend!r}: {' or '.join(EXTEND)}")
+            share = it.get("influence", 1.0)
+            if isinstance(share, bool) or not isinstance(share, (int, float)) or not 0.0 < share <= 1.0:
+                raise BuildError(f"motion.{name}[{i}] influence = {share!r}: the share of the motion it plays, above 0 "
+                                 f"and at most 1")
             bi, bo = float(it.get("blend_in", 0.0)) * ctx.fps, float(it.get("blend_out", 0.0)) * ctx.fps
             s = nla_strip(m.arm, act_m, start, scale, src_from, src_to, track=f"motion{i}", blend_in=bi,
-                          blend_out=bo, extend=extend)
+                          blend_out=bo, extend=extend, influence=float(share))
             info["strip"] = [round(s.frame_start, 2), round(s.frame_end, 2)]
+            if share < 1.0:
+                info["influence"] = float(share)
             if mact is not None and it.get("morphs", True):
                 for mm in S.morph_holders(m.arm):
                     if mm.data.shape_keys:
@@ -193,4 +231,7 @@ def run(ctx):
                 info["morphs"] = True
             out.setdefault(name, []).append(info)
             ctx.log("motion", name, json.dumps(info, ensure_ascii=False))
+    handed = POSE.free_hands(ctx)                     # the hands let go to the strips, keyed where the strips have them
+    if handed:
+        out["free_hands"] = handed
     return out

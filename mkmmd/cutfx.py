@@ -10,12 +10,18 @@ frames outside every window come back untouched. The layers an effect needs were
     slash               a band sweeps across; behind it the incoming shot, ahead of it the outgoing one, the switch under it.
     whip                a whip pan: the outgoing frame is flung off the frame and the incoming shot follows it in, side by
                         side, both smeared along their way by the shutter.
+    slice               the outgoing frame cut in two along a line, the halves sliding apart across it and off the frame by
+                        the cut, the incoming shot in the widening gap, an `edge` along each half's cut side.
+    spin                the cut's own frame (the outgoing shot, from the cut the incoming one) turned about a point faster
+                        and faster up to the cut and slowing to rest after it, smeared along its turn by the shutter.
     insert              a thought bubble over the host frame holds the other shot at reduced size (picture in picture),
-                        popping in and out, or growing until its picture is the whole frame.
+                        popping in and out, or growing until its picture is the whole frame; or a split screen, the host
+                        and the other shot (or a video, mkmmd.footage) side by side, sliding in, trading sides, sliding out.
     glitch              the figure (the frame against its `bare/` layer, the same frame without the glitch's objects)
                         breaks up in jumping slices and colour ghosts and drops out until the bare frame is left
                         (mkmmd.core.glitch)."""
 import json
+import math
 from pathlib import Path
 
 import cv2
@@ -32,6 +38,8 @@ COVER_MARGIN = 1.02                      # the scale that fills the frame, with 
 DOT_RADII = (0.12, 0.19, 0.28)           # the trailing circles' radii, as shares of the bubble's half-height
 DOT_FIT = (0.085, 0.13, 0.18)            # and at most these shares of the trail's length (head edge to cloud rim)
 DOT_AT = (0.12, 0.40, 0.75)              # where they sit along it, as shares measured from the head edge
+SMEAR_STEP = 1.5                         # px between the turned copies a spin's smear averages, at the frame's far corner
+MAX_TAPS = 2048                          # and at most this many copies
 
 
 def read_point(frames_dir, key, frame, size):
@@ -59,12 +67,22 @@ def read_figure(frames_dir, key, frame, size):
         raise FileNotFoundError(f"{path}: layer missing or unreadable (mk render makes it)") from None
 
 
+def _along(pic, at, length, across):
+    """The picture `pic` moved along the axis (x when `across`, else y) so that its first pixel lands at `at`, rounded to a
+    whole pixel (a picture at rest stays sharp), `length` pixels long, its edge pixels repeated beyond it."""
+    n = pic.shape[1] if across else pic.shape[0]
+    idx = np.clip(np.arange(length) - int(round(at)), 0, n - 1)
+    return pic[:, idx] if across else pic[idx]
+
+
 class CutFx:
     """The effects of a plan over one output's frames. `frames_dir` holds the cut's frames and the layers, `size` is
-    (width, height) of the frames being graded, `output` the aspect's name (for an insert's per-aspect geometry)."""
+    (width, height) of the frames being graded, `output` the aspect's name (for an insert's per-aspect geometry),
+    `footage_of` a clip -> mkmmd.footage.Clip opener (mkmmd.footage.source) for a split's video half."""
 
-    def __init__(self, plan, frames_dir, size, output=None):
+    def __init__(self, plan, frames_dir, size, output=None, footage_of=None):
         self.plan, self.dir, self.size, self.output = plan, Path(frames_dir), (int(size[0]), int(size[1])), output
+        self.footage_of = footage_of
         self.px = min(self.size) / 1080.0                                  # widths are given at 1080 on the short side
         self.at = {}
         for tr in plan["transitions"]:
@@ -76,7 +94,7 @@ class CutFx:
         for g in plan["glitches"]:
             for f in range(g["f0"], g["f1"]):
                 self.at[f] = ("glitch", g)
-        self._top, self._grown = {}, {}
+        self._top, self._grown, self._centre, self._clips = {}, {}, {}, {}
         self.notes = []
 
     # ---------------------------------------------------------------- what is there
@@ -95,12 +113,20 @@ class CutFx:
         return out
 
     def check(self, frames):
-        """Settle what depends on the pictures before anything is encoded: the scale at which each expand / collapse that
-        touches `frames` fills the frame (a TransitionError when one cannot)."""
+        """Settle what depends on the pictures before anything is encoded (a TransitionError when one cannot be): the scale
+        at which each expand / collapse that touches `frames` fills the frame, the point a slice through the figure cuts
+        through, and that a split's video can be read over its window."""
         want = set(frames)
         for tr in self.plan["transitions"]:
-            if tr["matte"] is not None and any(f in want for f in range(tr["first"], tr["last"] + 1)):
+            if not any(f in want for f in range(tr["first"], tr["last"] + 1)):
+                continue
+            if tr["kind"] in ("expand", "collapse"):
                 self._top_scale(tr)
+            elif tr["kind"] == "slice":
+                self._slice_centre(tr)
+        for ins in self.plan["inserts"]:
+            if ins.get("clip") and any(f in want for f in range(ins["f0"], ins["f1"])):
+                self._video(ins)
 
     def frame(self, frame, main):
         """The cut's frame `main` (float RGB) with the effect of `frame`'s window composited on it."""
@@ -109,7 +135,7 @@ class CutFx:
             return main
         kind, spec = hit
         if kind == "insert":
-            return self._insert(spec, frame, main)
+            return self._split(spec, frame, main) if spec["shape"] == "split" else self._insert(spec, frame, main)
         if kind == "glitch":
             return GL.frame(main, self._rgb(TR.bare_rel(f"g{spec['index']}", frame)), frame - spec["f0"],
                             spec["f1"] - spec["f0"], seed=spec["seed"], shift=spec["shift"], split=spec["split"] * self.px,
@@ -118,6 +144,10 @@ class CutFx:
             return self._slash(spec, frame, main)
         if spec["kind"] == "whip":
             return self._whip(spec, frame, main)
+        if spec["kind"] == "slice":
+            return self._slice(spec, frame, main)
+        if spec["kind"] == "spin":
+            return self._spin(spec, frame, main)
         return self._matte(spec, frame, main)
 
     # ---------------------------------------------------------------- layers
@@ -236,6 +266,83 @@ class CutFx:
         M = np.float32([[1, 0, -start], [0, 1, 0]]) if across else np.float32([[1, 0, 0], [0, 1, -start]])
         return cv2.warpAffine(strip, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
+    # ---------------------------------------------------------------- slice
+    def _slice_centre(self, tr):
+        """The point a slice's cut runs through, in frame pixels: a point of the frame, or the centroid of the outgoing flat
+        shot's figure on the window's first frame (a TransitionError when that frame shows none)."""
+        cen = tr["center"]
+        if cen["mode"] == "frame":
+            return M.frac_to_px(cen["at"], self.size)
+        if tr["index"] not in self._centre:
+            alpha = self._alpha(TR.matte_rel(tr["matte"], tr["first"]))
+            if float(alpha.max()) <= M.EPS:
+                raise TR.TransitionError(f"transition {tr['index']} (slice at {tr['at']} s): shot {tr['matte']!r} shows no "
+                                         f"figure at frame {tr['first']}, so center = \"figure\" has nothing to cut through")
+            k = alpha.shape[1] / self.size[0]                                # map pixels per frame pixel
+            x, y = M.centroid(alpha)
+            self._centre[tr["index"]] = ((x + 0.5) / k - 0.5, (y + 0.5) / k - 0.5)
+        return self._centre[tr["index"]]
+
+    def _slice(self, tr, frame, main):
+        """The outgoing frame cut in two along a line through the centre, the halves sliding apart across it (each its own
+        way, off the frame by the cut), the incoming shot in the widening gap, an `edge` along each half's cut side."""
+        w, h = self.size
+        incoming = self._plate(tr["plate"], frame, main)
+        c = self._slice_centre(tr)
+        nx, ny = TR.slice_normal(tr["angle"])
+        xs, ys = M.grid(h, w)
+        s = (xs - c[0]) * nx + (ys - c[1]) * ny                              # px across the cut, + on the normal's side
+        p = TR.slice_progress(tr, frame - tr["first"])
+        ew = tr["edge"]["width"] * self.px if tr["edge"] else 0.0
+        out = incoming
+        for sign, reach in zip((1.0, -1.0), TR.slice_reach(self.size, c, (nx, ny))):
+            dx, dy = sign * p * reach * nx, sign * p * reach * ny
+            half = cv2.warpAffine(main, np.float32([[1, 0, dx], [0, 1, dy]]), (w, h), flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_REPLICATE)
+            inside = sign * s - p * reach                                    # px into the moved half from its cut side
+            sx, sy = xs - dx, ys - dy                                        # where each pixel of it was in the frame
+            room = np.minimum(np.minimum(sx + 0.5, w - 0.5 - sx), np.minimum(sy + 0.5, h - 0.5 - sy))
+            if ew > 0.0:
+                half = M.paint(half, tr["edge"]["color"], np.clip(ew + 0.5 - inside, 0.0, 1.0))
+            out = M.paint(out, half, np.clip(inside + 0.5, 0.0, 1.0) * np.clip(room + 0.5, 0.0, 1.0))
+        return out
+
+    # ---------------------------------------------------------------- spin
+    def _spin(self, tr, frame, main):
+        """The cut's own frame (the outgoing shot before the cut, the incoming one from it) turned about the centre and
+        scaled, smeared along its turn over the shutter's sweep: the mean of copies turned at even steps across it."""
+        w, h = self.size
+        st = TR.spin_state(tr, frame)
+        c = M.frac_to_px(tr["center"]["at"], self.size)
+        if tr["back"] == "mirror":
+            border, value = cv2.BORDER_REFLECT_101, (0.0, 0.0, 0.0)
+        else:
+            border, value = cv2.BORDER_CONSTANT, tuple(float(v) for v in tr["back"])
+        lo, hi = st["smear"]
+        radius = max(math.hypot(x - c[0], y - c[1]) for x in (-0.5, w - 0.5) for y in (-0.5, h - 0.5))
+        sweep = math.radians(hi - lo) * radius                               # px the far corner moves with the shutter open
+        taps = 1 if sweep <= SMEAR_STEP else min(MAX_TAPS, 2 ** math.ceil(math.log2(sweep / SMEAR_STEP)))
+        if taps == 1:
+            m = cv2.getRotationMatrix2D(c, -(st["turn"] + (lo + hi) / 2.0), st["scale"])   # cv2 turns counter-clockwise
+            return cv2.warpAffine(main, m, (w, h), flags=cv2.INTER_LINEAR, borderMode=border, borderValue=value)
+        # a canvas round the frame that holds the disc its pixels turn on, so the copies bring in what turns into the frame
+        r = math.ceil(radius) + 2
+        pl, pt = max(0, r - math.floor(c[0])), max(0, r - math.floor(c[1]))
+        pr, pb = max(0, r - math.floor(w - 1 - c[0])), max(0, r - math.floor(h - 1 - c[1]))
+        big = (w + pl + pr, h + pt + pb)
+        m = cv2.getRotationMatrix2D(c, -(st["turn"] + lo + (hi - lo) / taps / 2.0), st["scale"])
+        m[0, 2] += pl
+        m[1, 2] += pt
+        acc = cv2.warpAffine(main, m, big, flags=cv2.INTER_LINEAR, borderMode=border, borderValue=value)
+        centre, turn = (c[0] + pl, c[1] + pt), (hi - lo) / 2.0
+        while taps > 1:                      # each pass averages the copies with themselves turned on: 2^k evenly spread
+            turned = cv2.warpAffine(acc, cv2.getRotationMatrix2D(centre, -turn, 1.0), big, flags=cv2.INTER_LINEAR,
+                                    borderMode=cv2.BORDER_REPLICATE)
+            acc = cv2.addWeighted(acc, 0.5, turned, 0.5, 0.0)
+            turn /= 2.0
+            taps //= 2
+        return np.ascontiguousarray(acc[pt:pt + h, pl:pl + w])
+
     # ---------------------------------------------------------------- insert
     def _dots(self, start, centre, a, b):
         """[(x, y, radius)] of the three circles of the trail between `start` (the edge of the head, where the trail begins)
@@ -306,3 +413,61 @@ class CutFx:
         if abs(k - 1.0) > 1e-4 or abs(centre[0] - (w - 1) / 2.0) > 1e-3 or abs(centre[1] - (h - 1) / 2.0) > 1e-3:
             picture = M.warp_scaled(picture, centre, k)
         return M.paint(out, picture, M.coverage(d))
+
+    # ---------------------------------------------------------------- split
+    def _video(self, ins):
+        """The mkmmd.footage.Clip of a split's video, opened once; a TransitionError when it cannot be read or its span
+        starts past its end without `loop`."""
+        if ins["index"] not in self._clips:
+            c = ins["clip"]
+            what = f"insert {ins['index']} (split {ins['from']}-{ins['to']} s): clip {c['src']!r}"
+            if self.footage_of is None:
+                raise TR.TransitionError(f"{what}: no video source was given to the cut effects (footage_of)")
+            try:
+                clip = self.footage_of(c["src"])
+                clip.index(0.0, start=c["in"], rate=c["rate"], loop=c["loop"])
+            except FileNotFoundError as e:                                   # mkmmd.footage.FootageError
+                raise TR.TransitionError(f"{what}: {e}") from None
+            self._clips[ins["index"]] = clip
+        return self._clips[ins["index"]]
+
+    def _split(self, ins, frame, main):
+        """The frame split in two: the host (the cut's frame) and the inner half (the inner shot's plate or the video), each
+        cropped about its focus in its panel. The inner half slides in from its side, the halves trade places on each swap
+        (the row running on round like a carousel) and it slides back out; a divider runs along each seam."""
+        w, h = self.size
+        geo = TR.split_for(ins, self.output, self.size)
+        across = geo["side"] in ("left", "right")                            # panels side by side: the axis is x
+        length, axis = (w, 0) if across else (h, 1)
+        panels = TR.split_panels(TR.split_state(ins, frame), geo["share"], length, geo["side"])
+        c = ins["clip"]
+        if c is not None:                                                    # the video fits the inner half at rest
+            rest = int(math.ceil(geo["share"] * length))
+            try:
+                inner = self._video(ins).picture((frame - ins["f0"]) / self.plan["fps"], (rest, h) if across else (w, rest),
+                                                 start=c["in"], rate=c["rate"], loop=c["loop"], fit=c["fit"],
+                                                 focus=tuple(geo["focus"]["inner"]), mirror=c["mirror"], back=tuple(c["back"]))
+            except FileNotFoundError as e:
+                raise TR.TransitionError(f"insert {ins['index']} (split): clip {c['src']!r}: {e}") from None
+        else:
+            inner = self._plate(ins["shot"], frame, main)
+        edges = np.arange(length, dtype=np.float32)                          # pixel i spans [i, i + 1) along the axis
+        out = np.zeros_like(main)
+        for role, start, size in panels:
+            cov = np.clip(np.minimum(edges + 1.0, start + size) - np.maximum(edges, start), 0.0, 1.0)
+            if not cov.any():
+                continue
+            if role == "host":
+                pic, at = main, TR.panel_offset(start, size, geo["focus"]["host"][axis], length)
+            elif c is not None:
+                pic, at = inner, start
+            else:
+                pic, at = inner, TR.panel_offset(start, size, geo["focus"]["inner"][axis], length)
+            out += _along(pic, at, length, across) * (cov[None, :, None] if across else cov[:, None, None])
+        div = ins["divider"]
+        if div:
+            half = div["width"] * self.px / 2.0
+            for s in TR.split_dividers(panels, length):
+                band = np.clip(np.minimum(edges + 1.0, s + half) - np.maximum(edges, s - half), 0.0, 1.0)
+                out = M.paint(out, div["color"], np.broadcast_to(band[None, :] if across else band[:, None], (h, w)))
+        return out

@@ -17,8 +17,13 @@
 
 The objects a [[glitch]] names (docs/design.md: Shots: Glitches) are hidden from its `to` on (a CONSTANT `hide_render` key
 added to what they already have), so they stay gone once it has broken them up.
+
+A prop card's `rates` = [{rate, into, per}] (a turntable's `rpm` into its `turns`): once the keys have animated the root's
+property `rate`, its property `into` is keyed on every frame with the running integral of rate / per over clip seconds,
+0 at clip second 0, so a driver that reads `into` turns a part at the keyed speed and a speed change never jumps it.
 """
 import bpy
+import numpy as np
 
 from ...core import lanes as LN
 from ...core import shotstyle as SS
@@ -108,11 +113,33 @@ def run(ctx):
         except (TypeError, RuntimeError, ValueError) as e:
             raise BuildError(f"[[key]] {spec['target']}.{prop}: {e}")
         out[f"{spec['target']}.{prop}"] = len(pts)
+    out.update(_rates(ctx))
     if out:
         ctx.log("keys", len(out))
     hidden = _glitched(ctx)
     if hidden:
         out["_glitch_hidden"] = hidden
+    return out
+
+
+def _rates(ctx):
+    """{"<prop>.<into>": frames keyed} for the props whose card has `rates` and whose `rate` is animated (see the module
+    docstring): Simpson's rule over every frame of the build, linear beyond it."""
+    out = {}
+    frames = np.arange(ctx.start, ctx.end + 1, dtype=float)
+    for name, p in ctx.props.items():
+        for r in p.card.get("rates") or []:
+            ad = p.root.animation_data
+            fc = ad.action.fcurves.find(f'["{r["rate"]}"]') if ad and ad.action else None
+            if fc is None or not len(fc.keyframe_points) or len(frames) < 2:
+                continue
+            v = np.array([fc.evaluate(f) for f in frames])
+            mid = np.array([fc.evaluate(f + 0.5) for f in frames[:-1]])
+            step = (v[:-1] + 4.0 * mid + v[1:]) / (6.0 * ctx.fps * float(r.get("per", 1.0)))
+            total = np.concatenate([[0.0], np.cumsum(step)])
+            total -= np.interp(ctx.frame0, frames, total)
+            K.key_prop(p.root, f'["{r["into"]}"]', frames, total, interp="LINEAR").extrapolation = "LINEAR"
+            out[f"{name}.{r['into']}"] = len(frames)
     return out
 
 

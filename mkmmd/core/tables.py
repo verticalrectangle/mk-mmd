@@ -7,6 +7,7 @@ A schema maps each key a stage reads to what is below it: None (anything: number
 tuple (the keys of a table, or of every table in a list of tables, e.g. `[[pose.<cast>.drape]]` or the events of
 `gaze`; values of other kinds pass) or a dict (the same, one schema per key). The stages read the keys; this is the list of
 the ones they read, so a key added to a stage is added here too."""
+from . import fretting
 from . import perform as PF
 from . import strum
 
@@ -15,12 +16,13 @@ SIDES = ("L", "R")
 HAND = {k: None for k in ("at", "dir", "palm", "pole", "rest", "along", "offset", "lift", "ride", "fingers", "grip", "clock",
                           "approach", "wrap", "edge", "face", "seeds", "skin_radius", "posture", "track", "channel", "fret",
                           "chord", "press", "move", "thumb", "tip", "ik")}
-HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers")
+HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers", "pole")
 HAND["wobble"] = ("deg", "tau", "seed")
+HAND["notes"] = fretting.NOTES_KEYS
 
 POSE = {
     "sit": ("hip", "facing", "floor_z", "pelvis_deg", "back_deg"), "sit_offset": None, "feet": SIDES, "lift": SIDES,
-    "hips": ("shift", "roll", "yaw"), "toes": SIDES, "lean": None, "turn": None, "lean_share": None, "turn_share": None,
+    "hips": ("shift", "roll", "yaw", "pitch"), "toes": SIDES, "lean": None, "turn": None, "lean_share": None, "turn_share": None,
     "head": ("pitch", "yaw", "roll", "neck"), "hands": {s: HAND for s in SIDES}, "fingers": SIDES,
     "drape": ("chain", "dirs", "scale"),
 }
@@ -31,8 +33,8 @@ PERFORM = {
     "head_limits": tuple(PF.HEAD_LIMITS), "neck_share": None, "eye_max": None, "breath": ("per_min", "deg"),
     "sway": ("deg", "period"), "nod": ("deg", "period"), "bob": ("deg", "timeline", "beats", "downbeat_accent"),
     "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "head_turn": None,
-    "rock": ("deg", "period", "phase", "axis", "hips"),
-    "head_rock": ("deg", "period", "phase", "axis"), "blink": ("per_min", "seed", "extra"), "lids": None,
+    "rock": ("deg", "period", "phase", "axis", "hips", "from", "to", "ease"),
+    "head_rock": ("deg", "period", "phase", "axis", "from", "to", "ease"), "blink": ("per_min", "seed", "extra"), "lids": None,
     "sing": ("timeline", "lines", "words", "mouth", "lead", "voice"), "expressions": ("morph", "keys"),
     "twitch": ("bones", "family", "t", "deg", "axis", "dur"),
     "bounce": ("depth", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"), "rise": None, "crouch": None,

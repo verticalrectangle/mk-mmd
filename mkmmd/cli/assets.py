@@ -18,18 +18,18 @@ the author's readme files; read them (`mk assets show SLUG --terms` prints the l
 license, restrictions and credit with `mk assets set`. `mk assets credits` fails (exit 1) while anything used is
 unreviewed or has neither an author nor a credit line. Kinds: model, motion, prop, vehicle, audio, reference,
 texture, font, other. Registry slugs are what mk.toml refers to: [[cast]] asset, [[motion.<cast>]] vmd, [[prop]] card,
-[[text]] font, [credits] assets.
+[[text]] font, [[fx]] clip (footage; `mk ref footage` registers Pexels videos), [credits] assets.
 
 Examples:
   mk assets add ~/models/my_model/my_model.pmx --kind model --slug my_model --author NAME
   mk assets scan ~/models --kind model --jobs 6
   mk assets show my_model --terms
   mk assets set my_model license="NAME terms of use (readme)" credit="Model: NAME" restrictions="no commercial use"
-  mk assets credits --out CREDITS.md               # in a project: its cast and [credits] assets
+  mk assets credits --out CREDITS.md               # in a project: its cast, footage clips and [credits] assets
 """
 
-FIELD_HELP = ("field=value, one or more: name author source_url license restrictions credit tags (a,b) rig path; "
-              "an empty value removes the field")
+FIELD_HELP = ("field=value, one or more: name author author_url source_url license restrictions credit tags (a,b) rig "
+              "path; an empty value removes the field")
 
 
 def add(sub):
@@ -176,7 +176,7 @@ def _run(args, reg):
         slugs = list(args.slugs)
         lines = []
         if not slugs:
-            slugs, lines = project_credits(get_project(args, required=True))
+            slugs, lines = project_credits(get_project(args, required=True), reg)
         if not slugs and not lines:
             raise UsageError("no assets: give slugs, or list them in the project's cast / [credits] assets / lines")
         text, problems = credits_text(reg, slugs, lines)
@@ -188,11 +188,44 @@ def _run(args, reg):
     return 0
 
 
-def project_credits(proj):
-    """The assets a project credits (its cast's, then its [credits] assets, each once) and its own [credits] lines."""
+def project_credits(proj, reg=None):
+    """The assets a project credits (its cast's, the videos its footage frame effects and split inserts show, then its
+    [credits] assets, each once) and its own [credits] lines. A clip given as a file counts when the registry (`reg`,
+    default the configured one) has an entry with its path; credit any other in [credits] lines."""
+    from ..footage import is_file
     slugs = list(dict.fromkeys(c["asset"] for c in proj.cast if c.get("asset")))
+    for clip in footage_clips(proj.data):
+        if is_file(clip):
+            reg = reg or A.Registry()
+            p = Path(clip).expanduser()
+            e = reg.find_path(p if p.is_absolute() else proj.root / p)
+            clip = e["slug"] if e else None
+        if clip and clip not in slugs:
+            slugs.append(clip)
     slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
     return slugs, proj.data.get("credits", {}).get("lines", [])
+
+
+def footage_clips(data):
+    """The videos a project's frames show (mk.toml `data`), each once: the clips of its [[fx]] footage entries (their
+    aspect.<output> tables' too), then those of its [[insert]] splits (`clip`, a video or {src, ...})."""
+    out = []
+
+    def add(c):
+        if isinstance(c, str) and c.strip() and c not in out:
+            out.append(c)
+
+    specs = data.get("fx") or []
+    for spec in [specs] if isinstance(specs, dict) else specs:
+        if not isinstance(spec, dict) or spec.get("kind") != "footage":
+            continue
+        for c in [spec.get("clip")] + [o.get("clip") for o in (spec.get("aspect") or {}).values() if isinstance(o, dict)]:
+            add(c)
+    inserts = data.get("insert") or []
+    for spec in [inserts] if isinstance(inserts, dict) else inserts:
+        c = spec.get("clip") if isinstance(spec, dict) else None
+        add(c.get("src") if isinstance(c, dict) else c)
+    return out
 
 
 def credits_text(reg, slugs, lines):

@@ -259,9 +259,12 @@ def test_registry_credits_flag_unreviewed(tmp_path):
              "license": "unreviewed"})
     reg.add({"kind": "audio", "path": str(tmp_path / "s.flac"), "slug": "s", "credit": "Song: Band",
              "license": "personal use"})
+    for w in ("regular", "bold"):                     # two weights of one family, credited alike
+        reg.add({"kind": "font", "path": str(tmp_path / f"{w}.ttf"), "slug": w, "credit": "Font: Foundry", "license": "OFL"})
     reg.save()
-    text, problems = A.Registry(tmp_path).credits(["m", "s"])
+    text, problems = A.Registry(tmp_path).credits(["m", "s", "regular", "bold"])
     assert "## Models" in text and "- M / Someone" in text and "- Song: Band" in text
+    assert text.count("- Font: Foundry") == 1
     assert problems == ["m: license not reviewed"]
     with pytest.raises(A.AssetError):
         reg.add({"kind": "model", "slug": "m"})

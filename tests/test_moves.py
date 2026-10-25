@@ -14,9 +14,9 @@ MARKS = {"arm.L": [0.093, -0.02, 1.25], "arm.R": [-0.093, -0.02, 1.25], "chest":
          "mouth": [0.0, -0.071, 1.35], "eye": [0.0, -0.045, 1.41], "reach": 0.37, "upper": 0.195, "fore": 0.176,
          "hand": 0.146}
 BEATS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
-PLACES = ("rest", "dainty", "mic", "mic_lens", "mic_up", "mic_across", "chest", "bounce", "point", "heart", "peace",
-          "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny", "bonk_up", "bonk", "hair", "hair_out",
-          "hip", "gun", "float_low", "float")
+PLACES = ("rest", "dainty", "dainty_one", "mic", "mic_lens", "mic_up", "mic_across", "chest", "bounce", "point", "heart",
+          "peace", "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny", "bonk_up", "bonk", "hair",
+          "hair_out", "hip", "gun", "float_low", "float")
 
 
 def near(p):
@@ -60,7 +60,7 @@ def test_no_place_bends_a_wrist_past_the_limit(name, scale):
     for side in ("L", "R"):
         pt, d, p, _, _, bend = MV.resolve(name, side, m)
         assert bend <= MV.WRIST + 1e-6
-        assert bend == pytest.approx(MV.bend(d, MV.forearm(side, m, pt)), abs=1e-6)
+        assert bend == pytest.approx(MV.bend(d, MV.forearm(side, m, pt, MV.POLES.get(name))), abs=1e-6)
         assert abs(d @ p) < 1e-9 and np.linalg.norm(d) == pytest.approx(1) and np.linalg.norm(p) == pytest.approx(1)
 
 
@@ -321,14 +321,49 @@ def test_a_mic_at_the_mouth_leans_back_up_to_the_lips_from_a_fist_under_them_so_
 
 def test_a_dainty_hand_waits_lightly_on_the_front_of_the_body_and_goes_back_there():
     torso = ball((0.0, -0.02, 0.9), 0.15)                                  # a skirt round the hips
-    es = [{"name": "rest", "hand": "L", "place": "dainty"}, {"name": "point", "t": 1.0, "dur": 0.5, "hand": "L"}]
-    keys = MV.compile(es, MARKS, clear=torso)["hands"]["L"]
+    both = [{"name": "rest", "hand": "L", "place": "dainty"}, {"name": "rest", "hand": "R", "place": "dainty"}]
+    keys = MV.compile(both + [{"name": "point", "t": 1.0, "dur": 0.5, "hand": "L"}], MARKS, clear=torso)["hands"]["L"]
     home = MV.resolve("dainty", "L", MARKS, torso)
     assert keys[0]["at"] == near(home[0]) and keys[-1]["at"] == near(home[0])
     assert torso(home[0] + MV.hand_box(home[1], home[2], MARKS["hand"], home[3])) == pytest.approx(MV.TOUCH_MARGIN, abs=5e-4)
     assert home[0][1] < MARKS["chest"][1] and 0 < home[0][0] < MARKS["arm.L"][0] + 0.02   # in front, inside the shoulder
-    waits = MV.compile([{"name": "rest", "hand": "L", "place": "dainty"}], MARKS)["hands"]["L"]
+    waits = MV.compile(both, MARKS)["hands"]["L"]
     assert len(waits) == 1 and waits[0]["t"] == 0.0                         # it waits there from the start
+
+
+def test_a_dainty_hand_alone_rests_on_its_own_thigh_its_wrist_straight_and_its_elbow_out():
+    """Two hands resting on the skirt front ("dainty") are a pose for two: alone there a hand bent in at the wrist and its
+    forearm lay on the front of the body. A dainty hand alone (its partner away on a move, or resting elsewhere) rests on
+    its own thigh ("dainty_one"), a few cm from the two-hand spot, the hand continuing its forearm and the elbow out to the
+    side (its key carries the elbow's pole); it glides there as its partner leaves, arriving as the partner gets to its
+    move, and is back on the spot as the partner is, and a short return of the partner between two moves does not send
+    it back for a moment."""
+    both = [{"name": "rest", "hand": "L", "place": "dainty"}, {"name": "rest", "hand": "R", "place": "dainty"}]
+    names = ("dainty", "dainty_one", "rest")
+    res = {n: MV.resolve(n, "R", MARKS) for n in names}
+    one, two = res["dainty_one"], res["dainty"]
+    assert one[5] <= MV.STRAIGHT["dainty_one"] + 1e-6 and one[5] < two[5] - 10       # the hand continues its forearm
+    assert np.linalg.norm(one[0] - two[0]) < 0.09 and one[0][1] < MARKS["chest"][1]   # a few cm away, in front
+    out = lambda r, n: -MV.elbow("R", MARKS, r[0], MV.POLES.get(n))[0]                 # noqa: E731 (her right: -x)
+    assert out(one, "dainty_one") > max(out(two, "dainty"), -MARKS["arm.R"][0] + 0.05)  # the elbow out to the side
+
+    def where(entries):
+        keys = placed(MV.compile(entries, MARKS)["hands"]["R"])
+        return [(k["t"], next((n for n in names if k["at"] == near(res[n][0])), "?"), k.get("pole")) for k in keys]
+    seen = where(both + [{"name": "point", "t": 2.0, "dur": 1.0, "hand": "L"}])
+    assert seen[0][1] == "dainty" and seen[-1][1] == "dainty" and {p for _, p, _ in seen} == {"dainty", "dainty_one"}
+    point, home = MV.resolve("point", "L", MARKS), MV.resolve("dainty", "L", MARKS)
+    lone = [t for t, p, _ in seen if p == "dainty_one"]
+    left = max(t for t, p, _ in seen if p == "dainty" and t < lone[0])
+    assert left == pytest.approx(2.0 - MV.travel(home, point), abs=1e-3)              # it leaves as the left does ...
+    assert lone[0] == pytest.approx(2.0, abs=1e-3)                                     # ... is there as it points
+    assert seen[-1][0] == pytest.approx(3.0 + MV.travel(point, home), abs=1e-3)        # and is back with it
+    assert all((pl is not None) == (p == "dainty_one") for _, p, pl in seen)           # its elbow held out there only
+    gap = where(both + [{"name": "point", "t": 2.0, "dur": 0.6, "hand": "L"},
+                        {"name": "heart_wink", "t": 3.6, "dur": 0.5, "hand": "L"}])
+    assert not [t for t, p, _ in gap if p == "dainty" and 2.0 < t < 4.1]               # no flip back between them
+    alone = where([both[1], {"name": "point", "t": 2.0, "dur": 1.0, "hand": "L"}])
+    assert {p for _, p, _ in alone} == {"dainty_one"}                                  # its partner rests elsewhere
 
 
 def test_the_member_s_yaw_turns_the_hand_directions_into_the_world():
@@ -407,6 +442,61 @@ def test_free_spans_that_touch_are_one_and_a_short_one_eases_over_half_its_lengt
         MV.compile([{"name": "rest", "hand": "R", "place": "mic"}, {"name": "free", "t": 1.0, "hand": "R"}], MARKS)
     with pytest.raises(MV.MoveError, match="two moves at once"):
         MV.compile([{"name": "free", "t": 1.0, "dur": 2.0, "hand": "L"}, {"name": "point", "t": 2.0, "hand": "L"}], MARKS)
+
+
+def _strip(t0, t1, centre, radius=0.08):
+    """A strip's hand over (t0, t1) on every 30th of a second: the wrist round a circle in front of the chest, the hand
+    pointing up, the palm forward."""
+    ts = np.round(np.arange(t0, t1 + 1e-9, 1.0 / 30.0), 6)
+    a = 2.0 * np.pi * (ts - t0) / max(t1 - t0, 1e-9)
+    at = np.asarray(centre, float) + radius * np.stack([np.cos(a), np.zeros_like(a), np.sin(a)], 1)
+    return {"t": ts.tolist(), "at": at.tolist(), "dir": [[0.0, 0.0, 1.0]] * len(ts), "palm": [[0.0, -1.0, 0.0]] * len(ts)}
+
+
+def test_a_free_hand_on_a_strip_follows_it_and_joins_and_leaves_it_at_a_human_pace():
+    """Given where a strip has the hand over a free span, the goal follows it there (so the IK lets go and takes over on
+    the strip's own hand: nothing moves at the hand-offs), the hand travels to the strip's first place from its last move
+    at the human pace, and leaves the strip at its end to reach the next move; the IK is let go over exactly that."""
+    strip = {"L": _strip(1.5, 3.0, (0.18, -0.25, 1.2))}
+    es = [{"name": "point", "t": 0.5, "dur": 0.9, "hand": "L"}, {"name": "free", "t": 1.5, "dur": 1.5, "hand": "L"},
+          {"name": "heart_wink", "t": 3.6, "dur": 0.5, "hand": "L"}]
+    out = MV.compile(es, MARKS, strip=strip)
+    keys = out["hands"]["L"]
+    on = [k for k in keys if k.get("strip")]
+    assert [k["t"] for k in on] == pytest.approx(strip["L"]["t"], abs=1e-4)                 # every sample, in order
+    assert [k["at"] for k in on] == [near(p) for p in strip["L"]["at"]]
+    assert not any("fingers" in k for k in on) and all("fingers" in k for k in placed(keys))
+    rest = MV.resolve("rest", "L", MARKS)[0]
+    assert not [k for k in keys if 1.4 <= k["t"] <= 3.6 and k["at"] == near(rest)]          # never parked at rest
+    point = MV.resolve("point", "L", MARKS)
+    gone = MV.travel(point, (np.asarray(strip["L"]["at"][0]), np.array([0.0, 0.0, 1.0]), np.array([0.0, -1.0, 0.0])))
+    before = [k for k in placed(keys) if k["t"] < 1.5]
+    assert 1.5 - gone < 1.4                                                                 # it must set off early ...
+    assert before[-1]["at"] == near(point[0]) and before[-1]["t"] == pytest.approx(1.5 - gone, abs=1e-3)   # and does
+    E = MV.FREE_EASE
+    assert out["ik"]["L"] == [[1.5, 1.0], [1.5 + E, 0.0], [3.0 - E, 0.0], [3.0, 1.0]]
+    heart = next(k for k in keys if k["t"] == pytest.approx(3.6))
+    assert heart["at"] == near(MV.resolve("heart", "L", MARKS)[0])
+
+
+def test_a_hand_leaves_its_strip_early_for_a_move_that_comes_soon_and_one_too_soon_is_refused():
+    strip = {"L": _strip(1.0, 2.5, (0.2, -0.2, 0.95))}
+    late = MV.compile([{"name": "free", "t": 1.0, "dur": 1.5, "hand": "L"},
+                       {"name": "peace_eye", "t": 2.62, "dur": 0.5, "hand": "L"}], MARKS, strip=strip)
+    peace = MV.resolve("peace", "L", MARKS)
+    on = [k for k in late["hands"]["L"] if k.get("strip")]
+    leave = on[-1]["t"]
+    s = (np.asarray(on[-1]["at"]), np.array([0.0, 0.0, 1.0]), np.array([0.0, -1.0, 0.0]))
+    assert leave < 2.5 and leave + MV.travel(s, peace) <= 2.62 + 1e-6                    # the latest it can stay
+    assert late["ik"]["L"][-1] == [round(leave, 4), 1.0]                                   # the IK is back as it leaves
+    home = MV.resolve("rest", "L", MARKS)
+    alone = MV.compile([{"name": "free", "t": 1.0, "dur": 1.5, "hand": "L"}], MARKS, strip=strip)
+    last = alone["hands"]["L"][-1]
+    s = (np.asarray(strip["L"]["at"][-1]), np.array([0.0, 0.0, 1.0]), np.array([0.0, -1.0, 0.0]))
+    assert last["at"] == near(home[0]) and last["t"] == pytest.approx(2.5 + MV.travel(s, home), abs=1e-3)   # home after
+    with pytest.raises(MV.MoveError, match=r"the L hand needs 0\.\d\d s to get from the strip \(at 1 s\) to 'peace'"):
+        MV.compile([{"name": "free", "t": 1.0, "dur": 0.1, "hand": "L"},
+                    {"name": "peace_eye", "t": 1.15, "dur": 0.5, "hand": "L"}], MARKS, strip=strip)
 
 
 @pytest.mark.parametrize("entries, marks, frag", [

@@ -22,11 +22,13 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      except hands whose pose `ride` is a chest bone: they go with it)
   head_tilt = [[t, deg], ...]        the head rolls toward the model's left (on top of the gaze), keyed the same way
   head_turn = [[t, deg], ...]        the head turns toward the model's left (on top of the gaze): a look over the shoulder
-  rock = {deg, period = 4.0, phase = 0.0, hips = 0.0}, head_rock = {...}   a periodic sideways lean of the upper body (like
-                                     `tilt`) and roll of the head (like `head_tilt`) toward the model's left: deg * sin(2 pi t /
-                                     period + phase) of clip time, ADDED to the keyed tilts; unlike them it goes on at any clip
-                                     time. `hips` (m) shifts the hips toward the left with the same swing, the feet planted:
-                                     the weight goes from foot to foot
+  rock = {deg, period = 4.0, phase = 0.0, hips = 0.0, from, to, ease = 0.4}, head_rock = {...}   a periodic sideways lean of
+                                     the upper body (like `tilt`) and roll of the head (like `head_tilt`) toward the model's
+                                     left: deg * sin(2 pi t / period + phase) of clip time, ADDED to the keyed tilts; unlike
+                                     them it goes on at any clip time. `hips` (m) shifts the hips toward the left with the
+                                     same swing, the feet planted: the weight goes from foot to foot. `from`, `to` (clip
+                                     seconds) keep it to a span, easing in over `ease` s before `from` and out after `to`; a
+                                     list of tables is several sways, summed (a sway in each span where she stands idle)
   crouch = [[t, metres], ...]        the hips drop by that much, the feet planted (the knees bend: a landing, a squat), eased
                                      between keys like `rise`
   air = [{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30}]
@@ -46,11 +48,13 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
   sing = {timeline = "audio/timeline.json" (the default), lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
   twitch = [{bones = ["ear_root.L", ...] | family = "ears", t = 3.2, deg = 14, axis = [1, 0, 0], dur = 0.22}]
-  strum = {hand = "R", prop = "guitar", rhythm = "onsets:other" | "beats:8" | [t, ...], from = 0.96, to = 3.86, accent = "downbeats",
-           depth = 0.003, span = 0.09, attack = 0.075, timeline = "audio/timeline.json", ...}   or a list of such tables: the
-                                     pick hand (its grip is `grip = "guitar:strum"`) strokes across the strings on the rhythm,
-                                     down strokes down, up strokes up, the pick meeting the first string at each strike time;
-                                     it rests between windows (mkmmd.core.strum; docs/design.md: Perform)
+  strum = {hand = "R", prop = "guitar", rhythm = "onsets:other" | "beats:8" | "notes" | [t, ...], from = 0.96, to = 3.86,
+           accent = "downbeats", depth = 0.003, span = 0.09, attack = 0.075, timeline = "audio/timeline.json", ...}   or a
+                                     list of such tables: the pick hand (its grip is `grip = "guitar:strum"`) strokes
+                                     across the strings on the rhythm, down strokes down, up strokes up, the pick meeting
+                                     the first string at each strike time; "notes" picks the other hand's bass line (its
+                                     `notes`), one string per note, alternating; it rests between windows
+                                     (mkmmd.core.strum; docs/design.md: Perform)
   drum = {hand = "R", fingers = [...], deg = 25, lift = 0.16, roll = 0.02, beats | timeline, from, to}   the fingers tap on
                                      the beats from where their keys hold them (a grip's curl): lifted before, down on it
 A table that is empty does nothing (the log says so); a table named after no cast member or holding a key this stage does
@@ -107,9 +111,10 @@ def _sample_pass(ctx, m, look_refs, frames):
 def _strum(ctx, name, m, specs):
     """[perform.<cast>] strum: key the pick hand's IK goal (relative to the grip the pose stage solved) so that the pick tip
     strokes across the strings of the guitar-like prop the hand grips: strokes from the timeline's onsets or the beat grid
-    (mkmmd.core.strum.plan), the pick tip's path over them (`path`), turned into goals that move the hand as a rigid body: the
-    tip goes where the path says, part of the sideways travel (`share`) made by turning the hand about the wrist, about an axis
-    along the strings. Returns {side: numbers}."""
+    (mkmmd.core.strum.plan), or picking the notes of the other hand's bass line one string at a time (`rhythm = "notes"`:
+    the fretting hand's `notes`, mkmmd.core.fretting.line), the pick tip's path over them (`path`), turned into goals that
+    move the hand as a rigid body: the tip goes where the path says, part of the sideways travel (`share`) made by turning
+    the hand about the wrist, about an axis along the strings. Returns {side: numbers}."""
     from ...core import fretting as FR
     from ...core import strum as SM
     specs = [specs] if isinstance(specs, dict) else list(specs)
@@ -136,14 +141,15 @@ def _strum(ctx, name, m, specs):
         neck = next((g for g in prop.card.get("use", {}).get("grip", []) if g.get("type") == "neck"), None)
         if "sigma" in first:
             sigma = float(first["sigma"])
-        elif neck is not None:                                 # half the width of the six strings at the strum centre
-            lo, hi = (FR.string_point(neck, s, float(centre @ a)) @ c for s in (6, 1))
+        elif neck is not None:                                 # half the width of the strings at the strum centre
+            lo, hi = (FR.string_point(neck, s, float(centre @ a)) @ c for s in (len(neck["strings"]), 1))
             sigma = abs(float(hi - lo)) / 2.0
         else:
             sigma = 0.0225
         tl = ctx.timeline(first, where)
-        strokes = sorted((s for e in entries for s in SM.plan(e, tl, ctx.duration)), key=lambda s: s.t)
-        keep = {k: first[k] for k in SM.DEFAULTS if k in first}
+        picked = _picked_notes(ctx, name, side, prop, neck, entry, where) if any(SM.picking(e) for e in entries) else None
+        strokes = sorted((s for e in entries for s in SM.plan(e, tl, ctx.duration, picked)), key=lambda s: s.t)
+        keep = SM.params(first)
         win = SM.window(strokes, **keep)
         if win is None:
             ctx.log("WARNING", f"{where}: no strokes (rhythm and window select no strike time)")
@@ -160,7 +166,7 @@ def _strum(ctx, name, m, specs):
         r = centre - pivot
         r = r - (r @ a) * a
         kappa = float(np.cross(a, r) @ c)                      # sideways travel of the tip per radian about the wrist
-        share = float(first.get("share", SM.DEFAULTS["share"])) if abs(kappa) > 0.03 else 0.0
+        share = float(keep["share"]) if abs(kappa) > 0.03 else 0.0
         locs, rots = [], []
         for u, h in zip(P["u"], P["h"]):
             th = float(np.clip(share * u / kappa, -0.6, 0.6)) if share else 0.0
@@ -182,12 +188,35 @@ def _strum(ctx, name, m, specs):
         out[side] = {"strokes": len(strokes), "down": down, "up": len(strokes) - down, "frames": [int(fr[0]), int(fr[-1])],
                      "sigma_mm": round(sigma * 1e3, 1), "turn_share": share, "first": [round(s.t, 3) for s in strokes[:6]],
                      "max_u_mm": round(float(np.abs(P["u"]).max()) * 1e3, 1)}
+        if picked is not None:
+            ps = [s for s in strokes if s.string is not None]
+            out[side]["picked"] = {"strokes": len(ps), "strings": sorted({s.string for s in ps})}
         if mills:
             out[side]["windmills"] = mills
         if first.get("kick"):
             out[side]["kick"] = _neck_kick(ctx, prop, n, [s.t for s in strokes if s.accent], float(first["kick"]))
         ctx.log("strum", name, side, json.dumps(out[side]))
     return out
+
+
+def _picked_notes(ctx, name, side, prop, neck, entry, where):
+    """[(t, c, w, string)] the pick hand plays with `rhythm = "notes"` (mkmmd.core.strum.pick_notes): the bass line of the
+    other hand (`[pose.<cast>.hands.<other>] notes`, gripping this prop's neck), each note on the string the fretting hand
+    plays it on, placed on the strum axis of the strum entry `entry`."""
+    from ...core import strum as SM
+    from .pose import bass_line
+    other = "L" if side == "R" else "R"
+    h = ((ctx.section("pose", name) or {}).get("hands") or {}).get(other) or {}
+    if h.get("notes") is None:
+        raise BuildError(f"{where}: rhythm = \"notes\" picks the bass line of the fretting hand: give "
+                         f"[pose.{name}.hands.{other}] notes = {{lane = \"...\" | times = [[t, midi], ...]}}")
+    ref = str(h.get("grip", ""))
+    fret_prop, _, use = ref.partition(":")
+    if fret_prop != prop.name or neck is None:
+        raise BuildError(f"{where}: rhythm = \"notes\": the fretting hand must grip the neck of {prop.name!r} "
+                         f"(its grip is {ref!r})")
+    placed, _keys = bass_line(ctx, h, prop.use("grip", use or None), where)
+    return SM.pick_notes(placed, neck, entry)
 
 
 def _windmill(ctx, m, side, prop, normal, fr, locs, rots, strokes, times, dur, where):
@@ -269,6 +298,25 @@ def _window(ts, b, ease=0.15):
     """1 inside a table's `from`..`to` (clip seconds; open when missing), easing in and out over `ease` seconds."""
     lo, hi = float(b.get("from", -1e9)), float(b.get("to", 1e9))
     return PF.smooth((ts - lo) / ease + 1.0) * PF.smooth((hi - ts) / ease + 1.0)
+
+
+ROCK_EASE = 0.4                                           # s: a rock's way in before its `from` and out after its `to`
+
+
+def _rocks(spec, key, name):
+    """[(table, window)] of a `rock` or `head_rock`: one table or a list of them (sways summed), each with its window
+    over `from`..`to` (`_window`, eased over its `ease`) as a function of clip seconds."""
+    v = spec.get(key)
+    out = []
+    for i, r in enumerate(v if isinstance(v, list) else [v] if v else []):
+        where = f"perform.{name}.{key}" + (f"[{i}]" if isinstance(v, list) else "")
+        if not isinstance(r, dict):
+            raise BuildError(f"{where} = {r!r}: expected a table {{deg, period, phase, ...}}")
+        ease = float(r.get("ease", ROCK_EASE))
+        if ease <= 0.0:
+            raise BuildError(f"{where}: ease = {ease}: the seconds it takes to come in and go out, more than 0")
+        out.append((r, lambda ts, r=r, ease=ease: _window(ts, r, ease)))
+    return out
 
 
 def _turn(ctx, name, m, spec, ts, frames):
@@ -415,11 +463,10 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
     (`_turn`), steps the feet round to the turned stance and sinks the hips while the root turns; `walk`, a walk's plan
     (`_walk`), steps the feet, dips the hips as each comes down and tucks the legs over its hops. Returns report numbers."""
     bn, rs, kk, cr, ai = spec.get("bounce"), spec.get("rise"), spec.get("kick"), spec.get("crouch"), spec.get("air")
-    rk = spec.get("rock") or {}
-    hips = float(rk.get("hips", 0.0))
+    rocks = [(r, win) for r, win in _rocks(spec, "rock", name) if float(r.get("hips", 0.0))]
     if walk and walk.get("air"):
         ai = (list(ai) if isinstance(ai, list) else [ai] if ai else []) + [{"from": a, "to": b} for a, b in walk["air"]]
-    if not (bn or rs or kk or cr or hips or ai or turn or (walk and walk.get("feet"))):
+    if not (bn or rs or kk or cr or rocks or ai or turn or (walk and walk.get("feet"))):
         return {}
     arm = m.arm
     smap = S.semantic_map(arm)
@@ -444,9 +491,11 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
         dip = dip + turn["dip"]
     if walk and walk.get("feet"):
         dip = dip + walk["dip"]
-    if hips:
-        side = hips * np.sin(2.0 * np.pi * ts / float(rk.get("period", 4.0)) + float(rk.get("phase", 0.0)))
-        info["hips_mm"] = round(abs(hips) * 1000, 1)
+    for r, win in rocks:
+        side = side + float(r["hips"]) * win(ts) * np.sin(2.0 * np.pi * ts / float(r.get("period", 4.0))
+                                                          + float(r.get("phase", 0.0)))
+    if rocks:
+        info["hips_mm"] = round(max(abs(float(r["hips"])) for r, _win in rocks) * 1000, 1)
     if walk and walk.get("feet") and np.abs(walk.get("sway", 0.0)).max() > 0:
         side = side + walk["sway"]                                   # the strut: over the foot that is down
         info["sway_mm"] = round(float(np.abs(walk["sway"]).max()) * 1000, 1)
@@ -683,10 +732,8 @@ def run(ctx):
         head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
         head_pitch_x = np.zeros(len(ts))
         head_yaw_x = np.radians(PF.eased_keys(ts, spec.get("head_turn", [])))
-        for key, table in (("rock", spec.get("rock") or {}), ("head_rock", spec.get("head_rock") or {})):
-            if not table:
-                continue
-            swing = PF.rock(ts, table.get("period", 4.0), table.get("deg", 0.0), table.get("phase", 0.0))
+        for key, table, win in [(k, r, w) for k in ("rock", "head_rock") for r, w in _rocks(spec, k, name)]:
+            swing = PF.rock(ts, table.get("period", 4.0), table.get("deg", 0.0), table.get("phase", 0.0)) * win(ts)
             axis = table.get("axis", "side")
             if axis not in ("side", "front", "turn"):
                 raise BuildError(f"perform.{name}.{key}: axis = \"side\", \"front\" or \"turn\", not {axis!r}")

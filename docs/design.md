@@ -163,7 +163,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
 | `[post]` | `mk post` | the grade: see [Rendering and post](#rendering-and-post) |
-| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh): see [Frame effects](#frame-effects) |
+| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages and the picture effects pixelsort, film, camcorder, doodle, booth): see [Frame effects](#frame-effects) |
 | `[[medium]]` | `mk build` (shots), `mk render`, `mk look` | a window of clip seconds drawn in another look whatever shot is in the cut: see [Medium shifts](#medium-shifts) |
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
 | `[colliders]` | sim, checks | named lists of collision shapes: see [Colliders](#colliders) |
@@ -217,6 +217,7 @@ audio/timeline.json     mk timeline analyze
 tracks/<name>.json      reference data only the project can compute (below)
 refs/<set>/             reference photos for modelling (mk ref photos)
 ref/<set>.json          measurements of reference clips (mk ref measure)
+footage/pexels_<id>.mp4 stock footage a footage frame effect shows (mk ref footage)
 build/<name>.blend      mk build
 renders/<preset>/<output>/<frame>.png   mk render (+ plate/ matte/ back/ point/ screen/ keep/ layers)
 out/<name>_<output>[_<preset>].mp4      mk post
@@ -374,7 +375,8 @@ something hung on a wall: its origin lies on the wall plane), `use.rest` planes 
 `armature` and `stats`. A **set** card may carry `use.rest` (its `floor`) and `obstacles`, `[{name, min, max}]` axis-aligned
 boxes in the set's frame that placed props keep clear of (windows, doors, built-ins), plus `paths` (centre lines with lanes,
 see [Sets](#sets)) and `lights`. A project can merge its own entries over any card with `card_extra` (see [Props](#props)). A vehicle's card also carries `wheels` (`[{object, radius, axis}]`) and
-`steering` (`{object, axis, ratio}`), which the [vehicles stage](#vehicles) reads.
+`steering` (`{object, axis, ratio}`), which the [vehicles stage](#vehicles) reads. A card's `rates` (`[{rate, into, per}]`, the
+`turntable`'s) are root properties the [keys stage](#keys) integrates: see there.
 
 ## Asset registry
 
@@ -383,18 +385,19 @@ see [Sets](#sets)) and `lights`. A project can merge its own entries over any ca
 
 ```jsonc
 {"slug": "my_model", "kind": "model", "path": "/abs/path/model.pmx", "name": "Rin", "author": "NAME",
- "source_url": "...", "license": "...", "restrictions": "...", "credit": "Model: NAME",
+ "author_url": "...", "source_url": "...", "license": "...", "restrictions": "...", "credit": "Model: NAME",
  "rig": "rigs/my_model.rig.json", "tags": ["original"], "readmes": ["/abs/path/readme.txt"], "extra": {...}}
 ```
 
 mk never guesses a license. New entries are `unreviewed` and keep the paths of the readme files found next to the
 asset (`mk assets show SLUG --terms` prints the lines that talk about terms of use); someone who has read them fills in
 `license`, `restrictions` and `credit` with `mk assets set` (`source_url` is the field `--url` fills). `mk assets credits`
-builds the credits from the project's cast and `[credits] assets` (one entry per asset, grouped by kind) and exits 1 while
+builds the credits from the project's cast, the videos its footage frame effects and split inserts show (a slug, or a file the
+registry has) and `[credits] assets` (one entry per asset, grouped by kind, a credit line two of them share printed once) and exits 1 while
 any of them is unreviewed or has neither an author nor a credit line; `[credits] lines` are the project's own lines (a song,
 a print made for it, the palette, tools), appended as bullets under `## Also` or under the `## Heading` lines among them.
 Slugs are how the project refers to registered assets: `[[cast]] asset`, `[[motion.<cast>]] vmd`, `[[prop]] card`,
-`[[text]] font`.
+`[[text]] font`, `[[fx]] clip`, `[[insert]] clip` (`mk ref footage` registers Pexels videos with their author, pages and licence).
 
 ## Colliders
 
@@ -764,6 +767,7 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `car_mockup` | an open two-seat cabin of boxes for tests (seats two, steers, rests an arm on a door, tests wind): it trips the form guard on purpose |
 | `convertible_80s` | an 80s convertible (Dodge 600 proportions, top folded), left-hand drive with the driver on +X, forward -Y: two seats, wheels, steering, a dash with `SPEED_GRID` / `BAR_GRAPH` surfaces and a cassette. Roles in `slots`: `body`, `lower`, `stripe`, `trim`, `rubber`, `interior`, `display`, `headlamp`, `taillamp`, `glass`, `wheel`, `boot`. Animatable root properties (key with `[[key]]`): `lamps` (0..1, with a warm-up flicker), `brake`, `tails` (0.35), `dash_on`, `tape` (0 held out, 1 pushed in), `bars`, `visors` (0 flipped up, the default, 1 down). Card `use`: `sit` driver / passenger, `feet`, `grip` `wheel`, `rest` `sill_L` / `sill_R`, `look` (`road`, `mirror`, `dash`, `cassette`, `headlamp_L` / `_R`, `tail`), `surface` (`speed`, `bars`, `cluster`, `radio`, `cassette_label`, `plate_front`, `plate_rear`), `anchor`; `wheels` and `steering` for the [vehicles stage](#vehicles) |
 | `electric_guitar` | an 80s Strat-type electric, upright on its tail (Z up along the strings, face toward -Y, origin at the saddle line). Roles in `slots`: `body`, `pickguard`, `neck`, `fretboard`, `hardware`, `strings`, `knobs`, `strap`, `cable`, `pick`, `inlay`, `dark`. Card: `use.grip` `neck` and `strum`, `use.anchor`, `use.look`, `use.wear`, hidden colliders; see [Playing a worn guitar](#playing-a-worn-guitar) |
+| `electric_bass` | a 60s-70s short-scale bass of the Mustang Bass kind (30 inch scale, 19 frets, an offset body, a split single coil, a string-through bridge, a control plate with two knobs and the jack, four in-line clover keys), upright like the guitar. Roles in `slots`: the guitar's, `knobs` (the black plastic of the knobs and the pickup covers) and `stripe`: naming it adds the racing stripes. Card: the guitar's contract with four strings and their `tuning` (E1 A1 D2 G2); see [Playing a worn guitar](#playing-a-worn-guitar) |
 | `hearts` | a field of puffy hearts that rise and sway around a point, animated by drivers on the frame (see below) |
 | `heart` | one big puffy heart that pounds on the song's beat (a bump on the beat and a smaller one after it) and bursts into a ring of little hearts every few beats; options `size` (0.2), `bpm`, `start` (a clip second on a beat), `beat` (0.25: the swell), `burst` (8 hearts), `every` (4 beats), `reach` (0.45 m), `burst_size`, `turn`, colour `heart` ("love"), `glow`. Drivers on the frame and the scene's `mk_frame0`; objects `<name>_heart`, `<name>_burst<i>` tagged `mk_heart` (silhouette accents: `accent = ["prop:mk_heart"]`); with `attach` it rides a chest |
 | `traffic_car` | an 80s car or truck for night traffic: `body` "sedan", "wagon" or "semi" (a cab-over tractor and a box trailer whose sides are `use.surface` `left` / `right`), colours `paint`, `trailer`, `glass`, `lamp`, `tail`, `marker`, emissions `lamps` (30), `tails` (9), `markers` (3.5), `beams` (real headlight spots: `beam_power` 900 W, `beam_angle` 55, `beam_tilt` 5). Faces -Y, origin under the middle; the card lists the wheels and beams, so a `[[vehicle]]` drives it |
@@ -782,6 +786,7 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `desk_lamp` | a spring-arm desk lamp that owns a warm spot light; options `paint` (slot or `#hex`, "love"), `power`; root properties `power` (60 W) and `on` (0..1: key it to switch the lamp); yaw aims it (0 looks toward -Y) |
 | `cassette_player` | a compact radio-cassette player (a boombox), 0.34 x 0.115 x 0.16 m; option `label` (the cassette's label colour); root properties `glow` (0..1) and `pump` (0..1: both speaker grilles, `<name>_grille_L` and `_R`, swell 12 % about their centres and come 4 mm out of the front; key it on the kicks); `use.surface` `dial` |
 | `cassette_tape` | a compact cassette lying on the desk; option `label` (a slot or `#hex`; by default picked from the instance name) |
+| `turntable` | a direct-drive DJ deck (SL-1200 proportions, 453 x 360 mm, unbranded) with a 7-inch single on its felt mat: grooves with their sheen, a paper label, the 45 adapter in the 38.2 mm hole, an S-shaped arm (headshell, cartridge, counterweight) with its rest, cue and lever, strobe dots, power knob, start / stop, 33 / 45 lamps, target light, pitch slider. Front -Y, origin on the floor under the plinth's middle. Roles in `slots`: `plate`, `body`, `metal`, `mat`, `vinyl`, `label`, `print` (the label's rings), `cartridge`, `lamp` (`ink` and `paper` name the palette's darkest and lightest); option `strobe` (W, 0.15). Root properties for `[[key]]`, also starting values in `slots`: `rpm` (0; 33.3, 45, negative turns it back; the keys stage integrates it into `turns`, the platter's revolutions since clip second 0, so a spin-up never jumps; the deck needs 0.7 s to reach speed), `arm` (0 on its rest, 1 over the lead-in groove, 1..2 the side played in to the last groove: key 1 + seconds / 210 while it plays), `cue` (0 down, the stylus on the record; 1 lifted 10 mm: lower it over 1-1.5 s for a needle drop). Card: `use.surface` `label` and `label_lower` (above and below the hole, riding the platter: `[[text]] on = "deck:label"` turns with the record; give it `lift = 0.0003`), `use.look` `record` and `stylus`, `use.anchor` `spindle` and `stylus` (the empty `<name>_stylus` at the tip), `rates`. Objects: `<name>_platter` (turns) carrying `_mat`, `_record`, `_label`, `_adapter`; `_arm`, `_yoke`, `_cue_bar`, `_cue_lever`; `_plinth`, `_feet`, `_controls`, `_arm_base`; the light `_strobe` |
 | `handheld_mic` | a handheld vocal microphone, 162 mm long with a 51 mm ball grille, standing on its tail along +Z, and its cord `<name>_cable`; colour roles `body`, `grille`, `hardware`, `cable` (`slots`: a palette slot or `#hex`); `use.anchor` `jack` (the cord's exit under the tail), `use.look` `grille` and `grip`. Put it in a hand with `attach` and `cable` (see [Posing](#posing)) |
 | `fuse` | a cartoon fuse: a rope (`<name>_cord`, 14 mm thick) that leaves a socket at the root, up and over in a curl, with a spiky spark (`<name>_spark`) that is lit at its tip and burns it down. Root properties for `[[key]]`, 0..1: `grow` (how much of the rope has sprouted, along its length; default 1), `burn` (how much has burned down from the tip; 0), `lit` (the spark's size, flickering; 0). Leave `grow` at 1 in the slots and key it from 0: the props stage measures the form as built. Options `points` (`[[x, y, z], ...]` from the root, the first `[0, 0, 0]`), `radius`; colour roles `cord` (text), `spark` (gold), `cap` (base); `use.look` `base` and `tip`. The spark has no parent (it rides the rope's end on a Follow Path constraint and copies the root's world scale), so `scale` and `parent` carry it too |
 | `burst` | a blast of pieces flung out from the root at a clip second: puffy hearts, five-point stars, cloud puffs and shards of glass (pillows facing -Y, and thin flat slivers with sharp edges, mirror-bright metal tinted their colour with a glow of their own: `<name>_heart<i>`, `<name>_star<i>`, `<name>_puff<i>`, `<name>_shard<i>`, the hearts tagged `mk_heart`), each easing out to its own reach while it pops in and spins in the picture's plane, then shrinking away; the directions are flattened toward the picture (x-z), so pieces fly across it more than at the lens. Drivers on the frame (the maths: `mkmmd/core/burst.py`), so a [freeze](#freezes) holds them mid-air. Options `count` (24), `seed` (1), `mix` (`{heart = 0.45, star = 0.35, puff = 0.2}`; `{shard = 1}` for broken glass), colours `heart` ("love"), `star` ("gold"), `puff` ("text"), `shard` ("text"), `glow` (0.3); root properties for `[[key]]`: `start` (the clip second it goes off; 0), `reach` (how far the farthest piece flies; 1.2 m), `life` (1.4 s), `spin` (360 degrees over a life), `size` (the largest piece; 0.16 m), `amount` (1; 0 hides every piece). A `[[key]]` on `start` with a `lane` sets it off again on every kick |
@@ -951,7 +956,7 @@ and positive `head.roll` tips the head toward its left shoulder.
 | `sit_offset` | `[x, y, z]` metres: slides the hip point on the seat, in the seat prop's frame (the world's for a `sit` table): sit further forward |
 | `feet` | ankle targets for the leg IK (a model without `leg_ik` bones ignores them). `"seat"` (default when seated): the seat prop's `use.feet` point of the seat's own name, else its only one (`L` and `R` as `[x, y, z]` in the prop's frame); a seat without one, and `"floor"`, put the feet in front of the knees (0.55 of the leg's length ahead of the hip, 0.1 m either side). Standing (no `sit`), `"floor"` keeps the feet where the model stands, on the floor under the hips (what no `feet` does too), and `"seat"` is an error that says so. `"prop:feet"`: another prop's `use.feet` point. A table `{L, R}` gives both feet as world `[x, y]` or any [target](#targets): `{cast = "rin", point = [x, y, 0]}` writes a standing pose in the character's own frame, so it moves with the character. Only x and y count: the ankle keeps the model's own height above the floor |
 | `lift` | `{L = m, R = m}`: each ankle's goal that far above its rest height, eased in over the settle like the feet (with or without `feet`): a foot kicked up, or both off the ground with `hips.shift` raised as far (a jump caught at its top). Any other key raises |
-| `hips` | `{shift = [x, y, z], roll, yaw}`: moves and turns the pelvis of a standing or seated body, eased in over the settle and on top of what a seat asks for. `shift` is in metres in the character's own frame (x its left, y behind, z up): a drop bends the knees and the leg IK keeps the feet on `feet`. `roll` degrees drops the left hip (+). `yaw` degrees turns the pelvis toward the left about the vertical. Keyed on `center` (shift) and `lower_body` (roll, yaw) |
+| `hips` | `{shift = [x, y, z], roll, yaw, pitch}`: moves and turns the pelvis of a standing or seated body, eased in over the settle and on top of what a seat asks for. `shift` is in metres in the character's own frame (x its left, y behind, z up): a drop bends the knees and the leg IK keeps the feet on `feet`. `roll` degrees drops the left hip (+). `yaw` degrees turns the pelvis toward the left about the vertical. `pitch` degrees tips it forward (+): the thighs fold at the hip joints with the feet planted, so with `lean` and a `shift` back the body hinges at the hips (bent over a table, hands on the knees) instead of curling at the waist. Keyed on `center` (shift) and `lower_body` (roll, yaw, pitch) |
 | `toes` | `{L = deg, R = deg}`: foot yaw about the vertical through each ankle (the leg IK bone), + toward the left: toes in are negative on the left foot and positive on the right. Any other key raises |
 | `lean`, `turn` | degrees: upper-body forward lean and turn toward the left, on top of the seat's back angle (default 0) |
 | `lean_share`, `turn_share` | the share of `lean` and of `turn` that `upper_body` takes; `upper_body2` takes the rest, and a model without one takes all (default 0.6 each) |
@@ -994,7 +999,7 @@ in over the settle.
 | `along` | `rest` on an edge: 0..1 along it (default 0.5) |
 | `offset` | `rest` on a plane: `[x, y, z]` metres from its centre, in the prop's frame (default 0) |
 | `lift` | `rest`: metres above the surface along its normal (default 0.03; 0 for a `grip = "rest"`) |
-| `keys` | `[{t, at, dir, palm, fingers}]`: moving targets, `t` in clip seconds, Bezier between the keys; `dir` and `palm` default to the hand's own; a key's `fingers` (as the hand's `fingers`) are reached at its time and eased between the keys that have them, from the hand's own at the end of the settle. With `at` that pose holds until the first key; without it the first key's target is the hand's from the start. A neck grip's keys are `{t, fret, chord, move}` instead |
+| `keys` | `[{t, at, dir, palm, fingers, pole}]`: moving targets, `t` in clip seconds, Bezier between the keys; `dir` and `palm` default to the hand's own; a key's `fingers` (as the hand's `fingers`) are reached at its time and eased between the keys that have them, from the hand's own at the end of the settle; a key's `pole` (a target) is where the elbow's pole is at its time, eased between the keys like the goal, the keys without one going back to the hand's own `pole` (the moves stage gives it to a place that holds the elbow its own way: a dainty hand alone, [Moves](#moves)). With `at` that pose holds until the first key; without it the first key's target is the hand's from the start. A neck grip's keys are `{t, fret, chord, move}` instead |
 | `ride` | the goal follows something. `"<object>"` (a steering wheel, `"car_wheel"`): the goal is parented to it. `"cast:<name>.<bone>"` (this character's own name; the chest is `cast:rin.upper_body2`): goal and pole are bone-parented to that bone, their keys computed from the world goal with the bone as it stands in the settled pose, so clasped hands follow every `lean`, `turn`, `tilt` and sway and never part; a bone of an arm is refused. Targets and `keys` are read as world points of the first frame (object) or of the settled pose (bone). A hand on a guitar's `neck` or `strum` point rides the prop's root by default |
 | `ik` | `[[t, share], ...]`: clip seconds and shares 0..1 of the arm IK (with the hand's copied rotation and the forearm's pre-bend) after the settle, eased between the keys and held outside them (default all of it); where it is under 1 the arm follows its [motion](#motion) strips. The moves stage writes it for a hand a `free` move lets go ([Moves](#moves)) |
 | `fingers` | a finger preset (`flat`, `relaxed`, `curled`, `fist`, `point`) or a table `{index = [a, b, c], middle, ring, little, thumb, spread}` of curls in degrees per joint (a finger left out stays straight) and `spread`, degrees the fingers fan apart in the plane of the palm (the index by `spread`, the ring 0.6 and the little finger 1.2 times as far, the thumb 0.8 times away from the index; negative closes them; or `{finger: deg}`) for this hand (replaced by a grip's solved rotations) |
@@ -1100,7 +1105,7 @@ every arm IK in millimetres, keyed `<cast>.<L|R>`.
 The log has a line per grip (and `mkmmd.solvers.grip: cached ...` or `solved in ...s` for each solve) and `WARNING` lines when
 something is off: a grip past its gates (a contact gap over 3 mm, penetration or finger clash over 1 mm: the prop does not fit
 that hand) and a wrist that ends more than 5 mm short of its goal (out of reach: lean the character, move the seat or bring the
-prop closer; an arm is about 0.38 m long for a 1.7 m model). The miss is measured at
+prop closer; an arm is about 0.38 m long for a 1.7 m model). The miss is measured, each hand on its own frames only, at
 the end of the settle, at every landing of a fretting hand's keyed change and on every sixth frame of a pen track; the moving
 targets of plain `keys` are not measured. Pin a grip with a `contact` check between a fingertip bone's tail and the prop, and a
 reach with one between `bone("wrist.R").tail` and `obj("<cast>_hand.R").loc` (the IK reached its goal).
@@ -1133,8 +1138,15 @@ cannot be keyed both in `[perform]` and by a move (each is a build error); other
 `{name = "rest", hand, place}` says where a hand waits when no move plays it (and gives that hand its arm IK, so a walk's `arms`
 swing it even when it plays nothing): `"rest"` (default: hanging by the hip; over a wide
 skirt the arm swings out until the hand clears it), `"dainty"` (resting lightly on the front of the skirt or the thighs, elbows
-in, the two hands together when both rest there: a girl's polite stand) or `"mic"` (a fist under the mouth, holding an
-attached mic that leans back up to the lips, so the forearm rises to it and the elbow hangs by the side). A hand
+in, the two hands together when both rest there: a girl's polite stand. It is a pose for two: a dainty hand alone, its
+partner away (playing a move, a reaction or let go) or resting elsewhere, rests on the front of its own thigh instead, a few
+cm out from the two-hand spot: the hand continues its forearm (its wrist bent 12 degrees at most), the fingers down the
+thigh and the palm on the skirt, and the elbow is held out to the side (the hand's keys there carry the elbow's pole), so
+the forearm and sleeve clear the hem of a jacket. It glides there from the spot as its partner leaves, arriving as the
+partner gets to its move, and is back as the partner is, unless that stretch is shorter than 0.15 s; the partner's
+absences closer than its round trip plus that count as one, so it does not go back for a moment) or `"mic"` (a fist under
+the mouth, holding an attached mic that leans back up to the lips, so the forearm rises to it and the elbow hangs by the
+side). A hand
 travels at a human pace: a trip takes 0.1 s plus its wrist's way at 1.6 m/s (eased: it peaks near twice that), or as long
 as turning its palm or its fingers' way at 600 degrees a second takes, if that is longer, and it reaches a move's first
 place on the move's time, so it sets off before it. A reaction is the other way round: `flung` leaves where the hand is on
@@ -1200,10 +1212,21 @@ natural:
 
 A `free` move lets its hand go for the span: the arm IK (with the hand's copied rotation and the forearm's pre-bend) eases off
 over 0.25 s and back on, and in between the arm follows whatever else drives it, a [motion](#motion) strip of the arms (a
-walk's swing, below); the hand's goal waits at its rest place meanwhile, so the hand comes back from there. The moves stage
-writes the hand's `ik` keys ([Posing](#posing)), and a member with a hand let go has its own keys composed with its strips
-(its action blends with Combine, so the pose stage's forearm key adds to the strip's elbow instead of replacing it). A hand
-that rests at the mic is never let go.
+walk's swing, a singing motion's gestures, below). The moves stage writes the hand's `ik` keys ([Posing](#posing)), and a
+member with a hand let go has its own keys composed with its strips (its action blends with Combine, so the pose stage's
+forearm key adds to the strip's elbow instead of replacing it). Once the motion stage has laid the strips, it reads where they
+have each let-go arm over its spans (the wrist, the hand's direction and palm, the elbow; in the frame of the chest the goal
+rides, so a strip that turns the chest under the arm carries the goal with it) and keys the hand again
+(`mkmmd.blender.build.pose.free_hands`): the goal follows the strip's hand over the span and the elbow's pole its elbow (turned
+at the span's ends by what the IK's elbow misses by), so the IK lets go and takes over on the strip's own arm and nothing moves
+at the hand-offs; the hand travels to where the strip has it at the span's start and away from it at its end at the human pace,
+as between any two places, and leaves the strip as late as still gets it to its next move on time (at the span's end or
+before: the report's `free_hands` has the spans as played). Over each span the forearm's pre-bend is off (the IK starts from
+the strip's own bent arm), and the hand's finger keys give way by its IK share to a strip that plays the fingers (the strip's
+curl alone, not composed with the hand's). Let a strip of the arm cover the span, eased in before it and out after it, and play
+the fingers in a strip of their own over the span itself, eased over 0.25 s: the build warns when no strip plays the arm fully
+over a span (the IK would let go of a half-played arm). Without a strip of that arm the goal waits at the hand's rest place
+over the span, so the hand comes back from there. A hand that rests at the mic is never let go.
 
 Faces of the same morph closer than 0.12 s are held through. The pose report has `moves` per member (`moves`, `hand_keys` per
 side, `free` spans per side, `expressions`, `twitches`, and `places`: per side and place, `moved_mm`, how far the approach
@@ -1240,12 +1263,21 @@ to some bones (`[motion.<cast>]` with a single table works too). Each entry make
 | `bones` | which bones the motion drives: `"all"` (default), `"upper"` (spine, neck, head, eyes, shoulders, arms with their twist bones, wrists, fingers), `"lower"` (center, groove, waist, lower body, legs, knees, ankles, toes and the leg and toe IK bones), `"arms"` (shoulders, arms, elbows, wrists and their twist bones, not the fingers) or a list of these groups and semantic or Blender names. Hair, skirt and the root bone belong to no group |
 | `morphs` | also play the VMD's facial keys (default true) |
 | `blend_in`, `blend_out` | seconds the strip's influence ramps in and out (default 0) |
+| `influence` | the share of the motion the strip plays, above 0 and at most 1 (default 1), eased in and out over the blends (the strip's influence is keyed): on a member whose action blends with Combine (a hand let go), a strip of `["upper_body", "upper_body2"]` at 0.35 turns and leans the chest a third as far as the motion does, under `[perform]`'s sway, so the chest and shoulders go with the gestures of the arms' strips |
+| `mirror` | `true`: the motion mirrored left for right, as MMD mirrors one (`core.vmd.mirror`: the bones of the two sides trade keys, positions flip and rotations reflect through the body's middle plane): the other hand plays the gestures. The facial keys are played as they are (default false) |
 | `extend` | `"hold"` (default): the strip's first and last poses stay before and after it; `"forward"`: only its last pose stays, after it; `"none"`: it acts on its own frames only. A later entry's track is above an earlier one's, so where both play the later one wins |
 
 A walk VMD gives a walking character natural arms where mk's own walk (`[perform.<cast>] walk`, its `arms` an IK swing) reads
 stiff: let both hands go with `free` moves over each run of steps, and play the walk's `bones = ["arms", "upper_body",
 "upper_body2"]` there with `extend = "none"`, its cycle scaled to two of the character's steps and its left heel strike on
 her own left steps (a VMD walk in place keeps the legs, the feet and the travel mk's).
+
+Singing arms (a singing motion's gestures): let each hand go with `free` over its stretches and play the motion's arm in a
+strip that covers each stretch, eased in before it and out after it, and its fingers in a strip of their own over the
+stretch itself, eased over 0.25 s ([Moves](#moves)); a motion whose other hand holds a mic all through gives that hand
+gestures `mirror`ed from other moments of it (or its relaxed hanging arm from a quiet stretch), and a strip of
+`["upper_body", "upper_body2"]` at an `influence` of about a third, on the gesturing arm's clock, turns and leans the chest
+with the gestures under the sway.
 
 A dance that stops with the music and picks up again: play stretches of one choreography as entries whose source ranges follow
 on (each `from` the `to` of the entry before), each with `extend = "forward"`. Between two of them she holds the pose the dance
@@ -1266,9 +1298,10 @@ By default (`extend = "hold"`) the motion's first pose holds before `start` and 
 `[perform]` key win over the motion (the active action plays on top of the strips): `pose` keys the spine, neck and head
 always, the pelvis with `sit` or `hips`, the arms with a `hands` table, the legs with `feet`; `perform` keys the spine, neck, head
 and eyes on every frame. Give a member that has both a motion and those tables `bones = "lower"` or a list of the bones the
-others leave alone. The report has, per entry, `vmd`, `source`, `strip` (first and last frame), `morphs` and, with `retime`,
-`motion_bpm`, `song_bpm` and `scale`; `retime` raises when no beat can be found in the motion (a very short or motionless VMD)
-or the timeline has fewer than two beats.
+others leave alone. The report has, per entry, `vmd`, `source`, `strip` (first and last frame), `morphs`, `mirror` and
+`influence` when given and, with `retime`, `motion_bpm`, `song_bpm` and `scale`, and `free_hands` the hands let go to the
+strips (per member and side: the `spans` as played, the `samples` read and the `pole` stretches keyed); `retime` raises
+when no beat can be found in the motion (a very short or motionless VMD) or the timeline has fewer than two beats.
 
 ### Perform
 
@@ -1315,7 +1348,7 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `lean`, `turn`, `tilt` | `[[t, deg], ...]`: extra upper-body forward lean, turn toward the left and sideways tilt toward the left over time, smoothstep-eased between the keys, held before the first and after the last, on top of the pose's base: a reach that leans in and settles back, a head on a shoulder. Hand targets still hold, except hands whose pose `ride` is a chest bone, which go with it. The first key's value holds from the start of the pre-roll: begin with a `[0, 0]` key to start from the base |
 | `head_tilt` | `[[t, deg], ...]`: the head rolls toward the left on top of the gaze, keyed the same way |
 | `head_turn` | `[[t, deg], ...]`: the head turns toward the left on top of the gaze, keyed the same way: a look back over the shoulder |
-| `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0, axis = "side", hips = 0}`: a periodic sway of the upper body and of the head: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed ones; `axis` `"side"` leans the body (like `tilt`) and rolls the head (like `head_tilt`) toward the left, `"front"` leans the body forward (like `lean`) and nods the head, `"turn"` twists the body (like `turn`) and shakes the head. Unlike the keys it goes on at any clip time, so a dreamy sway survives a re-cut; a squirm seen side-on is a fast `turn` (a swing a beat). `rock.hips` (metres) shifts the hips toward the left with the same swing, the feet planted, so the weight goes from foot to foot: a groove without steps |
+| `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0, axis = "side", hips = 0, from, to, ease = 0.4}`: a periodic sway of the upper body and of the head: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed ones; `axis` `"side"` leans the body (like `tilt`) and rolls the head (like `head_tilt`) toward the left, `"front"` leans the body forward (like `lean`) and nods the head, `"turn"` twists the body (like `turn`) and shakes the head. Unlike the keys it goes on at any clip time, so a dreamy sway survives a re-cut; a squirm seen side-on is a fast `turn` (a swing a beat). `rock.hips` (metres) shifts the hips toward the left with the same swing, the feet planted, so the weight goes from foot to foot: a groove without steps. `from`, `to` (clip seconds) keep a sway to a span, eased in over `ease` seconds before `from` and out over them after `to` (as `bounce`'s window); a list of tables is several sways, summed: a sway in each span where she only stands (still for the poses and dances between them), or the hips in one table and the body leaning against them in another |
 | `bounce` | `{depth = 0.03, beats = [t, ...], timeline, downbeat_accent = 1.6, from, to, attack = 0.05, decay = 0.16}`: the hips (the `center` bone) dip `depth` m on each beat (downbeats weighted), the feet planted, so the knees pump; `from`, `to` (clip seconds) limit it |
 | `rise` | `[[t, metres], ...]`: the whole body, feet too, lifts by that much (eased between keys): she floats |
 | `crouch` | `[[t, metres], ...]`: the hips drop by that much, the feet planted, so the knees bend (eased between keys, on top of `bounce`): a landing, a squat, a brace before a jump |
@@ -1362,7 +1395,7 @@ guitar](#playing-a-worn-guitar)).
 | `hand` | `"R"` (default) or `"L"`: the pick hand; its `[pose.<cast>.hands.<side>]` needs the strum grip, whose goal rides the prop |
 | `prop` | the name of the guitar the hand grips (required) |
 | `grip` | the prop's `use.grip` point of the strum zone (default `"strum"`) |
-| `rhythm` | `"onsets:<stem>"` (the timeline's `onsets`, see [Timeline](#timeline): `mk timeline onsets`), `"beats:N"` (N strokes per bar of four beats, a multiple of 4: 8 is eighths) or a list of strike times in clip seconds (default `"beats:8"`) |
+| `rhythm` | `"onsets:<stem>"` (the timeline's `onsets`, see [Timeline](#timeline): `mk timeline onsets`), `"beats:N"` (N strokes per bar of four beats, a multiple of 4: 8 is eighths), `"notes"` (pick the other hand's bass line one string at a time: [Playing a worn guitar](#playing-a-worn-guitar), Picking) or a list of strike times in clip seconds (default `"beats:8"`) |
 | `from`, `to` | clip seconds: only the strikes inside are played (default the whole clip) |
 | `accent` | `"downbeats"`, `"beats"` or a list of times: strikes within `accent_window` of them are accented (wider and deeper by `accent_gain`) |
 | `accent_gain` | an accented stroke's amplitude and depth (default 1.25) |
@@ -1535,6 +1568,12 @@ pulse = [[0.0, 900.0], [0.12, 150.0]]
 ```
 
 The report maps `<target>.<prop>` to the number of keys; a target or property that does not exist, or an empty `keys`, raises.
+
+A driver can read a position but cannot add up a speed, so a prop whose card has `rates = [{rate, into, per}]` (the `turntable`:
+`rpm` into `turns`, per 60) gets its root property `into` keyed by the stage on every frame of the build, after the keys,
+with the running integral of `rate / per` over clip seconds (Simpson's rule per frame, 0 at clip second 0, linear past the
+ends), once `rate` is animated: key the speed and the platter turns by what it adds up to, a spin-up never jumping the
+record. Unkeyed, the builder's own `into` already runs at the starting speed. The report counts its keys as `<prop>.<into>`.
 
 ### Sim
 
@@ -2020,8 +2059,9 @@ Frames: `mkmmd/core/gripframe.py` builds the grip frame in the world (`ring_fram
 
 A standing character can wear a prop on a bone (a guitar on its strap), fret its neck and strum its strings in time with the
 song. The mechanism is generic: the prop's card says where it is worn and where the hands go (`use.wear`, `use.grip` points of
-type `neck` and `strum`, `use.anchor`), the project gives the numbers (a chord and fret, the times, the rhythm). The library prop
-`electric_guitar` (frame and card: its module docstring) is a card that does.
+type `neck` and `strum`, `use.anchor`), the project gives the numbers (a chord and fret, the times, the rhythm). The library props
+`electric_guitar` and `electric_bass` (frame and card: their module docstrings) are cards that do; a bass plays a bass line
+one note at a time ([Bass lines and picking](#bass-lines-and-picking), below).
 
 ```toml
 [[prop]]
@@ -2138,9 +2178,68 @@ on one hand give different rhythms in different parts of the song. The build key
 window, relative to the grip, so the arm's reach is part of the result. `plan` and `path` are numpy only and tested without
 Blender; the `strum` check replays the plan on the timeline against the scene.
 
+### Bass lines and picking
+
+A fretting hand plays a bass line instead of chords when its table has `notes`, and the pick hand picks it one string at a
+time with `rhythm = "notes"` (`mkmmd/core/fretting.py`: `line`; `mkmmd/core/strum.py`: `pick_notes`, `plan`):
+
+```toml
+[[prop]]
+name = "bass"
+card = "library:electric_bass"
+wear = "rin"
+
+[pose.rin.hands.L]
+grip = "bass:neck"
+notes = { lane = "bass_notes", from = 24.42, to = 28.84, position = 7 }    # a note lane of [audio] hits (mk timeline hits --notes bass_notes=bass:30-400)
+[pose.rin.hands.R]
+grip = "bass:strum"
+
+[perform.rin]
+strum = { hand = "R", prop = "bass", rhythm = "notes", from = 24.42, to = 28.84 }
+```
+
+| `notes` key | Meaning |
+|---|---|
+| `lane` | a lane of the `[audio] hits` file whose hits carry a `midi` pitch (`mk timeline hits --notes NAME=STEM:LO-HI`), or |
+| `times` | `[[t, midi], ...]`: clip seconds and MIDI note numbers (one of `lane` and `times`) |
+| `from`, `to` | clip seconds: the notes inside are played (inclusive; default all) |
+| `min_db` | a lane's hits under this level are left out (0 is the lane's loudest) |
+| `octave` | whole octaves added to every pitch (default 0): a detector an octave off, or the line an octave lower |
+| `tuning` | the MIDI pitch of each open string, the lowest first (default the card's neck `tuning`; the library bass says `[28, 33, 38, 43]`, E1 A1 D2 G2) |
+| `position` | the lowest the hand may go: the index finger never below that fret (default 1), so every fretted note is on it or higher and the least travel is found within it; open strings stay allowed (the hand does not move for them), and a note with no string and fret from there up raises. A bassist keeps a line near the body this way: a 30 inch neck's first frets are out of a standing character's reach with the bass at the hip, its 7th position is not (the library bass is worn for it) |
+
+Every pitch is rounded to a semitone and placed on a string and fret over the whole line at once (dynamic programming): one
+finger per fret (a note on fret f at position p is played by finger f - p, index to little, so p is f - 3 .. f), open
+strings allowed, minimising the hand's travel along the neck (metres between the position wires) plus a cost per shift, a
+small one per open string (a fretted note shows the line; an open one saves a shift), per string crossed and per fret (the
+lower of two equal places). A note no string and fret can play raises with its time and pitch (`octave` or `from` / `to` mend
+it). Each change of note becomes a key of the neck grip (as `keys` do; `notes` replaces `fret`, `chord` and `keys`): the
+one-finger shape `{finger = [string, frets above the position]}` in place at the note's time, reached over the hand's `move`
+(0.12 s) cut to 0.75 of the time since the note before, so the hand arrives just before each note; a repeated note keys
+nothing. On an open string the finger of the note before lets go and hovers 3 mm over its string where it was (a shape's
+finger written `[string, frets, "hover"]` does that anywhere; strings are numbered from the highest, 1, to the lowest, 4 on
+a bass). The grip digest has `notes`: how many, the shapes, the strings and positions used, the open notes, the fret range.
+
+Picking (`rhythm = "notes"`): the strikes are the notes of the other hand's `notes` (the fretting hand must grip this prop's
+neck), each a stroke on the string its note is played on: it meets that string's near side at the note's time (u = c - d w:
+c is the string's place on the strum axis at the strum centre, w its radius and half a millimetre) and leaves its far side
+after `attack`, the tip `depth` past the strings' axis plane so it catches the string, over the other strings `lift` above
+them and to and from rest lifted by `return_lift`. The strokes alternate strictly, down first and down again after a pause
+long enough for the hand to rest (lead, attack, follow, approach, retreat and 0.1 s). A picking table's defaults are
+`span` 0.026, `depth` 0.002, `lift` 0.006, `attack` 0.012, `lead` and `follow` 0.05, `approach` and `retreat` 0.25,
+`return_lift` 0.008, `accent_gain` 1.15, `up_scale` 1 and `min_gap` 0.05 (`strum.PICK`; the table's own keys win). The strum
+report adds `picked` {strokes, strings}; the `strum` check judges every picked stroke (its `strokes` default is `all` for a
+picking spec) by the tip's distance from the string of its note when it crosses it, with the timing of the crossings.
+
 Checks to keep: `joint_limits` (the default elbow pole is under the shoulder; give `pole` per hand for another), `contact`
 between `bone("wrist.R").tail` and `obj("<cast>_hand.R").loc` (the IK reached its goal at every frame, `max` 5 mm), `strum`
-(distance at the down strokes, timing), `prop_body` (the guitar against the character's body), `form` on the prop.
+(distance at the down strokes, or every picked stroke; timing), `prop_body` (the guitar against the character's body), `form`
+on the prop. A bass is worn lower than a guitar: the library bass's card hangs it at the hip with the neck 25 degrees up (`at`
+[-0.23, -0.07, -0.13], `neck_deg` 25, `yaw_deg` 8) and its pick zone between the pickup and the end of the neck, where a pick
+player plays a Mustang and a hanging right arm reaches; with that, play the line from a `position` near the body (7 reaches on
+a small anime body; the first positions would need the bass hung high and far to the right). A longer-armed character can take
+a lower position or wear it differently with `wear = {cast, at = [...], neck_deg = ...}`.
 
 ## Shots
 
@@ -2498,13 +2597,13 @@ sketch = { paper = "text", ink = "base", strokes = 2, grain = 0.35, hatch = 7 }
 Effects that need two shots at once are composited by `mk post` from layers `mk render` draws next to the cut's frames. `mk build`,
 `mk render`, `mk post` and `mk look` all read one plan made from mk.toml alone (`mkmmd.core.transition.plan`, numpy-free maths, tested
 without Blender). A **window** is the run of frames an effect changes: the `dur` seconds that END at the cut `at` for a transition
-(`round(dur * fps)` frames, at least 2, so the incoming shot lands on the beat), the whole `from`..`to` of an insert (its frames
-`from` .. `to` - 1). **Plates** are the other shot's frames through its own camera and look. The layers sit in the output's frame
-folder, named by Blender frame (`<frame>.png`, five digits):
+(`round(dur * fps)` frames, at least 2, so the incoming shot lands on the beat; a spin's runs on `after` seconds past the cut),
+the whole `from`..`to` of an insert (its frames `from` .. `to` - 1). **Plates** are the other shot's frames through its own
+camera and look. The layers sit in the output's frame folder, named by Blender frame (`<frame>.png`, five digits):
 
 - `plate/<shot>/<frame>.png`: a shot's frame; a shot that is in the cut at that frame is its own plate: the cut's frame.
-- `matte/<shot>/<frame>.png` and `back/<shot>/<frame>.png`, for an expand or collapse: the flat shot's figure alone as coverage,
-  drawn at twice the frame's size, and its frame without the figure.
+- `matte/<shot>/<frame>.png` and `back/<shot>/<frame>.png`, for an expand or collapse (and a slice through the figure, on its first
+  window frame): the flat shot's figure alone as coverage, drawn at twice the frame's size, and its frame without the figure.
 - `point/<key>/<frame>.json`: a projected anchor or centre, `p` (frame fractions from the top left), `depth` and `m` (frame heights
   per metre at that depth, which sizes things given in metres); the key is `t<i>` for transition `i`'s `center`, `i<j>` for insert
   `j`'s `anchor`, `x<k>` for frame effect `k`'s.
@@ -2518,10 +2617,10 @@ A transition has these keys; the kind decides the rest, and a key of another kin
 
 | Key | Meaning |
 |---|---|
-| `at` | clip seconds of the cut (required): exactly one shot of the cut must start on that frame (use that shot's `from`); the window is the frames before it, inside the outgoing shot |
-| `kind` | `"expand"`, `"collapse"`, `"slash"` or `"whip"` (required) |
-| `dur` | window length in seconds, ending at the cut (default 0.4; 0.18 for `slash`, 0.15 for `whip`) |
-| `ease` | `in` (u², slow start), `out` (1 - (1 - u)²) or `inout` (smoothstep) (default `in`; `inout` for `slash` and `whip`) |
+| `at` | clip seconds of the cut (required): exactly one shot of the cut must start on that frame (use that shot's `from`); the window is the frames before it, inside the outgoing shot (a spin's goes on past it, inside the incoming shot) |
+| `kind` | `"expand"`, `"collapse"`, `"slash"`, `"whip"`, `"slice"` or `"spin"` (required) |
+| `dur` | window length in seconds, ending at the cut (default 0.4; 0.18 for `slash`, 0.15 for `whip`, 0.3 for `slice` and `spin`) |
+| `ease` | `in` (u², slow start), `out` (1 - (1 - u)²) or `inout` (smoothstep) (default `in`; `inout` for `slash` and `whip`; a spin has none: its turn is set, below) |
 
 `expand`: the figure of the OUTGOING flat shot grows and turns; inside it plays the next shot. `collapse`: the INCOMING flat shot's
 figure starts huge with the outgoing shot inside it and shrinks onto its place, landing on the cut (an expand played backwards).
@@ -2555,13 +2654,45 @@ pixels as they travel in `blur` frames. Like a slash it needs only the next shot
 | `dir` | `"left"`, `"right"`, `"up"` or `"down"`: the way the pictures travel (a pan to the right sends them left; default `left`) |
 | `blur` | the shutter in frames, 0 .. 4: how long a smear each frame's speed draws (default 1; 0 is sharp) |
 
-An insert is a thought bubble over the host shot holding another shot (picture in picture).
+`slice`: the outgoing frame is cut in two along a straight line and the halves slide apart across it, each its own way, eased,
+off the frame by the cut, the incoming shot in the widening gap: the first window frame opens a crack along the cut, the last
+leaves slivers at the frame's edges. Each half travels from the cut to the frame's farthest corner on its side
+(`mkmmd.core.transition.slice_reach`), so a cut off the middle sends its bigger half faster. Like a slash it needs only the
+next shot's plates (and, for `center = "figure"`, the outgoing shot's figure on the window's first frame).
+
+| Key | Meaning |
+|---|---|
+| `center` | the point the cut runs through: `[x, y]` frame fractions from the top left (default `[0.5, 0.5]`), or `"figure"`: the centroid of the outgoing shot's figure on the window's first frame, held over the window (that shot needs a flat look in every output; a first frame without the figure is an error) |
+| `angle` | degrees off vertical, clockwise positive (default -20, as a slash's) |
+| `edge` | `{color, width}`: a line along each half's cut side, inside it, as a sticker's white border: `color` (default `text`), `width` in px at 1080 on the short side (default 4). No line without the key |
+
+`spin`: a record spin. The outgoing frame turns about `center`, faster and faster up to the cut; the incoming one takes over under
+the blur on the cut, still turning, and slows to rest upright `after` seconds later. The window straddles the cut: `round(dur *
+fps)` frames before it, in the outgoing shot, and `round(after * fps)` from it, in the incoming one (each at least 2; the spin
+may not run past the incoming shot). Both sides are the cut's own frames turned, so it needs no layers. The turn is a steady
+acceleration from rest (on the frame before the window) to a top speed between the outgoing shot's last frame and the incoming
+one's first, then a steady slowing to rest (on the frame after the window), `turns` x 360 degrees in all, each side turning its
+share in proportion to its time so the speed is the same on both (`mkmmd.core.transition.spin_angle`). Each frame is the mean
+of copies turned across what the shutter (`blur` frames) sweeps, at most 1.5 px apart at the far corner, and its scale dips
+smoothly to `scale` at the cut and back.
+
+| Key | Meaning |
+|---|---|
+| `after` | seconds it spins on after the cut, in the incoming shot (default `dur`) |
+| `turns` | turns in all, both sides of the cut together (default 1.5); clockwise, negative for counter-clockwise |
+| `blur` | the shutter in frames, 0 .. 4: how far each frame's smear reaches (default 1; 0 is sharp) |
+| `scale` | the picture's scale at the cut, in (0, 2] (default 0.9: a slight dip; 1 for none) |
+| `center` | `[x, y]` frame fractions it turns about (default `[0.5, 0.5]`) |
+| `back` | what shows where the turned picture leaves the frame: `"mirror"` (default: the frame reflected at its edges, as editors' spin transitions do) or a colour (palette slot, `#hex`, `"a:b:t"` or `[r, g, b]`) |
+
+An insert puts another picture over a window of the host shot: a thought bubble holding another shot (picture in picture, the
+keys below) or a split screen (`shape = "split"`, its own keys further down).
 
 | Key | Meaning |
 |---|---|
 | `from`, `to` | clip seconds (required, `to` after `from`): the window. It must lie inside one shot of the cut, the host (the shot in force at `from`) |
 | `shot` | the shot inside the bubble (required): any `[[shot]]`, one in the cut or `plate = true`, but not the host |
-| `shape` | `"thought"` (the only shape) |
+| `shape` | `"thought"` (default) or `"split"` (below) |
 | `anchor` | a `mk q` expression (required), projected through the host shot's camera on every frame: the middle of a head for a thought bubble, `'bone("head", "Model_arm").center'` (with a head bone that runs from the neck to the crown `.center` is about the middle of the head; `.head` is the neck's end and puts the trail on the face) |
 | `radius` | metres: the anchor stands for a head of this radius, seen at the anchor's depth; the trail of circles starts at its edge, on the side of the bubble, never over the head (default 0.11; 0 starts them at the anchor) |
 | `size`, `ratio` | the bubble's height as a fraction of the frame height, in (0, 1] (default 0.34), and its width / height (default 1.35) |
@@ -2593,6 +2724,24 @@ color = "love"
 second = { color = "text", width = 0.04, offset = -0.03 }   # an optional thin band: gap to the main one (negative: behind it)
 dir = "right"                # or "left"
 
+[[transition]]               # the outgoing frame cut along a line, the halves sliding apart onto the next shot
+at = 8.42
+kind = "slice"
+dur = 0.3
+center = "figure"            # through the outgoing flat shot's figure; or [x, y] frame fractions (default the middle)
+angle = -20                  # degrees off vertical, clockwise positive
+edge = { color = "#ffffff", width = 14 }   # a line along each half's cut side
+
+[[transition]]               # a record spin: up to speed into the cut, the next shot spinning down to rest after it
+at = 10.20
+kind = "spin"
+dur = 0.3                    # the spin up, before the cut
+after = 0.4                  # the spin down, after it, in the incoming shot
+turns = 1.5
+blur = 1.0                   # the shutter in frames
+scale = 0.9                  # at the cut
+back = "mirror"              # or a colour
+
 [[insert]]                   # a thought bubble over the host shot, holding another shot (picture in picture)
 from = 12.40
 to = 13.50
@@ -2609,16 +2758,58 @@ expand = { dur = 0.4, turn = 0, ease = "in" }
 aspect.9x16 = { size = 0.2, offset = [0, -0.22], ratio = 1.0 }   # per-output size, offset and ratio
 ```
 
+`shape = "split"`: a split screen. Over the window the frame is divided across its width or its height: the host on one side
+and the inner half on `side`, each its own picture at its own scale, cropped about its `focus` (that point of the picture kept
+mid-panel as far as the picture still covers the panel), never squeezed. The inner half slides in from its side over `in`
+seconds (eased out: it settles into place) and back out over `out` seconds, gone on `to` (0: a cut); on each `swap` the halves
+trade sides, the row of panels running on the way the inner half came in, like a carousel (the host leaves on one side as it
+comes back on the other), as long as the slide in, landing on the swap's frame (with `in = 0`, a cut on it). A half is its
+picture moved by whole pixels, so at rest it is as sharp as the frame. It needs the inner shot's plates on its frames, or
+nothing for a video.
+
+| Key | Meaning |
+|---|---|
+| `from`, `to` | clip seconds (required, `to` after `from`): the window, inside one shot of the cut, the host |
+| `shot` | the inner half's shot: any `[[shot]]`, one in the cut or `plate = true`, but not the host. Exactly one of `shot` and `clip` |
+| `clip` | a video in the inner half instead: a file (project-relative, absolute or `~/...`) or the slug of an asset whose path is a video (`mk ref footage` registers Pexels clips so), read through `mkmmd.footage` as the footage frame effect's; or `{src, in, rate, loop, fit, mirror, back}`: `src` that video, `in` seconds into it on the window's first frame (default 0), `rate` its speed (default 1; 0 a still), `loop` (default false: past its end the last frame holds; a window that starts past its end is an error), `fit` `"cover"` (default: it fills the half, cropped about `focus.inner`) or `"contain"` (whole, on `back`, default `base`), `mirror` (flipped left to right, default false) |
+| `side` | where the inner half sits: `"left"`, `"right"`, `"top"` or `"bottom"` (default `"right"`, `"bottom"` in an output taller than wide) |
+| `share` | the inner half's share of the frame across the split, in (0, 1) (default 0.5) |
+| `focus` | `{host = [x, y], inner = [x, y]}`: the point of each picture kept mid-panel, frame fractions (default the middle of each); a left / right split crops across, a top / bottom one up and down |
+| `divider` | `{color, width}`: a line along each seam between the halves: `color` (default `text`), `width` in px at 1080 on the short side (default 6). No line without the key |
+| `in`, `out` | seconds the inner half slides in from its side from `from`, and back out by `to` (default 0.3 each; 0 a cut) |
+| `swap` | clip seconds, one or a list: the frames by which the halves have traded sides. Each swap slides as long as `in`, after the slide in has landed, and lands no later than the slide out begins |
+| `aspect.<output>` | `{side, share, focus}`: that output's own (`focus` entry by entry); nothing else may be overridden |
+
+```toml
+[[insert]]                   # her head beside the wide shot: in from the right, trading sides on the hit, out to the left
+from = 12.60
+to = 15.20
+shot = "head"                # or clip = "pexels_123" / { src = "pexels_123", in = 3.5, rate = 1, loop = false, fit = "cover" }
+shape = "split"
+side = "right"               # an output taller than wide takes "bottom" when no side is given
+share = 0.5
+focus = { host = [0.5, 0.5], inner = [0.5, 0.4] }
+divider = { color = "#ffffff", width = 10 }
+in = 0.3                     # seconds it slides in from its side (0: a cut); `out` the same, back out
+out = 0.3
+swap = [13.90]               # the halves have traded sides by then
+aspect.9x16 = { side = "bottom", focus = { host = [0.5, 0.42] } }
+```
+
 The plan refuses what cannot be drawn, with a message that names the effect: a transition `at` where no shot (or several) starts;
-a window that starts before the outgoing shot does (`shorten dur`); an expand or collapse whose figure shot is not a silhouette in
-every output; an insert that crosses a cut, whose `shot` is the host or does not exist, whose `out = "expand"` shot is not the one
-that starts at `to`, or whose window is too short for its pop-in and exit (each at least 2 frames); and any two windows, transitions
+a window that starts before the outgoing shot does (`shorten dur`), or a spin that runs past the incoming shot (`shorten after`);
+an expand or collapse whose figure shot is not a silhouette in every output, or a slice through the figure whose outgoing shot is
+not flat in every output; an insert that crosses a cut, whose `shot` is the host or does not exist, whose `out = "expand"` shot is
+not the one that starts at `to`, or whose window is too short for its pop-in and exit (each at least 2 frames); a split with both
+or neither of `shot` and `clip`, too few frames for its slides in and out, or a swap that slides before the inner half is in,
+overlaps the swap before it or lands after the slide out has begun; and any two windows, transitions
 and inserts together, that overlap in frames. `mk build` also refuses a window that needs frames from a shot before `[scene] start`
 (`lower [scene] start`), and keys the cameras of the shots that lend frames: after editing an effect run `mk build` again (`mk render`
 says `run mk build again` when a camera is not keyed over the frames an effect needs). `mk post` reports `matte_scale` per expand or
 collapse (`scale`, whether it was `raised`, and `needed`, the scale that fills the frame): a number far above `needed` spends the
 window with the new shot already full. A figure that is not in the frame at the covering frame, or a `center` that cannot lie inside
-it, is an error that says so (`center = "subject"` always can).
+it, is an error that says so (`center = "subject"` always can), and so is a slice's figure missing on its first window frame, or a
+split's video that cannot be read or whose window starts past its end (`mk post` checks them before encoding anything).
 
 In an expand the first window frame is the figure turned into a window at its own size (the dark shape fills with the next shot at
 once; the rim, if any, marks it) and the last is the incoming shot at full frame; a collapse ends on the figure landing on its place
@@ -2646,8 +2837,8 @@ timeline markers set aside, `Looks.prepare(frame, output, shot=...)` enters that
 subject objects alone (`Looks.matte`) and `back` the silhouette composed without the subject (`compose_silhouette(...,
 subject=False)`). `mk post` lays the effects over the cut's frames before the screen type and the grade; a missing layer is an error
 unless `--allow-gaps` (the plain cut shows there). `mk look` previews a frame inside a window composited, from layers it draws into
-its own folder. `--no-transitions` leaves the effects out of `mk render`, `mk post` and `mk look` (`--no-styles` leaves them out of
-`mk render` and `mk look` too: a figure needs its silhouette look).
+its own folder (a spin turns the frame it drew and needs none). `--no-transitions` leaves the effects out of `mk render`, `mk post`
+and `mk look` (`--no-styles` leaves them out of `mk render` and `mk look` too: a figure needs its silhouette look).
 
 ### Glitches
 
@@ -2695,8 +2886,9 @@ They read the rendered frames as they are, without their effects: an echo of a f
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels` or `stack` (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)) (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
+| `aspect` | any entry: `[fx.aspect.<output>]`, its own keys for one output ([Each output its own: aspect](#each-output-its-own-aspect)) |
 | `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears. A push has none |
 | `center` | lens and push (required), zoom, shock, orbit, mirror and stack (default the middle): `[x, y]` fractions of the frame (0, 0 the top left), or `{point = "<expression>"}`, a point of the scene ([Expressions](#expressions)) that `mk render` projects through the camera of the shot in the cut on every frame of the span (`point/x<i>/<frame>.json`) |
 | `radius`, `radius_m` | lens and push: the lens's Einstein radius, or the push's disc at the start; `radius` a share of the frame height (default 0.1 for a lens, 0.02 for a push), `radius_m` metres at the depth of a scene point (a hole of a known size, a pupil), one of the two |
@@ -2715,10 +2907,12 @@ They read the rendered frames as they are, without their effects: an echo of a f
 | `cell`, `angle`, `level`, `ink`, `lift`, `offset` | halftone: comic print. Where the luma is under `level` (0.5) the picture is lifted toward white by `lift` (0.35) x its darkness and screened with round dots of `ink` (black) on a grid `cell` px at 1080 apart (9) turned `angle` degrees (45), a dot's area growing with the darkness until the dots merge into solid ink at black; the lights stay clean. Then the red plate is printed `offset` `[x, y]` px at 1080 off (`[3, 2]`) and the blue as far the other way: a press out of register |
 | `bands`, `shift`, `share`, `rgb`, `hold`, `seed` | split: a broken digital signal. The frame is cut into `bands` (14) bands of random heights, `share` (0.35) of them torn sideways by up to `shift` (0.08 of the frame width; what leaves one side comes in at the other), the red and blue planes pulled `rgb` px at 1080 apart (10) in a torn band and a third of that everywhere else. A tear holds `hold` seconds (0.05), then the signal breaks another way; the same `seed` (1) breaks the same frames the same way |
 | `block` | mosh: a datamosh. The cut's frame before the span is held and carried along the cut's own motion from each frame to the next since the span's first frame (Farneback optical flow on the frames at a quarter size, averaged over `block` px at 1080 squares, 16, so it moves in chunks as a codec's motion vectors do), and mixed over the real frame by `strength`. Started on a cut it is the classic one: the outgoing picture smeared by the incoming shot's motion, as when the key frame of a cut is lost. Frames asked out of order are worked out again from the span's start |
+| `flow` | mosh: a made-up motion instead of the cut's own, so a still moshes too (a clip of one frame has no frames before it): `{kind, amount, steps, jitter, stuck, seed}` and the kind's own key. The span's first frame as it reached the mosh (the effects before it in the table on it; `mk look` renders it beside a later frame asked for, as a film's held frame) is carried `steps` (12) times along the flow on that frame and as many times more on each frame after: a P-frame played again and again. The frame is cut into `block` squares and each moves whole, by whole pixels, so the picture moves in sharp chunks: where a moving block pulls from one that stays, that one's edge is smeared out in a trail, and colours are dragged across the picture. `kind`: `drift` (every block the same way, `angle` degrees counter-clockwise from the right, 0), `zoom` (the picture pushed out from `center`, `[x, y]` frame fractions, default the middle, as a camera pushing in does; drawn in toward it with a negative `amount`), `swirl` (round `center`, counter-clockwise on screen; clockwise with a negative `amount`) or `noise` (a smooth random field whose swirls are `size` frame heights across, 0.3); `amount` (6) px at 1080 the farthest block moves per step (a zoom's and a swirl's at the frame's farthest corner from `center`); each block's move is off by up to `jitter` (0.25) x `amount` at random, and a share `stuck` (0.3) of the blocks, in patches, stays where it was (the frame itself shows there). The same `seed` (1) moves the same blocks: the same picture again; a larger `stuck` holds more of the same patches, and a frame of another size (`mk look`'s) is cut into the same blocks. Trails run about `amount` x `steps` px at 1080: a small amount over many steps stretches them smooth, a large one over a few stamps them in repeats |
+| `mask`, `objects` | mosh: `figure` moshes only inside the coverage of `objects` (the figure layer `mk render` draws beside the frames, as for a collage or a pixel sort), `ground` only outside it; both or neither. The held picture is mixed in by the coverage: the outline stays antialiased as the figure's own, and a figure a ground mask keeps is left exactly as it was (across a `rect`'s feathered edge too). With a `flow`, a block whose source holds anything of the rest on the span's first frame (her outline included) stays put, so her colours never smear into the ground, nor the ground's into her |
 | `objects` | a collage (required): its figure, object patterns as a look's `hide` takes (`"Rin_*"`, `"@collection"`, `"prop:key"`; one or a list). `mk render` draws their coverage alone through the camera of the shot in the cut beside each frame of the span (`figure/<key>/<frame>.png`, the key named from the patterns, so collages of the same figure share it) and the collage cuts the figure out of the picture with it: the figure as the frame shows it, look and lights and all |
-| `back`, `fill` | a collage: the flat colour behind (default `base`) and how the figure is drawn, `"picture"` (default: as the frame shows it) or a flat colour (a silhouette). Either may be a list, read at the step: the number of hits so far (a hit on the span's first frame is where it starts) plus the number of the cell, copy, panel or region drawn, round and round. So `back = ["love", "base"]` is a chessboard in a grid that flips on every hit, and one colour on every hit of an orbit |
-| `edge` | a collage: `{color, width}`, an outline round every figure and copy, `width` px at 1080 on the short side (default 3); default none |
-| `cells`, `piece`, `seed` | grid: the frame shrunk into `cells` x `cells` (3, or a list read at the step), the figure in each on its colour; a `piece` colour draws one cell's figure flat in it, the cell hopping a knight's move on every hit (from the middle of the top row; `seed` 1 picks among the moves, never straight back while another is open) |
+| `back`, `fill` | a collage: the flat colour behind (default `base`) and how the figure is drawn, `"picture"` (default: as the frame shows it), a flat colour (a silhouette) or `"silkscreen"` (printed in flat inks: [Dividing grids and silkscreen prints](#dividing-grids-and-silkscreen-prints)). Either may be a list, read at the step: the number of hits so far (a hit on the span's first frame is where it starts) plus the number of the cell, copy, panel or region drawn, round and round. So `back = ["love", "base"]` is a chessboard in a grid that flips on every hit, and one colour on every hit of an orbit |
+| `edge` | a collage: `{color, width}`, an outline round every figure and copy, `width` px at 1080 on the short side (default 3); default none. With `shadow` (a drop shadow) a thick white one makes a sticker; `keys` and `pivot` move the figure ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)) |
+| `cells`, `piece`, `seed` | grid: the frame shrunk into cells, `n` x `n` (3) or `[columns, rows]`, or a list of them read at the step (`divide` makes each step cell division: [Dividing grids and silkscreen prints](#dividing-grids-and-silkscreen-prints)), the figure in each on its colour; a `piece` colour draws one cell's figure flat in it, the cell hopping a knight's move on every hit (from the middle of the top row; `seed` 1 picks among the moves, never straight back while another is open) |
 | `count`, `radius`, `tilt`, `scale`, `size`, `turn`, `spin` | orbit: the figure moved to `center`, `scale` times its size (1), and `count` (6) copies of it, `size` times as large again (0.6), on a ring of `radius` (0.36 of the frame's short side) round it tilted `tilt` degrees from face-on (60): an ellipse whose near half is drawn over the figure and a little larger, its far half under it and smaller. The ring turns `spin` degrees a second (0) and `turn` more on every hit (30); copy j is drawn `fill` entry step + j |
 | `axes`, `place` | mirror: the frame folded about the vertical line through `center` (`axes` `"x"`, default), the horizontal one (`"y"`) or both (`"xy"`; a list is read at the step): the side or quarter with the figure's centroid is shown as it is, the others are its reflections, region j (0 that side, 1 across the vertical line, 2 across the horizontal, 3 both) drawn in its own `back` and `fill` entry step + j. `place` `[x, y]` (frame fractions) moves the figure's centroid there first: beside the fold, two of her face each other |
 | `count`, `slant`, `size`, `delay` | panels: the frame cut into `count` panels (3, 2 .. 12) across its long side, columns of a wide or square frame and rows of a tall one, by lines leaning `slant` degrees (12: to the right going up, as italics), panel j its own `back` and `fill` entry step + j with the figure moved onto its middle line, `size` times its size (1; and `count` times smaller in a row, so a figure framed for the whole frame fits one). With a `delay` (frames, default 0) panel j shows the figure j x `delay` frames before |
@@ -2783,6 +2977,16 @@ kind = "mosh"
 from = 18.21
 to = 18.97
 
+[[fx]]                        # a still: the street dragged in blocks out from the middle, on the left edge, her left as she is
+kind = "mosh"
+from = 0.0
+to = 0.04
+flow = { kind = "zoom", amount = 8, steps = 14, seed = 3 }
+mask = "ground"
+objects = "Rin_*"
+rect = [0.0, 0.0, 0.3, 1.0]
+feather = 40
+
 [[fx]]                        # a chessboard of her on the snare roll: it flips on every hit, a white knight hops across it
 kind = "grid"
 from = 28.83
@@ -2800,6 +3004,174 @@ only the frames asked for, renders those beside them as plates of the shot in th
 (`TR.fx_frames`). The plan, `mk build`'s shots report (`_cut_effects.fx`) and `mk post`'s report (`effects.fx`) list them. A
 collage cuts its figure out of the picture as the effects before it in the table left it, but with the figure's coverage as
 it was rendered: put it before an effect that moves the picture (a zoom, a lens, a shock), which then moves the collage.
+
+#### Where an effect applies: rect
+
+Any `[[fx]]` entry may be limited to a part of the frame: `rect = [x0, y0, x1, y1]` (frame fractions, 0, 0 the top left;
+`false`, the default, the whole frame) and `feather` (px at 1080 on the short side: a smooth ramp that wide across the rect's
+edges, not along the frame's own; default 0, a hard antialiased edge). Outside the rect the frame is left as the effects before
+it made it. The picture effects `film`, `camcorder`, `pixelsort` and `booth` take the rect as their frame: a film's vignette and
+weave, a camcorder's stamp corner, a booth's strip and its layout are the rect's, and a pixel sort's runs stop at its edge; the
+others draw on the whole frame and are cut to the rect (a mosh drags in what lies outside it). A pixel an effect leaves as it
+was stays so across a feathered edge: a figure a masked mosh keeps. Give each output its own through `[fx.aspect.<output>]`:
+a split screen left / right in 16x9 and 1x1 is top / bottom in 9x16, and the Screen Test covers her half only.
+
+```toml
+[[fx]]                        # the home-video look on the left half, on the top half of the vertical output
+kind = "camcorder"
+from = 11.0
+to = 12.0
+date = "OCT. 23 1999"
+rect = [0.0, 0.0, 0.5, 1.0]
+
+[fx.aspect.9x16]
+rect = [0.0, 0.0, 1.0, 0.5]
+```
+
+#### Picture effects: pixel sort, film, camcorder, doodles, photo booth
+
+`mkmmd/core/picturefx.py` checks, times and lays them out (numpy, tested), `mkmmd/picturefx.py` draws them (numpy, OpenCV and
+Pillow). Their randomness is seeded by `seed` and the entry: the same frames come out the same in `mk look` and `mk post`. A
+film's held frame and a booth's capture are the picture as it reached the effect on that frame (the effects before it in the
+table on it): `mk post` keeps it as it goes through the frames; `mk look` renders that frame's plate beside the frames asked for
+(with the points and figures the effects before it read there) and applies those effects to it again.
+
+| Key | Meaning |
+|---|---|
+| `by`, `lo`, `hi`, `axis`, `reverse` | pixelsort: every run of pixels whose `by` (`luma`, default, `hue` round the wheel from red, or `sat`, HSV saturation; 0..1) lies in `lo` .. `hi` (0.25 .. 0.8), unbroken along a row (`axis` `x`, default) or a column (`y`), is sorted by it, rising to the right (down), falling with `reverse`. All runs at once in one numpy sort: a 1080 x 1920 frame takes about 0.1 s |
+| `mask`, `objects` | pixelsort: `figure` sorts only inside the coverage of `objects` (a collage's figure layer, drawn by `mk render` beside the frames), `ground` only outside it; both or neither |
+| `times`, `lane`, `min_db`, `every`, `decay` | pixelsort: without them it is steady at `strength` (a mix over the picture); with them it fires: full on the frame of each hit and dying as exp(-age / `decay`) (0.12 s), the strongest hit counting, times `strength` |
+| `mono`, `contrast` | film: black and white (`true`) or colour (default) through a print's S curve, a soft toe and shoulder about mid grey, steeper with `contrast` (1; 0 none) |
+| `fps` | film: the picture changes `fps` times a second (default every frame): each film frame shows the clip frame at its start, counted from the span's first frame, and the damage below changes with the film frame. 15 is a Warhol Screen Test, 10 hand-made film |
+| `grain`, `flicker`, `weave`, `vignette` | film: grain, its amount in luma (0.06, strongest in the mid tones) or `{amount, size}` (clumps 1.5 px at 1080); exposure flicker 0..1 (0.05); gate weave, px at 1080 (1.5: a slow wander of the whole picture and a little shake); the corners darkened by `vignette` (0.3) |
+| `dust`, `scratches`, `hair` | film: specks per film frame (3, or `{count, size}`, 3 px at 1080), white and dark, a fifth of them bent fibres; `scratches` thin white vertical lines (1, at most 32), each lasting 4 .. 12 film frames, drifting a little sideways, then another elsewhere; `hair` the chance per second (0) of a dark hair in from a side of the gate for 0.4 .. 1.2 s |
+| `date`, `time`, `tick`, `indicator` | camcorder: the stamp's text, `time` over `date` (short texts, either may be left out); `tick = true` shows the time's seconds counting up from `time` at the span's start, in the style it was written (`8:41 PM`, `PM 8:41`, `20:41`); `indicator` `PLAY` (default, with a triangle), `REC` (a red dot blinking once a second) or `none`, at the top left (top right when the stamp is there) |
+| `font`, `corner`, `color`, `size` | camcorder: a font slug of the asset registry or a font file (default: the registry's first font tagged `mono`; a missing font is an error before any frame is drawn); the stamp's corner, `bottom-right` (default), `bottom-left`, `top-left`, `top-right`; its colour (white); its capitals' height in short sides (0.05). It is drawn after the tape's damage, crisp, with a dark rim and shadow. The font is credited through `[credits] assets` |
+| `tracking`, `chroma`, `scanlines`, `jitter`, `soft`, `saturation`, `noise` | camcorder, the tape: a tracking band rolling up the frame, its amount (0.3) or `{amount, speed}` (0.25 frame heights a second: lines torn sideways, snow, washed out); colour bled sideways and to the right, px at 1080 (6); scanlines 0..1 (0.15); each line jittered sideways, px at 1080 (1); luma softness, px at 1080 (1.2); `saturation` (0.8); noise in horizontal streaks (0.04) |
+| `marks` | doodle (required): `[{shape, at, size, color, angle, t}]`, purikura-pen marks: `shape` one of `star`, `heart`, `sparkle`, `x` (an X over an eye), `swirl`, `scribble`, `arrow`, `crown`, `cat_ears`; `at` `[x, y]` frame fractions or `{point = "<expression>"}`, projected through the camera of the shot in the cut on every frame as a `center` is (`point/x<i>m<j>/`); `size` frame heights (0.08) or, at a point, `size_m` metres at its depth (an eye's width); `color` (`love`); `angle` degrees counter-clockwise (0); `t` the clip second it pops in (the span's start), with a small spring (a 12 % overshoot, settled in 0.3 s) |
+| `fps`, `width`, `outline`, `wobble` | doodle: the marks are drawn again `fps` times a second (8) by a hand that wobbles up to `wobble` px at 1080 (1.5), so they boil; a pen line `width` px at 1080 (9) in its colour over a white rim `outline` px wide (5) |
+| `count`, `times`, `lane`, `min_db`, `every` | booth (one of `times` or `lane` required): on each of the first `count` (4) hits in the span the frame is captured; a white flash `flash` s long (0.15) over all of it; the capture drops into its cell over `drop` s (0.3), falling from 1.3 times its size with its shadow and a little bounce |
+| `layout`, `ratio`, `focus`, `size`, `tilt` | booth: `[columns, rows]` of the photos (default per frame: a column in a tall frame, a row in a wide one, as square a block as fits in a square one: 1 x 4 in 9x16, 4 x 1 in 16x9, 2 x 2 in 1x1; `aspect.<output>` sets one per output); a photo's width over its height (0.8), cut from the frame about `focus` (`[0.5, 0.42]`); the strip as large as fits `size` (0.86) of the frame, turned `tilt` degrees (-4) |
+| `back`, `paper`, `border`, `doodles`, `caption`, `color`, `font` | booth: the colour behind the strip (`rose`); the strip's paper (white) round each photo, `border` px at 1080 (16); `doodles` per photo (2), stickers drawn in the doodle shapes and the palette's accents near its edges, popping in after it lands; a short `caption` (no lyrics) in the strip's foot in `color` (`text`) and `font` (as a camcorder's) |
+
+```toml
+[[fx]]                        # Warhol's Screen Test on the head close-up
+kind = "film"
+from = 3.0
+to = 6.0
+mono = true
+fps = 15
+grain = { amount = 0.09, size = 1.8 }
+flicker = 0.08
+scratches = 0
+
+[[fx]]                        # an X over each eye
+kind = "doodle"
+from = 6.0
+to = 8.0
+marks = [{ shape = "x", at = { point = 'bone("eye.L").head' }, size_m = 0.05, color = "pine" },
+         { shape = "x", at = { point = 'bone("eye.R").head' }, size_m = 0.05, color = "pine", t = 6.25 }]
+
+[[fx]]                        # the purikura strip: four snares, four captures
+kind = "booth"
+from = 12.0
+to = 14.0
+lane = "snare"
+min_db = -3.0
+caption = "print club"
+```
+
+#### Footage, stickers and figure moves
+
+`kind = "footage"` is a collage over a video instead of flat colour: the figure (`objects`), as the frame shows it (or as
+`fill` says), cut out of the picture and laid over the frames of a clip, a sticker on stock footage and never blended into it.
+`mkmmd/footage.py` reads the clip with OpenCV as display-space RGB, keeps the last frames it decoded (reading on is fast, a
+jump seeks), and fits each frame to each output's size about that output's `focus`; anything else that shows a clip (a split
+screen's video half) reads it through the same module. A clip that is missing or unreadable, or a span that starts past its
+end without `loop`, is an error before `mk post` encodes anything (in `mk look` when the frame is drawn).
+
+| Key | Meaning |
+|---|---|
+| `clip` | footage (required): a video file, project-relative, absolute or `~/...` (anything with a path separator, `~` or a video extension), or the slug of an asset whose path is a video (`mk ref footage` registers Pexels videos as `pexels_<id>`, below) |
+| `in`, `rate`, `loop` | footage: the clip's second on the span's first frame (0), its speed (1; 0 a still, 0.5 slow motion, at most 16), and `loop = true` to start it over past its end; without it the last frame holds there |
+| `fit`, `focus`, `mirror` | footage: `cover` (default: the frame filled, the clip cropped with its point `focus` `[x, y]` (0..1 of the clip as the file has it; default the middle) as near the frame's middle as the crop allows) or `contain` (all of it, centred on the step's `back`); `mirror = true` flips it left to right (the focus with it). Give a vertical output its own `focus` through `[fx.aspect.9x16]` |
+| `shadow` | every collage: `{color, offset, blur, alpha}`, a drop shadow under the figure and its edge: `color` (black), `offset` `[dx, dy]` frame heights right and down (`[0.008, 0.012]`), `blur` px at 1080 (10, a Gaussian's sigma), `alpha` (0.4); default none. A smaller copy (a grid cell, an orbit's ring) casts a smaller one. With a thick white `edge` (12-18 px at 1080, grown round the figure and rounded where it bends in, as a die cut is) the figure is a sticker |
+| `keys`, `pivot` | every collage: the figure moved before it is laid out, `[{t, turn, dx, dy, scale, ease}, ...]` over clip seconds: `turn` degrees counter-clockwise on screen about `pivot`, `dx`, `dy` frame heights (right, down), `scale` times. From key to key by the `ease` of the key arrived at: `inout` (default), `in`, `out`, `linear` or `back` (a 10 % overshoot that settles); held before the first key and after the last, and what a key leaves out stays as the key before left it (at rest before the first). `pivot` `base` (default: the middle of the bottom of the figure's box on the span's first frame, her feet), `center` (its centroid there) or `[x, y]` frame fractions. A pivot found on the figure reads its layer on the span's first frame, which `mk look` renders beside the frames it is asked for |
+
+A cardboard stand-up playing possum: the sticker tips over flat on the downbeat (an ease-in, falling) and pops back up:
+
+```toml
+[[fx]]
+kind = "footage"
+from = 24.42
+to = 26.5
+objects = "Reisen*"
+clip = "pexels_4254119"
+in = 6.0
+edge = { color = "#ffffff", width = 14 }
+shadow = { color = "#1f1d2e", alpha = 0.45 }
+keys = [{ t = 24.45 }, { t = 24.8, turn = -90, ease = "in" }, { t = 25.6 }, { t = 25.85, turn = 0, ease = "back" }]
+
+[fx.aspect.9x16]              # lying flat across the tall frame: smaller, and to the left
+keys = [{ t = 24.45 }, { t = 24.8, turn = -90, scale = 0.7, dx = -0.22, ease = "in" }, { t = 25.6 },
+        { t = 25.85, turn = 0, scale = 1.0, dx = 0.0, ease = "back" }]
+```
+
+Footage comes from `mk ref footage ID... [--min-height 1080] [--orientation landscape|portrait|square]` (`mk ref search`
+finds the ids): each Pexels video's best rendition, the largest whose short side is at least `--min-height` under the 150 MB
+cap, is downloaded into `<project>/footage/pexels_<id>.mp4` (kept when a file of its size is there) and registered as the asset
+`pexels_<id>`, kind `reference`: its author and their page (`author_url`), the video's page, the Pexels License and what it
+forbids, and a credit line; `--orientation` refuses a video of another shape. The registry has one entry per video: its path
+is the latest project that fetched it. A footage `clip` counts for `mk assets credits` and `mk export web` as the cast does,
+a slug or a file the registry knows; credit any other file in `[credits] lines`.
+
+#### Dividing grids and silkscreen prints
+
+A grid's `cells` entry is `n` (n x n) or `[columns, rows]`, and a list of them steps on the hits: `cells = [1, [2, 1], [2, 2],
+[4, 2], [4, 4]]` is 1 -> 2 -> 4 -> 8 -> 16 (one layout alone is `[[4, 2]]`; a list that walks back down divides back). Each
+cell shows the whole frame contain-fitted and centred in it on the cell's `back` (seamless: the figure is cut out).
+
+| Key | Meaning |
+|---|---|
+| `divide` | grid: seconds (default 0: a cut). On a step to a layout of more cells each new cell grows out of its parent, the cell of the layout before that holds its middle (child (i, j) of parent (i x c0 // c1, j x r0 // r1) when one layout divides the other), its copy sliding and scaling from the parent's place to its own over `divide` s, eased out: cell division. To fewer cells it plays the other way, the old cells sliding into the new cell that holds their middle, in its colours. A step's move ends early when the next hit comes first; the copies on their way overlap, none cut off |
+| `fill = "silkscreen"`, `inks`, `offset` | every collage (`fill`, or a stack's `bands` entry): Warhol's silkscreen. The figure's picture cut into flat inks by its luma: `inks` ink sets of 2 to 4 colours each, the darkest band's first (default: the palette's darker of `base` and `text`, then two of its accents; four sets), read at the step plus the cell (copy, panel, region) as `back` is. The bands are cut at the figure's own luma quantiles, so a dark figure prints as well as a light one (the darkest fifth is the key plate, the rest in equal shares), its luma smoothed a little first: no gradient inside a band. The key plate also draws the lines (eyes, lashes, the edges of fingers and folds: where the luma dips under its surroundings) and is printed `offset` `[dx, dy]` px at 1080 off register (`[4, -3]`): where it misses, the band under it shows, and past the figure it prints on the ground |
+
+```toml
+[[fx]]                        # her face as a Warhol grid, its colours turning on the snares
+kind = "grid"
+from = 12.41
+to = 15.67
+objects = "Reisen*"
+cells = [[2, 2]]
+fill = "silkscreen"
+lane = "snare"
+min_db = -3
+back = ["#34a8d8", "#f08a24", "#e8508e", "#7cc35a"]
+inks = [["#141414", "#f2c14e", "#f6b8c8"], ["#141414", "#e8508e", "#9ad8f0"], ["#141414", "#7cc35a", "#f7d23e"],
+        ["#141414", "#f08a24", "#f4f0e6"]]
+
+[[fx]]                        # cell division on the snares, 1 -> 2 -> 4 -> 8 -> 16
+kind = "grid"
+from = 15.67
+to = 17.86
+objects = "Reisen*"
+cells = [1, [2, 1], [2, 2], [4, 2], [4, 4]]
+lane = "snare"
+min_db = -5
+divide = 0.22
+back = ["gold", "love", "pine", "rose"]
+
+[fx.aspect.9x16]              # a tall frame divides along its length first
+cells = [1, [1, 2], [2, 2], [2, 4], [4, 4]]
+```
+
+#### Each output its own: aspect
+
+Any `[[fx]]` entry may give `[fx.aspect.<output>]` tables of its own keys for one output: a footage `focus`, a grid's `cells`, a
+figure's `keys`, a booth's `layout`, a `rect`. Each is checked as the entry is, merged over it (`mkmmd.core.framefx.for_output`),
+and `mk look` and `mk post` draw every output with its own. It may not set `kind`, `from`, `to` or `objects` (every output draws
+one span of one figure), nor read frames, scene points or a figure the entry does not: the layers `mk render` draws are planned
+from the entry, so the keys that choose them (a `delay`, a `center` point, a pivot found on the figure) belong to the entry.
 
 ## Text
 
@@ -3360,7 +3732,7 @@ default): its colours exactly as written, no grain or vignette on it, as type se
 | `contrast`, `pivot` | 1.10 around the pivot 0.60: midtone contrast |
 | `split` | `{shadows "iris", highlights "gold", amount 0.06}`: split toning toward palette slots; off unless the table has a key |
 | `vignette` | 0.12: corner darkening (a fraction) |
-| `floor`, `toe` | `"base"`, 0.12: the darkest colour allowed (a palette slot or `#hex`; `false` for none): luminance below the floor plus the toe is lifted smoothly into that band and tinted toward the floor colour, so nothing in the frame is black |
+| `floor`, `toe` | the palette's darkest slot (`base` in the dark Rosé Pines, `text` in Dawn), 0.12: the darkest colour allowed (a palette slot or `#hex`; `false` for none): luminance below the floor plus the toe is lifted smoothly into that band and tinted toward the floor colour, so nothing in the frame is black |
 | `grain` | `{amount 0.012, size 1.5, seed 7}`: film grain, eight cycled noise frames |
 
 ```toml
@@ -3459,6 +3831,8 @@ Reference clips (`mk ref`) live outside the project: `~/.cache/mk/ref/<project n
 `clips.json`, the capped downloads, `track/<id>.npz` and the contact sheet; `mk ref clean` deletes everything but
 `clips.json`. Only the small measurement JSON is kept with the project (`<project>/ref/<set>.json`). Reference photos for modelling
 (`mk ref photos`) go to `<project>/refs/<set>/` (outside a project `~/.cache/mk/ref/photos/<set>/`) with `SOURCES.json` and a contact sheet.
+Stock footage that a project shows (`mk ref footage`, [Footage](#footage-stickers-and-figure-moves)) goes to `<project>/footage/`
+and is registered in the asset registry, not cached: the project's videos are made of it.
 
 ## Characters (`mk model`)
 

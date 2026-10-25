@@ -122,6 +122,13 @@ def _beats(ctx):
         return [float(b) for b in json.load(fh).get("beats", [])]
 
 
+def hand_keys(name, keys):
+    """A hand's compiled keys (mkmmd.core.moves) as the pose stage reads them: their places, and the elbow's pole of a
+    place that holds the elbow its own way, are points in member `name`'s own frame, so targets of it."""
+    return [dict(k, at={"cast": name, "point": k["at"]},
+                 **({"pole": {"cast": name, "point": k["pole"]}} if k.get("pole") is not None else {})) for k in keys]
+
+
 def apply(ctx):
     """Lay every member's compiled moves into ctx.data's pose and perform tables. Returns {cast: report}."""
     moves = ctx.data.get("move") or {}
@@ -134,10 +141,16 @@ def apply(ctx):
             raise BuildError(f"[[move.{name}]]: no cast member {name!r} (cast: {', '.join(sorted(ctx.cast))})")
         beats = _beats(ctx) if beats is None else beats
         yaw = math.degrees(m.root.matrix_world.to_euler().z)
+        plan = {"entries": list(entries), "marks": marks(m), "beats": beats, "yaw": yaw,
+                "clear": body_clearance(m, soft_bones(ctx, name, m))}
         try:
-            res = MV.compile(list(entries), marks(m), beats, yaw=yaw, clear=body_clearance(m, soft_bones(ctx, name, m)))
+            res = MV.compile(plan["entries"], plan["marks"], beats, yaw=yaw, clear=plan["clear"])
         except MV.MoveError as e:
             raise BuildError(f"move.{name}: {e}") from None
+        plan["free"] = {s: [(float(e["t"]), float(e["t"]) + float(e.get("dur", 1.0))) for e in plan["entries"]
+                            if isinstance(e, dict) and e.get("name") == "free" and e.get("hand", "R") == s]
+                        for s in ("L", "R")}
+        m.moves = plan                                   # pose.free_hands compiles them again with the strips' hands
         chest = "upper_body2" if "upper_body2" in S.semantic_map(m.arm) else "upper_body"
         pose = ctx.data.setdefault("pose", {}).setdefault(name, {})
         for side, keys in res["hands"].items():
@@ -146,7 +159,7 @@ def apply(ctx):
             hand = pose.setdefault("hands", {}).setdefault(side, {})
             if any(k in hand for k in ("at", "keys", "grip", "rest", "ik")):
                 raise BuildError(f"[pose.{name}.hands.{side}] places that hand and [[move.{name}]] moves it")
-            hand["keys"] = [dict(k, at={"cast": name, "point": k["at"]}) for k in keys]
+            hand["keys"] = hand_keys(name, keys)
             hand.setdefault("ride", f"cast:{name}.{chest}")
             if side in res["ik"]:
                 hand["ik"] = res["ik"][side]

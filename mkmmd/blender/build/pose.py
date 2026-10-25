@@ -88,6 +88,7 @@ from ...core import armreach as AR
 from ...core import fingers as FG
 from ...core import fretting as FR
 from ...core import gripframe as GF
+from ...core import moves as MV
 from ...core import pentrack as PT
 from ...core import wear as WR
 from .. import keys as K
@@ -474,6 +475,340 @@ def _ik_shares(ctx, name, side, ik, f0, f1):
     return [f0, f1] + [f for f, _ in later], [0.0, float(np.interp(f1, frames, vs))] + [v for _, v in later]
 
 
+def _key_goal(tgt, mats, par_inv, interp="BEZIER"):
+    """Key a hand's goal empty on [(frame, world goal matrix)], read in its parent's frame `par_inv` (a bone ride's: the
+    bone as it stands in the settled pose)."""
+    frames, locs, rots = [], [], []
+    for fr, M in sorted(mats, key=lambda fm: fm[0]):
+        Ml = par_inv @ M
+        frames.append(fr)
+        locs.append(tuple(Ml.translation))
+        rots.append(tuple(Ml.to_quaternion()))
+    K.key_vec(tgt, "location", frames, locs, interp=interp)
+    K.key_vec(tgt, "rotation_quaternion", frames, K.continuous(rots), interp=interp)
+
+
+def _key_ik(ctx, arm, name, side, rig, ik, f0, f1, unbent=()):
+    """Key a hand's arm rig on its IK shares (`_ik_shares`): each constraint's influence (that share of its full one,
+    `rig["full"]`) and the forearm's pre-bend. `unbent` [(frame, frame)]: stretches where a strip bends the elbow and
+    the hand is let go to it, the IK easing off and on inside them: the pre-bend is off from one to the other (the IK
+    starts from the strip's own bent arm there, and the arm it eases from and to is the strip's alone), back a frame
+    outside, where the IK holds the arm. Returns (frames, shares)."""
+    frames, shares = _ik_shares(ctx, name, side, ik, f0, f1)
+    for (bone, cname), full in rig["full"].items():
+        c = arm.pose.bones[bone].constraints[cname]
+        K.key_prop(arm, f'pose.bones["{bone}"].constraints["{cname}"].influence', frames, [full * s for s in shares])
+        c.influence = full
+    bend = dict(zip(frames, shares))
+    for a, b in unbent:
+        bend = {f: s for f, s in bend.items() if not a - 1.0 < f < b + 1.0}
+        bend.update({a - 1.0: 1.0, a: 0.0, b: 0.0, b + 1.0: 1.0})
+    fb = sorted(bend)
+    K.key_bone_quats(arm, rig["fore"], fb, [tuple(Quaternion().slerp(rig["bend"], bend[f])) for f in fb],
+                     interp="BEZIER")
+    return frames, shares
+
+
+def _key_fingers(ctx, arm, smap, side, h, f0, f1, fade=None):
+    """Key a hand's fingers: its own (`fingers`, else flat) from the settle's end, then each key's at its time, eased
+    between (none before the settle ends). `fade` (IK frames, IK shares, bones): those bones give way by the hand's IK
+    share, as its arm does, to the motion strip that plays them while the hand is let go (the strip's curl alone, not
+    composed with the hand's: the action blends with Combine)."""
+    seq = {f1: _finger_quats(arm, smap, side, h.get("fingers") or "flat")}
+    for k in sorted(h.get("keys", []), key=lambda k: float(k["t"])):
+        if k.get("fingers"):
+            seq[max(ctx.frame(float(k["t"])), f1)] = _finger_quats(arm, smap, side, k["fingers"])
+    seq = sorted(seq.items())
+    frames = [f0] + [f for f, _ in seq]
+    for b in seq[0][1]:
+        quats = K.continuous([(1, 0, 0, 0)] + [tuple(q[b]) for _, q in seq])
+        if fade is not None and b in fade[2]:
+            K.key_bone_quats(arm, b, *_faded(frames, quats, fade[0], fade[1]), interp="BEZIER")
+        else:
+            K.key_bone_quats(arm, b, frames, quats, interp="BEZIER")
+
+
+def _eased(frames, values, f, mix):
+    """The value at frame f of keys (frames, values), eased in and out between two (a Bezier key's flat handles), held
+    outside them; `mix(a, b, w)` blends two values."""
+    i = int(np.searchsorted(frames, f, side="right"))
+    if i == 0:
+        return values[0]
+    if i == len(frames):
+        return values[-1]
+    a, b = frames[i - 1], frames[i]
+    w = min(max((f - a) / (b - a), 0.0), 1.0) if b > a else 1.0
+    return mix(values[i - 1], values[i], w * w * (3.0 - 2.0 * w))
+
+
+def _faded(frames, quats, ik_frames, shares):
+    """(frames, quaternions) of a bone's keys (frames, quats) scaled by the IK share (ik_frames, shares): on its own
+    frames, the shares' and every frame where the share is under one, each rotation that share of the way from none."""
+    share = lambda f: _eased(ik_frames, shares, f, lambda a, b, w: a + (b - a) * w)                # noqa: E731
+    qs = [Quaternion(q) for q in quats]
+    want = {float(f) for f in frames} | {float(f) for f in ik_frames}
+    want |= {float(f) for f in range(math.ceil(min(ik_frames)), math.floor(max(ik_frames)) + 1) if share(f) < 1.0 - 1e-6}
+    out = sorted(want)
+    return out, K.continuous([tuple(Quaternion().slerp(_eased(frames, qs, f, lambda a, b, w: a.slerp(b, w)), share(f)))
+                              for f in out])
+
+
+def _driven(arm):
+    """The Blender names of the bones some NLA strip of the armature plays."""
+    out = set()
+    for tr in (arm.animation_data.nla_tracks if arm.animation_data else ()):
+        for st in tr.strips:
+            for fc in (st.action.fcurves if st.action else ()):
+                if fc.data_path.startswith('pose.bones["'):
+                    out.add(fc.data_path.split('"')[1])
+    return out
+
+
+POLE_OUT = 0.55           # m from the shoulder, at least, that a pole on its way between a strip's elbow and home passes
+
+
+def _pole_of(S, E, W, out=0.3):
+    """A pole `out` metres from the elbow E across the shoulder (S) - wrist (W) line, so the arm IK bends the elbow where
+    E is; None for an arm too straight to tell."""
+    axis = (W - S).normalized()
+    across = (E - S) - axis * (E - S).dot(axis)
+    return E + across.normalized() * out if across.length > 1e-4 else None
+
+
+def _strip_samples(ctx, m, smap, side, spans, inv):
+    """Where the member's motion strips have the hand `side` over its free `spans` (clip seconds), at their ends and on
+    every frame between: {"t", "at", "dir", "palm"} in the member's own frame (`inv`: the inverse of its root's world
+    matrix), as mkmmd.core.moves places (the wrist joint, the way the hand points and the way its palm faces), and
+    "pole" (a pole in the world that bends the arm IK's elbow where the strip has it). Each is read in the frame of the
+    bone the goal rides as that bone stands in the settled pose, so a strip that turns the chest under the arm carries
+    the goal with it. The arm rig (its constraints and the forearm's pre-bend) is muted meanwhile: the strip's arm."""
+    arm, rig = m.arm, m.hands[side]
+    wrist, upper = smap[f"wrist.{side}"], smap[f"arm.{side}"]
+    times = sorted({round(t, 6) for t0, t1 in spans for t in [t0, t1] + [ctx.time(f) for f in range(
+        math.ceil(ctx.frame(t0)), math.floor(ctx.frame(t1)) + 1)]})
+    act = arm.animation_data.action if arm.animation_data else None
+    path = f'pose.bones["{rig["fore"]}"].rotation_quaternion'
+    muted = [arm.pose.bones[b].constraints[c] for b, c in rig["full"]] + [
+        fc for fc in (act.fcurves if act else ()) if fc.data_path == path]
+    was = [o.mute for o in muted]
+    n_local = K.rest_rot(arm, wrist).inverted() @ palm_normal(arm, smap, side)
+    turn = inv.to_3x3().normalized()
+    sc = bpy.context.scene
+    out = {k: [] for k in ("t", "at", "dir", "palm", "pole", "S", "E", "W")}
+    try:
+        for o in muted:
+            o.mute = True
+        for t in times:
+            f = ctx.frame(t)
+            sc.frame_set(math.floor(f), subframe=f - math.floor(f))
+            ae = arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            mw, pb = ae.matrix_world, ae.pose.bones
+            X = Matrix()
+            if rig["ride_bone"] is not None:
+                X = rig["ride_set"] @ (mw @ pb[rig["ride_bone"]].matrix).inverted()
+            W = X @ mw @ pb[wrist].matrix
+            R = W.to_3x3().normalized()
+            out["t"].append(t)
+            out["at"].append(list(inv @ W.translation))
+            out["dir"].append(list(turn @ (R @ Vector((0.0, 1.0, 0.0)))))
+            out["palm"].append(list(turn @ (R @ n_local)))
+            S0, E = X @ (mw @ pb[upper].head), X @ (mw @ pb[rig["fore"]].head)
+            out["pole"].append(_pole_of(S0, E, W.translation))
+            out["S"].append(S0)
+            out["E"].append(E)
+            out["W"].append(W.translation.copy())
+    finally:
+        for o, w in zip(muted, was):
+            o.mute = w
+    good = [p for p in out["pole"] if p is not None]                 # a straight arm keeps its neighbour's
+    prev = good[0] if good else None
+    for i, p in enumerate(out["pole"]):
+        out["pole"][i] = prev = p if p is not None else prev
+    return out
+
+
+def _settled(rig, ae, point):
+    """A world point of the evaluated armature `ae` read in the frame of the bone the goal rides as it stands in the
+    settled pose (`_strip_samples`)."""
+    mw = ae.matrix_world
+    if rig["ride_bone"] is None:
+        return mw @ point
+    return rig["ride_set"] @ (mw @ ae.pose.bones[rig["ride_bone"]].matrix).inverted() @ (mw @ point)
+
+
+def _swivel(S, W, a, b):
+    """Radians that turn point a about the line from S to W onto the half-plane of point b."""
+    u = (W - S).normalized()
+    pa, pb = (a - S) - u * (a - S).dot(u), (b - S) - u * (b - S).dot(u)
+    return math.atan2(u.dot(pa.cross(pb)), pa.dot(pb)) if pa.length > 1e-6 and pb.length > 1e-6 else 0.0
+
+
+def _key_move_poles(ctx, pole, keys, home, pinv):
+    """Key the elbow's pole on a hand's keys when one of them holds the elbow its own way (a key's `pole`, a target: a
+    move's place such as a lone hand resting on the skirt, mkmmd.core.moves POLES): that pole on its keys and the hand's
+    own pole (`home`, world) on the others, eased between them as the goal is; read in the pole's parent frame `pinv`."""
+    if not any(k.get("pole") is not None for k in keys):
+        return
+    want = {}
+    for k in sorted(keys, key=lambda k: float(k["t"])):
+        want[ctx.frame(float(k["t"]))] = tuple(pinv @ (targets.point(ctx, k["pole"]) if k.get("pole") is not None
+                                                       else home))
+    frames = sorted(want)
+    K.key_vec(pole, "location", frames, [want[f] for f in frames], interp="BEZIER")
+
+
+def _key_pole(ctx, m, rig, samples, keys, rounds=3):
+    """Key the elbow's pole of a hand on a strip: on its keys there, where the strip bends the elbow (`samples["pole"]`),
+    and back where it stood on the hand's keys before and after each stretch, so the IK bends the elbow as the strip
+    does where it lets go and takes over. The IK aims its elbow at the pole only to some degrees, so at each stretch's
+    ends (the IK holding the arm on the strip's hand) the pole is turned about the shoulder-wrist line by what the IK's
+    elbow misses the strip's by, `rounds` times, and between them by a share of both. Only for a goal riding a bone (its
+    pole rides it too). Returns the stretches."""
+    if rig["ride_bone"] is None or samples["pole"][0] is None:
+        return 0
+    idx = {round(t, 4): i for i, t in enumerate(samples["t"])}
+    runs, cur = [], None                                     # each stretch: [key before, [sample indices], key after]
+    for i, k in enumerate(keys):
+        if k.get("strip"):
+            if cur is None:
+                cur = [keys[i - 1]["t"] if i else None, [], None]
+                runs.append(cur)
+            cur[1].append(idx[round(k["t"], 4)])
+        elif cur is not None:
+            cur[2], cur = k["t"], None
+    par_inv = rig["par_inv"]
+    ad = rig["pole"].animation_data
+    fcs = [ad.action.fcurves.find("location", index=i) if ad and ad.action else None for i in range(3)]
+
+    def keyed(t):
+        """The pole where the hand's own keys have it at clip time t (a move's place may hold the elbow its own way,
+        `_key_move_poles`), or where it stands: read before the stretches are keyed into it."""
+        f = ctx.frame(t)
+        return Vector([fc.evaluate(f) if fc is not None else rig["pole_loc"][i] for i, fc in enumerate(fcs)])
+    homes = [(keyed(before) if before is not None else None, keyed(after) if after is not None else None)
+             for before, _, after in runs]
+    turn = [[0.0, 0.0] for _ in runs]                        # the turn at each stretch's two ends
+
+    def outside(S0, P, home):
+        """Halfway between the strip's pole P and the hand's own (`home`), pushed out from the shoulder S0: the pole goes
+        round the arm on its way, not through it (straight across, the IK's elbow flips where the pole passes the arm's
+        line)."""
+        d = 0.5 * (P + par_inv.inverted() @ home) - S0
+        return tuple(par_inv @ (S0 + d.normalized() * max(d.length, POLE_OUT)))
+
+    def poles():                                             # each stretch on its own: the hand's own keys stay round it
+        for (before, ids, after), (a, b), (hb, ha) in zip(runs, turn, homes):
+            t0, t1 = samples["t"][ids[0]], samples["t"][ids[-1]]
+            at, want = {}, {}
+            for i in ids:
+                w = (samples["t"][i] - t0) / (t1 - t0) if t1 > t0 else 0.0
+                S0, P = samples["S"][i], samples["pole"][i]
+                q = Quaternion((samples["W"][i] - S0).normalized(), a + (b - a) * w)
+                at[i] = S0 + q @ (P - S0)
+                want[ctx.frame(samples["t"][i])] = tuple(par_inv @ at[i])
+            if before is not None:
+                want.setdefault(ctx.frame(before), tuple(hb))
+                want.setdefault(ctx.frame(0.5 * (before + t0)), outside(samples["S"][ids[0]], at[ids[0]], hb))
+            if after is not None:
+                want[ctx.frame(0.5 * (t1 + after))] = outside(samples["S"][ids[-1]], at[ids[-1]], ha)
+                want[ctx.frame(after)] = tuple(ha)
+            frames = sorted(want)
+            K.key_vec(rig["pole"], "location", frames, [want[f] for f in frames], interp="BEZIER", replace=False)
+
+    sc = bpy.context.scene
+    for _ in range(rounds):
+        poles()
+        for (_, ids, _), ends in zip(runs, turn):
+            for j, i in enumerate((ids[0], ids[-1])):
+                f = ctx.frame(samples["t"][i])
+                sc.frame_set(math.floor(f), subframe=f - math.floor(f))
+                ae = m.arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+                E = _settled(rig, ae, ae.pose.bones[rig["fore"]].head)
+                ends[j] += _swivel(samples["S"][i], samples["W"][i], E, samples["E"][i])
+    poles()
+    return len(runs)
+
+
+def free_hands(ctx):
+    """Hands let go to motion strips (docs/design.md: Moves, `free`), once the motion stage has laid the strips: where
+    the strips have each let-go hand over its free spans is sampled (`_strip_samples`), the member's moves are compiled
+    again with it (mkmmd.core.moves: the goal follows the strip there and joins and leaves it at the human pace), and
+    the hand's goal, its IK shares, its fingers and its elbow's pole are keyed again: the IK lets go and takes over on
+    the strip's own hand with the elbow where the strip has it, and finger bones a strip plays give way to it while the
+    hand is let go. A hand whose arm no strip plays keeps its goal at its rest place. Returns {cast: {side: report}}."""
+    out = {}
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    f0, f1 = ctx.start, ctx.start + ctx.settle
+    for name, m in ctx.cast.items():
+        plan = m.moves
+        if not plan or not any(plan["free"].values()):
+            continue
+        driven = _driven(m.arm)
+        smap = S.semantic_map(m.arm)
+        sides = [s for s in ("L", "R") if plan["free"][s] and s in m.hands
+                 and (m.hands[s]["fore"] in driven or smap.get(f"arm.{s}") in driven)]
+        if not sides:
+            continue
+        sc.frame_set(f0)                                         # targets are read where the pose stage read them
+        inv = m.root.matrix_world.inverted()
+        strip = {s: _strip_samples(ctx, m, smap, s, plan["free"][s], inv) for s in sides}
+        try:
+            res = MV.compile(plan["entries"], plan["marks"], plan["beats"], yaw=plan["yaw"], clear=plan["clear"],
+                             strip=strip)
+        except MV.MoveError as e:
+            raise BuildError(f"move.{name}: {e}") from None
+        sc.frame_set(f0)
+        for s in sides:
+            rig = m.hands[s]
+            keys = res["hands"][s]
+            h = dict(rig["h"], keys=MOVES.hand_keys(name, keys), ik=res["ik"].get(s))
+            _key_goal(rig["tgt"], _hand_targets(ctx, name, s, h, m.arm, smap, rig["back"], rig["out_dir"], f1),
+                      rig["par_inv"])
+            _key_move_poles(ctx, rig["pole"], h["keys"], rig["pole_w"], rig["pole_inv"])
+            ik = h["ik"] or []
+            spans = [(ik[i][0], ik[i + 3][0]) for i in range(0, len(ik), 4)]
+            frames, shares = _key_ik(ctx, m.arm, name, s, rig, h["ik"], f0, f1,
+                                     unbent=[(ctx.frame(a), ctx.frame(b)) for a, b in spans])
+            if h.get("fingers") or any(k.get("fingers") for k in h["keys"]):
+                _key_fingers(ctx, m.arm, smap, s, h, f0, f1, fade=(frames, shares, driven))
+            plays = _strips_of(m.arm, {rig["fore"], smap[f"arm.{s}"]})
+            for a, b in spans:
+                if not all(any(_full(st, f) for st in plays)
+                           for f in np.arange(math.ceil(ctx.frame(a)), math.floor(ctx.frame(b)) + 1)):
+                    ctx.log("WARNING", f"pose.{name}.hands.{s}: let go at {a:g}-{b:g} s where no motion strip plays the "
+                                       f"arm fully (one eases in or out there, or none plays): the IK lets go of a half-"
+                                       f"played arm; let a strip of the arm cover the span, eased in before and out after")
+            out.setdefault(name, {})[s] = {"spans": [[a, b] for a, b in spans], "samples": len(strip[s]["t"]),
+                                           "pole": _key_pole(ctx, m, rig, strip[s], keys)}
+            ctx.log("pose", f"{name}.{s}: let go on the strips over {out[name][s]['spans']}")
+    sc.frame_set(keep)
+    return out
+
+
+def _strips_of(arm, bones):
+    """The NLA strips of the armature whose action plays one of `bones` (Blender names)."""
+    paths = tuple(f'pose.bones["{b}"]' for b in bones)
+    return [st for tr in (arm.animation_data.nla_tracks if arm.animation_data else ()) if not tr.mute
+            for st in tr.strips if st.action is not None and any(fc.data_path.startswith(paths) for fc in st.action.fcurves)]
+
+
+def _full(st, f):
+    """Whether NLA strip `st` plays at its full influence on frame f: inside it, past its blend in and before its blend
+    out (or on its influence curve), or in a hold beyond it that has no blend."""
+    if st.mute:
+        return False
+    a, b = st.frame_start, st.frame_end
+    if st.use_animated_influence:
+        fc = st.fcurves.find("influence")
+        return a - 1e-3 <= f <= b + 1e-3 and fc is not None and fc.evaluate(f) >= 0.999
+    if f < a:
+        return st.extrapolation == "HOLD" and st.blend_in == 0.0
+    if f > b:
+        return st.extrapolation in ("HOLD", "HOLD_FORWARD") and st.blend_out == 0.0
+    return a + st.blend_in - 1e-3 <= f <= b - st.blend_out + 1e-3
+
+
 def _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1):
     """[(frame, IK goal matrix)] of a hand without a grip: lying on an edge or plane, at a point, or moving keys."""
     mats = []
@@ -767,23 +1102,57 @@ def _grip_card(ctx, h):
         return p, None
 
 
+def bass_line(ctx, h, entry, where):
+    """(placed notes, hand keys) of a fretting hand's `notes` (mkmmd.core.fretting.line) on its neck entry: the times from the
+    table's `times`, or from the `lane` it names in the [audio] hits file (mkmmd.core.lanes)."""
+    from ...core import lanes as LN
+    spec, hits = h["notes"], None
+    if hasattr(spec, "get") and spec.get("lane") is not None:
+        hits_file = (ctx.data.get("audio") or {}).get("hits")
+        if not hits_file:
+            raise BuildError(f"{where}: notes lane {spec['lane']!r} reads the [audio] hits file (write it with "
+                             f"`mk timeline hits --notes NAME=STEM:LO-HI` and name it in [audio] hits)")
+        try:
+            hits = LN.load(ctx.path(hits_file))
+        except LN.LaneError as e:
+            raise BuildError(f"{where}: {e}") from None
+    try:
+        return FR.line(spec, entry, hits, float(h.get("move", FR.MOVE)))
+    except FR.FrettingError as e:
+        raise BuildError(f"{where}: {e}") from None
+
+
 def _neck_grips(ctx, m, smap, name, side, h, back, out_dir, pole):
     """The grips of a fretting hand over time (grip = "guitar:neck"): its `fret` (the position, under the index finger) and
     `chord` at the start, then `keys = [{t, fret, chord, move}]`: the shape that is in place at clip time t, reached over `move`
     seconds (default 0.12) before it. A key without `fret` or `chord` keeps the previous one; without `fret` and `chord` in the
-    hand table the first key is the start. Every distinct (fret, chord) is solved once (cached). Returns the first grip with
-    `changes` = [(landing frame, move frames, goal, bones)] and every state's digest in `digest["states"]`."""
+    hand table the first key is the start. `notes` (a bass line, `bass_line`) makes the keys instead: a shape of one finger
+    per note, the first note's from the start. Every distinct (fret, chord) is solved once (cached). Returns the first grip
+    with `changes` = [(landing frame, move frames, goal, bones)] and every state's digest in `digest["states"]` (and the
+    line's numbers in `digest["notes"]`)."""
     where = f"pose.{name}.hands.{side}"
-    keys = sorted(h.get("keys") or [], key=lambda k: float(k["t"]))
-    if h.get("fret") is not None and h.get("chord") is not None:
-        states, later = [(None, h["fret"], h["chord"], 0.0)], keys
-    elif keys and keys[0].get("fret") is not None and keys[0].get("chord") is not None:
-        states, later = [(None, keys[0]["fret"], keys[0]["chord"], 0.0)], keys[1:]
+    line = None
+    if h.get("notes") is not None:
+        if any(h.get(k) is not None for k in ("fret", "chord", "keys")):
+            raise BuildError(f"{where}: `notes` chooses the string and fret of every note: leave out fret, chord and keys")
+        placed, nkeys = bass_line(ctx, h, _grip_card(ctx, h)[1], where)
+        states = [(None, nkeys[0]["fret"], nkeys[0]["chord"], 0.0)] + [(k["t"], k["fret"], k["chord"], k["move"])
+                                                                        for k in nkeys[1:]]
+        line = {"notes": len(placed), "shapes": len(nkeys), "strings": sorted({n["string"] for n in placed}),
+                "positions": sorted({n["position"] for n in placed}), "open": sum(1 for n in placed if not n["fret"]),
+                "frets": [min(n["fret"] for n in placed), max(n["fret"] for n in placed)],
+                "span_s": [round(placed[0]["t"], 3), round(placed[-1]["t"], 3)]}
     else:
-        raise BuildError(f"{where}: a neck grip needs `fret` and `chord` (or keys that start with both)")
-    for k in later:
-        _t, fret, chord, _mv = states[-1]
-        states.append((float(k["t"]), k.get("fret", fret), k.get("chord", chord), float(k.get("move", h.get("move", 0.12)))))
+        keys = sorted(h.get("keys") or [], key=lambda k: float(k["t"]))
+        if h.get("fret") is not None and h.get("chord") is not None:
+            states, later = [(None, h["fret"], h["chord"], 0.0)], keys
+        elif keys and keys[0].get("fret") is not None and keys[0].get("chord") is not None:
+            states, later = [(None, keys[0]["fret"], keys[0]["chord"], 0.0)], keys[1:]
+        else:
+            raise BuildError(f"{where}: a neck grip needs `fret` and `chord` (or keys that start with both), or `notes`")
+        for k in later:
+            _t, fret, chord, _mv = states[-1]
+            states.append((float(k["t"]), k.get("fret", fret), k.get("chord", chord), float(k.get("move", h.get("move", 0.12)))))
     solved, seq = {}, []
     for t, fret, chord, move in states:
         key = json.dumps([fret, chord], sort_keys=True)
@@ -793,6 +1162,8 @@ def _neck_grips(ctx, m, smap, name, side, h, back, out_dir, pole):
     out = dict(seq[0][2])
     out["changes"] = [(ctx.frame(t), max(1.0, move * ctx.fps), g["goal"], g["bones"]) for t, move, g in seq[1:]]
     out["digest"] = dict(seq[0][2]["digest"], states=[g["digest"] for g in solved.values()])
+    if line is not None:
+        out["digest"]["notes"] = line
     return out
 
 
@@ -817,7 +1188,7 @@ def run(ctx):
     ctx.check_tables("pose")
     out = {"moves": moves} if moves else {}
     f0, f1 = ctx.start, ctx.start + ctx.settle
-    probe = np.array([f1])                                # frames the IK misses are measured on (+ a moving track's)
+    probe = {}                                            # (cast, side) -> the frames its IK miss is measured on
     bpy.context.scene.frame_set(f0)                       # vehicles may have moved the props: one consistent frame
     for name, m in ctx.cast.items():
         spec = ctx.section("pose", name)
@@ -839,7 +1210,8 @@ def run(ctx):
         # hips onto the seat; `hips` slides and turns the pelvis of a standing body too
         hp = spec.get("hips") or {}
         hip_move = m.root.matrix_world.to_3x3().normalized() @ Vector(hp.get("shift", (0.0, 0.0, 0.0)))   # her frame -> world
-        hip_turn = _q((0, 0, 1), float(hp.get("yaw", 0.0))) @ _q((0, 1, 0), float(hp.get("roll", 0.0)))   # the armature's axes
+        hip_turn = (_q((0, 0, 1), float(hp.get("yaw", 0.0))) @ _q((0, 1, 0), float(hp.get("roll", 0.0)))
+                    @ _q((1, 0, 0), float(hp.get("pitch", 0.0))))   # the armature's axes; pitch + tips it forward
         centre = Vector()                                  # the hips' offset (world) at the end of the settle, for perform
         if seat:
             hips = (_world_head(arm, smap["leg.L"]) + _world_head(arm, smap["leg.R"])) / 2
@@ -853,7 +1225,7 @@ def run(ctx):
             if hip_move.length > 0.0:
                 K.key_bone_locs(arm, smap["center"], [f0, f1], [(0, 0, 0), tuple(hip_move)])
                 centre = hip_move
-            if hp.get("roll") or hp.get("yaw"):
+            if hp.get("roll") or hp.get("yaw") or hp.get("pitch"):
                 K.key_bone_arm(arm, smap["lower_body"], [f0, f1], [Quaternion(), hip_turn], interp="BEZIER")
             info["hips"] = {k: hp[k] for k in hp}
         # spine and head
@@ -933,6 +1305,7 @@ def run(ctx):
                 continue
             tgt, pole, cons, (fore, bend) = _arm_ik(ctx, m, smap, side)
             m.ik[side] = (tgt, pole)
+            probe[name, side] = np.array([f1])
             wrist = smap[f"wrist.{side}"]
             sh = _world_head(arm, smap[f"arm.{side}"])
             out_dir = lat if side == "L" else -lat
@@ -949,13 +1322,14 @@ def run(ctx):
             if seat and seat["prop"] is not None:          # IK goals ride with the prop
                 for o in (tgt, pole):
                     _reparent(o, seat["prop"].root)
-            ride_inv = None                                # the frame a bone ride's keys are relative to
+            ride_inv = ride_bone = ride_set = None         # the frame a bone ride's keys are relative to
             ride = h.get("ride")
             if ride is None and gu is not None and gu.get("type") in ("neck", "strum"):
                 ride = gp.root.name                        # a hand on the neck or strings goes with the prop (it is worn: it moves)
             if ride:                                       # ... or with one of its parts (a steering wheel), or a bone
                 if str(ride).startswith("cast:"):          # of the character itself (its chest): see _ride_bone
                     ride_bone, head_inv = _ride_bone(m, smap, name, side, ride, f1)
+                    ride_set = head_inv.inverted()         # the bone's head frame in the settled pose
                     attach_to_bone(tgt, arm, ride_bone, Matrix())
                     attach_to_bone(pole, arm, ride_bone, head_inv @ Matrix.Translation(pole_w))
                     ride_inv = Matrix.Translation((0.0, -arm.data.bones[ride_bone].length, 0.0)) @ head_inv
@@ -965,7 +1339,10 @@ def run(ctx):
                     if ob is None:
                         raise BuildError(f"pose.{name}.hands.{side}: ride object {ride!r} not found")
                     _reparent(tgt, ob)
-            frames, grip, interp = [], None, "BEZIER"
+            grip, interp = None, "BEZIER"
+            if h.get("notes") is not None and not (h.get("grip") and gu is not None and gu.get("type") == "neck"):
+                raise BuildError(f"pose.{name}.hands.{side}: `notes` is a fretting hand's bass line: it needs a neck grip "
+                                 f"(grip = \"<prop>:neck\")")
             if h.get("grip"):
                 neck = gu is not None and gu.get("type") == "neck"
                 if h.get("keys") and not neck:
@@ -974,13 +1351,13 @@ def run(ctx):
                 grip = (_neck_grips if neck else _grip)(ctx, m, smap, name, side, h, back, out_dir, pole_w)
                 if grip.get("pen"):                        # the nib follows a track: a goal on every frame
                     mats, interp = _pen_goals(ctx, m, wrist, h, grip), "LINEAR"
-                    probe = np.union1d(probe, ctx.frames[ctx.frames >= f1][::6])
+                    probe[name, side] = np.union1d(probe[name, side], ctx.frames[ctx.frames >= f1][::6])
                 else:
                     mats, prev = [(f1, grip["goal"])], grip["goal"]
                     for fr, mv, goal, _bones in grip.get("changes", []):     # a fretting hand moves to its next shape
                         mats += [(max(fr - mv, f1 + 0.5), prev), (fr, goal)]
                         prev = goal
-                    probe = np.union1d(probe, [math.ceil(fr) for fr, *_ in grip.get("changes", [])])   # reach at every landing
+                    probe[name, side] = np.union1d(probe[name, side], [math.ceil(fr) for fr, *_ in grip.get("changes", [])])   # reach at every landing
                 if grip.get("pick"):                       # the pick rides the wrist in the solved pinch
                     attach_to_bone(grip["pick"]["object"], arm, wrist, K.mat(grip["pick"]["T"]))
                 info.setdefault("grip", {})[side] = grip["digest"]
@@ -989,22 +1366,15 @@ def run(ctx):
                 mats = _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1)
             mats.sort(key=lambda fm: fm[0])
             par_inv = ride_inv if ride_inv is not None else (tgt.parent.matrix_world.inverted() if tgt.parent else Matrix())
-            locs, rots = [], []
-            for fr, M in mats:
-                Ml = par_inv @ M
-                frames.append(fr)
-                locs.append(tuple(Ml.translation))
-                rots.append(tuple(Ml.to_quaternion()))
-            K.key_vec(tgt, "location", frames, locs, interp=interp)
-            K.key_vec(tgt, "rotation_quaternion", frames, K.continuous(rots), interp=interp)
-            ik_fr, ik_share = _ik_shares(ctx, name, side, h.get("ik"), f0, f1)
-            for bone, cname in cons:                       # the rig takes over from the rest pose over the settle, as
-                c = arm.pose.bones[bone].constraints[cname]  # much of it as the hand's `ik` keys give from then on
-                full = c.influence
-                K.key_prop(arm, f'pose.bones["{bone}"].constraints["{cname}"].influence', ik_fr,
-                           [full * s for s in ik_share])
-                c.influence = full
-            K.key_bone_quats(arm, fore, ik_fr, [tuple(Quaternion().slerp(bend, s)) for s in ik_share], interp="BEZIER")
+            _key_goal(tgt, mats, par_inv, interp)
+            rig = {"tgt": tgt, "pole": pole, "fore": fore, "bend": bend, "par_inv": par_inv, "ride_bone": ride_bone,
+                   "ride_set": ride_set, "pole_loc": pole.location.copy(), "h": h, "back": back, "out_dir": out_dir,
+                   "full": {(bone, cname): arm.pose.bones[bone].constraints[cname].influence for bone, cname in cons},
+                   "pole_w": pole_w, "pole_inv": ride_inv if ride_inv is not None else (
+                       (pole.parent.matrix_world @ pole.matrix_parent_inverse).inverted() if pole.parent else Matrix())}
+            m.hands[side] = rig
+            _key_move_poles(ctx, pole, h.get("keys") or [], pole_w, rig["pole_inv"])
+            _key_ik(ctx, arm, name, side, rig, h.get("ik"), f0, f1)
             if h.get("ik") is not None:                    # a hand let go follows the member's strips (a walk's arm
                 arm.animation_data.action_blend_type = "COMBINE"   # swing), which compose with its own keys (the
                 info.setdefault("ik", {})[side] = len(h["ik"])     # pre-bend goes with the IK)
@@ -1018,14 +1388,7 @@ def run(ctx):
                     K.key_bone_quats(arm, b, [f0] + [f for f, _ in seq], [(1, 0, 0, 0)] + [bn[b] for _, bn in seq],
                                      interp="BEZIER")
             elif fp or any(k.get("fingers") for k in h.get("keys", [])):
-                seq = {f1: _finger_quats(arm, smap, side, fp or "flat")}         # the hand's own fingers, then each key's
-                for k in sorted(h.get("keys", []), key=lambda k: float(k["t"])):  # own at its time, eased in between
-                    if k.get("fingers"):                                          # (none before the settle ends)
-                        seq[max(ctx.frame(float(k["t"])), f1)] = _finger_quats(arm, smap, side, k["fingers"])
-                seq = sorted(seq.items())
-                for b in seq[0][1]:
-                    K.key_bone_quats(arm, b, [f0] + [f for f, _ in seq],
-                                     K.continuous([(1, 0, 0, 0)] + [tuple(q[b]) for _, q in seq]), interp="BEZIER")
+                _key_fingers(ctx, arm, smap, side, h, f0, f1)
         for side, fp in (spec.get("fingers") or {}).items():
             for b, q in _finger_quats(arm, smap, side, fp).items():
                 K.key_bone_quats(arm, b, [f0, f1], [(1, 0, 0, 0), tuple(q)], interp="BEZIER")
@@ -1045,23 +1408,28 @@ def run(ctx):
 IK_TOLERANCE_MM = 5.0
 
 
-def ik_errors(ctx, frame):
-    """How far each arm IK's wrist tail ends from its goal (mm), keyed "<cast>.<side>": at `frame`, or the worst over
-    several frames when `frame` is a list (hands with a moving track). A goal beyond the arm's reach leaves the hand
-    short of the prop, so it is logged as a warning."""
+def ik_errors(ctx, probe):
+    """How far each arm IK's wrist tail ends from its goal (mm), keyed "<cast>.<side>": the worst over that hand's own frames
+    in `probe` ((cast, side) -> frames: the settled frame, plus a moving track's or a fretting hand's landings). Another
+    member's frames are not its own: a hand let go (free) is off its parked goal there. A goal beyond the arm's reach
+    leaves the hand short of the prop, so it is logged as a warning."""
     sc = bpy.context.scene
     keep = sc.frame_current
+    at = {}
+    for hand, frames in probe.items():
+        for fr in np.atleast_1d(frames):
+            at.setdefault(int(fr), []).append(hand)
+    smaps = {name: S.semantic_map(ctx.cast[name].arm) for name in {name for name, _side in probe}}
     errs = {}
-    for fr in np.atleast_1d(frame):
-        sc.frame_set(int(fr))
+    for fr in sorted(at):
+        sc.frame_set(fr)
         dg = bpy.context.evaluated_depsgraph_get()
-        for name, m in ctx.cast.items():
-            smap = S.semantic_map(m.arm)
+        for name, side in at[fr]:
+            m = ctx.cast[name]
             ae = m.arm.evaluated_get(dg)
-            for side, (tgt, _pole) in m.ik.items():
-                tail = ae.matrix_world @ ae.pose.bones[smap[f"wrist.{side}"]].tail
-                miss = round((tail - tgt.evaluated_get(dg).matrix_world.translation).length * 1000, 1)
-                errs[f"{name}.{side}"] = max(miss, errs.get(f"{name}.{side}", 0.0))
+            tail = ae.matrix_world @ ae.pose.bones[smaps[name][f"wrist.{side}"]].tail
+            miss = round((tail - m.ik[side][0].evaluated_get(dg).matrix_world.translation).length * 1000, 1)
+            errs[f"{name}.{side}"] = max(miss, errs.get(f"{name}.{side}", 0.0))
     for key, miss in errs.items():
         if miss > IK_TOLERANCE_MM:
             name, _, side = key.rpartition(".")

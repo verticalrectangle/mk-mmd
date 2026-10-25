@@ -208,6 +208,53 @@ all round, IoU 0.96 with the pick and cord in; the headstock within 2 mm), 3/4 v
 shot (`keep = ["guitar*"]`, `accent = ["guitar_cable"]`) upright and turned 65 degrees about +Y, where the long neck, headstock,
 horns, strap buttons and the hanging cord read at once.
 
+## Worked example: the bass
+
+`mkmmd/blender/library/props/electric_bass*.py` (card `library:electric_bass`): a short-scale bass of the Mustang Bass kind,
+built on the guitar's toolkit (`electric_guitar_geo.slab`, `ring_curve`, the guitar's materials) with its own `_layout`,
+`_body`, `_neck`, `_hw`, `_parts`, `_mats`. It builds in 0.8 s and scores 0.009 on `form` (worst: the board's hidden faces, 0.036).
+
+**What was measured.** One front photograph of a 1966 body showed ten fret wires; fitted with 12-TET on the 762 mm scale and a
+scale that grows toward the neck (residual 0.7 mm) they gave a rectified image in metres. The fret numbering is not in the
+fit (a geometric series fits any starting fret): the 12th fret's double dot and the 15th, 17th and 19th dots fixed it, and the
+lower bout then measured 0.310 m against a dealer's 0.314 (x rescaled to it). The body's bass side and the bottom came out of
+a colour mask of the rectified image, the shadowed treble side and the bays from column samples (a wall shadow next to an
+edge is not the body: take where the body colour ends), the guard, plate, pickups and knobs as landmarks. The headstock is a
+front photograph of a Fender bass headstock scaled from its 1.75 inch nut to this one's 1 5/8. The check: every outline drawn
+over the rectified photograph (within a couple of millimetres), the render beside the photographs, and a flat silhouette.
+
+| part | how |
+|---|---|
+| body, guard, plate | `slab`s of splines through the read points; the guard's notch round the neck has sharp corners. A long sliver of an outline (the guard's tip between the treble bay and the neck, 1.5 mm wide) breaks `fill`'s Delaunay triangulation (edges cross the sliver, the slab is not closed): keep any tip at least ~6 mm wide |
+| stripes | three bands cut to the body's outline (Sutherland-Hodgman against each convex band) and laid over the face AND the rolled edge as a closed 0.3 mm film: the height comes from the slab's own quarter round at each point's distance from the wall |
+| neck, headstock, keys | the guitar's skin of superellipse rings; past the nut the headstock outline (pchip) ends a little short of its tip (a ring of zero width is degenerate); clover keys are a polar outline (four lobes, the one toward the shaft pulled in) on `rounded_panel`, flat faces parallel to the headstock's |
+| pickup, bridge, controls | `rounded_panel` covers and plate, swept saddles and the rolled tail, lathed knobs with metal caps, screws snapped 4 mm inside the guard's edge from their read positions |
+
+## Worked example: the turntable
+
+`mkmmd/blender/library/props/turntable*.py` (card `library:turntable`): a direct-drive DJ deck in SL-1200 MK2 proportions with
+a 7-inch single on it, no logo or lettering. `turntable_layout.py` holds every number, the tonearm's kinematics and the drivers'
+expressions (the tests evaluate those strings against the numpy maths), `_parts` the meshes, `_mats` and `turntable.py` the
+Blender side. It builds in 0.5 s and scores 0.0005 on `form`.
+
+**What was measured.** A front three-quarter photograph rectified by the top plate's four corners (a homography onto the 453 x
+360 mm plate) gave the landmarks that lie on the plate: the spindle 179 mm from the left edge and centred front to back, the arm
+well (56 mm in radius) round the pivot, which the data sheet's 230 mm effective length and 15 mm overhang put 215 mm from the
+spindle, 24 degrees round from the right; the buttons, the knob, the target light, the slider, the adapter's well. A point above
+the plate (a knob's top, the gimbal) rectifies too far back: read it at its foot. The single is RIAA / IEC 60098's 7-inch (174.6 mm,
+the 38.2 mm hole, the recorded area 168.3 to 108 mm, an 89 mm label: half the diameter, as photographs of singles show).
+
+| part | how |
+|---|---|
+| top plate | one `cage` of rings sampled on the same rays from the pivot: the rolled outer edge on outlines inset by each ring's offset (moving the points along their own normals lets two neighbours swap order round a corner, and the top face's long quads fold), then straight in to the arm well's lip, down its wall to a coved floor |
+| platter, mat, record, adapter, knobs, feet | lathes of filleted profiles (an annulus is a closed loop, welded); knurling is the lathe's radius modulated by the angle |
+| arm | a `tube` along a cubic from the gimbal into the collar, its end tangent the headshell's 22 degree offset; `rounded_panel` headshell and cartridge put in place by an explicit frame; the arm's origin on the axle, so one Euler (0, -lift, yaw) is the gimbal |
+| grooves, sheen, strobe dots | drawn by the materials in the part's own frame, so they turn with it: bands of shine are a noise along the radius; the sheen is the highlight concentric grooves make (a bar along the radius toward the half vector of the view and a key light, both moved into the record's frame), which EEVEE's isotropic shading cannot give; the dots come from the angle and the height on the bevel |
+
+Checks used: the landmarks on the rectified photograph, the deck beside the photographs at their angles (front three-quarter
+with an LP, three-quarter from the left with a single on it), a straight-down view, and the stylus against the record: the
+arm's lowest point is the stylus tip, on the playing surface at every `arm` past 1 and 10 mm over it with the cue up.
+
 ## Reviewing
 
 * Render the prop alone from named views and set it beside the reference photo at the same angle and lens: front 3/4
