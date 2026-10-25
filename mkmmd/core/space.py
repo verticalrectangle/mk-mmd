@@ -19,9 +19,10 @@ mkmmd/blender/library/props/space.py builds.
   stars        flat stars at points of the picture's plane, each flashing at its time, joined in order by thin lines that
                draw themselves as the next star flashes: a constellation, a melody as a piano roll.
   floor        a floor to the horizon at z = 0: a black `mirror` (EEVEE's ray tracing, which the floor switches on, reflects
-               what the camera sees in it), a `chess` board of `cell` m squares, or a glowing `grid` of lines every `cell`
-               m. The pattern softens to its average as it recedes (no moire) and fades into `dark` between the two
-               `fade` distances from the camera.
+               what the camera sees in it), a `chess` board of `cell` m squares, a glowing `grid` of lines every `cell`
+               m, or `asphalt` (a street, dry, wet or with puddles; its shader is the builder's, its share and footprint
+               numbers are here). The pattern softens to its average as it recedes (no moire) and fades into `dark`
+               between the two `fade` distances from the camera, or into nothing with `fade_to = "clear"`.
   starfield    stars streaming past along -X at `speed` m/s (and `surge` keys on top: a jump to light speed), drawn as
                streaks `streak` m long: two tiles of `length` m of them leapfrog round the root, so they never run out;
                none within `clear` m of the X axis, where the character walks.
@@ -44,10 +45,24 @@ PIECES = ("pawn", "rook", "knight", "bishop", "queen", "king")
 CHESS = {"piece": "pawn", "height": 1.0, "color": "text", "rough": 0.12, "metal": 0.0}
 STARS = {"points": [], "kind": 4, "inner": 0.3, "size": 0.12, "depth": 0.004, "lines": True, "line_width": 0.01,
          "flash": 0.35, "gain": 1.8, "draw": 0.12, "color": "text"}
-FLOOR_KINDS = ("mirror", "chess", "grid")
-FLOOR = {"kind": "mirror", "size": 400.0, "cell": 2.0, "line": 0.04, "color": "text", "dark": "#000000", "glow": 3.0,
-         "rough": None, "metal": 0.0, "fade": [40.0, 220.0]}
-FLOOR_ROUGH = {"mirror": 0.03, "chess": 0.12, "grid": 0.08}   # its roughness unless `rough` says
+FLOOR_KINDS = ("mirror", "chess", "grid", "asphalt")
+FLOOR = {"kind": "mirror", "size": 400.0, "cell": 2.0, "line": 0.04, "color": None, "dark": None, "glow": 3.0,
+         "rough": None, "metal": 0.0, "fade": [40.0, 220.0], "fade_to": "dark", "wet": 0.0, "puddles": 0.0,
+         "puddle_size": 1.5, "cracks": 0.3, "seed": 1}
+FLOOR_ROUGH = {"mirror": 0.03, "chess": 0.12, "grid": 0.08, "asphalt": 0.8}   # its roughness unless `rough` says
+FLOOR_COLOURS = {"asphalt": ("#a3a19c", "#4a4946")}   # (color, dark) unless given; the other kinds ("text", black)
+FADES_TO = ("dark", "clear")
+# Asphalt (metres, roughnesses): the aggregate's coarse stones `GRAIN` apart (the fine ones a third of it), their mean
+# tones between `dark` and `color` (the fine layer's and the whole grain's: what they fade to once a pixel, `PIXEL` x the
+# distance, is wider than they are), cracks round cells `CRACK` across, wet asphalt and standing water as rough as these
+GRAIN, CRACK, PIXEL = 0.009, 1.8, 0.001
+FINE_MEAN, GRAIN_MEAN = 0.091, 0.2465
+WET_ROUGH, PUDDLE_ROUGH = 0.3, 0.03
+# The levels of Blender's 2D Noise Texture (detail 3, roughness 0.55) that shares 0, 0.05, .., 1 of a floor lie above
+# (where the asphalt's puddles and cracks are): measured in Blender 4.2 (Cycles, 2048 x 2048 point samples over 400 x 400
+# features; mean 0.5, sd 0.094)
+NOISE_LEVELS = (0.87347, 0.65631, 0.62361, 0.60022, 0.58115, 0.56464, 0.54979, 0.53625, 0.52356, 0.5115, 0.49998,
+                0.48846, 0.47641, 0.46374, 0.45022, 0.43538, 0.41881, 0.39975, 0.37637, 0.3437, 0.12178)
 STARFIELD = {"count": 900, "length": 160.0, "width": 90.0, "height": [-1.0, 45.0], "clear": 5.0, "size": 0.035,
              "streak": 0.0, "speed": 12.0, "surge": [], "color": "text", "glow": 12.0, "seed": 1}
 DISC = {"inner": 2.0, "outer": 7.0, "color": "love", "hot": "#FFFFFF", "glow": 5.0, "spin": 0.3, "kepler": -1.5,
@@ -370,20 +385,38 @@ def floor_options(slots):
     o = options(FLOOR, slots, "floor")
     if o["kind"] not in FLOOR_KINDS:
         raise SpaceError(f"floor: kind is one of {', '.join(FLOOR_KINDS)}, not {o['kind']!r}")
-    _positive(o, ("size", "cell", "line"), "floor")
+    _positive(o, ("size", "cell", "line", "puddle_size"), "floor")
     if o["rough"] is None:
         o["rough"] = FLOOR_ROUGH[o["kind"]]
-    for k in ("rough", "metal"):
-        if not isinstance(o[k], (int, float)) or not 0.0 <= o[k] <= 1.0:
+    colour, dark = FLOOR_COLOURS.get(o["kind"], ("text", "#000000"))
+    o["color"] = colour if o["color"] is None else o["color"]
+    o["dark"] = dark if o["dark"] is None else o["dark"]
+    for k in ("rough", "metal", "wet", "puddles", "cracks"):
+        if not isinstance(o[k], (int, float)) or isinstance(o[k], bool) or not 0.0 <= o[k] <= 1.0:
             raise SpaceError(f"floor: {k} is 0 .. 1, not {o[k]!r}")
     if not isinstance(o["glow"], (int, float)) or o["glow"] < 0:
         raise SpaceError(f"floor: glow is a number, at least 0, not {o['glow']!r}")
     f = o["fade"]
     if not (isinstance(f, (list, tuple)) and len(f) == 2 and all(isinstance(v, (int, float)) for v in f) and 0 <= f[0] < f[1]):
         raise SpaceError(f"floor: fade is [near, far] metres from the camera, near < far, not {f!r}")
+    if o["fade_to"] not in FADES_TO:
+        raise SpaceError(f"floor: fade_to is {' or '.join(repr(v) for v in FADES_TO)}, not {o['fade_to']!r}")
     if o["line"] >= o["cell"]:
         raise SpaceError("floor: a grid's line must be thinner than its cell")
+    if not isinstance(o["seed"], int) or isinstance(o["seed"], bool):
+        raise SpaceError(f"floor: seed is a whole number, not {o['seed']!r}")
     return o
+
+
+def noise_level(share):
+    """The level of the asphalt's noise (NOISE_LEVELS) that `share` (0..1) of the floor lies above: under water for the
+    puddles, a crack shown for the cracks."""
+    return float(np.interp(float(share), np.linspace(0.0, 1.0, len(NOISE_LEVELS)), NOISE_LEVELS))
+
+
+def seed_offset(seed):
+    """Where a floor's seed moves its noises (x, y in noise units): another seed, other puddles, cracks and grain."""
+    return tuple(float(v) for v in np.random.default_rng(int(seed)).uniform(-500.0, 500.0, 2))
 
 
 def soften(dist):

@@ -351,10 +351,11 @@ def test_mk_ref_footage_downloads_into_the_project_registers_the_asset_and_credi
     assert code == 0 and out["assets"] == ["pexels_4254119"] and "Driving on a forest road" in out["text"]
 
 
-def test_credits_count_the_videos_of_footage_and_split_inserts_by_slug_or_by_a_registered_file(tmp_path, monkeypatch):
+def test_credits_count_footage_videos_and_photo_world_photos_by_slug_or_by_a_registered_file(tmp_path, monkeypatch):
     monkeypatch.setenv("MK_ASSETS", str(tmp_path / "assets"))
     reg = A.Registry()
     reg.add({"kind": "reference", "slug": "road", "path": str(tmp_path / "proj" / "footage" / "r.mp4"), "author": "a"})
+    reg.add({"kind": "reference", "slug": "plate", "path": str(tmp_path / "proj" / "plates" / "p.jpg"), "author": "b"})
 
     class Proj:
         root = tmp_path / "proj"
@@ -363,5 +364,8 @@ def test_credits_count_the_videos_of_footage_and_split_inserts_by_slug_or_by_a_r
                        {"kind": "grid", "clip": "nope"}, {"kind": "footage", "clip": "unregistered/x.mp4"}],
                 "insert": [{"shape": "split", "clip": {"src": "river", "in": 2.0}}, {"shape": "split", "clip": "sea"},
                            {"shape": "thought", "shot": "head"}],
+                "set": [{"kind": "photo_world", "image": "street"}, {"kind": "photo_world", "image": "plates/p.jpg"},
+                        {"kind": "photo_world", "image": "sky.png"}, {"kind": "night_sky", "image": "nope"},
+                        {"kind": "photo_world", "image": "street"}],
                 "credits": {"assets": ["font", "sea"], "lines": ["Song"]}}
-    assert project_credits(Proj, reg) == (["girl", "road", "sea", "river", "font"], ["Song"])
+    assert project_credits(Proj, reg) == (["girl", "road", "sea", "river", "street", "plate", "font"], ["Song"])

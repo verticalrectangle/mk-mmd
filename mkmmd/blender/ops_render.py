@@ -9,7 +9,8 @@ Text, Screen type) is kept off the frame: `screen/<frame>.png` (RGBA, written be
 to lay over the cut's frame and its effects. args["keep"] ({armature, materials}: `[post] keep`, mkmmd.core.keep) adds
 `keep/<frame>.png`, the mask of where those materials are seen (written before the frame; a frame on disk without one
 gets it). args["mk"] lists frames mk's own renderer draws (mkmmd.render): this job leaves them alone and draws only the
-layers of those in args["mk_layers"] (its share), the screen type first."""
+layers of those in args["mk_layers"] (its share), the screen type first. A frame or plate seen through a fisheye camera
+wants Cycles: under another engine the job fails before it draws anything (mkmmd.blender.fisheye.refuse)."""
 import os
 import time
 
@@ -17,6 +18,7 @@ import bpy
 
 from ..core import keep as KP
 from ..core import screentype as SRT
+from . import fisheye as FE
 from . import freeze as FRZ
 from . import scene as S
 from . import styles as ST
@@ -69,6 +71,8 @@ def render_frames(args):
     layers = TRN.Layers(sc, looks, args.get("aspect"), out_dir, args["demands"]) if looks and args.get("demands") else None
     freezes = FRZ.windows(sc)
     others, mine = {int(f) for f in args.get("mk") or ()}, {int(f) for f in args.get("mk_layers") or ()}
+    FE.refuse(sc, [int(f) for f in args["frames"] if int(f) not in others], args.get("aspect"),
+              args["demands"] if layers else None)
     t0, done, skipped, drawn, screens, masks = time.time(), 0, 0, 0, 0, 0
     kinds = {}
     keep = args.get("keep")

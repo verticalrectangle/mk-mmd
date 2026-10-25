@@ -160,10 +160,39 @@ def test_a_grid_line_s_light_stays_line_over_cell_however_far_it_is():
 
 
 @pytest.mark.parametrize("slots, frag", [({"kind": "lava"}, "kind is one of"), ({"fade": [100, 50]}, "near < far"),
-                                         ({"line": 3.0}, "thinner than its cell"), ({"rough": 2}, "rough is 0 .. 1")])
+                                         ({"line": 3.0}, "thinner than its cell"), ({"rough": 2}, "rough is 0 .. 1"),
+                                         ({"fade_to": "glass"}, "fade_to is 'dark' or 'clear'"),
+                                         ({"kind": "asphalt", "wet": 1.5}, "wet is 0 .. 1"),
+                                         ({"kind": "asphalt", "puddles": -0.1}, "puddles is 0 .. 1"),
+                                         ({"kind": "asphalt", "cracks": True}, "cracks is 0 .. 1"),
+                                         ({"kind": "asphalt", "puddle_size": 0}, "puddle_size must be a positive"),
+                                         ({"kind": "asphalt", "seed": 1.5}, "seed is a whole number"),
+                                         ({"kind": "asphalt", "dry": 1}, "unknown option 'dry'")])
 def test_a_bad_floor_says_what_to_change(slots, frag):
     with pytest.raises(SP.SpaceError, match=frag):
         SP.floor_options(slots)
+
+
+def test_each_floor_kind_has_its_own_roughness_and_colours_and_fades_into_dark_unless_told_clear():
+    o = SP.floor_options({"kind": "asphalt"})
+    assert (o["rough"], o["color"], o["dark"]) == (0.8, *SP.FLOOR_COLOURS["asphalt"]) and o["fade_to"] == "dark"
+    assert (o["wet"], o["puddles"], o["cracks"]) == (0.0, 0.0, 0.3)                      # dry, a few cracks
+    o = SP.floor_options({"kind": "chess", "fade_to": "clear"})
+    assert (o["rough"], o["color"], o["dark"], o["fade_to"]) == (0.12, "text", "#000000", "clear")
+    o = SP.floor_options({"kind": "asphalt", "color": "#808080", "dark": "base", "rough": 0.6, "puddles": 0.2})
+    assert (o["color"], o["dark"], o["rough"], o["puddles"]) == ("#808080", "base", 0.6, 0.2)
+    assert SP.FLOOR["color"] is None and SP.FLOOR["fade_to"] == "dark"                    # the defaults are not modified
+
+
+def test_the_noise_levels_put_the_asked_share_of_the_floor_above_them():
+    levels = [SP.noise_level(s) for s in np.linspace(0.0, 1.0, 41)]
+    assert all(a > b for a, b in zip(levels, levels[1:]))                 # more share, a lower level
+    assert SP.noise_level(0.0) == SP.NOISE_LEVELS[0] and SP.noise_level(1.0) == SP.NOISE_LEVELS[-1]
+    assert SP.noise_level(0.5) == pytest.approx(0.5, abs=1e-3)           # the noise is symmetric about 0.5
+    assert SP.noise_level(0.25) == pytest.approx(SP.NOISE_LEVELS[5]) and \
+        SP.noise_level(0.125) == pytest.approx(0.5 * (SP.NOISE_LEVELS[2] + SP.NOISE_LEVELS[3]))
+    a, b = SP.seed_offset(1), SP.seed_offset(2)
+    assert a == SP.seed_offset(1) and a != b and all(abs(v) <= 500.0 for v in a + b)
 
 
 # ---------------------------------------------------------------------------------------------------------------- starfield

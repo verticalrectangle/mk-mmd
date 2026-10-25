@@ -292,7 +292,7 @@ booms of a hits lane overtones a phone can play, and the report's `boom_phone_db
 
 ## 10. Credits
 
-`mk assets credits --out CREDITS.md` builds the credits from the cast, the footage and split-insert videos and `[credits] assets`; put what only the project knows (the song, a print made for it, the palette, tools) in
+`mk assets credits --out CREDITS.md` builds the credits from the cast, the footage and split-insert videos, the photos of `photo_world` sets and `[credits] assets`; put what only the project knows (the song, a print made for it, the palette, tools) in
 `[credits] lines`. It exits 1 while any asset is unreviewed or has no author or credit line.
 
 To publish the result, `mk export web` writes `out/web/`: the scene and its timeline as a static page, with

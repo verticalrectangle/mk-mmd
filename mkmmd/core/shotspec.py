@@ -1,20 +1,29 @@
 """The `[[shot]]` table, bpy-free (docs/design.md: Shots): the keys a shot takes, the per-output tables laid over it, and the
 checks the shots stage makes before it builds a camera. The stage reads the keys; this is the list of the ones it reads (and
-`mkmmd.core.shotstyle` the look's), so a key added to the stage is added here too."""
+`mkmmd.core.shotstyle` the look's, `mkmmd.core.fisheye` the fisheye's), so a key added to the stage is added here too."""
+from . import fisheye as FE
 from .screentype import deep_merge
 
 LOOK = ("style", "colors", "tones", "materials", "lines", "sketch", "hide", "keep", "accent", "tint", "knockout", "grow",
         "samples", "reflection")
 OWN = ("name", "from", "to", "plate", "aspect")                     # a shot's own: no per-output table changes them
-SHOT = OWN + ("mount", "at", "look", "lens", "roll", "lag", "shake", "keys", "frame", "shift", "dof", "follow") + LOOK
+SHOT = OWN + ("mount", "at", "look", "lens", "roll", "lag", "shake", "keys", "frame", "shift", "dof", "follow",
+              "fisheye") + LOOK
 ASPECT = tuple(k for k in SHOT if k not in OWN)
 FRAME = ("subject", "fill", "solve")
 SOLVES = ("lens", "distance", "dolly")
 DOF = ("focus", "fstop", "offset")
 FOLLOW = ("target", "axes", "lag", "from")
 KEYS = ("t", "at", "look", "lens", "roll", "shift")
-TABLES = ("frame", "dof", "follow", "colors", "tones", "lines", "sketch", "knockout",
+TABLES = ("frame", "dof", "follow", "fisheye", "colors", "tones", "lines", "sketch", "knockout",
           "reflection")                                    # laid over the shot's own key by key
+NOT_FISHEYE = {                                            # what a fisheye camera refuses, and why
+    "lens": "a fisheye's focal length comes from its `fov` and `fill`, for each output's picture",
+    "frame": "automatic framing solves a perspective lens or distance; a fisheye is sized by `fov` and `fill` and "
+             "placed with `at`",
+    "shift": "a fisheye's picture is centred on its axis: aim it with `look` and `roll`",
+    "style": "a look is drawn with Workbench and EEVEE, which draw no fisheye (Cycles alone does)",
+    "reflection": "the reflection is drawn with EEVEE, which draws no fisheye (Cycles alone does)"}
 
 
 class ShotError(ValueError):
@@ -31,7 +40,7 @@ def _keys(table, known, where):
 def _body(spec, known, where):
     """The keys of a shot, or of one output's table over it, and of the tables inside them."""
     _keys(spec, known, where)
-    for key, inner in (("frame", FRAME), ("dof", DOF), ("follow", FOLLOW)):
+    for key, inner in (("frame", FRAME), ("dof", DOF), ("follow", FOLLOW), ("fisheye", FE.KEYS)):
         if isinstance(spec.get(key), dict):
             _keys(spec[key], inner, f"{where} {key}")
     if isinstance(spec.get("keys"), list):
@@ -65,18 +74,41 @@ def follow_spec(sp, where):
             "from": None if t0 is None else float(t0)}
 
 
+def fisheye_spec(sp, where):
+    """The `fisheye` of a shot as one output sees it (`merged`), checked (mkmmd.core.fisheye.spec), with what a fisheye
+    refuses beside it (NOT_FISHEYE: `lens`, `frame`, `shift` and the looks; a key's `lens` and `shift` too): None when
+    it has none (or `fisheye = false`)."""
+    try:
+        fe = FE.spec(sp.get("fisheye"), where)
+    except FE.FisheyeError as e:
+        raise ShotError(str(e)) from None
+    if fe is None:
+        return None
+    for key, why in NOT_FISHEYE.items():
+        if sp.get(key) is not None and sp.get(key) is not False:
+            raise ShotError(f"{where}: `{key}` with `fisheye`: {why} (an output without the fisheye takes `{key}` in "
+                            f"its own [shot.aspect.<output>] table)")
+    for i, k in enumerate(sp.get("keys") or []):
+        for key in ("lens", "shift"):
+            if isinstance(k, dict) and key in k:
+                raise ShotError(f"{where} keys[{i}]: `{key}` with `fisheye`: {NOT_FISHEYE[key]}")
+    return fe
+
+
 def _settings(sp, where):
-    """What a shot as one output sees must make sense: its `follow` and its `frame` solve."""
+    """What a shot as one output sees must make sense: its `follow`, its `frame` solve and its `fisheye`."""
     follow_spec(sp, where)
     fr = sp.get("frame")
     if isinstance(fr, dict) and fr.get("solve", "lens") not in SOLVES:
         raise ShotError(f"{where} frame: solve = {fr['solve']!r} is none of {', '.join(SOLVES)}")
+    fisheye_spec(sp, where)
 
 
 def check(spec, outputs):
-    """ShotError for a shot with an unknown key (in the shot, `frame`, `dof`, `follow`, `keys[]` or an `aspect` table), a
-    plate with `from` but no `to` (or the reverse), an `aspect` table for an output the project does not have (`outputs`:
-    their names), or, as any output sees the shot, a `follow` that is wrong or rides with a `mount`, or an unknown solve."""
+    """ShotError for a shot with an unknown key (in the shot, `frame`, `dof`, `follow`, `fisheye`, `keys[]` or an `aspect`
+    table), a plate with `from` but no `to` (or the reverse), an `aspect` table for an output the project does not have
+    (`outputs`: their names), or, as any output sees the shot, a `follow` that is wrong or rides with a `mount`, an unknown
+    solve, or a `fisheye` that is wrong or comes with a key it refuses (NOT_FISHEYE)."""
     where = f"shot {spec.get('name')!r}"
     _body(spec, SHOT, where)
     if ("from" in spec) != ("to" in spec) and spec.get("plate"):

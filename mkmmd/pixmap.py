@@ -10,23 +10,29 @@ transparent ones too) and a `Map` holds the result with the geometry and the cam
 
   tri (h, w) int32        the triangle at each pixel (-1: nothing)
   bary (h, w, 2) float32  its barycentric weights of the triangle's 2nd and 3rd corners, exact on the pixel's ray
-  depth (h, w) float32    metres along the camera's view axis (inf: nothing)
+  depth (h, w) float32    metres along the camera's view axis (inf: nothing); through a fisheye, along the pixel's ray
   posed, rest (n, 3)      the vertices (float32)
   tris (t, 3)             the triangles, with tri_object, tri_material and tri_face (t,): indices into `objects` and
                           `materials` (names) and the polygon of the object's mesh each comes from
   camera                  JSON (`Camera`): matrix (4x4 world), type, lens (mm), sensor (w, h mm), fit, shift (x, y),
-                          ortho_scale, clip_start, size (w, h px)
+                          ortho_scale, clip_start, size (w, h px), and for a fisheye `fisheye` (the camera data's fields
+                          mkmmd.core.fisheye.from_blender reads)
 
 Pixels are (x, y) from the image's top left, x right, y down: pixel (x, y) covers [x, x + 1) x [y, y + 1) and is sampled
 at its centre. The camera follows Blender: the sensor fit (AUTO: the sensor's width on the image's longer side), the lens
-shift in units of the fitted side (the view window moves, so the picture moves the other way), perspective or
-orthographic. Ranges of pixels (`span`) are inclusive."""
+shift in units of the fitted side (the view window moves, so the picture moves the other way), perspective,
+orthographic or a fisheye (mkmmd.core.fisheye, whose rays bend: a triangle's pixels are found from its edges' images).
+Ranges of pixels (`span`) are inclusive."""
 import json
 from pathlib import Path
 
 import numpy as np
 
+from .core import fisheye as FE
+
 CHUNK = 1 << 20                      # candidate (triangle, pixel) pairs tested at once
+ARC = np.radians(3.0)                # a fisheye triangle's edges are sampled every ARC at most to find its pixels ...
+ARCS = 16                            # ... in this many pieces; one wider than ARC * ARCS takes the whole picture
 
 
 class MapError(ValueError):
@@ -43,6 +49,7 @@ class Camera:
         self.t = M[:3, 3]
         self.w, self.h = (int(v) for v in info["size"])
         self.ortho = info.get("type", "PERSP") == "ORTHO"
+        self.lens = FE.from_blender(info["fisheye"], (self.w, self.h)) if info.get("fisheye") else None
         fit = info.get("fit", "AUTO")
         sw, sh = info.get("sensor", (36.0, 24.0))
         if fit == "VERTICAL":
@@ -64,8 +71,10 @@ class Camera:
 
     def project(self, P):
         """(x, y, depth) of world points P (n, 3): pixel coordinates (from the top left) and metres along the view axis
-        (not positive: behind the camera)."""
+        (not positive: behind the camera); through a fisheye, metres from the camera (negative past its field)."""
         q = self.to_camera(P)
+        if self.lens is not None:
+            return self.lens.pixels(q)
         depth = -q[:, 2]
         if self.ortho:
             return self.cx + self.f * q[:, 0], self.cy - self.f * q[:, 1], depth
@@ -74,7 +83,11 @@ class Camera:
 
     def rays(self, px, py):
         """(origins, directions) (k, 3) in the camera's axes of the rays through the centres of pixels (px, py); a
-        perspective ray's direction has z = -1, so its parameter at a hit is the depth there."""
+        perspective ray's direction has z = -1, so its parameter at a hit is the depth there; a fisheye's is a unit
+        vector (zero where the picture is black), its parameter the distance."""
+        if self.lens is not None:
+            d = self.lens.rays(px, py)
+            return np.zeros_like(d), d
         a = (np.asarray(px, float) + 0.5 - self.cx) / self.f
         b = (self.cy - np.asarray(py, float) - 0.5) / self.f
         if self.ortho:
@@ -85,17 +98,61 @@ class Camera:
         d = np.stack([a, b, -np.ones_like(a)], 1)
         return np.zeros_like(d), d
 
-    def m_per_px(self, depth):
-        """Metres one pixel spans at `depth` (metres along the view axis)."""
+    def m_per_px(self, depth, px=None, py=None):
+        """Metres one pixel spans at `depth` (metres along the view axis; through a fisheye, along the ray of pixels
+        (px, py), where it depends on the pixel too: mkmmd.core.fisheye.Lens.m_per_px)."""
         depth = np.asarray(depth, float)
+        if self.lens is not None:
+            return self.lens.m_per_px(depth, px, py)
         return np.full(depth.shape, 1.0 / self.f) if self.ortho else depth / self.f
+
+
+def _fisheye_boxes(cam, Q):
+    """`_boxes` through a fisheye: the box of the images of a triangle's edges (a great circle's image bends, so each edge
+    is sampled every ARC at most and the box padded by how far an image can bow between samples); a triangle wider than
+    ARC * ARCS, or reaching round towards the ray straight behind the lens (where the picture folds), takes the whole
+    picture. (x0, y0, x1, y1) float, before rounding."""
+    L = cam.lens
+    n = len(Q)
+    dist = np.linalg.norm(Q, axis=2)                                        # (t, 3)
+    D = Q / np.maximum(dist, 1e-12)[..., None]
+    cos = np.minimum.reduce([(D[:, 0] * D[:, 1]).sum(1), (D[:, 1] * D[:, 2]).sum(1), (D[:, 2] * D[:, 0]).sum(1)])
+    wide = np.arccos(np.clip(cos, -1.0, 1.0))                               # the widest angle between two corners
+    theta = np.arctan2(np.hypot(Q[..., 0], Q[..., 1]), -Q[..., 2]).max(1)
+    whole = (wide > ARC * ARCS) | (theta + wide > np.pi - 2.0 * ARC)
+    pieces = np.where(wide > ARC, ARCS, 1)
+    x0, y0 = np.full(n, np.inf), np.full(n, np.inf)
+    x1, y1 = np.full(n, -np.inf), np.full(n, -np.inf)
+    for k in (1, ARCS):
+        sel = np.flatnonzero((pieces == k) & ~whole)
+        if not len(sel):
+            continue
+        t = np.linspace(0.0, 1.0, k + 1)[:-1]
+        A, B = Q[sel], Q[sel][:, [1, 2, 0]]
+        P = A[:, :, None, :] + t[None, None, :, None] * (B - A)[:, :, None, :]          # (s, 3 edges, k, 3)
+        x, y, _ = L.pixels(P.reshape(-1, 3))
+        x, y = x.reshape(len(sel), -1), y.reshape(len(sel), -1)
+        _, across = FE._swing(np.minimum(theta[sel] + wide[sel], np.pi - 1e-3), L.f, L.projection)
+        pad = 1.0 + L.k * across * (wide[sel] / k) ** 2 / 4.0               # twice the bow of an arc between samples
+        x0[sel], x1[sel] = x.min(1) - pad, x.max(1) + pad
+        y0[sel], y1[sel] = y.min(1) - pad, y.max(1) + pad
+    x0[whole], y0[whole], x1[whole], y1[whole] = 0.5, 0.5, cam.w - 0.5, cam.h - 0.5
+    return x0, y0, x1, y1
 
 
 def _boxes(cam, Q):
     """Per triangle (corners Q (t, 3, 3) in camera axes): the inclusive pixel box (x0, y0, x1, y1) whose centres it may
     cover, empty (x0 > x1) when it covers none or lies wholly behind the camera; a perspective triangle that reaches
-    behind the camera gets the whole picture (its corners have no place on it)."""
+    behind the camera gets the whole picture (its corners have no place on it); a fisheye's is `_fisheye_boxes`."""
     w, h = cam.w, cam.h
+    if cam.lens is not None:
+        sx0, sy0, sx1, sy1 = _fisheye_boxes(cam, Q)
+        x0, x1, y0, y1 = np.ceil(sx0 - 0.5), np.floor(sx1 - 0.5), np.ceil(sy0 - 0.5), np.floor(sy1 - 0.5)
+        gone = ~(np.linalg.norm(Q, axis=2) > cam.near).any(1)
+        x0[gone], y0[gone], x1[gone], y1[gone] = 0, 0, -1, -1
+        x0, y0 = np.clip(x0, 0, w), np.clip(y0, 0, h)
+        x1, y1 = np.clip(x1, -1, w - 1), np.clip(y1, -1, h - 1)
+        return x0.astype(np.int64), y0.astype(np.int64), x1.astype(np.int64), y1.astype(np.int64)
     depth = -Q[:, :, 2]
     if cam.ortho:
         sx, sy = cam.cx + cam.f * Q[:, :, 0], cam.cy - cam.f * Q[:, :, 1]
@@ -279,8 +336,10 @@ class Map:
         return P
 
     def cm_per_px(self, xs, ys):
-        d = self.depth[np.asarray(ys, int), np.asarray(xs, int)].astype(float)
-        return np.where(np.isfinite(d), self.cam.m_per_px(np.where(np.isfinite(d), d, 1.0)) * 100.0, np.nan)
+        xs, ys = np.asarray(xs, int), np.asarray(ys, int)
+        d = self.depth[ys, xs].astype(float)
+        ok = np.isfinite(d)
+        return np.where(ok, self.cam.m_per_px(np.where(ok, d, 1.0), xs, ys) * 100.0, np.nan)
 
     def at(self, x, y):
         """What the pixel (x, y) shows: material, object, polygon, the point in the world and at rest, depth and the

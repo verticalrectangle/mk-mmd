@@ -1,7 +1,8 @@
 """look: render quick views of a scene (never saved): through the scene camera (the cut, timeline markers
 respected), through a named camera, or from preset directions around a target point (a bone, an object, any
 expression), relative to a model's facing; such an orbit camera starts where its view begins on each frame and size,
-as a shot camera does (mkmmd.blender.depth).
+as a shot camera does (mkmmd.blender.depth). A view through a fisheye camera is drawn by Cycles whatever the engine
+(EEVEE and Workbench draw a fisheye as a perspective camera), with the same samples; its image reports `engine`.
 
 args: frames; views [{name, kind: shot|camera|orbit, camera, target (expr), facing (armature or null), yaw, elev,
 dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out (folder); hide [object names];
@@ -22,6 +23,7 @@ from mathutils import Vector
 
 from ..core import screentype as SRT
 from . import depth as DP
+from . import fisheye as FE
 from . import freeze as FRZ
 from . import scene as S
 from . import styles as ST
@@ -34,13 +36,17 @@ SURFACES = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
 
 
 def _camera_info(sc):
-    """The active camera as mkmmd.pixmap.Camera reads it, at the render's size."""
+    """The active camera as mkmmd.pixmap.Camera reads it, at the render's size (a fisheye's lens in `fisheye`: the camera
+    data's fields mkmmd.core.fisheye.from_blender reads)."""
     cam, r = sc.camera, sc.render
     cd, pct = cam.data, r.resolution_percentage / 100.0
-    return {"name": cam.name, "matrix": [list(row) for row in cam.matrix_world], "type": cd.type, "lens": cd.lens,
+    info = {"name": cam.name, "matrix": [list(row) for row in cam.matrix_world], "type": cd.type, "lens": cd.lens,
             "sensor": [cd.sensor_width, cd.sensor_height], "fit": cd.sensor_fit, "shift": [cd.shift_x, cd.shift_y],
             "ortho_scale": cd.ortho_scale, "clip_start": cd.clip_start,
             "size": [int(r.resolution_x * pct), int(r.resolution_y * pct)]}
+    if FE.is_fisheye(cam):
+        info["fisheye"] = FE.fields(cd)
+    return info
 
 
 def _geometry(sc, path):
@@ -120,11 +126,10 @@ def look(args):
     r.engine = ENGINES[engine]
     if engine == "eevee":
         sc.eevee.taa_render_samples = int(args.get("samples", 16))
-    elif engine == "cycles":
-        sc.cycles.samples = int(args.get("samples", 32))
     elif engine == "workbench":
         sc.display.shading.light = "STUDIO"
         sc.display.shading.color_type = "MATERIAL"
+    sc.cycles.samples = int(args.get("samples", 32 if engine == "cycles" else 16))   # also a fisheye's, whatever the engine
     r.use_motion_blur = False
     r.resolution_percentage = 100
     r.image_settings.file_format = "JPEG"
@@ -199,17 +204,21 @@ def look(args):
                 kind = looks.prepare(int(f), size["name"]) if looks is not None and v["kind"] == "shot" else None
                 if looks is not None and kind is None:
                     looks.leave()
+                drew = "cycles" if FE.is_fisheye(sc.camera) else engine
                 if kind:
                     layer = os.path.join(args["out"], size["name"], SRT.layer_rel(int(f)))
                     if os.path.exists(layer):
                         os.unlink(layer)                  # nothing stale: a frame with no screen type has no layer
-                    looks.render(path, layer=layer)
+                    looks.render(path, layer=layer)       # a fisheye's frame: Cycles (mkmmd.blender.styles)
                 else:
                     layer = None
-                    bpy.ops.render.render(write_still=True)
+                    with FE.cycles(sc):
+                        bpy.ops.render.render(write_still=True)
                 item = {"view": v["name"], "size": size["name"], "frame": int(f), "path": path,
                         "camera": sc.camera.name if sc.camera else None,
                         "screen": layer if layer and os.path.exists(layer) else None}
+                if drew != engine:
+                    item["engine"] = drew                 # a fisheye: only Cycles draws it
                 if args.get("map"):                      # a frozen cut frame may hold another pose than the set's
                     key = ("cut" if v["kind"] == "shot" else "set", int(f))
                     if key not in geos:

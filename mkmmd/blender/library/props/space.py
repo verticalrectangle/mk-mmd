@@ -36,8 +36,8 @@
 
     [[prop]]
     name = "ground"
-    card = "library:floor"                    # to the horizon: mirror | chess | grid
-    slots = { kind = "chess", cell = 2.0, color = "text", fade = [40, 220] }
+    card = "library:floor"                    # to the horizon: mirror | chess | grid | asphalt
+    slots = { kind = "chess", cell = 2.0, color = "text", fade = [40, 220] }   # fade_to = "clear": the world beyond
 
     [[prop]]
     name = "warp"
@@ -325,23 +325,106 @@ def stars(name, coll, root, slots=None):
 
 
 # ================================================================================================================ floor
+def _asphalt(nb, o, light, dark, x, y, d):
+    """(albedo, roughness, IOR, normal) sockets of the asphalt (core.space GRAIN, CRACK, noise_level): angular stones of
+    the aggregate, coarse and fine, set in the binder, toned between `dark` (the binder) and `color` (the lightest stone),
+    mottled by wear and patches; faint tar-sealed cracks round irregular cells (`cracks`, the share shown); then wet
+    asphalt (`wet`) and puddles of standing water (`puddles`, the share under water, with a damp rim). The stones fade to
+    their mean tone, and their bump away, once a pixel is wider than a stone (no shimmer far off)."""
+    ox, oy = SP.seed_offset(o["seed"])
+
+    def at(per_m, k):                       # the floor point in a pattern's own units (per_m a metre), seeded, pattern k
+        return nb.comb(nb.math("MULTIPLY_ADD", x, per_m, ox + 37.1 * k),
+                       nb.math("MULTIPLY_ADD", y, per_m, oy - 91.7 * k), 0.0)
+
+    def noise(per_m, k, which="Fac", detail=3.0):
+        return nb.noise(at(per_m, k), scale=1.0, detail=detail, rough=0.55, dims="2D", which=which)
+
+    def tone(t):                            # a tone between dark (0) and color (1), linear RGBA
+        return tuple(dark[i] + (light[i] - dark[i]) * t for i in range(3)) + (1.0,)
+
+    def stones(size, k, inset):
+        """(mask, r): stones `size` m apart, each its Voronoi cell shrunk by a random inset (cell units, [lo, hi]),
+        and a random 0..1 per stone."""
+        p = at(1.0 / size, k)
+        cell = nb.node("ShaderNodeTexVoronoi", {0: p, 2: 1.0, 8: 1.0}, feature="F1", voronoi_dimensions="2D")
+        edge = nb.node("ShaderNodeTexVoronoi", {0: p, 2: 1.0, 8: 1.0}, feature="DISTANCE_TO_EDGE",
+                       voronoi_dimensions="2D")
+        r, g, _ = nb.sep(cell.outputs["Color"])
+        gap = nb.math("MULTIPLY_ADD", g, inset[1] - inset[0], inset[0])
+        return nb.smooth(-0.02, 0.1, nb.math("SUBTRACT", edge.outputs["Distance"], gap)), r
+
+    px = nb.math("MULTIPLY", d, SP.PIXEL)                                # a pixel's width on the floor, m
+
+    def seen(size):                         # 1 while a pixel is narrower than `size`, 0 once it is wider than 2 x
+        return nb.math("SUBTRACT", 1.0, nb.smooth(0.5 * size, 2.0 * size, px))
+    coarse, rc = stones(SP.GRAIN, 0, (0.06, 0.26))
+    fine, rf = stones(SP.GRAIN / 3.0, 1, (0.10, 0.35))
+    near = seen(SP.GRAIN)
+    grain = nb.mixc(fine, tone(0.0), nb.mixc(rf, tone(0.15), tone(0.6)))
+    grain = nb.mixc(seen(SP.GRAIN / 3.0), tone(SP.FINE_MEAN), grain)
+    grain = nb.mixc(coarse, grain, nb.mixc(nb.math("POWER", rc, 1.6), tone(0.2), tone(1.0)))
+    albedo = nb.mixc(near, tone(SP.GRAIN_MEAN), grain)
+    wear = nb.math("MULTIPLY", nb.math("MULTIPLY_ADD", noise(1.0 / 0.6, 2), 1.5, 0.25),
+                   nb.math("MULTIPLY_ADD", noise(1.0 / 6.0, 3), 1.2, 0.4))
+    albedo = nb.vmath("SCALE", albedo, scale=wear)
+    polish = nb.math("MULTIPLY_ADD", nb.math("MULTIPLY", coarse, near), -0.3, 1.0)    # the stones' tops worn smooth
+    rough = nb.math("MULTIPLY", float(o["rough"]), polish)
+    height = nb.math("ADD", nb.math("MULTIPLY", coarse, nb.math("MULTIPLY_ADD", rc, 0.3, 0.7)),
+                     nb.math("MULTIPLY", fine, 0.4))                    # the stones stand out of the binder
+    if o["cracks"] > 0:
+        warp = nb.vmath("SCALE", nb.vmath("SUBTRACT", noise(1.0 / 0.5, 4, "Color", 2.0), (0.5, 0.5, 0.5)),
+                        scale=0.24 / SP.CRACK)
+        cells = nb.node("ShaderNodeTexVoronoi", {0: nb.vmath("ADD", at(1.0 / SP.CRACK, 5), warp), 2: 1.0, 8: 1.0},
+                        feature="DISTANCE_TO_EDGE", voronoi_dimensions="2D")
+        edge = nb.math("MULTIPLY", cells.outputs["Distance"], SP.CRACK)                     # metres to the cell's edge
+        line = nb.math("SUBTRACT", 1.0, nb.smooth(0.002, 0.008, edge))
+        lv = SP.noise_level(o["cracks"])
+        crack = nb.math("MULTIPLY", nb.math("MULTIPLY", line, nb.smooth(lv, lv + 0.02, noise(1.0 / 2.5, 6))),
+                        seen(0.01))
+        albedo = nb.mixc(crack, albedo, tuple(0.7 * v for v in dark) + (1.0,))      # tar, darker than the binder
+        rough = nb.mixf(crack, rough, min(float(o["rough"]), 0.45))
+        height = nb.math("SUBTRACT", height, nb.math("MULTIPLY", crack, 1.2))
+    wet, core = float(o["wet"]), 0.0
+    if o["puddles"] > 0:
+        lv = SP.noise_level(o["puddles"])
+        water = noise(1.0 / float(o["puddle_size"]), 7)
+        core = nb.smooth(lv, lv + 0.005, water)
+        wet = nb.math("MAXIMUM", nb.smooth(lv - 0.03, lv, water), wet)          # a damp rim round each puddle
+    if o["puddles"] > 0 or o["wet"] > 0:
+        albedo = nb.vmath("SCALE", albedo, scale=nb.math("MULTIPLY", nb.math("MULTIPLY_ADD", wet, -0.45, 1.0),
+                                                         nb.math("MULTIPLY_ADD", core, -0.3, 1.0)))
+        rough = nb.mixf(core, nb.mixf(wet, rough, nb.math("MINIMUM", rough, SP.WET_ROUGH)), SP.PUDDLE_ROUGH)
+    bump = nb.node("ShaderNodeBump", {"Strength": nb.math("MULTIPLY", nb.math("MULTIPLY", near, 0.9),
+                                                         nb.math("MULTIPLY", nb.math("SUBTRACT", 1.0, core),
+                                                                 nb.math("MULTIPLY_ADD", wet, -0.3, 1.0))),
+                                      "Distance": 0.002, "Height": height})
+    return albedo, rough, nb.mixf(core, 1.5, 1.33), bump.outputs["Normal"]
+
+
 def _floor_material(name, o, slots):
-    """The floor's shader (core.space.checker / grid_lines in nodes): the pattern from the object's x, y, softened by
-    the camera distance, faded into `dark` between the `fade` distances; a mirror is the dark glossy surface alone."""
+    """The floor's shader (core.space.checker / grid_lines in nodes, the asphalt of `_asphalt`): the pattern from the
+    object's x, y, softened by the camera distance, faded into `dark` between the `fade` distances, or into nothing with
+    `fade_to = "clear"` (a transparent mix, dithered in EEVEE, so the world shows beyond); a mirror is the dark glossy
+    surface alone."""
     m, nb = NK.new_material(name)
     light, dark = _colour(o["color"], slots), _colour(o["dark"], slots)
     x, y, _ = nb.sep(nb.texcoord("Object"))
     d = nb.cam_distance()
     soft = nb.math("MAXIMUM", 0.004, nb.math("MULTIPLY", d, 0.0025))
     far = nb.smooth(float(o["fade"][0]), float(o["fade"][1]), d)
+    clear = o["fade_to"] == "clear"
+
+    def faded(col):
+        return col if clear else nb.mixc(far, col, dark + (1.0,))
     c = float(o["cell"])
-    base, glow = dark + (1.0,), None
+    base, glow, rough, ior, normal, spec = dark + (1.0,), None, float(o["rough"]), None, None, 1.0
     if o["kind"] == "chess":
         s = nb.math("MULTIPLY", nb.math("SINE", nb.math("MULTIPLY", x, math.pi / c)),
                     nb.math("SINE", nb.math("MULTIPLY", y, math.pi / c)))
         k = nb.math("DIVIDE", c / math.pi, soft)
         mask = nb.math("ADD", 0.5, nb.math("MULTIPLY", 0.5, nb.math("TANH", nb.math("MULTIPLY", s, k))))
-        base = nb.mixc(far, nb.mixc(mask, dark + (1.0,), light + (1.0,)), dark + (1.0,))
+        base = faded(nb.mixc(mask, dark + (1.0,), light + (1.0,)))
     elif o["kind"] == "grid":                  # core.space.grid_lines: each line box-filtered over `soft`, a trapezoid
         half = float(o["line"]) / 2.0
         cover = []
@@ -353,12 +436,27 @@ def _floor_material(name, o, slots):
             cover.append(nb.math("DIVIDE", nb.math("MAXIMUM", 0.0, nb.math("SUBTRACT", hi, lo)),
                                  nb.math("MULTIPLY", soft, 2.0)))
         lines = nb.math("SUBTRACT", nb.math("ADD", cover[0], cover[1]), nb.math("MULTIPLY", cover[0], cover[1]))
-        glow = nb.math("MULTIPLY", nb.math("MULTIPLY", lines, float(o["glow"])), nb.math("SUBTRACT", 1.0, far))
-    sh = nb.principled(base, rough=float(o["rough"]), metal=float(o["metal"]), spec=1.0)
+        glow = nb.math("MULTIPLY", lines, float(o["glow"]))
+        if not clear:
+            glow = nb.math("MULTIPLY", glow, nb.math("SUBTRACT", 1.0, far))
+    elif o["kind"] == "asphalt":
+        base, rough, ior, normal = _asphalt(nb, o, light, dark, x, y, d)
+        base, spec = faded(base), 0.5
+    sh = nb.principled(base, rough=rough, metal=float(o["metal"]), spec=spec, normal=normal)
+    if ior is not None:
+        nb.set(sh.inputs["IOR"], ior)
     if glow is not None:
         sh = nb.add_shader(sh, nb.emission(light + (1.0,), glow))
+    if clear:
+        sh = nb.mix_shader(far, sh, nb.transparent())
+        m.surface_render_method = "DITHERED"
     nb.output(sh)
-    m.diffuse_color = (*light, 1.0) if o["kind"] != "mirror" else (*dark, 1.0)
+    if o["kind"] == "mirror":
+        m.diffuse_color = (*dark, 1.0)
+    elif o["kind"] == "asphalt":                # the grain's mean tone
+        m.diffuse_color = (*(dk + SP.GRAIN_MEAN * (lt - dk) for dk, lt in zip(dark, light)), 1.0)
+    else:
+        m.diffuse_color = (*light, 1.0)
     return m
 
 

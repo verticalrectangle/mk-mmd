@@ -9,22 +9,23 @@ An item is one of the plan's demands: a `plate` (a shot seen through its own cam
 a `matte` (a silhouette shot's figure alone as coverage, and its frame without the figure), a `bare` frame (a glitch's shot
 with the glitch's objects hidden: what is left when its figure has gone), a `figure` (a collage's objects alone as
 coverage), a `point` (a world point, an expression of the `mk q` language, seen through a shot's camera: its place in the
-frame, `p`, and `m`, how many frame heights a metre spans at its depth, which turns a size in metres into pixels). Each is
+frame, `p`, and `m`, how many frame heights a metre spans at its depth, which turns a size in metres into pixels; through a
+fisheye, mkmmd.blender.fisheye: `depth` is then its distance and `m` the scale of a patch facing the camera). Each is
 claimed with an empty file before it is drawn, so a stopped render resumes and several Blender processes share the frames;
 the file that marks an item finished is written last. Cameras: the shot table's camera of the shot for the output aspect,
-which `mk build` keyed over the frames the plan needs (`keyed` in the table)."""
+which `mk build` keyed over the frames the plan needs (`keyed` in the table). A plate seen through a fisheye is drawn by
+Cycles (`mk render` has refused any other engine for it by then; `mk look` switches)."""
 import contextlib
 import json
-import math
 import os
 
 import bpy
 import numpy as np
-from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
 from ..core import shotstyle as SS
 from ..core import transition as TR
+from . import fisheye as FE
 from . import styles as ST
 from .ops_core import _namespace
 
@@ -118,7 +119,8 @@ class Layers:
             self.looks.render(paths[0])
         else:
             sc.render.filepath = paths[0]
-            bpy.ops.render.render(write_still=True)
+            with FE.cycles(sc):
+                bpy.ops.render.render(write_still=True)
 
     def _matte(self, item, paths):
         lk = self.looks
@@ -161,10 +163,7 @@ class Layers:
             co = Vector(eval(compile(item["expr"], "<mk transition>", "eval"), ns))     # noqa: S307 - the project's own expression
         except Exception as e:                                               # a bad expression is the project's to fix
             raise RuntimeError(f"point {item['key']}: {item['expr']!r} failed at frame {self.frame}: {e}") from None
-        p = world_to_camera_view(sc, sc.camera, co)
-        up = sc.camera.matrix_world.to_3x3() @ Vector((0.0, 1.0, 0.0))
-        q = world_to_camera_view(sc, sc.camera, co + up)                    # one metre up in the camera's plane
-        r = sc.render
-        m = math.hypot((q.x - p.x) * r.resolution_x / r.resolution_y, q.y - p.y)
+        p = FE.view(sc, sc.camera, co)
+        m = FE.scale(sc, sc.camera, co)
         with open(paths[0], "w", encoding="utf-8") as fh:
             json.dump({"p": [round(p.x, 6), round(1.0 - p.y, 6)], "depth": round(p.z, 4), "m": round(m, 6)}, fh)

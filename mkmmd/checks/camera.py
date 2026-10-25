@@ -2,22 +2,47 @@
 import numpy as np
 
 from .. import bridge
+from ..core import fisheye as FE
 from . import CheckError, Metric, is_expr, metric
+
+
+def fisheye_lens(cam, k, size):
+    """The fisheye lens (mkmmd.core.fisheye.Lens) of camera sample k rendered at size (w, h), None for a camera that is
+    not panoramic; a CheckError for a panoramic camera mk does not project."""
+    fish = cam.get("fisheye")
+    if fish is None or fish[k][0] == 0:
+        return None
+    name = cam["names"][k]
+    if fish[k][0] < 0:
+        why = cam.get("fisheye_errors", {}).get(name) or "a panoramic camera mk does not project"
+        raise CheckError(f"camera {name!r}: {why}")
+    projection = {c: p for p, c in FE.CODES.items()}[int(round(fish[k][0]))]
+    sw, sh = cam["sensor"][k]
+    return FE.Lens(projection, fish[k][1], fish[k][2], size, sensor=sw, fit=cam["sensor_fit"].get(name, "AUTO"),
+                   shift=tuple(cam["shift"][k]), sensor_h=sh)
 
 
 def project(points, cam, k, size):
     """Normalised image coordinates (n, 2) (0..1, origin bottom-left) and depth (n,) of world points for camera
     sample k rendered at size (w, h). Follows Blender: sensor fit AUTO puts the sensor width on the larger image
     side; the lens shift (fractions of the larger side) moves the VIEW WINDOW, so the picture moves the other way: a
-    positive shift_x moves it left, a positive shift_y down (probed against world_to_camera_view in Blender 4.2.3)."""
+    positive shift_x moves it left, a positive shift_y down (probed against world_to_camera_view in Blender 4.2.3).
+    Through a fisheye (`fisheye_lens`): the place in its picture, and as depth the distance from the camera, negative
+    where the lens images nothing of the point."""
     w, h = size
     M = cam["world"][k]
     R, t = M[:3, :3] / np.linalg.norm(M[:3, :3], axis=0, keepdims=True), M[:3, 3]
     pc = (points - t) @ R                                   # camera space: x right, y up, -z forward
+    lens = fisheye_lens(cam, k, size)
+    if lens is not None:
+        return lens.project(pc)
     depth = -pc[:, 2]
     fit = cam["sensor_fit"].get(cam["names"][k], "AUTO")
     sw, sh = cam["sensor"][k]
     lens = cam["lens"][k]
+    if lens <= 0:
+        raise CheckError(f"camera {cam['names'][k]!r} is neither a perspective camera nor a fisheye: no place in its "
+                         f"picture for a point")
     if fit == "VERTICAL":
         fpix = lens / sh * h
     elif fit == "HORIZONTAL":
@@ -39,9 +64,10 @@ def _point_list(args, default):
 @metric
 class Framing(Metric):
     name = "framing"
-    doc = ("Subject inside the frame for every output aspect: each point projected through the active camera "
-           "(timeline markers respected) at each output's size. Value: the smallest margin to the safe area over all "
-           "frames, points and outputs, as a fraction of the frame (negative = outside the safe area).")
+    doc = ("Subject inside the frame for every output aspect: each point projected through each output's own camera of "
+           "the shot in the cut (timeline markers respected) at that output's size. Value: the smallest margin to the "
+           "safe area over all frames, points and outputs, as a fraction of the frame (negative = outside the safe "
+           "area). Through a fisheye whose image circle shows inside the frame, the circle's edge bounds it too.")
     args = {"points": "bones (head position) or expressions (default head and neck)",
             "cast": "cast member whose bones are meant", "outputs": "output names (default: all in mk.toml)",
             "safe": "safe-area margin as a fraction of each side (default 0.05)"}
@@ -80,16 +106,18 @@ class Framing(Metric):
             cols.append(v)
             labels += [p] * v.shape[1]
         P = np.concatenate(cols, 1)
-        cam = data.camera(frames)
         worst, detail, at = np.inf, {}, None
         for name, size in sizes.items():
+            cam = data.camera(frames, output=name)          # that output's own camera of the shot in the cut
             margins = np.zeros(len(frames))
             where = []
             for k in range(len(frames)):
                 if cam["names"][k] is None:
                     raise CheckError("framing: the scene has no active camera")
                 uv, depth = project(P[k], cam, k, size)
-                m = np.minimum.reduce([uv[:, 0], 1 - uv[:, 0], uv[:, 1], 1 - uv[:, 1]]) - safe
+                lens = fisheye_lens(cam, k, size)
+                m = (np.minimum.reduce([uv[:, 0], 1 - uv[:, 0], uv[:, 1], 1 - uv[:, 1]]) if lens is None
+                     else lens.margin(uv)) - safe
                 m = np.where(depth > 0, m, -1.0)
                 j = int(np.argmin(m))
                 margins[k] = m[j]

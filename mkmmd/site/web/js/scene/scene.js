@@ -17,12 +17,13 @@ const NEAR = 0.05, FAR = 400;                // a bake older than its cameras' c
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 
 // The cut's shot at clip second `t` for an output, and its camera on bake frame `k` as a view-projection with a key
-// light from over the camera's shoulder: {shot, VP, key}, or null where the cut has no shot.
+// light from over the camera's shoulder: {shot, VP, key}, or null where the cut has no shot or its camera is a fisheye
+// (Cycles alone draws one; the page has no fisheye projection, so it shows the free view and says so).
 export function shotView(bake, blob, output, t, k) {
   const cut = bake.cut[output] || [];
   const shot = cut.find((c) => t >= c.from && t < c.to) || (cut.length && t >= cut[cut.length - 1].to ? cut[cut.length - 1] : cut[0]);
   const c = shot && bake.cameras.find((x) => x.name === shot.camera);
-  if (!c) return null;
+  if (!c || c.fisheye) return null;
   const out = bake.outputs.find((o) => o.name === output) || bake.outputs[0], o = c.offset + 15 * k;
   const ci = c.clip_at, [near, far] = ci === undefined ? [NEAR, FAR] : [blob[ci + 2 * k], blob[ci + 2 * k + 1]];
   const VP = mul(cameraProjection(blob[o + 12], c, blob[o + 13], blob[o + 14], out.size[0], out.size[1], near, far),
@@ -118,7 +119,9 @@ export function sceneView(root, { at = null, view = "3d", lazy = false, draftLab
       S.cam === "free" ? [S.orbit.yaw, S.orbit.pitch, S.orbit.dist, ...S.orbit.target].join() : ""].join("|");
     if (key === S.last) return;
     S.last = key;
-    label.textContent = `${shot ? shot.shot : "–"} · f ${b.frame0 + k}${held ? ` (held on ${held[0]})` : ""}`;
+    const fish = S.cam === "shot" && shot && (b.cameras.find((x) => x.name === shot.camera) || {}).fisheye;
+    label.textContent = `${shot ? shot.shot : "–"} · f ${b.frame0 + k}${held ? ` (held on ${held[0]})` : ""}` +
+      (fish ? " · a fisheye: Cycles alone draws it (Draft), this is the free view" : "");
     if (S.view === "draft") {
       const p = S.players.get(S.output), vf = p ? p.frame(k) : null;
       if (vf) flat.getContext("2d").drawImage(vf, 0, 0, flat.width, flat.height);

@@ -16,10 +16,13 @@ args:
 npz keys: frames; per armature index a: bone_world_a (F,n,4,4) posed world matrices, bone_rest_a (n,4,4) rest
 matrices (armature space), arm_world_a (F,4,4); obj_world (F,m,4,4); obj_bbox (F,m,2,3) the world bounds (min, max) of
 each object's evaluated geometry (zeros when it has none on that frame), `objects` holding names or fnmatch patterns
-(`words_*`, expanded to the matching names in name order); expr_i (F,...); cam_world (F,4,4), cam_lens,
-cam_sensor (F,2), cam_shift (F,2), cam_clip (F,2); per mesh request k: mesh_v_k (n,3) vertices, mesh_t_k (m,3) triangle
-corners (indices into mesh_v_k), mesh_o_k (m,) index of the owning object in the reply's meshes[k].objects. The JSON
-reply names everything."""
+(`words_*`, expanded to the matching names in name order); expr_i (F,...); the active camera: cam_world (F,4,4),
+cam_lens, cam_sensor (F,2), cam_shift (F,2), cam_clip (F,2), cam_fisheye (F,3): (projection code, lens mm, field radians)
+of a fisheye (mkmmd.core.fisheye.CODES; 0: not a fisheye, -1: a panoramic camera mk does not project, its reason in the
+reply's camera `fisheye_errors`); each output's own camera of the shot in the cut (the project's outputs; the reply's
+camera `outputs` and per frame `output_names`): the same as cam_out_world (F,O,4,4) ... cam_out_fisheye (F,O,3); per mesh
+request k: mesh_v_k (n,3) vertices, mesh_t_k (m,3) triangle corners (indices into mesh_v_k), mesh_o_k (m,) index of the
+owning object in the reply's meshes[k].objects. The JSON reply names everything."""
 import json
 from contextlib import contextmanager
 from fnmatch import fnmatchcase
@@ -30,6 +33,8 @@ from mathutils import Vector
 
 from ..core import bonemap
 from ..core import families as FAM
+from ..core import fisheye as FE
+from . import fisheye as FEB
 from . import scene as S
 from .ops_core import _namespace
 from .runtime import CTX, op
@@ -37,6 +42,29 @@ from .runtime import CTX, op
 
 def _mat(m):
     return np.array([list(r) for r in m], float)
+
+
+CAMERA = {"world": (4, 4), "lens": (), "sensor": (2,), "shift": (2,), "clip": (2,), "fisheye": (3,)}   # sampled per camera
+
+
+def _camera_into(out, prefix, at, ob, dg, errors):
+    """Write camera object `ob` as `dg` evaluates it into the arrays <prefix>_world ... <prefix>_fisheye (CAMERA) at
+    index `at`; a panoramic camera mk does not project gets fisheye code -1 and its reason in `errors`."""
+    ce = ob.evaluated_get(dg)
+    d = ce.data
+    out[prefix + "_world"][at] = _mat(ce.matrix_world)
+    out[prefix + "_lens"][at] = d.lens if d.type == "PERSP" else 0.0
+    out[prefix + "_sensor"][at] = (d.sensor_width, d.sensor_height)
+    out[prefix + "_shift"][at] = (d.shift_x, d.shift_y)
+    out[prefix + "_clip"][at] = (d.clip_start, d.clip_end)
+    try:
+        lens = FE.params(FEB.fields(d))
+    except FE.FisheyeError as e:
+        errors[ob.name] = str(e)
+        out[prefix + "_fisheye"][at] = (-1.0, 0.0, 0.0)
+        return
+    if lens is not None:
+        out[prefix + "_fisheye"][at] = (FE.CODES[lens[0]], lens[1], lens[2])
 
 
 def _arm(name):
@@ -329,12 +357,16 @@ def sample(args):
     out["obj_bbox"] = np.zeros((F, len(objects), 2, 3))      # world bounds of the evaluated geometry (0, 0: none)
     expr_vals = [[] for _ in exprs]
     want_cam = bool(args.get("camera"))
-    cam_names = []
-    if want_cam:
-        for key in ("cam_world", "cam_lens", "cam_sensor", "cam_shift", "cam_clip"):
-            out[key] = np.zeros({"cam_world": (F, 4, 4), "cam_lens": (F,), "cam_sensor": (F, 2), "cam_shift": (F, 2),
-                                 "cam_clip": (F, 2)}[key])
+    cam_names, out_names = [], []
     proj = CTX["project"] or {}
+    outs = [o["name"] for o in proj.get("outputs") or []]
+    if want_cam:
+        for k, shape in CAMERA.items():
+            out[f"cam_{k}"] = np.zeros((F,) + shape)
+            if outs:
+                out[f"cam_out_{k}"] = np.zeros((F, len(outs)) + shape)
+    by_cam = {c: e["cameras"] for e in S.shot_table(sc) for c in e["cameras"].values()} if want_cam else {}
+    fish_errors = {}
     for i, f in enumerate(frames):
         sc.frame_set(f)
         dg = bpy.context.evaluated_depsgraph_get()
@@ -361,13 +393,15 @@ def sample(args):
             cam = sc.camera
             cam_names.append(cam.name if cam else None)
             if cam is not None:
-                ce = cam.evaluated_get(dg)
-                d = ce.data
-                out["cam_world"][i] = _mat(ce.matrix_world)
-                out["cam_lens"][i] = d.lens if d.type == "PERSP" else 0.0
-                out["cam_sensor"][i] = (d.sensor_width, d.sensor_height)
-                out["cam_shift"][i] = (d.shift_x, d.shift_y)
-                out["cam_clip"][i] = (d.clip_start, d.clip_end)
+                _camera_into(out, "cam", i, cam, dg, fish_errors)
+            row = []
+            for j, o in enumerate(outs):                # the output's own camera of the shot in the cut on this frame
+                oc = bpy.data.objects.get((by_cam.get(cam.name) or {}).get(o) or "") if cam is not None else None
+                oc = oc or cam
+                row.append(oc.name if oc else None)
+                if oc is not None:
+                    _camera_into(out, "cam_out", (i, j), oc, dg, fish_errors)
+            out_names.append(row)
     for e, vals in enumerate(expr_vals):
         out[f"expr_{e}"] = np.array(vals, float)
     np.savez(args["out"], **out)
@@ -380,10 +414,11 @@ def sample(args):
     reply = {"out": args["out"], "frames": len(frames), "bones": meta_b, "objects": objects, "exprs": exprs,
              "colliders": resolved_specs, "meshes": meshes, "props": uses}
     if want_cam:
-        cams = {n for n in cam_names if n}
+        cams = {n for n in cam_names if n} | {n for row in out_names for n in row if n}
         reply["camera"] = {"names": cam_names, "sensor_fit": {n: bpy.data.objects[n].data.sensor_fit for n in cams},
                            "resolution": [sc.render.resolution_x, sc.render.resolution_y],
-                           "pixel_aspect": [sc.render.pixel_aspect_x, sc.render.pixel_aspect_y]}
+                           "pixel_aspect": [sc.render.pixel_aspect_x, sc.render.pixel_aspect_y],
+                           "fisheye_errors": fish_errors, "outputs": outs, "output_names": out_names}
     return reply
 
 

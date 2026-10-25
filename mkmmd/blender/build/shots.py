@@ -19,7 +19,12 @@
                                  must be an exact crop of a 9:16 master keeps the master's camera with lens and dof
                                  fstop x 1920 / 1080 and shift = [0, (420 - top) / 1080] for a crop `top` px from the
                                  master's top (mkmmd.core.shotstyle.crop_camera)
-  [shot.aspect.<output>]         per-output overrides of at / look / lens / roll / frame / follow / shift / style / reflection
+  [shot.aspect.<output>]         per-output overrides of at / look / lens / roll / frame / follow / shift / fisheye / style
+                                 / reflection
+  fisheye = {fov = 180, projection = "equisolid" | "equidistant", fill = "frame" | "circle"}   a real fisheye (camera
+                                 type PANO, drawn by Cycles alone), sized per output (mkmmd.core.fisheye): `frame` puts
+                                 the image circle round the frame (its diagonal spans fov), `circle` the whole circle
+                                 inside the short side; refuses lens, frame, shift and the looks (shotspec.NOT_FISHEYE)
   dof = {focus = target, fstop = 2.8, offset = 0}   offset: metres the focus plane sits nearer the camera than the target
                                  (a face's surface is 4-8 cm in front of its eye bones)
   style = "silhouette"           the flat look of a shot, composed at render time (`mk render`, `mk look`) by
@@ -51,6 +56,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 
+from ...core import fisheye as FE
 from ...core import freeze as FZ
 from ...core import medium as MD
 from ...core import perform as PF
@@ -158,7 +164,7 @@ def run(ctx):
             SP.check(spec, [o["name"] for o in outs])
         except SP.ShotError as e:
             raise BuildError(str(e)) from None
-    table, report, later = [], {}, []
+    table, report, later, fisheyes = [], {}, [], {}
     ctx.before_save.append(lambda: _check_looks(ctx, later))
     for m in list(sc.timeline_markers):
         sc.timeline_markers.remove(m)
@@ -185,6 +191,7 @@ def run(ctx):
             mount = _mount(ctx, sp.get("mount"))
             try:
                 fol = SP.follow_spec(sp, f"shot {name!r} ({asp})")
+                fe = SP.fisheye_spec(sp, f"shot {name!r} ({asp})")
             except SP.ShotError as e:
                 raise BuildError(str(e)) from None
             fr = sp.get("frame")
@@ -196,6 +203,10 @@ def run(ctx):
             cd = bpy.data.cameras.new(f"{name}@{asp}")
             cd.sensor_fit, cd.sensor_width = "AUTO", SENSOR
             cd.clip_start, cd.clip_end = 0.02, 5000.0
+            if fe:                                   # a panoramic camera: its lens puts the image circle where `fill` says
+                for attr, value in FE.blender(fe, out["size"]).items():
+                    setattr(cd, attr, value)
+                fisheyes[(name, asp)] = dict(fe, lens_mm=round(cd.fisheye_lens, 4))
             cam = bpy.data.objects.new(f"{name}@{asp}", cd)
             coll.objects.link(cam)
             cam.rotation_mode = "QUATERNION"
@@ -312,7 +323,8 @@ def run(ctx):
                 quats.append(tuple(q))
             K.key_vec(cam, "location", frames, pos, interp="LINEAR")
             K.key_vec(cam, "rotation_quaternion", frames, K.continuous(quats), interp="LINEAR")
-            K.set_fcurve(cd, "lens", 0, frames, lens, interp="LINEAR")
+            if not fe:                               # a fisheye's lens is its own (sized above), never keyed
+                K.set_fcurve(cd, "lens", 0, frames, lens, interp="LINEAR")
             if any("shift" in k for k in keys):
                 shifts = np.array(shifts)
                 K.set_fcurve(cd, "shift_x", 0, frames, shifts[:, 0], interp="LINEAR")
@@ -350,6 +362,9 @@ def run(ctx):
             report[name]["plate"] = True
         if styles:
             report[name]["styles"] = {asp: sorted(s) for asp, s in styles.items()}
+        lenses = {asp: fisheyes[(name, asp)] for asp in cams if (name, asp) in fisheyes}
+        if lenses:
+            report[name]["fisheye"] = lenses                         # per output: fov, projection, fill, lens_mm
         ctx.log("shot", name, f_from, f_to, "(plate)" if plate else "")
     sc["mk_shots"] = json.dumps(table)
     first = min((e for e in table if not e.get("plate")) or table, key=lambda s: s["from"])
@@ -364,6 +379,7 @@ def run(ctx):
     for w in media:
         for norm in w["styles"].values():
             _later(later, f"medium {w['index']}", norm)
+    _fisheye_media(table, media, fisheyes)
     sc["mk_medium"] = json.dumps(media)                          # mk render / mk look draw these frames in their look
     if media:
         report["_medium"] = MD.summary(media)
@@ -378,6 +394,28 @@ def run(ctx):
     if freezes:
         report["_freezes"] = freezes
     return report
+
+
+def _fisheye_media(table, media, fisheyes):
+    """A [[medium]] window draws its look over whatever shot is in the cut (and over the plates it lends to a transition or
+    insert), with Workbench and EEVEE: a window with a look for an output over a fisheye shot's frames in that output is
+    an error (`fisheyes`: {(shot, output): spec})."""
+    for w in media:
+        for asp, look in w["styles"].items():
+            if not look:
+                continue
+            seen = {}
+            for f in range(w["from"], w["to"]):
+                e = SS.shot_at(table, f)
+                if e is not None and (e["name"], asp) in fisheyes:
+                    seen.setdefault(e["name"], []).append(f)
+            for e in table:
+                if e.get("plate") and (e["name"], asp) in fisheyes and e["from"] < w["to"] and e["to"] >= w["from"]:
+                    seen.setdefault(e["name"], []).append(max(e["from"], w["from"]))
+            for name, fs in seen.items():
+                raise BuildError(f"medium {w['index']}: its {asp} look covers frame {min(fs)} of shot {name!r}, a fisheye "
+                                 f"in {asp}: a look is drawn with Workbench and EEVEE, which draw no fisheye (Cycles alone "
+                                 f"does); move the window off the shot")
 
 
 def _rings(ctx, table, outs, media=()):

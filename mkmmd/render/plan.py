@@ -78,6 +78,10 @@ def shot_look(doc, entry, output, span):
     """The vector look of a shot for an output when mk can draw it over the bake frames [k0, k1) of `span`:
     (look, None), else (None, why). A look: {shot, output, spec, table, draw (the object names drawn), ids ({material:
     id}), light, tex (whether a drawn tone needs the texture pass)}."""
+    cam = (entry.get("cameras") or {}).get(output)
+    rec = next((c for c in doc["cameras"] if c["name"] == cam), None)
+    if rec is not None and rec.get("fisheye"):
+        return None, "a fisheye camera (Cycles draws it)"
     look = (entry.get("styles") or {}).get(output)
     if not look:
         return None, "lit by the scene (no flat look)"
@@ -85,8 +89,7 @@ def shot_look(doc, entry, output, span):
     if kind != "vector":
         return None, f"a {kind} look"
     spec = look[kind]
-    cam = (entry.get("cameras") or {}).get(output)
-    if not any(c["name"] == cam for c in doc["cameras"]):
+    if rec is None:
         return None, f"its camera {cam!r} is not in the bake"
     k0, k1 = span
     objs = {o["name"]: o for o in doc["objects"]}

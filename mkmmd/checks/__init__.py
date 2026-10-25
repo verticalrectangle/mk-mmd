@@ -198,12 +198,22 @@ class Data:
                 "names": meta["objects"], "exempt": meta.get("exempt", []), "frame": meta["frame"],
                 "roots": {p: np.array(M, float) for p, M in meta.get("roots", {}).items()}}
 
-    def camera(self, frames):
+    def camera(self, frames, output=None):
+        """The camera on `frames`: the active one (the timeline markers'), or with `output` that output's own camera of the
+        shot in the cut (a project with outputs; else the active one)."""
         r = self.rows(frames)
         c = self.meta["camera"]
-        return {"names": [c["names"][i] for i in r], "world": self.z["cam_world"][r], "lens": self.z["cam_lens"][r],
-                "sensor": self.z["cam_sensor"][r], "shift": self.z["cam_shift"][r], "clip": self.z["cam_clip"][r],
-                "sensor_fit": c["sensor_fit"], "resolution": c["resolution"], "pixel_aspect": c["pixel_aspect"]}
+        outs = c.get("outputs") or []
+        if output in outs and "cam_out_world" in self.z:
+            j = outs.index(output)
+            got = {k: self.z[f"cam_out_{k}"][r, j] for k in ("world", "lens", "sensor", "shift", "clip", "fisheye")}
+            names = [c["output_names"][i][j] for i in r]
+        else:
+            got = {k: self.z[f"cam_{k}"][r] for k in ("world", "lens", "sensor", "shift", "clip")}
+            got["fisheye"] = self.z["cam_fisheye"][r] if "cam_fisheye" in self.z else np.zeros((len(r), 3))
+            names = [c["names"][i] for i in r]
+        return {"names": names, **got, "fisheye_errors": c.get("fisheye_errors", {}), "sensor_fit": c["sensor_fit"],
+                "resolution": c["resolution"], "pixel_aspect": c["pixel_aspect"]}
 
     def source_frames(self, sources, frames):
         """Posed (unscaled) rotation (F,S,3,3) and position (F,S,3) of shape sources; and their rest frames (S,3,3),

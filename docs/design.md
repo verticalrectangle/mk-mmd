@@ -126,7 +126,7 @@ blender -b SCENE.blend -y --python-exit-code 3 --python-expr BOOT -- job.json re
 | `bone(NAME[, armature])` | world-space view of a posed bone: `.head` `.tail` `.center` `.dir` `.length` `.matrix` `.quat` `.local_quat`. NAME is a Blender name, a semantic name (`head`, `wrist.R`, `index2.L`) or a PMX name |
 | `obj(NAME)` | world-space view of an object: `.loc` `.matrix` `.quat` `.euler` `.dims` `.bbox` `.visible` |
 | `morph(NAME[, armature])` | the value of a shape key on the model's meshes |
-| `cam()`, `screen(point[, camera])` | the active camera as an `obj` view; a world point to camera-view coordinates `(x, y, depth)` (x, y in 0..1 from the bottom left of the frame, depth in metres) |
+| `cam()`, `screen(point[, camera])` | the active camera as an `obj` view; a world point to camera-view coordinates `(x, y, depth)` (x, y in 0..1 from the bottom left of the frame, depth in metres), a shot camera seen at its own output's size; through a fisheye ([Fisheye shots](#fisheye-shots)) the place in its picture and, as depth, the distance from the camera, negative past its field |
 | `dist(a, b)`, `angle(a, b)` | distance (m) and angle (degrees) between vectors |
 | `arm(NAME)`, `scene`, `bpy`, `np`, `math`, `Vector`, `fps`, `frame0` | the armature object, the Blender scene and modules, the project's `fps` and `frame0` |
 | `frame`, `t` | the frame being evaluated and its clip seconds (`None` without a project) |
@@ -392,12 +392,13 @@ see [Sets](#sets)) and `lights`. A project can merge its own entries over any ca
 mk never guesses a license. New entries are `unreviewed` and keep the paths of the readme files found next to the
 asset (`mk assets show SLUG --terms` prints the lines that talk about terms of use); someone who has read them fills in
 `license`, `restrictions` and `credit` with `mk assets set` (`source_url` is the field `--url` fills). `mk assets credits`
-builds the credits from the project's cast, the videos its footage frame effects and split inserts show (a slug, or a file the
-registry has) and `[credits] assets` (one entry per asset, grouped by kind, a credit line two of them share printed once) and exits 1 while
-any of them is unreviewed or has neither an author nor a credit line; `[credits] lines` are the project's own lines (a song,
-a print made for it, the palette, tools), appended as bullets under `## Also` or under the `## Heading` lines among them.
-Slugs are how the project refers to registered assets: `[[cast]] asset`, `[[motion.<cast>]] vmd`, `[[prop]] card`,
-`[[text]] font`, `[[fx]] clip`, `[[insert]] clip` (`mk ref footage` registers Pexels videos with their author, pages and licence).
+builds the credits from the project's cast, the videos its footage frame effects and split inserts show and the photos its
+`photo_world` sets are made of (a slug, or a file the registry has) and `[credits] assets` (one entry per asset, grouped by kind, a
+credit line two of them share printed once) and exits 1 while any of them is unreviewed or has neither an author nor a credit
+line; `[credits] lines` are the project's own lines (a song, a print made for it, the palette, tools), appended as bullets under
+`## Also` or under the `## Heading` lines among them. Slugs are how the project refers to registered assets: `[[cast]] asset`,
+`[[motion.<cast>]] vmd`, `[[prop]] card`, `[[text]] font`, `[[fx]] clip`, `[[insert]] clip`, `[[set]] image` (a `photo_world`'s
+photo) (`mk ref footage` registers Pexels videos with their author, pages and licence).
 
 ## Colliders
 
@@ -669,6 +670,7 @@ Colours are palette slot names or `#hex` (and `"slot:slot:t"` mixes two); builde
 |---|---|
 | `test_road` | a flat two-lane S-curve on a ground plane, for vehicle and camera tests: `length` (600 m), `lane_width` (3.6), `curve` (the lateral swing of the S, 40 m); path `road` with lanes `R1` (with the path) and `L1` |
 | `night_sky` | the scene's world: a gradient dome, a city glow, thin lit clouds, stars, the moon with its halo and an optional moonlight, EEVEE ray tracing; nothing spatial (the sky is in world angles, `at` and `yaw` do not turn it) |
+| `photo_world` | the scene's world made of ONE photo projected round the scene in world directions, so any camera (a Cycles fisheye too) sees it bent as through its lens, it lights the cast and glossy things reflect it; nothing spatial (`at` and `yaw` do not turn it) |
 | `highway` | a divided night highway along a centre line, built to scale (3 km and more) from a few merged meshes: lanes as card paths, lamps with baked spill, gantries and billboards as `use.surface`, tunnels, trees, wet asphalt |
 | `skyline` | a distant night city (an arc or a band of buildings with shader-lit windows, glow, beacons) around the set root |
 | `hills` | layered ridges on the horizon: curtains round `center` (x, y) at each layer's `distance`, rolling ridge lines up to `height` (`seed`, `rough` 0..1), an `arc` = [from, to] degrees (azimuth from +X toward +Y) that can leave a city's direction open; flat colours (`color`, "base") pulled toward the horizon haze by `haze` (rising with distance), so they read as silhouettes whatever lights the scene |
@@ -683,6 +685,27 @@ seed 1}` or `false`; `az` 0 = +X, counter-clockwise from above); `glow` (`{az -9
 strength 1.0, haze 0.1}` or `false`); `clouds` (`{cover 0.4, softness 0.5, opacity 0.35, drift 0.3, wind 20, seed 1}` or `false`);
 `eevee` (`{raytracing true, trace_scale 1, quality 0.5, probe 2048}` or `false` to leave the renderer settings alone). Card:
 `use.look` `moon` and `glow`.
+
+**`photo_world`** keys (the maths is `mkmmd/core/photoworld.py`, tested; the world's nodes follow it step by step, checked by
+rendering a numbered grid in Cycles, EEVEE and a Cycles fisheye, about one level in 255 from the prediction): `image` (required:
+the photo, a file, project-relative, absolute or `~/...`, or the slug of a registry entry whose path is an image: jpg, jpeg, png,
+webp, exr or hdr; a missing file or one that is not an image is an error; its alpha, if it has one, lets `fill` through), `toward`
+(`[0, 1, 0]`: behind a cast member who faces -y, what a camera in front of her sees; the world direction of the photo's centre),
+`roll` (0: degrees the photo turns clockwise about `toward`, as a camera looking along it sees it; unrolled, its up is the world's
+up made level, +Y when `toward` is vertical), `fov` (required: degrees across the photo's long side, its true field of view;
+2 atan(18 / f) for a 35 mm-equivalent focal length f), `spread` (= `fov`: degrees its long side spans in the world), `fill`
+(`"#080808"`: palette slot or `#hex`, the world where the photo does not reach), `strength` (1: what the camera sees, the photo's
+own pixels at 1, through a floor faded to clear too), `light` (= `strength`: every other ray, a Light Path split: the light it
+casts on the cast and what glossy things and puddles reflect; daylight on the cast may want 3 or more while the background stays
+the photo) and `saturation` (1). A ray at the angle θ from `toward` and the azimuth φ about it shows the photo at the true angle
+α = θ · fov / spread, at tan(α) / tan(fov / 2) · (cos φ, sin φ) half long sides from its centre, aspect-correct, sampled smoothly
+(Smart: cubic when magnified): `spread = fov` is the perspective of the camera that took it, a larger one stretches the photo
+angularly and uniformly about its centre, so a modest photo fills a fisheye's 180 degrees and its straight lines still bend as
+through a lens; where α reaches 90 degrees or the point falls outside the photo, the world is `fill`. The rest of the sphere is
+`fill` too and lights the cast as such: a sky colour there is a soft fill from behind the camera, near black none. Under AgX the
+photo's whites roll off and its colours soften; `[look] view = "Standard"` shows it as shot. EEVEE: the world probe is 2048 px and
+its sun extraction is off. Card: `use.look` `centre` (100 km out along `toward`). `mk assets credits` counts the photo (see
+[Asset registry](#asset-registry)).
 
 **`highway`** keys (defaults in parentheses; unknown keys raise an error):
 
@@ -778,7 +801,7 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `round_board` | a round chessboard round the origin (Byzantine chess is 4 rings of 16): `rings` (6) rings `<name>_r<i>` of `sectors` (16, even) cells from `inner` (2.2 m) out, each `width` (0.8) deep and `thick` (0.05), `gap` (0.03) between cells, light (`light`, "text") and dark (`dark`, black) alternating round a ring and from ring to ring. Root property `phase` (key it): ring i turns `omega_i * phase` radians about the centre, `omega_i = omega * (r_i / r_0) ** kepler` (`omega` 1, `kepler` -1.5: inner rings orbit faster and the board winds into a spiral). Every cell has an overlay `<name>_hot_r<i>s<j>` in `hot` ("love"), hidden: a `[[key]]` on its `hide_render` lights an attacked square. A prop `parent = "<name>_r<i>"` rides a ring. `use.rest` `top` (a plane), `use.look` `centre` |
 | `chess` | a chess piece standing on its origin, `height` (1 m) tall: `piece` `pawn`, `rook`, `bishop`, `queen` or `king` turned on a lathe (Staunton-like), or `knight` (a lathed base under a horse's head, a thick plate domed on both faces, facing +X), glossy (`rough` 0.12, `metal` 0, a clear coat) in `color` ("text"); `<name>_piece` |
 | `stars` | flat stars in the picture's plane, facing -Y: `points = [[x, z, size, t], ...]` (metres in the root's x-z plane, a size factor, and optionally the clip second it flashes: up to `gain` (1.8) times its size and back over `flash` (0.35) s), `kind` points (4), `inner` radius (0.3 of the outer), `size` (0.12 m), `depth` (0.004), glowing `color` ("text"); with `lines` (true) each star is joined to the next by a rod `<name>_line<i>` (`line_width` 0.01) that draws itself over `draw` (0.12) s as the next star flashes: a constellation, a melody as a piano roll |
-| `floor` | a floor to the horizon at z = 0 under the root, `size` (400 m) each way from it (`<name>_floor`): `kind` `mirror` (default: dark glass that shows what stands on it; the floor switches on EEVEE's screen-space ray tracing, which mirrors what the camera sees), `chess` (light and dark squares `cell` (2 m) across) or `grid` (glowing lines every `cell` m, `line` (0.04 m) wide, at `glow` (3) in `color`). Colours `color` (the light squares or the lines; "text") and `dark` (black); `rough` (mirror 0.03, chess 0.12, grid 0.08), `metal` (0). The pattern blends its edges over a few pixels' footprint at the camera's distance, so far away a checker becomes its own grey and a grid dims instead of shimmering (`mkmmd/core/space.py` `checker`, `grid_lines`), and it fades into `dark` between the two `fade` distances from the camera (`[40, 220]` m). `use.rest` `top`. Floors that change with the song are three floors with `hide_render` keys on their `<name>_floor` objects |
+| `floor` | a floor to the horizon at z = 0 under the root, `size` (400 m) each way from it (`<name>_floor`): `kind` `mirror` (default: dark glass that shows what stands on it; the floor switches on EEVEE's screen-space ray tracing, which mirrors what the camera sees), `chess` (light and dark squares `cell` (2 m) across), `grid` (glowing lines every `cell` m, `line` (0.04 m) wide, at `glow` (3) in `color`) or `asphalt` (a street: angular stones of the aggregate, coarse and fine, standing out of the binder with polished tops, mottled by wear and patches; `cracks` (0.3: the share of a net of thin tar-sealed cracks round cells about 1.8 m across that shows, 0 none), `wet` (0 dry, 1 rain-wet: darker and as rough as 0.3), `puddles` (0: the share of the floor under standing water, flat pools as rough as 0.03 with a damp rim) about `puddle_size` (1.5 m) across, `seed` (1: other puddles, cracks and stones)). Colours `color` (the light squares, the lines, the asphalt's lightest stone; "text", asphalt "#a3a19c") and `dark` (black, asphalt's binder "#4a4946": a sun-bleached grey street); `rough` (mirror 0.03, chess 0.12, grid 0.08, asphalt 0.8 where dry), `metal` (0). The pattern blends its edges over a few pixels' footprint at the camera's distance, so far away a checker becomes its own grey and a grid dims instead of shimmering (`mkmmd/core/space.py` `checker`, `grid_lines`; the asphalt's stones fade to their mean tone, measured, once a pixel is wider than a stone), and it fades into `dark` between the two `fade` distances from the camera (`[40, 220]` m), or with `fade_to = "clear"` into nothing (any kind: a mix with transparency, dithered in EEVEE, so the world shows beyond: a [photo_world](#sets)'s own street). `use.rest` `top`. Floors that change with the song are three floors with `hide_render` keys on their `<name>_floor` objects |
 | `starfield` | stars streaming past the root along -X at `speed` (12 m/s), plus `surge = [[t, metres], ...]` of extra way (eased between the keys: a jump to light speed). `count` (900) stars per tile, `size` (0.035 m) across and `streak` (0) m long along X, in `color` ("text") glowing at `glow` (12), spread over `length` (160 m) along X, `width` (90) across and `height` (`[-1, 45]`), none within `clear` (5 m) of the X axis, where a character walks; `seed` (1). Two tiles `<name>_tile0` / `<name>_tile1` of the same stars leapfrog round the root (their X keyed per frame from the clock), so the field never runs out: together they always cover `-length` .. `length` |
 | `disc` | an accretion disc round a black hole: a flat ring `<name>_disc` from `inner` (2 m) to `outer` (7) about the root, white-hot (`hot`) inside going to `color` ("love") outward and dimming, at `glow` (5), its streaks (a noise stretched along the orbit: `streaks` (3) round it, `rings` (22) across) orbiting `spin` (0.3) turns a second at the inner rim, faster inside (angular speed as `(r / inner) ** kepler`, `kepler` -1.5): a driver on the frame runs the clock. Additive (it lights what is behind it and hides nothing); tilt it with `rot`. `use.look` `centre` |
 | `bedroom_desk` | an 80s writing desk, 1.20 x 0.60 x 0.74 m, three drawers; options `edge` (slot of the band round the top, "pine"), `drawers` (three slots, "foam,love,gold"); `use.rest` `top` and `front` |
@@ -2267,8 +2290,9 @@ shot starts on the frame `round(frame0 + from * fps)`.
 | `keys` | `[{t, at, look, lens, roll, shift}, ...]`, a move inside the shot; `t` is in clip seconds (not relative to the shot). Between two keys `at`, `lens`, `roll` and `shift` move with a smoothstep ease and `look` switches to the next key's target halfway, so aim at something that moves rather than between two fixed points. A field a key leaves out is the shot's own; the first and last key hold outside their span |
 | `frame` | `{subject, fill, solve}`: solves the lens, or the distance, for each output so the subject fills a share of the frame height. `subject` is a target or a list of targets (one world point is written `[[x, y, z]]`); its height is the vertical extent of those points (at least 0.25 m) plus 0.15 m of headroom, taken at the median of about twelve frames of the shot. `fill` is the share of the frame height (default 0.45). `solve = "lens"` (default) sets one lens for the whole shot (a keyed `lens` is replaced), `"distance"` keeps the lens and moves the camera along the aim line by one factor, `"dolly"` keeps the keyed lens and moves the camera along the aim line on every frame so the subject keeps `fill` (a dolly zoom: a lens keyed from 28 to 75 mm sends the camera 2.7 times as far, she keeps her size and the room behind her swells; exact for a subject on the aim point; the report's `moves.<output>.dolly_m` is the range of distances); any other solve is an error |
 | `shift` | `[x, y]`, Blender's lens shift: fractions of the larger image side, the picture moving the other way (a positive `y` moves it down; probed in Blender 4.2.3); constant, or keyed in `keys[].shift` (default `[0, 0]`). See the crop below |
+| `fisheye` | `{fov = 180, projection = "equisolid", fill = "frame"}`: a real fisheye camera, drawn by Cycles alone ([Fisheye shots](#fisheye-shots)), sized for each output. `fov` (degrees, 30 to 360) is the field across the frame's diagonal (`fill = "frame"`, the default: a full-frame fisheye, its image circle round the frame) or across the circle (`fill = "circle"`: the whole circle inside the frame's short side, black outside); `projection` is `"equisolid"` (default, as most real fisheyes) or `"equidistant"`. `at`, `look`, `roll`, `keys`, `lag`, `follow`, `shake`, `mount` and `dof` work as for any shot; `lens`, `frame`, `shift` (and a key's `lens` and `shift`) and the looks (`style`, `reflection`) are refused, saying why. `fisheye = false` in an aspect table drops it for that output |
 | `dof` | `{focus, fstop, offset}`: depth of field; `focus` is any target (required), keyed as the distance from the camera on every frame, less `offset` metres (default 0): the focus plane sits that much nearer the camera than the target. A character's eye bones (`"cast:rin"`) are inside the head, 4-8 cm behind the face's surface (more for `.head`, the base of the skull), while a close-up at f/2.8 keeps only a few centimetres sharp: give a face target `offset = 0.05`. `fstop` (default 2.8). Without `dof` nothing blurs |
-| `aspect.<output>` | `{...}`, `[shot.aspect.<output>]`: that output's own version of the shot. It may hold any key above except `name`, `from`, `to`, `plate` and `aspect`. The tables `frame`, `dof`, `follow`, `colors`, `tones`, `knockout` and `reflection` merge key by key with the shot's own (`frame = { fill = 0.6 }` keeps the `subject`, `follow = { lag = 0.4 }` the `target`); every other key, targets and lists included, is replaced whole; `reflection = false` and `follow = false` switch an inherited reflection or follow off for that output. A table for an output the project does not have is an error |
+| `aspect.<output>` | `{...}`, `[shot.aspect.<output>]`: that output's own version of the shot. It may hold any key above except `name`, `from`, `to`, `plate` and `aspect`. The tables `frame`, `dof`, `follow`, `fisheye`, `colors`, `tones`, `knockout` and `reflection` merge key by key with the shot's own (`frame = { fill = 0.6 }` keeps the `subject`, `follow = { lag = 0.4 }` the `target`, `fisheye = { fill = "circle" }` the `fov`); every other key, targets and lists included, is replaced whole; `reflection = false`, `follow = false` and `fisheye = false` switch an inherited reflection, follow or fisheye off for that output. A table for an output the project does not have is an error |
 | `style`, `colors`, `hide`, `keep`, `accent`, `tint`, `knockout`, `grow`, `samples` | the silhouette look, below |
 | `style`, `colors`, `tones`, `hide`, `keep` | the vector look, below (with the project's `[vector]` table) |
 | `reflection` | the window reflection, below |
@@ -2318,9 +2342,42 @@ shift = [0.0, 0.1111]                  # (420 - 300) / 1080
 `mk build` refuses a `mount` that names nothing; a shot without `from` and `to` that is not a plate, and a plate with only one of them;
 a `shift` that is not `[x, y]`; a key that `[[shot]]`, `frame`, `dof`, `keys[]` or an `aspect` table does not have (the message lists
 the known ones: `shot 'storm': unknown key 'lenss' (known: ...)`); an `aspect` table for an output the project does not have; a `frame`
-without `subject`; a window of an effect that needs frames from a shot before `[scene] start` (`lower [scene] start`); and bad look
-tables (the message names the shot and the output: `shot 'storm' (16x9): ...`). It logs a WARNING for a plate no effect uses and for
-an object pattern that matches nothing.
+without `subject`; a window of an effect that needs frames from a shot before `[scene] start` (`lower [scene] start`); bad look
+tables (the message names the shot and the output: `shot 'storm' (16x9): ...`); a `fisheye` with a bad `fov`, `projection` or `fill`,
+or with `lens`, `frame`, `shift` or a look beside it, as any output sees the shot (`shot 'low' (1x1): `lens` with `fisheye`: a
+fisheye's focal length comes from its `fov` and `fill` ...`); and a `[[medium]]` window whose look covers a fisheye shot's frames.
+It logs a WARNING for a plate no effect uses and for an object pattern that matches nothing.
+
+### Fisheye shots
+
+A shot with `fisheye = {...}` gets, per output, a camera of type `PANO` (Blender 4.2's own camera properties, no longer under
+`camera.data.cycles`): `projection = "equisolid"` is `panorama_type = "FISHEYE_EQUISOLID"`, which images the ray `theta` off
+the axis at r = 2 f sin(theta / 2) sensor mm from the centre with `f = fisheye_lens`, black past `fisheye_fov`;
+`"equidistant"` is `FISHEYE_LENS_POLYNOMIAL` with `fisheye_polynomial_k1 = -1 / f` and k0, k2, k3, k4 = 0 (theta = r / f),
+because Blender's own `FISHEYE_EQUIDISTANT` ignores the sensor and stretches its circle to both sides of the picture (an
+ellipse in a 16:9 frame). The sensor is 36 mm across the picture's longer side (`sensor_fit = "AUTO"`), and `f` is solved for
+each output's size so the frame's half-diagonal (`fill = "frame"`) or half its short side (`"circle"`) lies at `fov / 2`;
+`fisheye_fov` is the field for a circle and a hair (1 %) past the corners for a full frame, so no corner pixel's filter
+reaches black (`mkmmd/core/fisheye.py`: `lens`, `cut`, `blender`; the report's `fisheye` gives each output's `lens_mm`).
+Rendering markers at known directions in Blender 4.2.3 (1:1, 16:9, 9:16, both projections, sensor fits, lens shift) put every
+one within half a pixel of these formulas; Cycles clips a panoramic camera's rays at `clip_start` along each ray.
+
+Only Cycles draws a panoramic camera: EEVEE and Workbench draw it as a perspective one. `mk render` (and so `mk post`, which
+composes what it drew) refuses, before it draws anything, a frame or a plate seen through a fisheye under another engine,
+naming the fix (`[render] engine = "cycles"` or `--engine cycles`; with `engine = "mk"` the shots Blender draws use the
+scene's own engine, so set `cycles`). `mk look` draws the images seen through a fisheye with Cycles whatever `--engine`
+says (with its `--samples`). The looks are refused on a fisheye shot; the passes other
+layers take through its camera are drawn by Cycles (each surface a flat emission through its MMD alpha): the figure
+layer (`figure/<key>/<frame>.png`, the collages' and a masked pixel sort's or mosh's) and `[post] keep`'s mask, so they line
+up with the frame.
+
+Everything that places scene points in the picture projects through a fisheye with the same maths (`Lens`): the `framing`
+check (each output through its own camera of the shot in the cut; a circle's edge bounds the frame too), `mk q`'s
+`screen()`, the cut effects' scene points (`{point = ...}`: `p` its place, `m` the scale of a patch facing the camera),
+the rings, `mk look --map`'s pixel maps (rays bent as the lens bends them; `depth` along each ray) and the clip stage
+(below: a fisheye's nearest geometry is a distance in its cone). The bake records a fisheye's lens: mk's own renderer
+leaves its shots to Blender and the site's 3D view shows the free view for them. `occlusion` and `camera_inside` cast
+rays and need no projection.
 
 ### Clip ranges
 
@@ -2333,7 +2390,10 @@ the depth of the nearest geometry inside its view, the view widened by a tenth o
 it sees nothing): as late as it can start without cutting anything off (`mkmmd/core/clip.py`, `mkmmd/blender/depth.py`). The
 depth is exact, read coarse to fine (each drawn object's box, the boxes of chunks of 256 of its triangles, those triangles;
 geometry instanced by another object counts as its box), on the world a render sees (a freeze's held frame with the camera
-on its own). `mk look`'s orbit cameras start the same way on each frame and size, and the bake keeps every camera's clip
+on its own). A fisheye starts at half the distance of the nearest geometry whose bounding sphere reaches into its cone of
+sight (its widest angle off the axis the picture shows, widened by a tenth, at most all round), as Cycles clips each of its
+rays along the ray (`mkmmd/core/clip.py`: `least_distance`); what lies just outside the cone may bring it nearer, never
+farther. `mk look`'s orbit cameras start the same way on each frame and size, and the bake keeps every camera's clip
 range per frame for mk's own renderer. Its report: `cameras`, `frames`, `near_m` (least, median, most) and `touching`
 (frames where something was within 2 mm of a lens). `mk build --skip clip` leaves every camera at 2 cm.
 
@@ -3632,7 +3692,8 @@ slots = { gold = "#f2c46d" }        # one slot overridden for this project
 | `final` | 100 % | 64 | on |
 
 `[render]` (all optional) overrides the preset: `samples`, `shutter` (the motion blur shutter, 0.35) and `engine` (`eevee`, the
-default (EEVEE Next), `cycles`, `workbench` or `mk`, below). `--samples`, `--percent` and `--engine` override both for one run; `--output NAME` renders some
+default (EEVEE Next), `cycles`, `workbench` or `mk`, below). A fisheye shot ([Fisheye shots](#fisheye-shots)) needs `cycles`:
+under another engine the render stops before it starts, naming the frame and the camera. `--samples`, `--percent` and `--engine` override both for one run; `--output NAME` renders some
 outputs, `--frames SPEC` some frames (default the whole clip), `--jobs N` runs N Blender processes per output that share the frames.
 Frames are claimed with an empty file first, so a stopped render resumes; a disk check refuses to start when the frames would not fit
 (it keeps 1.5 GB spare). Shots with a render-time look ([Shots](#looks-silhouette-and-reflection): silhouette, reflection) are finished

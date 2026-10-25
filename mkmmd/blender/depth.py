@@ -1,11 +1,14 @@
 """The geometry a camera sees in a Blender scene, for mkmmd.core.clip (docs/design.md: Shots: Clip ranges): `Depth()`
 keeps every rendered object's triangles in chunks (made once, from the first frame it is read on), `frame()` takes the
 scene's current frame (call it after a frame change), and `least(camera, size)` is the depth of the nearest geometry
-that camera sees on it for a picture of `size` (w, h) pixels; `near(camera, size)` the clip_start that makes."""
+that camera sees on it for a picture of `size` (w, h) pixels (a fisheye's: its distance, which is where Cycles clips
+its rays); `near(camera, size)` the clip_start that makes."""
 import bpy
 import numpy as np
 
 from ..core import clip as CL
+from ..core import fisheye as FE
+from . import fisheye as FEB
 
 GEOMETRY = ("MESH", "CURVE", "SURFACE", "FONT", "META")          # read as triangles
 BOXES = ("CURVES", "POINTCLOUD", "VOLUME", "GPENCIL")            # counted as solid boxes
@@ -70,14 +73,22 @@ class Depth:
 
     def least(self, cam, size):
         """The depth (m) of the nearest geometry the camera object `cam` sees on the current frame, for a picture of
-        `size` (w, h) pixels (inf: none; None for a camera that is not a perspective one)."""
+        `size` (w, h) pixels; through a fisheye, its distance (inf: none; None for a camera that is neither a perspective
+        one nor a fisheye mk projects)."""
         cd = cam.data
+        to_cam = np.linalg.inv(np.array(cam.matrix_world.normalized(), float))
+        items = [(box, to_cam @ M, get) for box, M, get in self.items]
+        if cd.type == "PANO":
+            try:
+                lens = FEB.lens(cam, size)
+            except FE.FisheyeError:
+                return None
+            return CL.least_distance(items, CL.Cone(lens.reach()))
         if cd.type != "PERSP":
             return None
         sensor = cd.sensor_height if cd.sensor_fit == "VERTICAL" else cd.sensor_width
         view = CL.View(cd.lens, sensor, size, (cd.shift_x, cd.shift_y), cd.sensor_fit)
-        to_cam = np.linalg.inv(np.array(cam.matrix_world.normalized(), float))
-        return CL.least_depth([(box, to_cam @ M, get) for box, M, get in self.items], view)
+        return CL.least_depth(items, view)
 
     def near(self, cam, size):
         """The clip_start `cam` wants on the current frame for a picture of `size` (None: leave it as it is)."""

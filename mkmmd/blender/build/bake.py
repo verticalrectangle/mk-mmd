@@ -5,7 +5,9 @@ beside the .blend as <name>.bake/ (`mk build --bake` bakes a saved scene again w
               joints) and its shape keys as morph targets, MMD materials as their base texture and alpha; no animation.
               Left out: a mesh hidden on every frame of the clip, and one baked frame by frame (`frames` below)
   bake.json   the clip (fps, frame0, frames, outputs, the cut per output, the shot table, the freezes), what bake.bin holds
-              where (offsets in floats), and what the vector look needs to be drawn without Blender:
+              where (offsets in floats; a fisheye camera's lens as `fisheye`: projection, lens mm, field radians, from
+              mkmmd.core.fisheye: mk's renderer leaves its shots to Blender, the site draws no shot through it), and
+              what the vector look needs to be drawn without Blender:
               objects    every object a look sorts (mkmmd.blender.styles.look_objects), in the scene's order: its pattern
                          record (collections, truthy properties), whether it is type (the text stage's), its materials as
                          a look numbers them, whether it casts Workbench's shadow, and `baked`: "glb", "by_frame" or null
@@ -51,7 +53,9 @@ import time
 import bpy
 import numpy as np
 
+from ...core import fisheye as FE
 from ...core import rings as RG
+from .. import fisheye as FEB
 from .. import freeze as FRZ
 from .. import styles as ST
 from . import BuildError
@@ -463,8 +467,15 @@ def bake(ctx, out_dir):
             index["morphs"].append({"name": o.name, "count": int(morphs[o.name].shape[1]), "offset": put(morphs[o.name])})
     for c in cams:
         cd = bpy.data.objects[c].data
-        index["cameras"].append({"name": c, "sensor": float(cd.sensor_width), "sensor_height": float(cd.sensor_height),
-                                 "fit": cd.sensor_fit, "offset": put(cam_data[c]), "clip_at": put(cam_clip[c])})
+        rec = {"name": c, "sensor": float(cd.sensor_width), "sensor_height": float(cd.sensor_height), "fit": cd.sensor_fit,
+               "offset": put(cam_data[c]), "clip_at": put(cam_clip[c])}
+        try:
+            fish = FE.params(FEB.fields(cd))
+        except FE.FisheyeError as e:
+            raise BuildError(f"bake: camera {c!r}: {e}") from None
+        if fish is not None:
+            rec["fisheye"] = {"projection": fish[0], "lens": fish[1], "field": fish[2]}
+        index["cameras"].append(rec)
     for fx in flex:
         if fx.why is None and fx.geoms:
             v_at = [put(v) for v in fx.verts]

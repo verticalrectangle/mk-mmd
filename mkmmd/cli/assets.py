@@ -18,14 +18,15 @@ the author's readme files; read them (`mk assets show SLUG --terms` prints the l
 license, restrictions and credit with `mk assets set`. `mk assets credits` fails (exit 1) while anything used is
 unreviewed or has neither an author nor a credit line. Kinds: model, motion, prop, vehicle, audio, reference,
 texture, font, other. Registry slugs are what mk.toml refers to: [[cast]] asset, [[motion.<cast>]] vmd, [[prop]] card,
-[[text]] font, [[fx]] clip (footage; `mk ref footage` registers Pexels videos), [credits] assets.
+[[text]] font, [[fx]] clip (footage; `mk ref footage` registers Pexels videos), [[set]] image (a photo_world's photo),
+[credits] assets.
 
 Examples:
   mk assets add ~/models/my_model/my_model.pmx --kind model --slug my_model --author NAME
   mk assets scan ~/models --kind model --jobs 6
   mk assets show my_model --terms
   mk assets set my_model license="NAME terms of use (readme)" credit="Model: NAME" restrictions="no commercial use"
-  mk assets credits --out CREDITS.md               # in a project: its cast, footage clips and [credits] assets
+  mk assets credits --out CREDITS.md               # in a project: its cast, footage clips, photo worlds, [credits] assets
 """
 
 FIELD_HELP = ("field=value, one or more: name author author_url source_url license restrictions credit tags (a,b) rig "
@@ -189,19 +190,22 @@ def _run(args, reg):
 
 
 def project_credits(proj, reg=None):
-    """The assets a project credits (its cast's, the videos its footage frame effects and split inserts show, then its
-    [credits] assets, each once) and its own [credits] lines. A clip given as a file counts when the registry (`reg`,
-    default the configured one) has an entry with its path; credit any other in [credits] lines."""
+    """The assets a project credits (its cast's, the videos its footage frame effects and split inserts show, the photos
+    its photo_world sets are made of, then its [credits] assets, each once) and its own [credits] lines. A clip or a
+    photo given as a file counts when the registry (`reg`, default the configured one) has an entry with its path;
+    credit any other in [credits] lines."""
+    from ..core.photoworld import is_file as is_image
     from ..footage import is_file
     slugs = list(dict.fromkeys(c["asset"] for c in proj.cast if c.get("asset")))
-    for clip in footage_clips(proj.data):
-        if is_file(clip):
+    refs = [(c, is_file(c)) for c in footage_clips(proj.data)] + [(p, is_image(p)) for p in world_images(proj.data)]
+    for ref, as_file in refs:
+        if as_file:
             reg = reg or A.Registry()
-            p = Path(clip).expanduser()
+            p = Path(ref).expanduser()
             e = reg.find_path(p if p.is_absolute() else proj.root / p)
-            clip = e["slug"] if e else None
-        if clip and clip not in slugs:
-            slugs.append(clip)
+            ref = e["slug"] if e else None
+        if ref and ref not in slugs:
+            slugs.append(ref)
     slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
     return slugs, proj.data.get("credits", {}).get("lines", [])
 
@@ -225,6 +229,18 @@ def footage_clips(data):
     for spec in [inserts] if isinstance(inserts, dict) else inserts:
         c = spec.get("clip") if isinstance(spec, dict) else None
         add(c.get("src") if isinstance(c, dict) else c)
+    return out
+
+
+def world_images(data):
+    """The photos a project's [[set]] photo_world entries are made of (mk.toml `data`), each once: their `image`, a
+    file or a registry slug."""
+    out = []
+    sets = data.get("set") or []
+    for spec in [sets] if isinstance(sets, dict) else sets:
+        im = spec.get("image") if isinstance(spec, dict) and spec.get("kind") == "photo_world" else None
+        if isinstance(im, str) and im.strip() and im not in out:
+            out.append(im)
     return out
 
 

@@ -4,10 +4,10 @@ import sys
 
 import bpy
 import numpy as np
-from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
 from ..core import shotstyle as SS
+from . import fisheye as FE
 from . import scene as S
 from .runtime import CTX, op
 
@@ -88,9 +88,9 @@ def _namespace(arm_name):
     def morph(name, armature=None):
         return S.morph_value(arm(armature), name)
 
-    def screen(p, camera=None):
+    def screen(p, camera=None):                     # a shot camera at its own output's size: the picture's aspect counts
         cam = bpy.data.objects[camera] if camera else sc.camera
-        return world_to_camera_view(sc, cam, Vector(p))
+        return FE.view(sc, cam, p, FE.output_size(sc, cam))   # world_to_camera_view's (x, y, depth); a fisheye: distance
 
     def dist(a, b):
         return (Vector(a) - Vector(b)).length

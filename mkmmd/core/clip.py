@@ -12,7 +12,15 @@ camera's pyramid of sight widened by MARGIN on each side, so what is just outsid
 searches coarse to fine: each object's box, then the boxes of its chunks of about CHUNK nearby triangles (`Piece`),
 then those triangles, nearest first, until no box left can hold anything nearer than what was found. Each step is
 exact: the least depth of a convex piece inside the view is at a corner of the piece clipped to the view (`tri_depth`),
-so nothing inside the view is ever nearer than where the camera starts."""
+so nothing inside the view is ever nearer than where the camera starts.
+
+A fisheye (mkmmd.core.fisheye) sees a cone of rays round its axis, as wide as 360 degrees, and Cycles clips each of its
+rays at clip_start along the ray: what counts is a point's distance from the camera. `least_distance` searches the same
+way with bounding spheres (`Cone`, `sphere_bounds`, `tri_distance`): a triangle that may reach into the cone counts with
+its nearest point, so the distance found is never more than the nearest seen (what lies just outside the cone may make
+it less)."""
+import math
+
 import numpy as np
 
 NEAR_SHARE = 0.5          # the camera starts at this share of the depth of the nearest geometry it sees ...
@@ -201,3 +209,100 @@ def near(depth):
     if not np.isfinite(depth):
         return NEAR_NONE
     return max(NEAR_MIN, NEAR_SHARE * float(depth))
+
+
+class Cone:
+    """The sight of a fisheye camera: the rays within `half` radians of its axis (-z), widened by MARGIN (at most every
+    direction, pi)."""
+
+    def __init__(self, half, margin=MARGIN):
+        self.half = min(math.pi, float(half) * margin)
+
+
+def _reaches(c, rho, cone):
+    """Whether spheres (centres c (k, 3) in the camera's axes, radii rho (k,)) reach into `cone`: one round the camera
+    always does; else its centre's angle off the axis less its angular radius is within the cone."""
+    d = np.linalg.norm(c, axis=1)
+    if cone.half >= math.pi:
+        return np.ones(len(c), bool)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        off = np.arccos(np.clip(-c[:, 2] / np.maximum(d, 1e-300), -1.0, 1.0))
+        spread = np.arcsin(np.clip(rho / np.maximum(d, 1e-300), 0.0, 1.0))
+    return (d <= rho) | (off - spread <= cone.half)
+
+
+def sphere_bounds(lo, hi, M, cone):
+    """Lower bounds of the distance from the camera of what of boxes [lo, hi] ((k, 3), M (k, 4, 4) or one (4, 4) as in
+    `box_depth`) lies inside `cone`: inf for a box whose bounding sphere stays outside the cone, else the distance to
+    that sphere (0 with the camera inside it)."""
+    lo, hi = np.asarray(lo, float).reshape(-1, 3), np.asarray(hi, float).reshape(-1, 3)
+    M = np.broadcast_to(np.asarray(M, float), (len(lo), 4, 4))
+    C = lo[:, None, :] + CORNERS[None] * (hi - lo)[:, None, :]
+    Cc = np.einsum("kij,kcj->kci", M[:, :3, :3], C) + M[:, None, :3, 3]
+    c = Cc.mean(1)
+    rho = np.linalg.norm(Cc - c[:, None, :], axis=2).max(1)
+    return np.where(_reaches(c, rho, cone), np.maximum(np.linalg.norm(c, axis=1) - rho, 0.0), np.inf)
+
+
+def _segment(A, B):
+    """Distance from the origin to the segments A-B ((n, 3) each)."""
+    E = B - A
+    t = np.clip(-(A * E).sum(1) / np.maximum((E * E).sum(1), 1e-300), 0.0, 1.0)
+    return np.linalg.norm(A + t[:, None] * E, axis=1)
+
+
+def tri_distance(T, cone):
+    """The distance from the camera of each triangle of T (n, 3, 3) in the camera's axes that may reach into `cone` (its
+    bounding sphere does; inf for the others): its nearest point, never farther than its nearest point inside the cone."""
+    T = np.asarray(T, float).reshape(-1, 3, 3)
+    if not len(T):
+        return np.zeros(0)
+    A, B, C = T[:, 0], T[:, 1], T[:, 2]
+    c = T.mean(1)
+    rho = np.linalg.norm(T - c[:, None, :], axis=2).max(1)
+    n = np.cross(B - A, C - A)
+    nn = (n * n).sum(1)
+    flat = nn > 1e-24
+    q = n * ((A * n).sum(1) / np.where(flat, nn, 1.0))[:, None]          # the origin dropped onto the triangle's plane
+    inside = flat.copy()
+    for P0, P1 in ((A, B), (B, C), (C, A)):
+        inside &= (np.cross(P1 - P0, q - P0) * n).sum(1) >= 0.0
+    plane = np.where(inside, np.abs((A * n).sum(1)) / np.sqrt(np.where(flat, nn, 1.0)), np.inf)
+    d = np.minimum.reduce([plane, _segment(A, B), _segment(B, C), _segment(C, A)])
+    return np.where(_reaches(c, rho, cone), d, np.inf)
+
+
+def least_distance(items, cone):
+    """`least_depth` for a fisheye: the least distance (m) from the camera of the geometry of `items` (as there) that may
+    lie inside `cone`, inf when there is none. An object that only has its box counts with its bounding sphere's
+    distance."""
+    if not items:
+        return np.inf
+    lo = np.array([b[0] for b, _, _ in items], float)
+    hi = np.array([b[1] for b, _, _ in items], float)
+    M = np.array([m for _, m, _ in items], float)
+    b0 = sphere_bounds(lo, hi, M, cone)
+    best = np.inf
+    for i in np.argsort(b0, kind="stable"):
+        if b0[i] >= best:
+            break
+        got = items[i][2]()
+        if got is None:
+            best = min(best, float(b0[i]))
+            continue
+        piece, V = got
+        clo, chi = piece.boxes(V)
+        b1 = sphere_bounds(clo, chi, M[i], cone)
+        order = [j for j in np.argsort(b1, kind="stable") if b1[j] < best]
+        R, t = M[i, :3, :3], M[i, :3, 3]
+        V = np.asarray(V, float).reshape(-1, 3)
+        k = 0
+        while k < len(order) and b1[order[k]] < best:
+            take, n = [], 0
+            while k < len(order) and b1[order[k]] < best and (not take or n < BATCH):
+                take.append(piece.chunks[order[k]])
+                n += len(take[-1])
+                k += 1
+            T = V[piece.F[np.concatenate(take)]] @ R.T + t
+            best = min(best, float(tri_distance(T, cone).min()))
+    return best

@@ -41,25 +41,32 @@ passes at SS.VECTOR_SCALE times the frame's size, boxed down:
 
 reflection. A plane light probe at the glass object and, in the glass material, a mirror layer in front of the glass
 shader (mkmmd.blender.mirror). EEVEE Next fills a glossy surface on a probe's plane with the mirrored view of the whole
-scene, so what stands behind the camera shows up in the pane."""
+scene, so what stands behind the camera shows up in the pane.
+
+A fisheye shot has no look (mkmmd.core.shotspec refuses one: Workbench and EEVEE draw a fisheye as a perspective camera),
+but the passes other layers take through its camera are drawn by Cycles there, each surface a flat emission through its
+MMD alpha as `keep_mask` makes it, so they line up with the Cycles frame: `coverage` (a collage's or a mask's figure) and
+`keep_mask`."""
 import json
 import os
 import tempfile
 
 import bpy
 import numpy as np
-from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
 
 from ..core import medium as MD
 from ..core import rings as RG
 from ..core import screentype as SR
 from ..core import shotstyle as SS
+from . import fisheye as FE
 from . import mirror as MR
 from .ops_core import _namespace
 
 WORKBENCH = "BLENDER_WORKBENCH"
 EEVEE = "BLENDER_EEVEE_NEXT"
+CYCLES = "CYCLES"
+MASK_SAMPLES = 16                        # Cycles samples of a coverage pass through a fisheye (Workbench's 16 for the others)
 FLAT_TYPES = {"MESH", "CURVE", "SURFACE", "FONT", "META", "CURVES", "POINTCLOUD"}
 TEXT_GROUP = "mk_text_"                  # the node groups of the text stage: its objects are type
 AOV_NAME = "mk_soft"
@@ -447,7 +454,8 @@ class Looks:
             img = self._shoot_scene()
         else:
             self.sc.render.filepath = path
-            bpy.ops.render.render(write_still=True)
+            with FE.cycles(self.sc):                       # a fisheye's frame: Cycles (mk render refused any other)
+                bpy.ops.render.render(write_still=True)
             return
         if rgba is not None:
             img = SR.composite(img, rgba)
@@ -512,12 +520,14 @@ class Looks:
             rs.run()
 
     def _shoot_scene(self):
-        """The scene's own render of the frame (its engine, light and view transform) as display values -> (h, w, 3)."""
+        """The scene's own render of the frame (its engine, light and view transform; Cycles through a fisheye) as display
+        values -> (h, w, 3)."""
         rs, ims = Restore(), self.sc.render.image_settings
         try:
             for k, val in (("file_format", "PNG"), ("color_mode", "RGB"), ("color_depth", "8"), ("compression", 0)):
                 rs.attr(ims, k, val)
-            return self._shoot("scene")[..., :3]
+            with FE.cycles(self.sc):
+                return self._shoot("scene")[..., :3]
         finally:
             rs.run()
 
@@ -555,6 +565,10 @@ class Looks:
         if engine == EEVEE:
             rs.attr(sc.eevee, "taa_render_samples", int(samples or 16))
             rs.attr(sc.eevee, "use_raytracing", False)
+        elif engine == CYCLES:                            # a pass through a fisheye: flat surfaces, so no light to clean
+            for k, val in (("samples", int(samples or MASK_SAMPLES)), ("use_denoising", False),
+                           ("use_adaptive_sampling", False)):
+                rs.attr(sc.cycles, k, val)
         else:
             d = sc.display
             rs.attr(d, "render_aa", "16")
@@ -591,10 +605,11 @@ class Looks:
         for the kept ones and black for the rest, so whatever stands in front of a kept surface hides it as it does in the
         picture; an MMD material (mmd_tools' `mmd_shader`) is transparent by its own alpha, texture included (an eye drawn
         on a quad keeps only its painted part; a strand's see-through tip lets the eye show), any other is opaque. Objects
-        without any material are left out (they would render lit grey). Antialiased, the frame's size."""
+        without any material are left out (they would render lit grey). Antialiased, the frame's size. Through a fisheye
+        camera the pass is Cycles' (EEVEE draws a fisheye as a perspective camera)."""
         keep, rs = set(materials), Restore()
         try:
-            self._film(rs, EEVEE, "Raw")                     # linear: a rim's coverage, not its sRGB code
+            self._film(rs, CYCLES if FE.is_fisheye(self.sc.camera) else EEVEE, "Raw")   # linear: a rim's coverage
             for m in bpy.data.materials:
                 if m.use_nodes and m.node_tree:
                     _flat_surface(rs, m, 1.0 if m in keep else 0.0)
@@ -619,16 +634,29 @@ class Looks:
 
     def coverage(self, names, scale=1):
         """Coverage (h, w) in 0..1 of the named objects alone (the rest hidden, and those the scene hides on this frame),
-        antialiased by Workbench like the flat pass, `scale` times the frame's size: a matte, a collage's figure."""
+        antialiased by Workbench like the flat pass, `scale` times the frame's size: a matte, a collage's figure. Through a
+        fisheye camera, which Workbench draws as a perspective one, Cycles draws it instead, every surface of those objects
+        a flat emission through its MMD alpha (as `keep_mask`): the coverage of the figure the Cycles frame shows."""
         rs = Restore()
         try:
-            self._film(rs, WORKBENCH, "Standard")
+            fish = FE.is_fisheye(self.sc.camera)
+            self._film(rs, CYCLES if fish else WORKBENCH, "Standard")
             r = self.sc.render
             if scale != 1:
                 rs.attr(r, "resolution_x", r.resolution_x * int(scale))
                 rs.attr(r, "resolution_y", r.resolution_y * int(scale))
             self._visibility(rs, show=names)
-            return np.clip(self._shoot("matte")[..., 3] / SS.ALPHA_FULL, 0.0, 1.0).astype(np.float32)
+            if not fish:
+                return np.clip(self._shoot("matte")[..., 3] / SS.ALPHA_FULL, 0.0, 1.0).astype(np.float32)
+            mats = {m.name: m for n in names for m in _materials(bpy.data.objects[n])}
+            for m in mats.values():
+                if m.use_nodes and m.node_tree:
+                    _flat_surface(rs, m, 1.0)
+            a = np.clip(self._shoot("matte")[..., 3], 0.0, 1.0).astype(np.float32)
+            h, w = a.shape                               # Cycles draws the black past the image circle opaque: no figure
+            py, px = np.mgrid[0:h, 0:w]
+            seen = FE.lens(self.sc.camera, (w, h)).rays(px.ravel(), py.ravel()).any(1).reshape(h, w)
+            return np.where(seen, a, 0.0).astype(np.float32)
         finally:
             rs.run()
 
@@ -801,11 +829,11 @@ class Looks:
 
     def _ring_centre(self, ring):
         """The ring's centre at the prepared frame as frame fractions from the top left, seen through the scene camera
-        (the shot's, per output); None when the point is behind the camera."""
+        (the shot's, per output); None when the point is behind the camera (or past a fisheye's field)."""
         c = ring["center"]
         if c["mode"] == "frame":
             return tuple(c["at"])
-        p = world_to_camera_view(self.sc, self.sc.camera, ring_point(ring, self.frame))
+        p = FE.view(self.sc, self.sc.camera, ring_point(ring, self.frame))
         return None if p.z <= 0 else (p.x, 1.0 - p.y)
 
     def _enter_vector(self, name, spec):
