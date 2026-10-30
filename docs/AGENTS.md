@@ -233,7 +233,15 @@ fingertip bone's `.tail` and the prop.
   Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
   `bullets = {at = "cast:rin.center", offsets = [...]}` ([Lyrics](design.md#lyrics)): each flies past where she is on the frame it lands; key her hop or duck on
   the same onsets and prove it with a `clearance` check. Persona's kinetic type is screen type with `lyrics = {style = "slam", layout = "same",
-  recycle = {fade = 4, slide = 7}, backing = {color = "#E3263A", torn = 0, slant = 14}}` in a heavy italic font.
+  recycle = {fade = 4, slide = 7}, backing = {color = "#E3263A", torn = 0, slant = 14}}` in a heavy italic font. A phrase sung again and again
+  accumulates as rings of words turning about a point instead of each line replacing the last: one entry with `lines = [a, b]` and
+  `layout = {kind = "ring", rings = "line" | "fill", center, turn}` (a ring per repeat, or each ring filled before the next; `center` may be a
+  target such as her head), and `wobble = {}` makes the letters of a sung word bob on a wave with the voice ([Lyrics](design.md#lyrics): Rings, Wobble).
+  A motion-design reel's huge type is `layout = {kind = "bleed", rows, yaw, pitch, swing}` with `style = "slam"`, `recycle = true` and a heavy
+  grotesk: each word off the frame's edges, tilted in depth (kinetic `yaw`, `pitch`, `persp`).
+  Toy alphabet blocks are `lyrics = {style = "blocks"}` (or a label: `text` with `blocks = {...}`) ([Block type](design.md#block-type)): a 3D wooden
+  block per letter that drops in and lands on the onset, `blocks.hits` hop (`jump`) or `slam` them on a lane, `next = "tumble"` knocks a line off
+  as the next comes down and `crash` scatters a pile; as screen type over the picture or standing in the scene (`size` is a block's edge).
 
 ## 7. Checks
 

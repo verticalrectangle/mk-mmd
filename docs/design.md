@@ -3656,8 +3656,9 @@ The same entry also makes lyric type (`lyrics`), handwriting (`ink`) and type of
 | `back` | `true`: the text goes on the other side of a card surface (its normal reversed, `up` kept: a pane read from outside); with `on` only |
 | `backing` | `true` or `{color, pattern, pattern_color, pad, height, torn, dz, glow, scale, seed, slant}`: a strip of tape behind the text, the ink box plus `pad` `[x, y]` (em; default 0.55, 0.3) or a fixed `height` em, `color` (default `surface`), ends torn by `torn` x its height (default 0.1, below 0.5), `pattern` `plain` (default) / `stripe` / `dots` / `check` in `pattern_color` (default `surface`) drawn from the strip's own UV, `scale` its pitch factor (1.0), `glow` the strip's own emission (default 0.3; 1.0 in screen type, which has no lights), `dz` metres behind the text (default 0.0006), `seed` of the tearing (1), `slant` degrees its ends lean, to the right going up (default 0; -60 .. 60: with `torn = 0` a clean parallelogram, Persona's slab under a heavy italic); it moves, rotates and fades with the word |
 | `outline` | `true` or `{color, width, alpha, dz}`: a ring of another colour behind the letters (the filled shapes grown by `width` em, default 0.05, `color` default `text`, at `alpha` in (0, 1], default 0.5, `dz` metres behind, default 0.0003) so they read on any background; it moves and fades with the word |
-| `kinetic` | `{show, scale, sx, sy, dx, dy, dxp, dyp, rot, pivot, tracking, weight, opacity, tint, drip, headroom}`: motion keyed on node inputs, written by `lyrics` or by hand ([Lyrics](#lyrics), the kinetic keys) |
+| `kinetic` | `{show, scale, sx, sy, dx, dy, dxp, dyp, rot, pivot, tracking, weight, opacity, tint, drip, headroom, orbit, bend, wobble}`: motion keyed on node inputs, written by `lyrics` or by hand ([Lyrics](#lyrics), the kinetic keys) |
 | `lyrics` | `{timeline, line, words, style, ...}`: one text per sung word, read from the timeline ([Lyrics](#lyrics)) |
+| `blocks` | `true` or `{paint, ink, wood, ground, letter, relief, round, rim, sides, pictures, layout, rows, gap, space, view, fall, hits, next, crash, tumble, land, to}`: the text set in 3D toy alphabet blocks, one per letter or digit: a label (with `text`) or the sung words (with `lyrics.style = "blocks"`) ([Block type](#block-type)) |
 | `ink` | `{strokes \| track, on, width, lift, color, dry, glossy, from, to}`: handwriting instead of type, a pen's strokes that appear behind the nib; the entry carries only `name` and `ink` ([Ink](#ink)) |
 | `screen` | `true` or `{anchor, side, margin, height, width}`: type of the picture, laid over the finished frame of whichever shot is cutting; `at`, `box`, `size`, `offset` are in frame heights, and no `on`, `mount`, `facing` or `up` ([Screen type](#screen-type)) |
 | `knockout` | `true`: screen type reversed out of a silhouette shot, in any other shot ordinary screen type ([Screen type](#screen-type)) |
@@ -3756,7 +3757,7 @@ Keys inside `lyrics = {...}`:
 | `timeline` | the timeline JSON (required; project-relative, or `~/...`) |
 | `line`, `lines`, `words` | which words: exactly one of `line = N` and `lines = [a, b]`, 1-based and inclusive; `words = [i, j]` applies to every selected line (one number: one word; default all). Numbers out of range are errors that name the numbers |
 | `case`, `clean` | `case` is `keep` (default) / `lower` / `upper` / `title`; `clean = true` keeps letters, digits and apostrophes (a curly one turns straight; a word with nothing else left stays as it was) |
-| `style`, `arrive` | how a word arrives: `pop` (default), `slap`, `drop`, `rise`, `slide`, `slam`, `type` or `none`; `arrive = {...}` overrides that style's numbers (below) |
+| `style`, `arrive` | how a word arrives: `pop` (default), `slap`, `drop`, `rise`, `slide`, `slam`, `type`, `none` or `blocks` (3D toy blocks that drop in: [Block type](#block-type); their look and motion are in `blocks`, and only `timeline`, `line`, `lines`, `words`, `case`, `clean`, `from` and `to` apply); `arrive = {...}` overrides that style's numbers (below) |
 | `from`, `to` | clip seconds. `from`: no word lands before the frame of `from` (default: each lands on its onset). `to`: where the shot cuts and the text is gone (default: the end of the last selected word's note) |
 | `leave` | how the line leaves: `cut` (default, hold to `to`), `drip` or `rewind` (below) |
 | `drip`, `rewind` | the numbers of `leave = "drip"` and `leave = "rewind"` (below) |
@@ -3768,10 +3769,11 @@ Keys inside `lyrics = {...}`:
 | `backing` | a `backing` table, or a list of them cycled over the words |
 | `recycle` | `true` or `{gap, fade, assign, slide}`: a word is gone `gap` frames before the next word of its slot lands (default 0) and fades over the `fade` frames before (default 0: it cuts), and with `slide` (em, + right) is flung off sideways over those frames, faster and faster. A word's slot is its surface (`same`), row (`stack`) or slot (`slots`); `assign` is a list of group numbers cycled over the words instead (the way to share a slot in `flow`, where each word stands alone) |
 | `wow` | `true` or a table: tape wow and flutter while a note is held (below) |
+| `wobble` | `true` or `{amount, sway, tilt, rate, wave, follow, attack, release, min_hold}`: the letters bob and sway on a wave that travels along the word while it is sung, as big as the voice is loud (below) |
 | `punch`, `write` | the words that stand out, and the words whose note is held long, take a look of their own (below) |
 | `carry` | what a word does that is already up when its block starts (a `from` after its onset, a new shot with `zones`): `land` (default) arrives again, `still` is simply there in its new place |
 | `zones` | `{<shot> = {overlay}}`: the line is set again in every shot it crosses (below) |
-| `layout` | where the words stand: `same` (default), `flow`, `stack` or `slots`, or a table `{kind, ...}` (below) |
+| `layout` | where the words stand: `same` (default), `flow`, `stack`, `slots`, `ring` or `bleed` (huge words off the edges, tilted in depth), or a table `{kind, ...}` (below) |
 | `bullets` | `{at, offsets, box, facing, up, come, go, lead, after}`: each word flies past a target in the world, an obstacle for a character to dodge (below) |
 
 **Arrival.** Every style also takes `alpha0` (opacity at the landing, default 1) and `alpha_frames` (frames it takes to reach 1,
@@ -3788,6 +3790,7 @@ in shares of the panel, so the text needs a surface or a `box`.
 | `style = "slam"` | slammed onto the picture: it starts `big` times its size and comes down to it over `dur` s, faster and faster, then rings, a damped spring of its scale (`a`, `td`, `tp` as `pop`; `a` negative: it squashes on the impact) and a shake of `shake` em gone in 60 ms; opaque from the first frame. `arrive`: `big` 2.6, `dur` 0.05, `a` -0.10, `td` 0.05, `tp` 0.16, `shake` 0.05. With `layout = "same"`, `recycle = {fade, slide}` and a slanted red `backing` it is Persona's kinetic type |
 | `style = "type"` | a typewriter over its note: the first letter on the landing, the last when the note ends (`reveal`) |
 | `style = "none"` | no arrival: it is simply there |
+| `style = "blocks"` | the word in toy alphabet blocks, one per letter, that drop in from above, land on the onset and bounce ([Block type](#block-type)) |
 
 **Leaving.** `leave = "drip"`: when a tempo tick falls between the end of the last word's note (minus 30 ms) and `to` minus `min_run`,
 every letter stretches downward from its top and falls like a drop, the first one leaving on the tick's frame; with no such tick the
@@ -3804,11 +3807,24 @@ and out over `tail` s (0.15) after the note: a slow sway of position (`amount` 0
 angle (`tilt` 2.5 degrees) and a fast flutter (`flutter` 0.03 em at `flutter_rate` 9 Hz), added to the arrival. With `style = "slide"`
 and `backing` this is the cassette look ([Cassette type](#cassette-type)).
 
+**Wobble.** `wobble = {amount, sway, tilt, rate, wave, follow, attack, release, min_hold}` (`true` or `{}` is all defaults;
+`mkmmd/core/typewobble.py`): while a word is sung its letters bob on a wave that travels along it from the first letter to the last,
+`wave` letters to a cycle (4.5) at `rate` cycles a second (2.2 Hz), each rising and falling by up to `amount` em (0.08), swaying
+sideways `sway` times that (0.35) a quarter cycle apart and turning up to `tilt` degrees (7) with the slope of the wave under it,
+about its own middle: jelly letters, not a shake. How far they go follows the voice: the smoothed level of the timeline's
+`vocal_db` (as `weight` reads it: -34 dB still, -5 dB re the vocal's peak the full amount) while the note is held, rising over
+`attack` s from its start (0.12) and dying away over `release` s after its end (0.35), so a note that swells wobbles more and a
+silent voice keeps the letters still. `follow` (0..1, default 1) is the share of the amplitude the level sets; 0 wobbles fully
+whenever the voice sounds at all. Notes held less than `min_hold` s (0) stay still. Every word starts its wave at a phase of its
+own (fixed by the word), so neighbours never bob in step, and every build is the same. The rate is chosen, not measured: a
+level sampled once a frame cannot show a singer's vibrato. A `punch` or `write` look can give its words a `wobble` of their own
+(`false`: none). It plays on top of the arrival, the spread and a ring's turn (the letters bob across the ring).
+
 **Emphasis.** `punch = {top, above, words, ...look}` picks the words that stand out: the `top` loudest of the selection by `vocal_db`,
 those at or `above` a level in dB (against the peak of the vocal), and `words` by number within the selection (1-based); at least one
 of the three. `write = {min_hold, ...look}` takes the words that are not punch words and whose note is held for `min_hold` seconds
 (default 0.6) or more. The look is any of `font`, `color`, `glow`, `outline`, `backing` (`false`: no strip), `scale` (cap height
-relative to the line's, positive), `style` / `arrive` (not `rise`), `tilt`, `weight`, `reveal` (`true` writes the word out letter by
+relative to the line's, positive), `style` / `arrive` (not `rise`), `tilt`, `weight`, `wobble`, `reveal` (`true` writes the word out letter by
 letter over its note: the typewriter's ramp, first letter on the landing, last when the note ends). A word in its own font is
 measured in it, so the layout fits. The report lists the punch and write words by number.
 
@@ -3822,8 +3838,46 @@ band's side) sets each row against a margin of the panel. `stack` (`rows`, `pitc
 cycled by row, `tilt` per row): word k on row `k mod rows`, the first on top (`down`) or at the bottom (`up`). `slots` (`slots =
 [{at, box, align, tilt, size}]`, `assign`): `at = [u, v]` and `box = [w, h]` are shares of the panel (u right, v up from its centre),
 the word is fitted into its box and aligned there, `size` is a cap height in m; word k takes slot `assign[k]` (default k mod len).
-`flow`, `stack` and `slots` need a panel (`on`, or `box`; `flow` and `stack` also work with a `size`). The words are measured in
+`flow`, `stack`, `slots` and `ring` need a panel (`on`, `box` or `screen`; `flow` and `stack` also work with a `size`). The words are measured in
 Blender with the node the text is drawn with; the rest is `core/wordtype.py`.
+
+**Bleed.** `layout = {kind = "bleed", width, height, rows, align, at, yaw, pitch, persp, swing, tilt, inset}` sets huge
+words that run off the panel's edges, a motion-design reel's type (`wordtype.layout_bleed`): each word as large as makes its
+ink `width` times the panel's width (1.2: the frame crops it), its cap height at most `height` of its band (0.8: a short
+word stays readable), word k in band k mod `rows` (1) from the top; `align` (cycled, default `["left", "right"]`) starts a
+word `inset` of its own width (0.04) off the panel's left edge and runs it off the right one, or the other way round, or
+off both (`center`); `at` `[u, v]` nudges (shares of the panel, cycled). Every word is then turned in depth onto a plane,
+`yaw` degrees its right side away and `pitch` its top away (cycled, default `[-24, 18]` and `[8, -6]`), seen in
+perspective from `persp` em (3), swinging in `swing` degrees further on its landing over 0.2 s (0); `tilt` (cycled) turns it
+in the plane too. It needs a panel (`screen = {margin = 0}` makes it the whole frame), takes a size per word (never shrunk
+to a `fit`) and a slot per band, so `recycle = true` makes each new word take its band's place. Heavy grotesk words
+slammed in on their onsets: `font = "fira_sans_heavy"`, `lyrics = {style = "slam", recycle = true, layout = {kind =
+"bleed", rows = 2, yaw = [-26, 20, -14, 24], pitch = [10, -8, 6, -12], swing = 30}}`.
+
+**Rings.** `layout = {kind = "ring", center, radius, pitch, gap, turn, start, rings, face, even, bend}` (`mkmmd/core/typering.py`)
+sets the words round circles about a point, reading round them, the letters following the curve: `face = "out"` (default) reads
+clockwise with the tops away from the centre (type round the top of a badge), `"in"` counter-clockwise with the tops toward it
+(along its bottom); `bend = false` sets each word straight on its tangent instead. Each word takes an arc as long as its ink (with
+the spread's headroom, the strip behind it and its outline: a sticker's die-cut edge) plus `gap` em (0.3, times `word_spacing`) of
+clear ring, measured where neighbours come closest. A ring word stays up from its landing to the cut like any other, so an entry
+that spans several lines (`lines = [a, b]`: a phrase sung again and again) ACCUMULATES instead of each line replacing the last:
+`rings = "line"` (default) gives every lyric line a ring of its own, `pitch` em (default: the tallest word with its edge, plus
+`gap`) further out than the one before, the line centred on `start` (`even = true`: its words share the whole ring out between
+them); `rings = "fill"` winds the words round one ring, each repeat taking up where the last stopped, until the next word would not
+fit, then shares that full ring's free arc out between its words (it closes evenly) and goes on round the next ring out. `start`
+is where a ring starts, in degrees clockwise from the top (default 0, the top; 180 for `in`), `center` the point the rings go
+round: `[u, v]`, shares of the panel from its centre (default `[0, 0]`; for screen type, the middle of the picture), or a
+[target](#targets) (`"cast:rin.head"`, `[x, y, z]`, a table): a point of the scene that the rings follow on every frame, as the
+cut's camera of each output sees it for screen type and on the panel's plane for type in the scene (the build keys an empty,
+`<name>_ring`, `@<output>` for one output of several, there; a `[[freeze]]` does not hold it). `radius` is the first ring's, a share of half the panel's shorter side
+(0.35). The common size is the largest at which every ring fits `fit` of the room about the centre (at most `size`), no line wraps
+into itself on its ring and the innermost words keep half their height clear of the centre: a long line on a small first ring
+sets the type small. Each ring turns about the centre at `turn` degrees a second (8; clockwise for a positive number), the next
+ring the other way; a list (`turn = [6, -10, 4]`) gives each ring its own, cycled. A ring turns rigidly from the moment its first
+word lands, so every word lands where its place on the turning ring has got to (the kinetic `orbit` and `bend`, below). An
+entry's `tilt` (`{random = 6}`: stickers slapped on a little askew) is added on top of each word's turn to its ring. The report
+gives `rings` (`{ring, words, radius, turn, first_frame}` per ring) and, round a point of the scene, `ring_track` (`{object,
+frames}`).
 
 **Zones.** `zones = {<shot> = {overlay}}` sets one `line` again in every shot of the cut it is on screen in (at least 2 frames): each
 shot's block is the entry with that shot's overlay laid over it (tables merged: any `[[text]]` key, `lyrics = {...}` included; a shot
@@ -3859,12 +3913,17 @@ whose values are all one number just sets the node):
 | `tint` | `{color, keys}`, both required: a mix toward another palette colour, 0 = the text's own (`Tint`) |
 | `drip` | `{t, g, stretch, life, seed}` (`t` required): the exit, from clip second `t` every letter stretches downward from its top and falls, the first letter on `t`, the rest within 0.1 s; `g` px/s² at a 150 px em (2600), `stretch` the extra height (3.2), `life` seconds to fade (0.55), `seed` the random order the letters go in (1) (`Drip`) |
 | `headroom` | the share of the word's width the fit leaves for the letters' spread (`lyrics` sets it from `spread`) |
+| `orbit` | `{center, keys, track}` (`keys` required): after everything above, the word turned about `center` (`[x, y]` m in the text frame) by `keys` degrees counter-clockwise: a ring word carried round its turning ring (`Orbit`); `track` names an object whose place, seen from the text on its plane, the centre moves with (a ring round a point of the scene) |
+| `bend` | `{radius, side}`: the letters (and the strip behind them) follow a circle of `radius` m through the word's pivot, its centre below the word (`side = 1`: the tops out) or above it (`-1`: the tops in) |
+| `wobble` | `{amp, phase, amount, sway, tilt, wave}` (`amp` and `phase` required): every letter bobs by `amount` em x `amp` on a wave that travels along the word, `wave` letters to a cycle at the keyed `phase` (cycles), sways `sway` times that and turns up to `tilt` degrees about its own middle (`WobAmp`, `WobPhase`; `lyrics.wobble` writes them) |
+| `yaw`, `pitch`, `persp` | the word turned in depth about its pivot, `yaw` degrees its right side away and `pitch` its top away (keyed, `Yaw`, `Pitch`), seen in perspective from `persp` em in front of it (a number, default 8; nearer is stronger) and laid flat in its plane again: a 2D projective warp of the word, its strip and its outline (a `bleed` layout writes them) |
 
 They become keys on Value nodes of the text's node group, so a render needs no Python (read one with `mk q
 'bpy.data.node_groups["mk_text_<name>"].nodes["Pop"].outputs[0].default_value' --frames ...`). Letters stay filled shapes of the
 String to Curves instances: the drip scales and moves each character about its own top, opacity and tint travel as the attributes
 `mk_alpha` and `mk_tint` that the shared material reads (hashed alpha: a word fades without sorting against the glass), the weight is
-the shape repeated on a ring.
+the shape repeated on a ring, the wobble moves and turns each character about its own middle, the bend moves every point of the
+filled word round its circle.
 
 ```toml
 [[text]]                              # steam words over a mug: they land on their onsets, rise to their slots and frost over
@@ -3900,11 +3959,31 @@ fit = 0.8
 lyrics = { timeline = "audio/timeline.json", line = 1, words = [5, 8], style = "drop", from = 2.6, to = 5.0, leave = "drip", sizes = [0.13, 0.055, 0.12, 0.21] }
 ```
 
+```toml
+[[text]]                              # a phrase sung again and again: a ring of die-cut stickers per repeat, turning in turn
+name = "chant"
+screen = true                         # round the middle of the picture, in every output
+font = "sticker_display"
+outline = { color = "#ffffff", width = 0.14, alpha = 1.0 }
+[text.lyrics]
+timeline = "audio/timeline.json"
+lines = [9, 14]                       # the six repeats; every word stays up until `to`
+to = 33.0
+style = "slap"
+tilt = { random = 5 }
+colors = ["love", "pine", "gold", "iris", "foam"]
+color_by = "word"
+wobble = { amount = 0.1 }             # the letters bob with the voice while each word is sung
+layout = { kind = "ring", rings = "line", radius = 0.3, turn = [6, -9] }
+# round her head instead, as each output's camera sees it: center = "cast:rin.head"
+# fill each ring before the next instead of a ring per repeat: rings = "fill"
+```
+
 The stage report has one entry per `lyrics` text, `{words, lines, style, layout, skipped, first_frame, last_frame, cut_frame,
-drip_from, rewind_from, carried, punch, write}` (Blender frames; seconds for `drip_from` and `rewind_from`; `skipped`, `carried`,
-`punch` and `write` as `[line, word]` pairs) and, with `zones`, `blocks` (`{shot, words, style, layout, first_frame, last_frame}` per
-shot); and per word the usual text numbers with `lyric` `[line, word]`, `chars`, `kinetic_keys` and `frames` [on, off). The string
-itself (`widest`) is not reported.
+drip_from, rewind_from, carried, punch, write, wobble}` (Blender frames; seconds for `drip_from` and `rewind_from`; `skipped`, `carried`,
+`punch` and `write` as `[line, word]` pairs; `wobble` how many words wobble) and, with `zones`, `blocks` (`{shot, words, style, layout,
+first_frame, last_frame}` per shot), with a ring `rings` and `ring_track` (Rings, above); and per word the usual text numbers with
+`lyric` `[line, word]`, `chars`, `kinetic_keys` and `frames` [on, off). The string itself (`widest`) is not reported.
 
 ### Screen type
 
@@ -4012,6 +4091,125 @@ lyrics = { line = 3, to = 11.57 }          # the line, and where it is let go: o
 
 Preview a word landing with `mk look --frames F --output 9x16` (frames are Blender frames: the report's `first_frame` and the words'
 `frames`), a stretch with its motion with `mk render --preset draft --frames t=8:18.7` then `mk post --preset draft --allow-gaps`.
+
+### Block type
+
+A `[[text]]` set in toy alphabet blocks: one wooden cube per letter or digit, its edges and corners rounded, its six faces painted in
+palette colours, the letter raised (or printed) on its front inside a rim, and another letter, a digit or a little picture on each of
+the other faces. The sung words are lyric type with `lyrics = {style = "blocks", ...}` (`timeline`, `line` / `lines`, `words`, `case`,
+`clean`, `from` and `to` as in [Lyrics](#lyrics); its other keys are errors); a label is `text = "..."` (`\n` or a list of strings for
+rows) with `blocks = {...}`. The look, the layout and the motion are in `blocks` (`true` is all defaults). `mkmmd/core/blocktype.py`
+(numpy only, tested on synthetic timelines) decides the blocks, what their faces show, where they stand, how big they are and how each
+moves, and makes each block's mesh; `mkmmd/blender/build/blocktype.py` builds them. A block gets no character but letters and digits:
+an apostrophe or a hyphen leaves no gap.
+
+The entry's own keys that apply: the placement (`on`, `mount`, `at`, `facing`, `up`, `box`, `back`, `lift`, `screen`, `aspect`,
+`offset`), `font`, `size` (the EDGE of a block: m, frame heights for screen type), `fit`, `align` / `valign`, `glow` and `lit`; any other
+text key (`color`, `depth`, `kinetic`, `backing`, ...) is an error that names it. The blocks are fitted as text is: the largest edge at
+which their outline, as the viewer sees it after `view`, fills `fit` of the panel (default 0.9; at most `size`; `size` alone does not
+shrink), aligned in that margin. They stand in front of the panel, their back faces on it.
+
+**Building.** Per entry (per output for screen type) an empty `<name>` (`<name>@<output>` for one output of several) stands at the
+panel, turned by `view` and scaled by the edge, so `[[key]]` can move a whole entry; under it one mesh object per block,
+`<name>_l<line>w<word>c<letter>` (a label's `<name>_c<k>`, numbered in reading order), keyed on whole frames: location, rotation
+(quaternion) and scale where it moves (LINEAR; straight runs dropped, so linear keys still give every frame exactly), its scale 0 until
+its fall begins and from the frame it is gone (CONSTANT steps): `mk render` needs no Python. Blocks with the same letter share a mesh,
+each object links its own colours (OBJECT material slots). Each glyph is read once per font off a throwaway String to Curves / Fill
+Curve object and becomes geometry, so no string is left in the .blend; the objects carry `mk_lyric = [line, word]` and `mk_block` (the
+letter's place in its word), screen type `mk_screen` and `mk_show` as any screen text. The paint shades itself from the camera's side
+(a fixed light over the viewer's left shoulder in camera space, with a gloss highlight) as emission times `glow`, so screen type, drawn
+with the lights off, still shows solid blocks; in the scene `lit` adds that share of a Principled surface the scene lights. Defaults:
+screen type `glow = 1` (and no `lit`), in the scene `glow = 0.3`, `lit = 1`.
+
+**Layout.** The blocks of a word stand `gap` edges apart and words `space` apart, in rows that build up from the bottom as real blocks
+do: a line's first row is its lowest and every row stands on the one under it. `layout = "flow"` (default) sets each lyric line in
+`rows` rows (`"auto"`: the count that sets the blocks biggest; a number: at most that many), `layout = "stack"` puts every word on a
+row of its own, a tower with the first word at the bottom. With `next = "stack"` (default) each later line stands on top of the one
+before; with `next = "tumble"` every line takes the same place. A label reads top to bottom: its last row stands on the floor and lands
+first. `view = [pitch, yaw]` turns the blocks to show their tops (pitch) and right-hand sides (yaw), in degrees (default `[16, 12]` for
+screen type, which is drawn straight on, `[0, 0]` in the scene, where the camera shows them).
+
+**Motion.** Lengths are in edges, times in clip seconds.
+
+- The fall: a word's first block lands on the frame `floor(onset x fps + 0.4)` (as a lyric word does, never before `from`), its other
+  letters `stagger` s apart (to the frame); a label's first at `land`, every next one `stagger` later. Each falls from rest `height`
+  edges above its place (`"top"`, the default: from just out of the picture for screen type, just above the panel in the scene) under
+  `g` edges/s^2, so it is on screen from the frame its fall begins; it is tilted by up to `spin` degrees about an axis of its own,
+  turning at a steady rate to land flat, bounces with restitution `bounce` until its hops are too low to see, and squashes on each
+  impact (by `squash` for a fall of 4 edges or more, less for a lower one), a damped spring of about 50 ms about its bottom.
+- Hits: `hits = {lane, move, min_db, every, from, to, ...}` or a list of them. On every hit of a lane of the `[audio] hits` file
+  (picked as `[[key]] lane` picks: `min_db`, `every`, `from` / `to`), on the hit's frame (the landing rule), every block that stands on
+  its floor moves: `move = "jump"` hops `height` edges, `wave` s later per block pitch to the right (a ripple), turning `turn` degrees
+  about its x axis on the way (whole turns: 360 is a flip that lands on its letter again); `move = "slam"` is lifted `height` over the
+  first 60 % of `lead` s before the hit and slammed down on it, squashing by `squash` with the whole pile (each block's floor sinks with
+  the rows under it). A block still falling or bouncing lets a hit go by.
+- The next line: with `next = "tumble"` the earlier line is knocked off when the next line's first block starts to fall, from where
+  that block will land outward; `crash = t` knocks off every block still up at `t`, from the middle outward. A knocked block flies off
+  sideways (`kick` edges/s, less the farther it is), up (`pop`) and toward the viewer, spinning (`spin` degrees/s), `gap` s later per
+  block pitch away; with `floor` (default in the scene) it lands on the floor of the bottom row, its lowest corner on it, bounces,
+  slides to a stop and lies flat on its nearest face until the cut; without it (screen type) it falls out of the bottom of the picture,
+  or is gone `life` s after it was knocked.
+- Gone: at `to` (the cut), as lyric words; a label at `blocks.to` (default: the end of the build).
+
+**Faces.** The front shows the letter in `ink` on its paint, inside a rim (`rim`), raised `relief` edges (`letter = "raised"`) or
+printed flat (`"printed"`). `sides = "mixed"` (default): the back the letter in the other case, the right side the next letter of the
+alphabet, the bottom a digit, the top and the left side a picture; `"letters"` letters and a digit all round; `"pictures"` five
+pictures; `"plain"` paint only. A face whose glyph the font lacks is left plain; a front letter it lacks is an error that names its
+place (`letter 2 of word (1, 3)`). The pictures are printed in palette colours on faces painted `ground`: carrot, tomato, peapod,
+eggplant, radish, broccoli, corn, mushroom, apple, sun, star and heart (`pictures` picks, cycled by the letter).
+
+| Key (in `blocks`) | Meaning |
+|---|---|
+| `paint` | a colour or a list cycled over the blocks, one per face as well (default `["love", "gold", "foam", "iris", "rose", "pine"]`) |
+| `ink`, `wood`, `ground` | the letters and rims (`surface`), the rounded wooden edges (`"gold:base:0.6"`) and the faces with pictures (`surface`) |
+| `letter`, `relief`, `round`, `rim` | `raised` (default) or `printed`; the raised height (0.05 edges); the radius of the rounded edges (0.12, 0.02 .. 0.3); a rim round each lettered face (true) |
+| `sides`, `pictures` | what the other faces show: `mixed` (default), `letters`, `pictures` or `plain`; the pictures to use (default all) |
+| `layout`, `rows`, `gap`, `space` | `flow` (default) or `stack`; rows per line (`"auto"`); edges between the blocks of a word (0.06) and between words (0.6) |
+| `view` | `[pitch, yaw]` degrees the blocks turn to show their tops and right sides (screen type `[16, 12]`, the scene `[0, 0]`) |
+| `fall` | `{height, g, bounce, stagger, spin, squash}`: `"top"` or edges; edges/s^2 (196.2: a 5 cm block); restitution (0.35); s between letters (0.03); degrees of tilt (25); squash (0.12) |
+| `hits` | a table or a list: `{lane, move, min_db, every, from, to}` and the move's own: `jump` `{height 0.6, wave 0.012, turn 0}`, `slam` `{height 0.35, lead 0.09, squash 0.28, wave 0}` |
+| `next`, `crash` | `stack` (default) or `tumble`; a clip second at which every block still up tumbles away |
+| `tumble` | `{kick, pop, spin, gap, life, floor}`: 5 and 7 edges/s, 420 degrees/s, 0.02 s per pitch, 1.2 s, true in the scene |
+| `land`, `to` | a label's: clip seconds its first block lands (0) and it is gone (the end of the build) |
+
+```toml
+[[text]]                              # the first words crash in over the picture, hop on the kicks and are slammed on the sub
+name = "hook"
+screen = { anchor = "bottom", height = 0.34 }
+font = "fraunces_black"
+[text.lyrics]
+timeline = "audio/timeline.json"
+line = 1
+words = [1, 4]
+case = "upper"
+style = "blocks"
+to = 5.9
+[text.blocks]
+hits = [{ lane = "kick", move = "jump", min_db = -10 }, { lane = "sub", move = "slam", min_db = -2 }]
+
+[[text]]                              # a tower on the floor of the set, word on word, that crashes before the cut
+name = "tower"
+at = [1.3, -0.5, 0.75]
+facing = [0.0, -1.0, 0.0]
+box = [1.4, 1.5]
+valign = "bottom"                     # the panel's bottom edge on the floor
+size = 0.2                            # 20 cm blocks
+lyrics = { timeline = "audio/timeline.json", line = 5, case = "upper", style = "blocks" }
+blocks = { layout = "stack", fall = { height = 22 }, crash = 23.98 }
+
+[[text]]                              # a label on a wall, letter by letter from 0.5 s, flipping on the snare
+name = "abc"
+on = "studio:wall"
+size = 0.22
+text = "ABC 123"
+blocks = { land = 0.5, sides = "pictures", hits = { lane = "snare", move = "jump", turn = 360 } }
+```
+
+The stage report has per entry `{style, label, blocks, words, lines, layout, rows, next, edge, view, fits, skipped, first_frame,
+last_frame, cut_frame, hits, moves, tumbles, crash, meshes, on, font, panel, object, per_word}`: Blender frames (`first_frame` the first
+landing), `hits` the hits picked per move and `moves` the blocks that made them, `tumbles` `{t, blocks}`, `per_word` each word's
+`lyric`, `blocks`, `land` and `frames` [on, off); never a letter. Look at a landing with `mk look --frames F --sheet` at the words'
+`land` frames, and at a hit on its frame.
 
 ### Ink
 

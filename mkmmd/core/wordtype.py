@@ -21,7 +21,9 @@ The tape look (`slide` arrival, `wow`, `leave = "rewind"`, the `rows` of a flow)
 stand out (`punch`: the loudest, or by number or level, in a font, size and style of their own) and how the type is set
 shot by shot (`zones`: a line set again in every shot it crosses, the words that were up at the cut landing again, still,
 in the new zone; `mkmmd/core/typezones.py` decides who is in which shot) are here. The layout of a zone is always the whole
-line's, so a word that carries across a cut keeps its place when the zone does not change."""
+line's, so a word that carries across a cut keeps its place when the zone does not change. The ring layout (words round
+circles that turn, a ring per repeat of a phrase or each ring filled before the next) is `mkmmd/core/typering.py`'s, the
+letters' wobble with the voice `mkmmd/core/typewobble.py`'s."""
 import math
 from dataclasses import dataclass, field
 
@@ -30,21 +32,26 @@ import numpy as np
 from . import tapefx as TF
 from . import timeline as TL
 from . import typefx as FX
+from . import typering as TR
+from . import typewobble as TW
 from .screentype import deep_merge
 from .typezones import plan_blocks, split_words
 
 LYRICS_KEYS = {"timeline", "line", "lines", "words", "case", "clean", "style", "arrive", "from", "to", "leave", "drip",
                "spread", "weight", "colors", "color_by", "sizes", "offsets", "layout", "tilt", "recycle", "recolor",
-               "backing", "scales", "punch", "write", "wow", "rewind", "carry", "zones", "bullets"}
+               "backing", "scales", "punch", "write", "wow", "rewind", "carry", "zones", "bullets", "wobble"}
 BULLETS = {"at": None, "offsets": [[0.0, 0.0, 0.0]], "box": [1.0, 0.3], "facing": [0.0, -1.0, 0.0], "up": [0.0, 0.0, 1.0],
            "come": [6.0, 0.0, 0.0], "go": [-6.0, 0.0, 0.0], "lead": 0.6, "after": 0.6}
 BULLET_PLACEMENT = ("on", "mount", "at", "facing", "up", "box", "screen")   # entry keys bullets leave to `bullets`
 CASES = ("keep", "lower", "upper", "title")
 STYLES = ("pop", "drop", "rise", "slap", "slide", "slam", "type", "none")
-LAYOUTS = ("same", "flow", "stack", "slots")
+LAYOUTS = ("same", "flow", "stack", "slots", "ring", "bleed")
+BLEED = {"width": 1.2, "height": 0.8, "rows": 1, "align": ["left", "right"], "at": [[0.0, 0.0]], "yaw": [-24.0, 18.0],
+         "pitch": [8.0, -6.0], "persp": 3.0, "swing": 0.0, "tilt": None, "inset": 0.04}   # huge words off the edges
+BLEED_SWING = 0.2                                   # s a bleed word takes to swing in by `swing` degrees to its yaw
 LEAVES = ("cut", "drip", "rewind")
 CARRIES = ("land", "still")
-LOOK_KEYS = {"font", "color", "glow", "outline", "scale", "backing", "style", "arrive", "tilt", "weight", "reveal"}
+LOOK_KEYS = {"font", "color", "glow", "outline", "scale", "backing", "style", "arrive", "tilt", "weight", "reveal", "wobble"}
 PUNCH_KEYS = LOOK_KEYS | {"above", "top", "words"}     # which words (the louder ones), then the look they take
 WRITE_KEYS = LOOK_KEYS | {"min_hold"}                  # which words (the held ones), then the look they take
 LIFT_STEP = 0.002                                   # frame heights between the words of screen type, so strips never z-fight
@@ -513,6 +520,74 @@ def layout_stack(boxes, n_rows, panel, fit, size, cap, pitch=1.3, direction="dow
     return em, out, rows, aligns
 
 
+def bleed_options(lay):
+    """A `bleed` layout's keys checked, with BLEED's defaults: lists (`align`, `at`, `yaw`, `pitch`, `tilt`) cycled over
+    the words, one value standing for a list of one."""
+    o = {**BLEED, **lay}
+    for k, lo, hi in (("width", 0.1, 10.0), ("height", 0.05, 4.0), ("persp", 0.5, 1000.0), ("swing", -180.0, 180.0),
+                      ("inset", -1.0, 1.0)):
+        if isinstance(o[k], bool) or not isinstance(o[k], (int, float)) or not lo <= float(o[k]) <= hi:
+            raise LyricsError(f"lyrics: bleed {k} = {o[k]!r}: a number in {lo:g} .. {hi:g}")
+        o[k] = float(o[k])
+    if isinstance(o["rows"], bool) or not isinstance(o["rows"], int) or not 1 <= o["rows"] <= 8:
+        raise LyricsError(f"lyrics: bleed rows = {o['rows']!r}: a whole number of bands, 1 .. 8")
+    for k in ("align", "at", "yaw", "pitch", "tilt"):
+        v = o[k]
+        if v is None:
+            continue
+        v = [v] if isinstance(v, (str, int, float)) and not isinstance(v, bool) or (
+            k == "at" and isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v)) \
+            else v
+        if not isinstance(v, (list, tuple)) or not v:
+            raise LyricsError(f"lyrics: bleed {k} is a value or a list of them, cycled over the words")
+        if k == "align" and any(a not in ("left", "center", "right") for a in v):
+            raise LyricsError("lyrics: bleed align is left, center or right (the side a word starts from)")
+        if k == "at" and not all(isinstance(a, (list, tuple)) and len(a) == 2 for a in v):
+            raise LyricsError("lyrics: bleed at is [u, v] (shares of the panel) or a list of them")
+        if k in ("yaw", "pitch", "tilt") and not all(isinstance(a, (int, float)) and not isinstance(a, bool) for a in v):
+            raise LyricsError(f"lyrics: bleed {k} is degrees, a number or a list of them")
+        o[k] = list(v)
+    return o
+
+
+def layout_bleed(boxes, cap, panel, opts):
+    """Huge words off the panel's edges, the way a motion-design reel sets type: each word as large as makes its ink
+    `width` times the panel's width (so the frame crops it), at most `height` of its band's height in cap height, in
+    band k mod `rows` from the top; `align` left starts it just off the panel's left edge (`inset` of its own width
+    beyond it) and runs it off the right one, right the other way round, center off both; nudged `at` [u, v] (shares
+    of the panel). `boxes` are the words' ink boxes (w, y0, y1) in em at size 1, `cap` the cap height per em. Returns
+    per word {size (cap height), offset (u, v) of its ink's middle from the panel's centre, row, yaw, pitch, tilt}."""
+    pw, ph = float(panel[0]), float(panel[1])
+    band = ph / opts["rows"]
+    out = []
+    for k, (w, y0, y1) in enumerate(boxes):
+        em = min(opts["width"] * pw / max(w, 1e-9), opts["height"] * band / max(cap, 1e-9))
+        ink = w * em
+        a = _cycle(opts["align"], k)
+        u = {"left": -0.5 * pw - opts["inset"] * ink + 0.5 * ink, "center": 0.0,
+             "right": 0.5 * pw + opts["inset"] * ink - 0.5 * ink}[a]
+        row = k % opts["rows"]
+        nu, nv = _cycle(opts["at"], k)
+        out.append({"size": em * cap, "offset": (u + float(nu) * pw, 0.5 * ph - (row + 0.5) * band + float(nv) * ph),
+                    "row": row, "yaw": float(_cycle(opts["yaw"], k, 0.0)), "pitch": float(_cycle(opts["pitch"], k, 0.0)),
+                    "tilt": None if opts["tilt"] is None else float(_cycle(opts["tilt"], k))})
+    return out
+
+
+def depth_keys(depth, t_land, fps):
+    """The kinetic `yaw`, `pitch` and `persp` of a word tilted in depth (`depth`: its yaw and pitch, degrees, the
+    viewing distance in em and a `swing`): held, or with a swing turned that many degrees further on its landing
+    (`t_land`, clip seconds) and easing out to its yaw over BLEED_SWING seconds, a key a frame."""
+    out = {"pitch": [[t_land, depth["pitch"]]], "persp": depth["persp"]}
+    if depth["swing"]:
+        n = max(int(round(BLEED_SWING * fps)), 1)
+        out["yaw"] = compress([[t_land + j / fps, depth["yaw"] + depth["swing"] * (1.0 - eo3(j / n))]
+                               for j in range(n + 1)])
+    else:
+        out["yaw"] = [[t_land, depth["yaw"]]]
+    return out
+
+
 def recycle_hide(lands, slots, gap=0):
     """Frame each word has to be gone by: the landing of the next word that uses the same slot, minus `gap` frames
     (None: nobody takes the slot over)."""
@@ -616,16 +691,19 @@ def _auto_rows(boxes, gap, panel, fit, size, cap, leading, min_pitch=0.0, align=
     return best[1]
 
 
-def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None):
+def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None, rims=None):
     """Where every word goes: (places, slot of each word, common cap-height size or None). A place is {"spec": keys for
-    the word's text, "offset": (u, v) metres from the panel's centre or None, "tilt": degrees or None}."""
+    the word's text, "offset": (u, v) metres from the panel's centre or None, "tilt": degrees or None}; a ring word's also
+    has "ring" (mkmmd/core/typering.py: its ring, orientation, the ring's radius, turn and centre). `rims` is the outline
+    round each word (em of the common size), which a ring leaves room for."""
     n = len(words)
     layout = lyr.get("layout", "same")
     lay = dict(layout) if isinstance(layout, dict) else {"kind": layout}
     kind = lay.pop("kind", "same")
     if kind not in LAYOUTS:
         raise LyricsError(f"lyrics: layout kind {kind!r} must be one of {list(LAYOUTS)}")
-    allowed = {"same": set(), "flow": FLOW_KEYS, "stack": STACK_KEYS, "slots": SLOT_KEYS}[kind]
+    allowed = {"same": set(), "flow": FLOW_KEYS, "stack": STACK_KEYS, "slots": SLOT_KEYS, "ring": TR.RING_KEYS,
+               "bleed": set(BLEED)}[kind]
     if set(lay) - allowed:
         raise LyricsError(f"lyrics: layout {kind!r} keys {sorted(set(lay) - allowed)} are unknown "
                           f"(known: {sorted(allowed)})")
@@ -639,6 +717,17 @@ def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None):
     fit, sz = entry.get("fit"), entry.get("size")
     boxes, cap = _word_boxes(words, measure, kind, fonts, rel,
                              {"font": entry.get("font"), "tracking": entry.get("tracking")}, pads)
+    if kind == "bleed":                                     # huge words off the edges, each at its own size
+        if not panel:
+            raise LyricsError("lyrics: layout 'bleed' needs a panel (`screen`, `on` or `box`): the words run off its "
+                              "edges")
+        opts = bleed_options(lay)
+        for k, pl in enumerate(layout_bleed(boxes, cap, panel, opts)):
+            places[k]["offset"] = pl["offset"]
+            places[k]["spec"].update(size=pl["size"], align="center", valign="middle")
+            places[k]["tilt"] = pl["tilt"]
+            places[k]["depth"] = {"yaw": pl["yaw"], "pitch": pl["pitch"], "persp": opts["persp"], "swing": opts["swing"]}
+        return kind, places, [k % opts["rows"] for k in range(n)], size
     if kind == "flow":
         gap = float(lay.get("gap", 0.28)) * float(entry.get("word_spacing", 1.0))
         leading = float(entry.get("leading", 1.5))
@@ -670,6 +759,22 @@ def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None):
                                                 float(lay.get("pitch", 1.3)), lay.get("dir", "down"), lay.get("align"),
                                                 lay.get("shift"))
         tilts = [None if _cycle(lay.get("tilt"), r) is None else float(_cycle(lay.get("tilt"), r)) for r in slot_of]
+    elif kind == "ring":                                    # round circles about a point: a ring per line, or filled
+        try:
+            opts = TR.options(lay)
+            res = TR.layout_ring(boxes, [w.line for w in words], panel, fit, sz, cap, opts, rims,
+                                 float(entry.get("word_spacing", 1.0)))
+        except TR.RingError as e:
+            raise LyricsError(f"lyrics: {e}") from None
+        em = res["em"]
+        off = [res["words"][k]["offset"] for k in range(n)]
+        slot_of = list(range(n))
+        tilts = [None] * n
+        target = opts["center"] if TR.is_target(opts["center"]) else None
+        for k in range(n):
+            pl, rg = res["words"][k], res["rings"][res["words"][k]["ring"]]
+            places[k]["ring"] = {"ring": pl["ring"], "orient": pl["orient"], "radius": rg["radius"], "turn": rg["turn"],
+                                 "center": res["center"], "face": opts["face"], "bend": opts["bend"], "target": target}
     else:
         slots = lay.get("slots")
         if not slots or not isinstance(slots, list):
@@ -835,6 +940,17 @@ def _check_look(tab, what):
         raise LyricsError(f"lyrics: a {what} word cannot arrive as steam; give the whole line style 'rise'")
     if not float(tab.get("scale", 1.0)) > 0:
         raise LyricsError(f"lyrics: {what} scale must be positive")
+    _wobble_options(tab.get("wobble"), f"{what} wobble")
+
+
+def _wobble_options(v, what="wobble"):
+    """A `wobble` value (true, a table, or false / absent: none) as typewobble's checked options, or None."""
+    if v is None or v is False:
+        return None
+    try:
+        return TW.options(v)
+    except TW.WobbleError as e:
+        raise LyricsError(f"lyrics: {str(e).replace('wobble', what, 1)}") from None
 
 
 def _punch(lyr, words):
@@ -952,11 +1068,23 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
     for k in range(n):
         b = FX.backing_spec({"backing": back_of(k)})
         pads.append(None if b is None else (b["pad"][0], b["pad"][1], b["height"]))
+    rims = []                                               # and so is an outline (a sticker's die-cut edge), round a ring
+    for k in range(n):
+        o = None if bare else (var[k]["outline"] if var[k] is not None and "outline" in var[k] else entry.get("outline"))
+        o = FX.outline_spec({"outline": o})
+        rims.append(0.0 if o is None else o["width"] * rel[k])
     kind, places, slot_of, size = _places(words, entry, lyr, panel, measure,
                                           fonts if any(f is not None for f in fonts) else None,
                                           rel if any(r != 1.0 for r in rel) else None,
-                                          pads if any(x is not None for x in pads) else None)
-    _with_offset(places, entry.get("offset") or (0.0, 0.0))
+                                          pads if any(x is not None for x in pads) else None, rims)
+    off0 = entry.get("offset") or (0.0, 0.0)
+    _with_offset(places, off0)
+    ring_t0 = {}                                            # a ring turns from the moment its first word is sung
+    for k in range(n):
+        rg = places[k].get("ring")
+        if rg is not None:
+            ring_t0[rg["ring"]] = min(ring_t0.get(rg["ring"], math.inf), landing_frame(words[k].start, fps) / fps)
+    wob = _wobble_options(lyr.get("wobble"))
     tilts = lyr.get("tilt")
     tilt_rnd = 0.0
     if isinstance(tilts, dict):
@@ -1058,6 +1186,8 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
         w = words[k]
         sub = dict(inherit)
         sub.update(places[k]["spec"])
+        if kind == "bleed":                                             # its own size, never shrunk to fit the panel
+            sub.pop("fit", None)
         sub["name"] = f"{name}_{w.tag}"
         sub["text"] = w.text
         sub["lyric"] = [w.line, w.index]
@@ -1085,7 +1215,7 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
             tilt = _cycle(tilts, k, 0.0)
         if backing is not None:
             sub["backing"] = _cycle(backing, k) if isinstance(backing, (list, tuple)) else backing
-        wt_k = wt
+        wt_k, wb_k = wt, wob
         v = var[k]
         if v is not None:                                               # a word that stands out has its own look
             for key in ("font", "color", "glow", "outline", "backing"):
@@ -1095,6 +1225,11 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
                 tilt = float(v["tilt"])
             if v.get("weight") is not None:
                 wt_k = _table(v, "weight", WEIGHT_KEYS) or {}
+            if "wobble" in v:
+                wb_k = _wobble_options(v["wobble"])
+        ring = places[k].get("ring")
+        if ring is not None:                                            # round the ring: the tops out, in, or level
+            tilt = (tilt or 0.0) + ring["orient"]
         if bare:
             sub.pop("backing", None)
             sub.pop("outline", None)
@@ -1113,8 +1248,22 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
         rcw = rc if rc is not None and (rc_words is None or rc_words[0] <= k + 1 <= rc_words[1]) else None
         wow_k = (wow_p, 2.0 * math.pi * h01(w.line, w.index, 41)) if wow_p and TF.wow_held(w.start, w.voiced_end, wow_p) else None
         rew_k = (rew_t0[k], rew) if rew_t0[k] is not None else None
-        sub["kinetic"] = _kinetic(w, k, n, lands, hide[k], k_style, pw, fps, spread_k, wt_k, rcw, vs, tilt, drip, drip_t0[k],
-                                  rec, group, t_last, wow_k, rew_k)
+        kin = sub["kinetic"] = _kinetic(w, k, n, lands, hide[k], k_style, pw, fps, spread_k, wt_k, rcw, vs, tilt, drip,
+                                        drip_t0[k], rec, group, t_last, wow_k, rew_k)
+        if ring is not None:                    # carried round the turning ring, the letters following its curve
+            kin["orbit"] = {"center": [off0[0] + ring["center"][0], off0[1] + ring["center"][1]],
+                            "keys": compress(TR.orbit_keys(ring["turn"], ring_t0[ring["ring"]], *kin["show"]))}
+            if ring["bend"]:
+                kin["bend"] = {"radius": ring["radius"], "side": TR.side(ring["face"])}
+        depth = places[k].get("depth")
+        if depth is not None and (depth["yaw"] or depth["pitch"] or depth["swing"]):   # tilted onto a plane in depth
+            kin.update(depth_keys(depth, lands[k] / fps, fps))
+        if wb_k is not None and TW.held(w.start, w.voiced_end, wb_k):     # the letters bob with the voice
+            wtab = TW.keys(w.start, w.voiced_end, lands[k], hide[k] - 1, fps, lambda t: level(vocal_at(vs, t, fps)), wb_k,
+                           h01(w.line, w.index, 59))
+            if wtab is not None:
+                wtab["amp"] = compress(wtab["amp"])
+                kin["wobble"] = wtab
         if k_style == "type" or (v is not None and v.get("reveal")):    # written letter by letter over the note
             t_from = lands[k] / fps
             sub["reveal"] = {"from": t_from, "to": max(w.voiced_end, t_from + 1.0 / fps)}
@@ -1127,6 +1276,20 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
                "carried": [[words[k].line, words[k].index] for k in keep if carried[k]],
                "punch": [[words[k].line, words[k].index] for k in keep if is_punch[k]],
                "write": [[words[k].line, words[k].index] for k in keep if is_write[k]]}
+    if kind == "ring":                          # ring by ring: how many words, how big, how fast, from when (clip frames)
+        rings = {}
+        for k in keep:
+            rg = places[k]["ring"]
+            r = rings.setdefault(rg["ring"], {"ring": rg["ring"] + 1, "words": 0, "radius": round(rg["radius"], 5),
+                                              "turn": rg["turn"], "first_frame": lands[k]})
+            r["words"] += 1
+            r["first_frame"] = min(r["first_frame"], lands[k])
+        summary["rings"] = [rings[i] for i in sorted(rings)]
+        target = places[0]["ring"]["target"] if places else None
+        if target is not None:                  # a point of the scene: the build keys where it is, the words follow it
+            summary["ring_track"] = {"target": target, "center": [off0[0] + places[0]["ring"]["center"][0],
+                                                                  off0[1] + places[0]["ring"]["center"][1]]}
+    summary["wobble"] = sum(1 for s in specs if "wobble" in s["kinetic"])
     return specs, summary
 
 
@@ -1166,7 +1329,7 @@ def _expand_zones(entry, name, lyr, tl, fps, frame0, shots, panel_of, measure):
     specs, summary = [], {"words": 0, "lines": [int(lyr["line"])], "skipped": [[words[k].line, words[k].index]
                                                                                 for k in split_words(blocks, n)],
                           "blocks": [], "carried": [], "punch": [], "write": [], "cut_frame": cut, "first_frame": None,
-                          "last_frame": None, "drip_from": None, "rewind_from": None}
+                          "last_frame": None, "drip_from": None, "rewind_from": None, "wobble": 0}
     for i, b in enumerate(blocks):
         idx = b["words"]
         if idx != list(range(idx[0], idx[-1] + 1)):
@@ -1191,6 +1354,7 @@ def _expand_zones(entry, name, lyr, tl, fps, frame0, shots, panel_of, measure):
         summary["words"] += summ["words"]
         summary["skipped"] += summ["skipped"]
         summary["carried"] += summ["carried"]
+        summary["wobble"] += summ["wobble"]
         for key in ("punch", "write"):
             summary[key] += [x for x in summ[key] if x not in summary[key]]
         summary["blocks"].append({"shot": b["shot"], "words": blk["words"], "style": summ["style"], "layout": summ["layout"],

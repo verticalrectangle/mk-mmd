@@ -20,11 +20,27 @@ from .typeset import TextError
 #                          falls (`g` px/s^2 at a 150 px em, `stretch` extra height, gone after `life` s), the first
 #                          letter on t, the rest within 0.1 s; opacity fades per letter
 #   headroom               share the fit allows for the letters' spread (the lyrics stage sets it from the spread)
+#   orbit = {center, keys, track}   a turn about `center` ([x, y] m in the text frame), keys in degrees counter-clockwise,
+#                          after everything above: a ring word carried round its ring; `track` names an object whose
+#                          place (seen from the text, on its plane) is where the centre has gone
+#   bend = {radius, side}  the letters follow a circle of `radius` m through the word's pivot, its centre below the word
+#                          (side 1: the tops out) or above it (side -1: the tops in): type round a ring
+#   wobble = {amp, phase, amount, sway, tilt, wave}   letters bobbing on a wave that travels along the word: amp
+#                          [[t, 0..1]] and phase [[t, cycles]] keys, amount (em), sway (share of it), tilt (degrees), wave
+#                          (letters per cycle); mkmmd/core/typewobble.py has the maths
+#   yaw, pitch             the word turned in depth about its pivot, degrees: yaw its right side away (positive), pitch
+#                          its top away, then seen in perspective from `persp` em in front of it (default 8): big type
+#                          skewed onto a tilted plane, flat in the text's own plane again (a 2D projective warp)
+#   persp                  the viewing distance of yaw and pitch, em (default 8; nearer is stronger)
 KINETIC_KEYS = {"show", "scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot", "tracking", "weight", "opacity", "tint",
-                "drip", "pivot", "headroom"}
-MOTION = ("scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot")
+                "drip", "pivot", "headroom", "orbit", "bend", "wobble", "yaw", "pitch", "persp"}
+MOTION = ("scale", "sx", "sy", "dx", "dy", "dxp", "dyp", "rot", "yaw", "pitch")
 KEYED = MOTION + ("tracking", "weight", "opacity")          # channels that are plain key lists
+PERSP = 8.0                                                 # em: the viewing distance of a yaw or a pitch by default
 DRIP_KEYS = {"t", "g", "stretch", "life", "seed"}
+ORBIT_KEYS = {"center", "keys", "track"}
+BEND_KEYS = {"radius", "side"}
+WOBBLE_KEYS = {"amp", "phase", "amount", "sway", "tilt", "wave"}
 LOOK_KEYS = ("value", "blink", "flicker", "fade", "ghost", "halo")      # emission tricks that need their own material
 PIVOTS = ("center", "bottom", "top")
 
@@ -77,8 +93,49 @@ def kinetic_spec(spec):
                         "life": float(v.get("life", 0.55)), "seed": int(v.get("seed", 1))}
         elif key == "headroom":
             out[key] = float(v)
+        elif key == "orbit":
+            out[key] = _orbit(v)
+        elif key == "bend":
+            if not isinstance(v, dict) or set(v) - BEND_KEYS or "radius" not in v or v.get("side", 1) not in (1, -1):
+                raise TextError("kinetic bend is {radius = m, side = 1 | -1}")
+            if not float(v["radius"]) > 0:
+                raise TextError("kinetic bend radius must be positive")
+            out[key] = {"radius": float(v["radius"]), "side": int(v.get("side", 1))}
+        elif key == "wobble":
+            out[key] = _wobble(v)
+        elif key == "persp":
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0.5 <= float(v) <= 1000.0:
+                raise TextError("kinetic persp is the viewing distance of yaw and pitch in em, 0.5 .. 1000")
+            out[key] = float(v)
         else:
             out[key] = v
+    if "persp" in out and not ({"yaw", "pitch"} & set(out)):
+        raise TextError("kinetic persp is the viewing distance of a yaw or a pitch: give one")
+    return out
+
+
+def _orbit(v):
+    """kinetic `orbit`: {center [x, y] m, keys [(t, deg)], track object name or None}."""
+    if not isinstance(v, dict) or set(v) - ORBIT_KEYS or "keys" not in v:
+        raise TextError("kinetic orbit is {center = [x, y], keys = [[t, degrees], ...], track}")
+    c = v.get("center", (0.0, 0.0))
+    if not (isinstance(c, (list, tuple)) and len(c) == 2):
+        raise TextError("kinetic orbit center is [x, y] metres in the text frame")
+    track = v.get("track")
+    if track is not None and not (isinstance(track, str) and track):
+        raise TextError("kinetic orbit track is the name of an object")
+    return {"center": [float(c[0]), float(c[1])], "keys": key_list(v["keys"], "orbit"), "track": track}
+
+
+def _wobble(v):
+    """kinetic `wobble`: {amp [(t, 0..1)], phase [(t, cycles)], amount em, sway, tilt degrees, wave letters per cycle}."""
+    if not isinstance(v, dict) or set(v) - WOBBLE_KEYS or "amp" not in v or "phase" not in v:
+        raise TextError("kinetic wobble is {amp = [[t, v], ...], phase = [[t, cycles], ...], amount, sway, tilt, wave}")
+    out = {"amp": key_list(v["amp"], "wobble amp"), "phase": key_list(v["phase"], "wobble phase"),
+           "amount": float(v.get("amount", 0.07)), "sway": float(v.get("sway", 0.35)), "tilt": float(v.get("tilt", 6.0)),
+           "wave": float(v.get("wave", 4.0))}
+    if not out["wave"] > 0 or min(out["amount"], out["sway"], out["tilt"]) < 0:
+        raise TextError("kinetic wobble wave is positive and amount, sway and tilt are not negative")
     return out
 
 

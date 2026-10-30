@@ -47,6 +47,8 @@ are packed into the .blend.
   lyrics = {timeline = "audio/timeline.json", line = 3, words = [1, 4], style = "pop", from = t, to = t, ...}
                             one text per sung word, read from the timeline (never printed anywhere), each with its own
                             `kinetic` keys; the entry's placement and look keys go to every word: build/wordtype.py
+  blocks = {hits = {lane = "kick", move = "jump"}, ...}   the text (or, with lyrics style "blocks", the sung words) as 3D
+                            toy alphabet blocks, one object per letter: build/blocktype.py
   backing = {color = "rose", pattern = "stripe", ...}   a strip of tape behind the text (core/typefx.py): it is the
                             text's ink box plus a margin, moves with the word and fades with its opacity
   outline = {color = "text", width = 0.05, alpha = 0.5}   a soft ring of another colour behind the letters (width in em)
@@ -83,11 +85,12 @@ from .. import keys as K
 from ..library.sets import highway as HIGHWAY
 from ..library.sets import nightkit as NK
 from . import BuildError, collection
+from . import textring as RG
 
 KNOWN = {"name", "on", "mount", "at", "facing", "up", "box", "text", "value", "font", "size", "fit", "align", "valign",
          "offset", "color", "glow", "lit", "depth", "lift", "tracking", "word_spacing", "leading", "reveal", "blink",
          "flicker", "fade", "ghost", "halo", "haze", "back", "kinetic", "lyric", "backing", "outline", "screen", "knockout",
-         "_aspect", "_multi", "_shot", "_path"}
+         "blocks", "_aspect", "_multi", "_shot", "_path"}
 MAX_NAME = 50                  # characters of a text's name: Blender keeps 63, and the node group's `mk_text_` takes 8
 LIFT = 0.002                    # m in front of the surface
 GHOST_BACK = 0.0006             # m the unlit segments sit behind the lit ones
@@ -581,7 +584,7 @@ def _key(id_data, path, keys, ctx, interp):
 # `kinetic = {...}` is validated by mkmmd/core/typefx.py (its header lists the keys); here its keys become Value nodes.
 NODE_NAMES = {"scale": "Pop", "sx": "SquashX", "sy": "SquashY", "dx": "Dx", "dy": "Dy", "dxp": "DxPanel",
               "dyp": "DyPanel", "rot": "Rot", "tracking": "Tracking", "weight": "Weight", "opacity": "Opacity",
-              "tint": "Tint"}
+              "tint": "Tint", "yaw": "Yaw", "pitch": "Pitch"}
 WEIGHT_COPIES = 12              # copies on the ring a keyed weight grows the filled letters with
 
 
@@ -608,11 +611,33 @@ def _smooth(g, x, lo, hi):
     return n.outputs["Result"]
 
 
+def _tilted(g, geo, yaw, pitch, dist):
+    """`geo` (about the word's pivot) turned in depth, `yaw` degrees its right side away and `pitch` its top away (Value
+    sockets or None), and seen in perspective from `dist` m in front of it: every point moved to where an eye there sees
+    it on the tilted plane, flat in the text's plane again (its own z kept)."""
+    pos = g.node("GeometryNodeInputPosition").outputs[0]
+    rot = g.node("ShaderNodeVectorRotate", rotation_type="EULER_XYZ")
+    g.put(rot.inputs["Vector"], pos)
+    g.put(rot.inputs["Rotation"], _xyz(g, g.math("RADIANS", g.math("MULTIPLY", pitch, -1.0)) if pitch else 0.0,
+                                      g.math("RADIANS", yaw) if yaw else 0.0, 0.0))
+    turned, own = g.node("ShaderNodeSeparateXYZ"), g.node("ShaderNodeSeparateXYZ")
+    g.put(turned.inputs[0], rot.outputs[0])
+    g.put(own.inputs[0], pos)
+    k = g.math("DIVIDE", dist, g.math("MAXIMUM", g.math("SUBTRACT", dist, turned.outputs[2]), 0.1 * dist))
+    sp = g.node("GeometryNodeSetPosition")
+    g.put(sp.inputs["Geometry"], geo)
+    g.put(sp.inputs["Position"], _xyz(g, g.math("MULTIPLY", turned.outputs[0], k),
+                                      g.math("MULTIPLY", turned.outputs[1], k), own.outputs[2]))
+    return sp.outputs[0]
+
+
 def _motion(g, P, kin):
-    """geometry -> geometry: the word's keyed transform about its pivot (scale and squash, rotation, offsets), or None
-    when nothing about it moves. The Value nodes are made once, here."""
+    """geometry -> geometry: the word's keyed transform about its pivot (scale and squash, rotation, a tilt in depth
+    seen in perspective, offsets), then its turn round a ring (`orbit`, build/textring.py), or None when nothing about it
+    moves. The Value nodes are made once, here."""
     ch = {c: _val(g, NODE_NAMES[c], kin[c][0][1]) for c in FX.MOTION if c in kin}
-    if not ch:
+    turn = RG.orbit_value(g, kin) if kin.get("orbit") else None
+    if not ch and turn is None:
         return None
     em, (px, py) = P["em"], P["pivot"]
     pw, ph = P["panel"] or (0.0, 0.0)
@@ -633,26 +658,34 @@ def _motion(g, P, kin):
     shift = (total(px, ("dx", em), ("dxp", pw)), total(py, ("dy", em), ("dyp", ph)))
 
     def apply(geo):
-        a = g.node("GeometryNodeTransform")
-        g.put(a.inputs["Geometry"], geo)
-        a.inputs["Translation"].default_value = (-px, -py, 0.0)
-        b = g.node("GeometryNodeTransform")
-        g.put(b.inputs["Geometry"], a.outputs[0])
-        g.put(b.inputs["Rotation"], _xyz(g, 0.0, 0.0, rot))
-        g.put(b.inputs["Scale"], _xyz(g, sx, sy, pop))
-        c = g.node("GeometryNodeTransform")
-        g.put(c.inputs["Geometry"], b.outputs[0])
-        g.put(c.inputs["Translation"], _xyz(g, shift[0], shift[1], 0.0))
-        return c.outputs[0]
+        if ch:
+            a = g.node("GeometryNodeTransform")
+            g.put(a.inputs["Geometry"], geo)
+            a.inputs["Translation"].default_value = (-px, -py, 0.0)
+            b = g.node("GeometryNodeTransform")
+            g.put(b.inputs["Geometry"], a.outputs[0])
+            g.put(b.inputs["Rotation"], _xyz(g, 0.0, 0.0, rot))
+            g.put(b.inputs["Scale"], _xyz(g, sx, sy, pop))
+            geo = b.outputs[0]
+            if "yaw" in ch or "pitch" in ch:
+                geo = _tilted(g, geo, ch.get("yaw"), ch.get("pitch"), kin.get("persp", FX.PERSP) * em)
+            c = g.node("GeometryNodeTransform")
+            g.put(c.inputs["Geometry"], geo)
+            g.put(c.inputs["Translation"], _xyz(g, shift[0], shift[1], 0.0))
+            geo = c.outputs[0]
+        return RG.orbit(g, P, geo, turn) if turn is not None else geo
 
     return apply
 
 
 def _letters(g, P, inst, kin):
-    """Per-letter work on the filled character instances: the drip exit (stretch about each letter's top, fall, sideways
-    wobble, fade) and the attributes the material reads, `mk_alpha` (keyed opacity x the drip's fade) and `mk_tint`."""
+    """Per-letter work on the filled character instances: the wobble with the voice (build/textring.py), the drip exit
+    (stretch about each letter's top, fall, sideways wobble, fade) and the attributes the material reads, `mk_alpha`
+    (keyed opacity x the drip's fade) and `mk_tint`."""
     em = P["em"]
     fade = 1.0
+    if kin.get("wobble"):
+        inst = RG.wobble(g, P, inst)
     d = kin.get("drip")
     if d:
         t = _val(g, "Drip", -1.0)                                  # seconds since the exit started; keyed
@@ -802,8 +835,8 @@ def _tape_mesh(g, P, b):
 
 def _tree_kinetic(name, P, string, mat):
     """The node group of a kinetic word: String to Curves (tracking keyed) -> typewriter -> Fill Curve on the character
-    instances -> per-letter drip and the attributes the material reads -> Realize -> weight -> extrude -> placed ->
-    keyed transform about the pivot -> only while `Show` says so."""
+    instances -> per-letter wobble and drip and the attributes the material reads -> Realize -> bent round a ring ->
+    weight -> extrude -> placed -> keyed transform about the pivot -> turned round the ring -> only while `Show` says so."""
     kin = P["kin"]
     nt = _new_tree(name)
     g = _G(nt)
@@ -816,6 +849,9 @@ def _tree_kinetic(name, P, string, mat):
     if "drip" in kin:
         stc.pivot_mode = "TOP_CENTER"                             # each letter stretches from the middle of its top
         g.piv = stc.outputs["Pivot Point"]
+    elif "wobble" in kin:
+        stc.pivot_mode = "MIDPOINT"                               # each letter turns about its own middle
+        g.piv = stc.outputs["Pivot Point"]
     curves = stc.outputs["Curve Instances"]
     if P["reveal"]:
         curves = _reveal(g, curves)
@@ -825,6 +861,8 @@ def _tree_kinetic(name, P, string, mat):
     real = g.node("GeometryNodeRealizeInstances")
     g.put(real.inputs["Geometry"], inst)
     mesh = real.outputs[0]
+    if "bend" in kin:
+        mesh = RG.bend(g, P, mesh)
     if "weight" in kin:
         mesh = _grown(g, P, mesh, _val(g, NODE_NAMES["weight"], kin["weight"][0][1]))
     if P["depth"] > 0:
@@ -842,9 +880,12 @@ def _tree_kinetic(name, P, string, mat):
         geo = join.outputs[0]
     if P.get("backing"):
         b = P["backing"]
+        tape = _tape_mesh(g, P, b)
+        if "bend" in kin:
+            tape = RG.bend(g, P, tape)
         join = g.node("GeometryNodeJoinGeometry")
         g.put(join.inputs["Geometry"], geo)
-        g.put(join.inputs["Geometry"], _placed(g, P, _tape_mesh(g, P, b), b["material"], -b["dz"], motion))
+        g.put(join.inputs["Geometry"], _placed(g, P, tape, b["material"], -b["dz"], motion))
         geo = join.outputs[0]
     if "show" in kin:
         sw = g.node("GeometryNodeSwitch", input_type="GEOMETRY")
@@ -891,7 +932,7 @@ def _key_kinetic(ctx, nt, kin, P):
         end = d["t"] + d["life"] + LY.DRIP_SPREAD + 0.1
         _key_node(ctx, nt, "Drip", [(d["t"] - 1.0 / ctx.fps, -1.0 / ctx.fps), (end, end - d["t"])])
         n_keys += 2
-    return n_keys
+    return n_keys + RG.key(ctx, nt, kin, _key_node)
 
 
 # ------------------------------------------------------------------------------------------------------ stage
@@ -1181,6 +1222,10 @@ def run(ctx):
                 suffix = f"@{asp}" if asp is not None and len(outputs) > 1 else ""
                 if asp is not None:
                     vspec = {**vspec, "_aspect": asp, "_multi": len(outputs) > 1}
+                from . import blocktype as BTB          # toy alphabet blocks, one object per letter: build/blocktype.py
+                if BTB.is_blocks(vspec):
+                    out[f"{vspec['name']}{suffix}"] = BTB.build(ctx, coll, vspec, suffix, cache)
+                    continue
                 if vspec.get("lyrics") is not None:       # lyric type: one text per word, built from the timeline
                     from . import wordtype as LYB
                     report = {}
