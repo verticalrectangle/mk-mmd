@@ -204,3 +204,18 @@ def test_strike_times_are_the_first_string_contact_of_each_direction():
     st = SM.plan({"rhythm": "beats:8", "from": BEATS[4], "to": BEATS[6]}, TL)
     down, up = SM.strike_times(st)
     assert down == pytest.approx([BEATS[4], BEATS[5], BEATS[6]], abs=1e-3) and len(up) == 2
+
+
+# ------------------------------------------------------------------------------------------------ turning about the wrist
+def test_the_hand_turns_about_the_wrist_only_where_the_turn_moves_the_tip_sideways():
+    """Strings along z, across along x, the face looking along -y; the strum centre at the origin. A wrist out of the face
+    over the pick turns the tip across the strings (a forearm rotation); a wrist that hangs above the strings on the bass
+    side would turn it into the face, so the hand does not turn there (the arm carries the stroke)."""
+    along, across, centre = [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+    share, kappa = SM.turn_share(0.6, [0.0, -0.08, 0.02], centre, along, across)          # 80 mm out of the face
+    assert share == pytest.approx(0.6) and abs(kappa) == pytest.approx(0.08)
+    share, kappa = SM.turn_share(0.6, [-0.08, -0.04, 0.0], centre, along, across)         # 80 mm toward the bass side, 40 out
+    assert share == 0.0 and abs(kappa) == pytest.approx(0.04)
+    half, _ = SM.turn_share(0.6, [-0.05, -0.07, 0.0], centre, along, across)              # in between: some of it
+    assert 0.0 < half < 0.6
+    assert SM.turn_share(0.6, [0.0, -0.02, 0.0], centre, along, across)[0] == 0.0          # too short a lever to matter

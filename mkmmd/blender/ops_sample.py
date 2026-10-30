@@ -13,6 +13,11 @@ args:
                                              (frame null: as the scene stands): `objects` by name plus what a render shows
                                              under the prop root(s) `prop` (a name or a list; no colliders, no hidden
                                              objects, no characters), minus `exclude` (names or fnmatch patterns)
+  skins       [{armature, regions: {name: {bones, stop}}}]   the skinned meshes an armature deforms (S.model_meshes; a
+                                             mesh a cloth or soft-body modifier moves is left out), on every frame: the
+                                             vertices whose heaviest bone weight is a bone of a region (its `bones` and
+                                             their descendants short of its `stop` bones, the chains a family names left
+                                             out: what a sim moves) and every triangle that has such a vertex
 npz keys: frames; per armature index a: bone_world_a (F,n,4,4) posed world matrices, bone_rest_a (n,4,4) rest
 matrices (armature space), arm_world_a (F,4,4); obj_world (F,m,4,4); obj_bbox (F,m,2,3) the world bounds (min, max) of
 each object's evaluated geometry (zeros when it has none on that frame), `objects` holding names or fnmatch patterns
@@ -22,7 +27,11 @@ of a fisheye (mkmmd.core.fisheye.CODES; 0: not a fisheye, -1: a panoramic camera
 reply's camera `fisheye_errors`); each output's own camera of the shot in the cut (the project's outputs; the reply's
 camera `outputs` and per frame `output_names`): the same as cam_out_world (F,O,4,4) ... cam_out_fisheye (F,O,3); per mesh
 request k: mesh_v_k (n,3) vertices, mesh_t_k (m,3) triangle corners (indices into mesh_v_k), mesh_o_k (m,) index of the
-owning object in the reply's meshes[k].objects. The JSON reply names everything."""
+owning object in the reply's meshes[k].objects; per skin request k: skin_r_k (n,3) the vertices at rest and skin_v_k
+(F,n,3) posed (float32, the armature's space), skin_t_k (m,3) the triangles (indices into them), skin_g_k (n,) the
+region of each vertex (index into the reply's skins[k].regions; -1 a vertex of a kept triangle outside them), skin_b_k
+(n,) its heaviest bone (into skins[k].bones), skin_o_k (n,) its object (into skins[k].objects). The JSON reply names
+everything."""
 import json
 from contextlib import contextmanager
 from fnmatch import fnmatchcase
@@ -293,6 +302,132 @@ def _sample_meshes(specs, out):
     return meta
 
 
+# ---------------------------------------------------------------- skinned meshes, frame by frame
+SIMULATED = {"CLOTH", "SOFT_BODY"}          # modifiers that move a mesh on their own: a sim's motion, not the skin's
+
+
+def _resolve_bones(arm, names):
+    """Blender names of `names` (Blender, semantic or PMX); a '?' name the model lacks is skipped."""
+    out = []
+    for n in names:
+        try:
+            out.append(S.resolve_bone(arm, n[1:] if n.startswith("?") else n))
+        except KeyError:
+            if not n.startswith("?"):
+                raise
+    return out
+
+
+def _region_bones(arm, spec):
+    """Blender names of one skin region: its `bones` and their descendants, short of its `stop` bones (each with all
+    under it) and of the chains a family names (hair, a skirt, a sleeve's chain: what a sim moves)."""
+    stop, bones, out = set(_resolve_bones(arm, spec.get("stop") or [])), arm.data.bones, []
+    todo = _resolve_bones(arm, spec["bones"])
+    while todo:
+        b = bones[todo.pop()]
+        if b.name in stop or b.name in out or FAM.classify(b.name, S.name_j(arm.pose.bones[b.name])) != "other":
+            continue
+        out.append(b.name)
+        todo += [c.name for c in b.children]
+    return out
+
+
+class _Skin:
+    """One skin request (module docstring: skins), its vertices at rest found once and posed filled frame by frame. A mesh
+    whose modifiers change its vertex count cannot be compared with its rest vertex by vertex: it is left out and named
+    in `skipped`, as one a cloth or soft-body modifier moves is."""
+
+    def __init__(self, spec, n_frames):
+        arm = self.arm = _arm(spec.get("armature"))
+        self.regions = list(spec["regions"])
+        self.region_bones = {r: _region_bones(arm, spec["regions"][r]) for r in self.regions}
+        of = {b: k for k, r in enumerate(self.regions) for b in self.region_bones[r]}
+        bones = set(arm.data.bones.keys())
+        inv = np.linalg.inv(_mat(arm.matrix_world))
+        dg = bpy.context.evaluated_depsgraph_get()
+        self.parts, self.objects, self.bones, self.skipped = [], [], [], {}
+        index_of = {}
+        rest, tris, region, top_bone, owner, off = [], [], [], [], [], 0
+        for ob in S.model_meshes(arm):
+            sim = [md.type for md in ob.modifiers if md.type in SIMULATED]
+            if sim:
+                self.skipped[ob.name] = f"a {sim[0].lower().replace('_', ' ')} modifier moves it"
+                continue
+            me, groups = ob.data, [g.name for g in ob.vertex_groups]
+            n = len(me.vertices)
+            oe = ob.evaluated_get(dg)
+            n_eval = len(oe.to_mesh().vertices)
+            oe.to_mesh_clear()
+            if n_eval != n:
+                self.skipped[ob.name] = f"its modifiers make {n_eval} vertices of its {n}"
+                continue
+            top = np.full(n, -1)
+            for v in me.vertices:                                   # the heaviest bone (not mmd_tools' own groups)
+                best = 0.0
+                for g in v.groups:
+                    if g.weight > best and g.group < len(groups) and groups[g.group] in bones:
+                        best, top[v.index] = g.weight, g.group
+            reg = np.array([of.get(groups[g], -1) if g >= 0 else -1 for g in top], int)
+            if not (reg >= 0).any():
+                continue
+            me.calc_loop_triangles()
+            T = np.empty(len(me.loop_triangles) * 3, np.int32)
+            me.loop_triangles.foreach_get("vertices", T)
+            T = T.reshape(-1, 3)
+            T = T[(reg[T] >= 0).any(1)]
+            used = np.unique(T)
+            index = np.full(n, -1, np.int64)
+            index[used] = np.arange(len(used)) + off
+            co = np.empty(n * 3, np.float32)
+            me.vertices.foreach_get("co", co)
+            M = inv @ _mat(ob.matrix_world)
+            rest.append(co.reshape(-1, 3)[used] @ M[:3, :3].T + M[:3, 3])
+            tris.append(index[T])
+            region.append(reg[used])
+            for g in top[used]:
+                if g >= 0 and groups[g] not in index_of:
+                    index_of[groups[g]] = len(self.bones)
+                    self.bones.append(groups[g])
+            top_bone.append(np.array([index_of[groups[g]] if g >= 0 else -1 for g in top[used]], int))
+            owner.append(np.full(len(used), len(self.objects), int))
+            self.parts.append((ob, n, used, off))
+            self.objects.append(ob.name)
+            off += len(used)
+        cat = lambda xs, shape: np.concatenate(xs) if xs else np.zeros(shape)            # noqa: E731
+        self.rest, self.tris = cat(rest, (0, 3)), cat(tris, (0, 3))
+        self.region, self.top, self.owner = cat(region, 0), cat(top_bone, 0), cat(owner, 0)
+        self.posed = np.zeros((n_frames, off, 3), np.float32)
+
+    def read(self, i, dg):
+        """Frame i's posed vertices (the depsgraph `dg` evaluated there); NaN where a modifier changed the vertex count."""
+        inv = np.linalg.inv(_mat(self.arm.evaluated_get(dg).matrix_world))
+        for ob, n, used, off in self.parts:
+            oe = ob.evaluated_get(dg)
+            me = oe.to_mesh()
+            try:
+                co = np.empty(n * 3, np.float32)
+                same = len(me.vertices) == n
+                if same:
+                    me.vertices.foreach_get("co", co)
+            finally:
+                oe.to_mesh_clear()
+            if not same:
+                self.posed[i, off:off + len(used)] = np.nan
+                continue
+            M = inv @ _mat(oe.matrix_world)
+            self.posed[i, off:off + len(used)] = co.reshape(-1, 3)[used] @ M[:3, :3].T + M[:3, 3]
+
+    def save(self, out, k):
+        out[f"skin_r_{k}"] = self.rest.astype(np.float32)
+        out[f"skin_v_{k}"] = self.posed
+        out[f"skin_t_{k}"] = self.tris.astype(np.int32)
+        out[f"skin_g_{k}"] = self.region.astype(np.int16)
+        out[f"skin_b_{k}"] = self.top.astype(np.int32)
+        out[f"skin_o_{k}"] = self.owner.astype(np.int16)
+        return {"armature": self.arm.name, "regions": self.regions, "region_bones": self.region_bones,
+                "objects": self.objects, "bones": self.bones, "skipped": self.skipped}
+
+
 @op("sample")
 def sample(args):
     frames = [int(f) for f in args["frames"]]
@@ -349,6 +484,7 @@ def sample(args):
     F = len(frames)
     out = {"frames": np.array(frames)}
     meshes = _sample_meshes(args.get("meshes") or [], out)
+    skins = [_Skin(spec, F) for spec in args.get("skins") or []]
     for k, (arm, names) in enumerate(arms):
         out[f"bone_world_{k}"] = np.zeros((F, len(names), 4, 4))
         out[f"bone_rest_{k}"] = np.array([_mat(arm.data.bones[n].matrix_local) for n in names]).reshape(-1, 4, 4)
@@ -376,6 +512,8 @@ def sample(args):
             out[f"arm_world_{k}"][i] = _mat(mw)
             for j, n in enumerate(names):
                 out[f"bone_world_{k}"][i, j] = _mat(mw @ ae.pose.bones[n].matrix)
+        for sk in skins:
+            sk.read(i, dg)
         for j, n in enumerate(objects):
             ev = bpy.data.objects[n].evaluated_get(dg)
             out["obj_world"][i, j] = _mat(ev.matrix_world)
@@ -404,6 +542,7 @@ def sample(args):
             out_names.append(row)
     for e, vals in enumerate(expr_vals):
         out[f"expr_{e}"] = np.array(vals, float)
+    skin_meta = [sk.save(out, k) for k, sk in enumerate(skins)]
     np.savez(args["out"], **out)
     uses = {}
     for n in args.get("props") or []:
@@ -412,7 +551,7 @@ def sample(args):
             raise ValueError(f"prop {n!r}: no prop root with stored use points (rebuild the scene)")
         uses[n] = json.loads(root["mk_use"])
     reply = {"out": args["out"], "frames": len(frames), "bones": meta_b, "objects": objects, "exprs": exprs,
-             "colliders": resolved_specs, "meshes": meshes, "props": uses}
+             "colliders": resolved_specs, "meshes": meshes, "skins": skin_meta, "props": uses}
     if want_cam:
         cams = {n for n in cam_names if n} | {n for row in out_names for n in row if n}
         reply["camera"] = {"names": cam_names, "sensor_fit": {n: bpy.data.objects[n].data.sensor_fit for n in cams},

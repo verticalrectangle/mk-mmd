@@ -17,7 +17,8 @@ Everything is built by `electric_guitar_parts` from `electric_guitar_layout`'s n
 
 Objects `<name>_<part>`: body, pickguard, neck (wood with heel and headstock), fretboard (with its dots), frets, nut, tuners
 (machine heads and string retainers), truss, pickups (with the guard's screws), bridge, knobs, switch, decals (graphic layers: the switch's slot, the string holes),
-jack_plate, buttons, back_plates (the neck plate and the tremolo cover), strings, plug, pick (modelled in the grip solver's pinch frame, lying on the pickguard at rest), cable (a
+jack_plate, buttons, back_plates (the neck plate and the tremolo cover), string_1 .. string_6 (one per string, 1 the high e: they
+ring when played, mkmmd.core.strings), plug, pick (modelled in the grip solver's pinch frame, lying on the pickguard at rest), cable (a
 bevelled curve from the plug end down to the floor, z = -0.14: the wear stage re-hangs it), the empties `<name>_strap_top`,
 `<name>_strap_bottom`, `<name>_jack` and the hidden colliders `<name>_col_body` / `_horn` / `_neck` / `_head`. The material
 `<name>_strap` (a woven band) is made for the strap the pose stage builds; no strap object exists here.
@@ -26,8 +27,8 @@ Card keys
   size, origin ("bridge"), front ("-Y"), slots (the colour roles, below)
   use.grip    neck: frame {along (0,0,1) toward the nut, across (1,0,0) low E to high e, normal (0,-1,0) out of the board}, thumb
               (0,1,0), scale, frets (the board's crown centre under each wire, index 0 = the nut), strings (low E first: nut and
-              bridge points on the axis, radius), section {width, depth (nut, last fret), p 2.6, board_width, board_radius} (the
-              neck's back is exactly this superellipse), fret_height
+              bridge points on the axis, radius, object: its own `<name>_string_<n>`), section {width, depth (nut, last fret),
+              p 2.6, board_width, board_radius} (the neck's back is exactly this superellipse), fret_height
               strum: center (the pick tip's rest point, on the string plane between the neck and bridge pickups), along, across,
               normal, zone [z0, z1] and pick {object, thickness, length, width, tip} (the pick object's frame: origin where the
               pads meet, +x toward the tip at x = tip, y across, z through the thickness)

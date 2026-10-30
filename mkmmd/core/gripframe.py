@@ -13,6 +13,9 @@ CLOCK = {"L": 10.0, "R": 2.0}        # hours on a clock face as the character se
 WHEEL_APPROACH = 90.0                 # palm on the side of the rim that faces the character
 WHEEL_WRAP = -1                       # fingers round the outside of the rim, then the front
 RING_TYPES = {"ring", "wheel"}
+STRUM_LEAN = 45.0                     # deg: a pick's squeeze axis leans from the bass side toward the neck (or the bridge)
+STRUM_CLEAR = 0.004                   # m: the pick hand's skin stays this far above the strings' plane
+STRUM_HEADING = 90.0                  # deg: the wrist anywhere on the hand's side of the pick (the arm places it)
 
 
 def unit(v):
@@ -87,18 +90,22 @@ def wrist_goal(G, target_in_wrist, bone_length):
     return W, W @ T
 
 
-def strum_frame(center, normal, along, tip, thumb="neck"):
+def strum_frame(center, normal, along, across, tip, thumb="neck", lean=STRUM_LEAN):
     """The pinch frame of a pick whose tip rests at `center` on a guitar's strings: x = the pick's direction toward its tip
-    = into the face (minus the face `normal`), z = the squeeze axis from the index pad to the thumb pad (the string
-    direction `along`, toward the nut when the thumb is on the `neck` side, away from it for `bridge`), y = z cross x; the
-    origin (midway between the pads) is `tip` above `center`, since the pick's tip protrudes `tip` beyond the pads."""
-    n, a = unit(normal), unit(along)
-    a = a - (a @ n) * n
-    if np.linalg.norm(a) < 1e-6:
-        raise ValueError("a strum zone's string direction lies along its normal")
+    = into the face (minus the face `normal`); z = the squeeze axis from the index pad to the thumb pad: the thumb lies on
+    top of the pick, on the bass side (against `across`, which runs from the lowest string to the highest), leaning `lean`
+    degrees toward the nut (`thumb` "neck") or the bridge ("bridge"), as a hand that comes over the body's edge holds a pick
+    (0 holds its face square to the strings' sweep, 90 edge on); y = z cross x. The origin (midway between the pads) is `tip`
+    above `center`, since the pick's tip protrudes `tip` beyond the pads."""
+    n = unit(normal)
+    a, c = (np.asarray(v, float) for v in (along, across))
+    a, c = a - (a @ n) * n, c - (c @ n) * n
+    if np.linalg.norm(a) < 1e-6 or np.linalg.norm(c) < 1e-6:
+        raise ValueError("a strum zone's string direction or its across direction lies along its normal")
     if thumb not in ("neck", "bridge"):
         raise ValueError(f"thumb must be \"neck\" or \"bridge\", got {thumb!r}")
-    z = unit(a) * (1.0 if thumb == "neck" else -1.0)
+    th = math.radians(float(lean))
+    z = unit(-math.cos(th) * unit(c) + math.sin(th) * unit(a) * (1.0 if thumb == "neck" else -1.0))
     x = -n
     return frame_matrix(x, np.cross(z, x), z, np.asarray(center, float) + n * float(tip))
 
@@ -117,7 +124,9 @@ def card_style(entry, hand):
     neck           style neck, prop = the neck problem (mkmmd.core.fretting.solver_prop) for the hand's `fret` (the position:
                    the index finger's fret) and `chord` (a name or a table); hand key press (the pad's place behind the wire)
     strum          style pinch of the card's `pick` {thickness, length, width, tip}: width = thickness, depth = length, length =
-                   width, edge = length - tip (hand key `tip` overrides the card's: how far the pick sticks out of the pads)
+                   width, edge = length - tip (hand key `tip` overrides the card's: how far the pick sticks out of the pads),
+                   heading STRUM_HEADING (the arm the build adds places the wrist) and stop = tip - STRUM_CLEAR (the hand
+                   stays above the strings: in strum_frame they lie at x = tip)
     Raises ValueError naming what is missing."""
     kind, name = entry.get("type"), entry.get("name", "?")
 
@@ -165,6 +174,6 @@ def card_style(entry, hand):
         tip = float(hand.get("tip", pick.get("tip", 0.008)))
         if not 0.0 < tip < length:
             raise ValueError(f"grip {name!r} (strum): the pick's tip ({tip * 1e3:g} mm) must be inside its length ({length * 1e3:g} mm)")
-        params["edge"] = length - tip
+        params.update(edge=length - tip, heading=STRUM_HEADING, stop=tip - STRUM_CLEAR)
         return "pinch", {"width": float(pick["thickness"]), "depth": length, "length": float(pick["width"])}, params
     raise ValueError(f"grip {name!r}: type {kind!r} has no grip style (ring, pen, pinch, neck, strum)")

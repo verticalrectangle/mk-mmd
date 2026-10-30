@@ -2,7 +2,8 @@
 
 `parts(stripes)` -> {suffix: core.shell.Mesh}: body, pickguard, control_plate, neck, fretboard (with its dots), frets, nut,
 tuners, tree, pickups (with the guard's screws), bridge, knobs, plate_parts (its screws and the jack's nut), buttons,
-back_plates (the neck plate and the string ferrules), strings, plug, pick, decals (graphic layers), and with `stripes` the
+back_plates (the neck plate and the string ferrules), string_1 .. string_4 (one tube per string, numbered as players number
+them: 1 the G, 4 the low E), plug, pick, decals (graphic layers), and with `stripes` the
 racing stripes. The meshes are in the prop's frame (the pick in its own pinch frame). `bounds()` is the box of the whole
 prop with its cord.
 """
@@ -24,7 +25,8 @@ def parts(stripes=False):
         out = {
             "body": B.body_mesh(), "pickguard": B.guard_mesh(), "control_plate": B.plate_mesh(),
             "neck": N.neck_mesh(), "fretboard": N.board_mesh(), "frets": N.frets_mesh(), "nut": N.nut_mesh(),
-            "tuners": N.tuners_mesh(), "tree": N.tree_mesh(), "strings": N.strings_mesh(),
+            "tuners": N.tuners_mesh(), "tree": N.tree_mesh(),
+            **{f"string_{4 - i}": m for i, m in enumerate(N.string_meshes())},
             "pickups": S.merge([H.pickups_mesh(), H.guard_screws_mesh()]), "bridge": H.bridge_mesh(),
             "knobs": H.knobs_mesh(), "plate_parts": H.plate_parts_mesh(), "buttons": H.buttons_mesh(),
             "back_plates": H.back_mesh(), "plug": H.plug_mesh(), "pick": H.pick_mesh(), "decals": H.decals_mesh(),

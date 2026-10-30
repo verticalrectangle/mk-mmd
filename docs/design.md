@@ -96,8 +96,9 @@ blender -b SCENE.blend -y --python-exit-code 3 --python-expr BOOT -- job.json re
   `mk q`, `mk check` and `mk grip` answer in under a second. Ops that change scene state (`look` hides objects, removes markers,
   adds a camera; `build`; `render_frames`) always get a fresh Blender.
 - `sample` is how numbers leave Blender: one pass over a set of frames writes posed bone and object matrices, rest
-  matrices, expression values, the active camera, resolved colliders and evaluated meshes (world-space triangles of what
-  a render shows, for [`form`](#form)) to an `.npz`; checks and solvers work on that.
+  matrices, expression values, the active camera, resolved colliders, evaluated meshes (world-space triangles of what
+  a render shows, for [`form`](#form)) and a character's skinned limbs on every frame, with their rest shape (for
+  `skin_collapse`) to an `.npz`; checks and solvers work on that.
 
 ## Conventions
 
@@ -459,7 +460,8 @@ ways in; `mk check --list` prints every metric's arguments and default limits. M
 | `contact` | largest distance (mm) between two points (expressions or tracks) where `when` holds | `component = "z"` for a signed axis difference |
 | `penetration` | deepest chain point inside a body or collider (mm) | measured on the baked bones, i.e. what renders, with each chain's own radius; reports the frame, the bone and the shape (`body:<bone>` for the model's own bodies) |
 | `foot_slide` | 95th percentile horizontal speed of planted feet (mm/frame) | between consecutive frames only: `frames` with gaps (a dance's stops) are measured run by run |
-| `joint_limits` | worst excess over a limit (deg) | elbow fold-through and in-plane hyperextension, knees, wrists, neck, spine; limits calibrated on professional MMD dances; sideways elbow bends are not flagged (MMD rigs treat the elbow as a ball joint) |
+| `joint_limits` | worst excess over a limit (deg) | elbow fold-through and in-plane hyperextension, knees, wrists, neck, spine (limits calibrated on professional MMD dances; sideways elbow bends are not flagged: MMD rigs treat the elbow as a ball joint), and how far each arm turns about itself, by anatomy: `forearm_twist` and `arm_twist` (below); each series over its limit names its worst frame (`at_frame`) and up to ten `spans` of frames over it (`[first, last, worst, degrees]`) |
+| `skin_collapse` | largest change of a limb's cross-section against its rest size, as a share | the skinned meshes of a character's upper arms, forearms, thighs and shins cut square to each segment from 30 to 80 % of its length, on every frame: a twist the rig's weights cannot follow pulls a sleeve in (below); default `max` 0.15; detail: `at_frame`, `kind` (`collapse` or `swell`), `region` (`forearm.L` ...), `bone` (the heaviest bone at the cut), `object`, `at` (the cut, as a fraction of the segment), `regions` (each one's worst `loss` and `swell`) |
 | `framing` | smallest margin to each output's safe area | per output through the active camera; matches Blender's projection; fractions of the frame, negative = outside the safe area |
 | `occlusion` | largest share of subject points hidden from the camera | ray casts; the subject's own meshes do not count |
 | `camera_inside` | frames with the camera inside a closed mesh a render shows | hidden objects (colliders) and `ignore` (glow and haze volumes) are passed through |
@@ -467,6 +469,7 @@ ways in; `mk check --list` prints every metric's arguments and default limits. M
 | `palette` | near-black share (or median distance to a palette) | on rendered frames; `rose-pine-moon`, `rose-pine`, `rose-pine-dawn` built in |
 | `form` | boxiness 0..1 of a prop's evaluated geometry: area-weighted over loose parts, `1 - (1 - cuboid)(1 - flat_sharp)` | what a render shows at one frame, in the prop's frame; hero props stay under the default `max` 0.25; `detail.worst_parts` names the objects to fix (see [Form](#form)) |
 | `strum` | largest distance (mm) of the pick tip from the nearest string at the strike of a down stroke | replays the project's `[perform.<cast>] strum` on its timeline and measures the scene: the pick object rides the wrist, so the arm's reach is in the numbers; `detail.timing` has the mean, median, p95 and max of when the tip really crosses the first string against the planned strike time (ms), `detail.missed` the strokes it never reached; default `max` 10 (see [Playing a worn guitar](#playing-a-worn-guitar)) |
+| `string_play` | how many notes of a worn guitar-like prop are not played as planned (`max` 0) | replays the project's strum spec and fretting hand ([Strings that ring](#strings-that-ring)): per note the note's string rings from the note's fret on the first frame after it (`mk_amp` up, `mk_u0` the fret's place; in a line played one note at a time no other string starts with it), a fretted note's finger (the skin of its distal phalanx) lies on the string within `finger_mm` across and of the press window behind the wire and touches it (`touch_mm` from its surface), and the pick tip (or a fingerstyle stroke's fingertip skin) crosses the string within `time_ms` of the note, passing within `pick_mm` of its axis; detail: `notes`, `missed`, `worst` (each number's worst), `misses` (the first eight, `miss` naming silent, wrong_fret, other_string, no_finger, finger, no_strike or strike) |
 | `prop_body` | deepest vertex (mm) of a prop's geometry inside the character's collision bodies | the torso, hips, legs, neck and head bodies of rig.json (not the arms that hold it), over the frames; the bodies are capsules a little fatter than the skin, so a few millimetres is a prop resting on the body; default `max` 8 |
 | `clearance` | least gap (m) between the world bounds of objects that fly past (`objects`: names or fnmatch patterns, e.g. a [bullets](#lyrics) entry's `bul_l*`) and the character's collision bodies, over the frames each object has geometry | exact for the bodies' spheres, capsules and rounded boxes; negative: into a body (by at least that much: where the cores overlap it is minus the body's radius). The bodies are rig.json's, often ending at the ankles and wrists, so shoes and fingers stand out of them; default `min` 0; detail: `object`, `at_frame`, `body`, `object_frames` |
 | `ribbon_clear` | least gap (m) between the [[ribbon]]s as they show on each frame (the drawn part of the centre line the stage stores on each root, `mk_ribbon`, with the radius that holds its surface, pulses included) and the characters' collision bodies as the scene poses them (after the sim) | exact for a round ribbon, a flat one counted as thick as it is wide; negative: into a body; default `min` 0; detail: `ribbon`, `at_frame`, `body`, `at_m` (how far along the ribbon), `ribbons` (each one's least gap); see [Ribbons](#ribbons) |
@@ -481,6 +484,34 @@ early for its next move is travelling, which the rules do not cover. The hands r
 their places on it), so mirror and palm are measured in its frame: the world with the upper body's motion undone, in the
 armature's axes.
 
+**Arm twists.** `joint_limits` measures how far each arm turns about itself as `mkmmd.core.armtwist` defines it, the pose
+stage's arm rig holding the same ([Posing](#posing)): `forearm_twist` is the swing-twist of the hand (the wrist bone)
+relative to the elbow about the rest forearm (elbow to wrist), so a twist bone's roll and any the wrist adds both count;
+`arm_twist` is the upper arm's distal bone (its twist bone, else the arm bone) relative to the chest about the rest upper
+arm, so a rig or a motion that splits the turn between the arm and its twist bone reads the same. Both are against the
+rest pose, + supination and external rotation on either side. An MMD arm rests out, palm down, the thumb forward, and the
+elbow folds forward from there: that is the forearm's mid-prone neutral and the humerus's, so the limits are anatomy's
+from neutral with a little room (AAOS and Boone & Azen 1979: a forearm turns about 80-90 degrees each way, an upper arm
+70-90): `forearm_twist` -90 (pronation) to +100 (supination), `arm_twist` -95 to +95, its external bound widened by as
+much as the arm is raised past level (`elevation_deg` in detail: an arm raised overhead out to the side turns about 90
+out on its way up, and one raised forward overhead reads near 180 against the rest). A twist near half a turn reads
+either side of 180 (the same pose). Professional dance motions turn the arms' twist bones much further at moments
+(up to 160-170 degrees on 8 calibration dances, 24,900 frames), where an MMD rig's ball-joint elbow hides it: a project
+that plays one widens the two series in `limits` and leaves the skin to `skin_collapse`.
+
+**Skin.** `skin_collapse` takes the meshes a character's armature deforms (a mesh a cloth or soft-body modifier moves is
+left out and named in `detail.skipped`), and per limb segment the vertices whose heaviest bone is the segment's own or a
+twist or D bone under it, with every triangle that has one; the chains a sim moves (hair, a skirt, ears, a sleeve's
+chain) belong to no segment. It cuts each segment with planes square to it (the bones' heads, as posed) at 11 places from
+30 to 80 % of its length and compares the cut curve's mean distance from the segment with the same cut at rest, mesh
+object by mesh object. Linear blend skinning pulls a ring of skin weighted to bones turned far apart about the limb toward
+its axis, and the faces between rings turned against each other neck in: a forearm turned past what its twist bones can
+spread goes flat and jagged. The joints' own pinch is outside the cuts: an MMD rig's shoulder, elbow and knee lose volume
+at every deep bend (no corrective shapes), up to a quarter of a segment from the joint. On a jacketed model with three
+twist bones per arm, ordinary moves change a cut by at most 7 %, a forearm turned 155-180 degrees by 22-25 %, and
+professional dances at their most twisted by 15-16 %. A 30 s clip (900 frames, one character) takes about 9 s: 5 for the
+sample, 4 for the cuts.
+
 Arguments:
 
 | Metric | Arguments |
@@ -489,7 +520,8 @@ Arguments:
 | `contact` | `a`, `b` (an [expression](#expressions) or `track:NAME.channel`), `when` (a mask: `track:NAME.channel` or an expression, truthy frames count), `component` (`x`, `y` or `z`), `unit` (`m`, `cm` or `mm`, default mm) |
 | `penetration` | `cast`, `families` (default hair and ears), `radius` (`{family: {scale, max}}` or one `{scale, max}`: the point radius is the body radius x scale, at most max, in metres), `colliders` (specs or the name of a collider set), `model_bodies` (true), `use_masks` (false: honour PMX collision masks everywhere, not only near the root), `anchor_free` (0.25 m) |
 | `foot_slide` | `cast`, `points` (default `ankle.L ankle.R toe.L toe.R`), `floor` (0 m), `tolerance` (0.015 m: how far above its rest height a point still counts as planted) |
-| `joint_limits` | `cast`, `limits` (override `{name: [lo, hi]}` of `elbow_fold`, `elbow_back`, `knee_bend`, `knee_side`, `wrist`, `neck_swing`, `neck_twist`, `spine_swing`, `spine_twist`), `sides` (`L R`) |
+| `joint_limits` | `cast`, `limits` (override `{name: [lo, hi]}` of `elbow_fold`, `elbow_back`, `knee_bend`, `knee_side`, `wrist`, `neck_swing`, `neck_twist`, `spine_swing`, `spine_twist`, `forearm_twist`, `arm_twist`; the upper arm's external bound still widens as the arm rises past level), `sides` (`L R`) |
+| `skin_collapse` | `cast`, `sides` (`L R`), `limbs` (default `upper_arm forearm thigh shin`), `span` (`[0.3, 0.8]`: where the cuts go, as fractions of a segment from its joint) |
 | `framing` | `points` (bones or expressions; default head and neck), `cast`, `outputs` (default all), `safe` (0.05: the safe-area margin as a fraction of each side). Give one per shot with `frames` set to that shot's frames: a close-up of a page is not supposed to contain the head |
 | `occlusion` | `points` (expressions; default the cast's head and chest), `cast` (its meshes are the subject) or `ignore_models` (armature names), `ignore` (object names that never block: glass, hair cards) |
 | `camera_inside` | `ignore` (object names a camera may sit inside) |
@@ -497,6 +529,7 @@ Arguments:
 | `palette` | `images` (a glob), `palette` (a name or a list of hex colours), `black` (0.035: the luma below which a pixel is near-black), `measure` (`black` or `distance`), `width` (240) |
 | `form` | `prop` (a prop root name or a list), `objects`, `exclude`, `exempt`, `exempt_weight`, `frame`, `hard_edge_deg` (65), `worst` (6): see [Form](#form) |
 | `strum` | `cast`, `hand` (`R`), `pick` (the pick object, default `<prop>_pick`), `tip` (metres from the pick object's origin to its tip along x; default the card's `pick.tip`, 0.008), `strokes` (`down`: the worst down stroke, or `all`) |
+| `string_play` | `cast`, `hand` (`R`: the pick hand), `pick` (default `<prop>_pick`), `finger_mm` (3), `touch_mm` (2.5), `time_ms` (8), `pick_mm` (5) |
 | `prop_body` | `cast`, `prop`, `bones` (semantic bones whose bodies count; default `upper_body upper_body2 lower_body neck head leg.L leg.R knee.L knee.R`), `exclude` (a cable, a pick), `samples` (4000 vertices), `frame` |
 | `ribbon_clear` | `ribbons` (names or fnmatch patterns; default every [[ribbon]]), `cast` (a member or a list; default every member with a rig.json) |
 | `wrist_bend`, `mic_palm`, `hand_room` | `cast`, `sides` (`L R`) |
@@ -1080,23 +1113,44 @@ and positive `head.roll` tips the head toward its left shoulder.
 Finger curls are a preset: `flat`, `relaxed`, `curled`, `fist`, or `point` (the index stays straight, the others as `fist`, the
 thumb tucked); or a table `{index = [8, 10, 0], middle = [10, 12], thumb = [0, 8]}` of degrees toward the palm for each finger's
 first three joints (`thumb0`, `thumb1`, `thumb2` for the thumb; a number alone is the first joint; a finger or joint left out
-stays straight; `thumb = "tuck"` tucks it). The presets bend (fingers / thumb, degrees per joint) `relaxed` 14, 22, 14 / 8, 10,
-8; `curled` 35, 50, 35 / 14, 18, 14; `fist` 80, 95, 65 / 25, 35, 40, and `point` its three curled fingers as `fist`
-(`mkmmd/core/fingers.py`). The rotations turn about each finger's own flexion axis. A tucked thumb is solved per hand from its
-rest bones (`tuck_thumb`): it folds across the curled middle finger, its tip resting on that finger's middle and end segments
-(22 % of the finger's length off its bones) on the middle finger's side of the index, never standing up beside it, the rest of
-it clear of both fingers, with the least turning (its base joint costing most).
+stays straight; `thumb = "tuck"`, `"ring"` or `"cross"` solves it, below). The presets bend (fingers / thumb, degrees per joint)
+`relaxed` 14, 22, 14 / 8, 10, 8; `curled` 35, 50, 35 / 14, 18, 14; `fist` 80, 95, 65 / 25, 35, 40, and `point` its three curled
+fingers as `fist` (`mkmmd/core/fingers.py`). The rotations turn about each finger's own flexion axis (`joints`). Curled that way
+a thumb only swings out of the palm's plane: it can neither cross the palm nor turn its pad to a fingertip, so a thumb that
+must touch something is solved per hand from its rest bones and skin:
+
+- `tuck` (`tuck_thumb`): it folds across the curled middle finger, its tip resting on that finger's middle and end segments
+  (22 % of the finger's length off its bones) on the middle finger's side of the index, never standing up beside it, the rest
+  of it clear of both fingers, with the least turning (its base joint costing most).
+- `ring` and `cross` move it as a thumb moves (`opposed`): its base swings out of the palm's plane and across it and rolls
+  about its length (opposition), its other two joints bend toward its pad (the side its rest chain bends to); `oppose_thumb`
+  solves those five angles within a thumb's range, its joints clear of the index and middle fingers, with the least turning.
+  `ring`: its fingertip meets the index's, the two last segments rounding a ring (an OK sign). `cross`: its last segment lies
+  skin on skin across the index's last one on the thumb's side, both tips just past the crossing (the finger heart).
+
+The fingers end where their skin does, not at their tip bones (`finger_end`: the farthest skin the last bone moves, and that
+skin's radius): a model's tip bone may stand a centimetre past the fingertip, so tips that meet as bones are apart as skin.
 
 #### Hands
 
 `[pose.<cast>.hands.L]` and `.R` put an arm on a target. The goal empty `<cast>_hand.<L|R>` (collection `Rig`) is the wrist bone's
 tail and orientation: a position-only IK on the forearm (`mk_arm_ik`, chain up to the upper arm, its target a child of the goal
 at the wrist's head) bends the elbow toward the pole empty `<cast>_elbow.<L|R>`, the wrist copies the goal's rotation
-(`mk_hand_rot`) and the forearm twist bone, when the rig has one, rolls all the way with the hand (`mk_forearm_twist`: the rig
-spreads it down the forearm, so a sleeve turns with the hand instead of the hand turning inside the cuff); the wrist's head is
-held on the forearm's end (`mk_wrist_on_arm`: rigs put it a fraction of a millimetre off the twist bone's axis). The IK's pole
-angle is solved per arm from its rest pose, with the forearm pre-folded 20 degrees toward the front (the solver starts from that
-fold), so the elbow points at the pole on either side of any rig. These empties are the names checks and `[[key]]` address. A hand needs one of
+(`mk_hand_rot`) and the forearm twist bone, when the rig has one, rolls with the hand (`mk_forearm_twist`: the rig spreads it
+down the forearm, so a sleeve turns with the hand instead of the hand turning inside the cuff), and the twist bones are held in
+range whatever drives the arm, the IK, a motion strip while the hand is let go, or both at a hand-off (a clamp, so the turn
+levels off rather than jumps): the forearm's within -75 to +85 degrees of MMD's rest roll (`mk_forearm_limit`: the range of
+`mkmmd.core.armtwist.FOREARM`, -90 to +100, + supination, less the 15 degrees the wrist may turn the hand on past it,
+`mk_wrist_roll`), the upper arm's within 85 either way (`mk_arm_twist_range`), and within 75 while the IK holds the arm
+(`mk_arm_twist_limit`; the twist bone is left out of the IK). A goal that asks more leaves the hand short of its roll instead of
+wringing the sleeve into a flat pillar, and the moves library turns the elbow so that none does ([Moves](#moves)); a dance's
+own shrug past the range is levelled off the same way.
+The wrist's head is held on the forearm's end (`mk_wrist_on_arm`: rigs put it a fraction of a millimetre off the twist bone's
+axis). The IK's pole angle is solved per arm from its rest pose, with the forearm pre-folded 20 degrees toward the front (the
+solver starts from that fold), so the elbow points at the pole on either side of any rig. That fold makes the IK's elbow a
+hinge whose crease faces forward at rest: MMD's rest roll (palms down, thumbs forward) is the forearm's mid-prone neutral, and
+`mkmmd.core.armtwist.twists` predicts both twists of an IK-posed arm from its joints and hand within about a degree (the same
+definitions `joint_limits` measures). These empties are the names checks and `[[key]]` address. A hand needs one of
 `at`, `rest`, `grip` or `keys`. The goals of a seated character ride with its seat prop; a standing character's stay in the world
 unless `ride` says otherwise. The wrist goal is keyed at the end of the settle (and at the keys' times), the influence eases
 in over the settle.
@@ -1106,12 +1160,12 @@ in over the settle.
 | `at` | where the wrist joint goes: a [target](#targets). The hand points along `dir` with the palm toward `palm` |
 | `dir` | `[x, y, z]` world direction the hand points along, wrist to fingertips (default straight ahead of the character) |
 | `palm` | `[x, y, z]` world direction the palm faces: the hand rolls about `dir` to match (default the least rotation from rest; `[0, 0, -1]`, palm down, for `rest`) |
-| `pole` | a target the elbow points at (on either side of any rig: the IK's pole angle is solved per arm from its rest pose). Default, from the shoulder: 0.45 m outward, 0.25 m behind and 0.30 m below it; for a hand on a guitar's `strum` point, 0.45 m outward, 0.12 m behind and 0.08 m below (a strumming forearm drapes over the body's edge); on its `neck`, 0.15 m outward, 0.08 m behind and 0.40 m below |
+| `pole` | a target the elbow points at (on either side of any rig: the IK's pole angle is solved per arm from its rest pose). Default, from the shoulder: 0.45 m outward, 0.25 m behind and 0.30 m below it; on a guitar's `neck`, 0.15 m outward, 0.08 m behind and 0.40 m below; for a hand on its `strum` point the elbow is chosen with the grip (out from the shoulder, below it, the forearm clear of the card's `avoid` objects: over the body's edge) and the pole put where it points (0.45 m outward, 0.12 m behind and 0.08 m below when no elbow is allowed). The pole of a `neck` or `strum` hand is then turned round the shoulder-wrist line the least way (5 degree steps, at most 60) that keeps the arm's twists 10 degrees inside the human range ([Moves](#moves), the twist) at every grip of the hand, the fret changes and the two ends of a pick hand's widest stroke (`[perform]` strum's `span` and `accent_gain`), without bending the wrist past 55 degrees: a fretting hand down by the nut turned its forearm over past what it can from an elbow hanging under the shoulder, and a pick hand's upper arm turned in past its range at the end of a down stroke (the grip's digest gives `pole_turn_deg`); a `pole` given is kept |
 | `rest` | `"prop:use"`: a `use.rest` point of a prop the hand lies on, an edge (`a`, `b`) or a plane (`center`); the palm faces `palm`, the heading is `dir` (default forward and slightly outward) |
 | `along` | `rest` on an edge: 0..1 along it (default 0.5) |
 | `offset` | `rest` on a plane: `[x, y, z]` metres from its centre, in the prop's frame (default 0) |
 | `lift` | `rest`: metres above the surface along its normal (default 0.03; 0 for a `grip = "rest"`) |
-| `keys` | `[{t, at, dir, palm, fingers, pole}]`: moving targets, `t` in clip seconds, Bezier between the keys; `dir` and `palm` default to the hand's own; a key's `fingers` (as the hand's `fingers`) are reached at its time and eased between the keys that have them, from the hand's own at the end of the settle; a key's `pole` (a target) is where the elbow's pole is at its time, eased between the keys like the goal, the keys without one going back to the hand's own `pole` (the moves stage gives it to a place that holds the elbow its own way: a dainty hand alone, [Moves](#moves)). With `at` that pose holds until the first key; without it the first key's target is the hand's from the start. A neck grip's keys are `{t, fret, chord, move}` instead |
+| `keys` | `[{t, at, dir, palm, fingers, pole, sight}]`: moving targets, `t` in clip seconds, Bezier between the keys; `dir` and `palm` default to the hand's own; a key's `fingers` (as the hand's `fingers`) are reached at its time and eased between the keys that have them, from the hand's own at the end of the settle; a key's `pole` (a target) is where the elbow's pole is at its time, eased between the keys like the goal, the keys without one going back to the hand's own `pole` (the moves stage gives it to a place that holds the elbow its own way: a dainty hand alone, [Moves](#moves)). `sight = true` on consecutive keys holds the hand with the head from the first of them to the last (a second goal, `<name>_sight.<side>`, rides the head bone with their goals, and the hand's goal copies it, handed over in 0.1 s either side): a ring held at the eye stays on it as the head leans, tilts, nods and rocks (the moves stage marks a `peek`'s keys so). With `at` that pose holds until the first key; without it the first key's target is the hand's from the start. A neck grip's keys are `{t, fret, chord, move}` instead |
 | `ride` | the goal follows something. `"<object>"` (a steering wheel, `"car_wheel"`): the goal is parented to it. `"cast:<name>.<bone>"` (this character's own name; the chest is `cast:rin.upper_body2`): goal and pole are bone-parented to that bone, their keys computed from the world goal with the bone as it stands in the settled pose, so clasped hands follow every `lean`, `turn`, `tilt` and sway and never part; a bone of an arm is refused. Targets and `keys` are read as world points of the first frame (object) or of the settled pose (bone). A hand on a guitar's `neck` or `strum` point rides the prop's root by default |
 | `ik` | `[[t, share], ...]`: clip seconds and shares 0..1 of the arm IK (with the hand's copied rotation and the forearm's pre-bend) after the settle, eased between the keys and held outside them (default all of it); where it is under 1 the arm follows its [motion](#motion) strips. The moves stage writes it for a hand a `free` move lets go ([Moves](#moves)) |
 | `fingers` | a finger preset (`flat`, `relaxed`, `curled`, `fist`, `point`) or a table `{index = [a, b, c], middle, ring, little, thumb, spread}` of curls in degrees per joint (a finger left out stays straight) and `spread`, degrees the fingers fan apart in the plane of the palm (the index by `spread`, the ring 0.6 and the little finger 1.2 times as far, the thumb 0.8 times away from the index; negative closes them; or `{finger: deg}`) for this hand (replaced by a grip's solved rotations) |
@@ -1133,9 +1187,9 @@ The keys of a grip (see [Grips](#grips) for what each style needs and does):
 | `channel` | the track's channel of positions (default `"target"`) |
 | `wobble` | pen with a `track`: degrees, or `{deg, tau = 18, seed = 3}` (frames), a slow random tilt of the pen about the world X and Y (default none) |
 | `fret`, `chord` | neck: the position fret under the index finger (1 or more) and the chord shape (a name or `{finger = [string, frets]}`) |
-| `press` | neck: the share of the gap between two wires, behind the wire it plays, where a pad presses (default 0.3) |
-| `move` | neck: seconds a keyed change takes to land (default 0.12) |
-| `thumb`, `tip` | strum: `"neck"` (default) or `"bridge"`, the side the thumb is on; metres the pick's tip sticks out of the pads (default the card's `pick.tip`, 0.008) |
+| `press` | neck: the share of the gap between two wires, behind the wire it plays, where a fingertip presses (default 0.3: the `finger_targets` point the solver puts the fingertip on) |
+| `move` | neck: seconds a keyed change takes to land (default 0.12): the fingers ease off the strings over its first quarter, the hand moves (slides along the neck to a new position) and they land over its last quarter |
+| `thumb`, `tip` | strum: the thumb lies on top of the pick, on the bass side, leaning 45 degrees toward the neck (`"neck"`, default) or the bridge (`"bridge"`); metres the pick's tip sticks out of the pads (default the card's `pick.tip`, 0.008) |
 
 ```toml
 [pose.rin]
@@ -1209,8 +1263,11 @@ on a prop attached to a bone reads it where the props stage left it. A worn prop
 
 Per member the report has `hip_offset` (the pelvis move onto the seat, metres) or `hips`, `toes`, `drape_bones` (bones keyed),
 `ride` (side → bone), `wear`, and a `grip` digest per hand: `style`, `contacts_mm` (gap per finger or region), `penetration_mm`,
-`finger_clash_mm`, `seconds` and the style's own numbers (`clock` and `axis_flipped` of a ring, `fret`, `chord` and `states` of a
-neck, `thumb` and `tip_mm` of a strum, `point` of a rest, `writing` and `track` of a pen path), with `warnings` when it misses.
+`finger_clash_mm`, `seconds` and the style's own numbers (`clock` and `axis_flipped` of a ring, `fret`, `chord`, `states`,
+`knuckles_mm`, `pads_mm` (per target finger, its fingertip from its target: across the string, along the neck) and `from_ref`
+(how far the hand moved from the shape it was solved from) of a neck, `thumb`, `tip_mm`, `forearm_clear_mm` and `pole` of a
+strum, `wrist_bend_deg`, `reach` and `elbow` (`pole` or `chosen`) of both, `point` of a rest, `writing` and `track` of a pen
+path), with `warnings` when it misses.
 `attached` lists the props placed by `attach` and `anchor_to`, `cables` the worn props' cords, and `ik_error_mm` the miss of
 every arm IK in millimetres, keyed `<cast>.<L|R>`.
 
@@ -1245,9 +1302,12 @@ cannot be keyed both in `[perform]` and by a move (each is a build error); other
 | `dur` | seconds it lasts (default 1) |
 | `hand` | `"R"` (default) or `"L"`: the hand of a one-hand move |
 | `morph`, `value` | a `face` move's morph (semantic or the model's own name) and its value (default 1); on any other move, a face held over it on top of the move's own |
-| `hits` | a beat move's own clip seconds to play on instead of the beats inside it (the snares, say); each must fall inside the move |
+| `hits` | a beat move's own clip seconds to play on instead of the beats inside it (the snares, say); each must fall inside the move. A gag move's may be a lane of the [audio] hits file instead, `{lane, min_db, every, from, to}` (`from` / `to` default to the move's span), read by the build |
+| `prop` | a gag move's held prop (`chomp`, `brush`; `yawn` hugs one): a `[[prop]]` name. The move places it itself, so the prop has no `attach`, `wear`, `anchor_to` or `place` of its own: key its appearance (its `scale`, a pop) for the moments it should show |
+| `chore` | `chores`' loop: `"sweep"` (default), `"stir"` or `"water"` |
+| `accents` | `bounce`'s fists-up-and-hop moments: clip seconds or a lane table as `hits` (default: the timeline's downbeats inside the move) |
 
-`{name = "rest", hand, place}` says where a hand waits when no move plays it (and gives that hand its arm IK, so a walk's `arms`
+`{name = "rest", hand, place, t}` says where a hand waits when no move plays it (and gives that hand its arm IK, so a walk's `arms`
 swing it even when it plays nothing): `"rest"` (default: hanging by the hip; over a wide
 skirt the arm swings out until the hand clears it), `"dainty"` (resting lightly on the front of the skirt or the thighs, elbows
 in, the two hands together when both rest there: a girl's polite stand. It is a pose for two: a dainty hand alone, its
@@ -1256,9 +1316,18 @@ cm out from the two-hand spot: the hand continues its forearm (its wrist bent 12
 thigh and the palm on the skirt, and the elbow is held out to the side (the hand's keys there carry the elbow's pole), so
 the forearm and sleeve clear the hem of a jacket. It glides there from the spot as its partner leaves, arriving as the
 partner gets to its move, and is back as the partner is, unless that stretch is shorter than 0.15 s; the partner's
-absences closer than its round trip plus that count as one, so it does not go back for a moment) or `"mic"` (a fist under
+absences closer than its round trip plus that count as one, so it does not go back for a moment), `"behind"` (the hands
+clasped behind the back, the elbows back; alone, the back of the hand rests on the small of the back), `"clasp"` (the
+hands clasped together at the chest, fingers laced, the elbows down; alone, the hand rests on the chest) — both poses for
+two as `dainty` is —, `"skirt"` (each hand pinching the skirt at its side, a little curtsy; `skirt` and `behind` rest on
+the skirt even where the sim moves it, so the hand is on the cloth, not under it) or `"mic"` (a fist under
 the mouth, holding an attached mic that leans back up to the lips, so the forearm rises to it and the elbow hangs by the
-side). A hand
+side). Without `t` the entry is where the hand waits from the start; with `t` (clip seconds) it changes where it waits from
+then on: the hand is at the new place on `t`, setting off before it as for a move, and a move it plays across `t` or that
+leaves it too little time to get there, or to go on from there to its next move, is a build error saying how long the trip
+takes (a move starting on `t` takes it there afterwards). A hand left at a pose for two when its partner changes place goes
+to its lone place as the partner gets to its new one, and back as it returns, when it has the time (busy, it goes there
+after its move). A hand at the mic holds it from the start to the end: its rest place does not change. A hand
 travels at a human pace: a trip takes 0.1 s plus its wrist's way at 1.6 m/s (eased: it peaks near twice that), or as long
 as turning its palm or its fingers' way at 600 degrees a second takes, if that is longer, and it reaches a move's first
 place on the move's time, so it sets off before it. A reaction is the other way round: `flung` leaves where the hand is on
@@ -1268,7 +1337,7 @@ move, else straight on to that move, leaving its place early enough to get there
 (the hand would have to jump) is a build error that says how long the trip takes. One hand cannot play two moves at once.
 A hand that rests at the mic keeps the mic in its fist through every move it plays (the mic moves aim it); a two-hand move
 leaves it at the mic and plays with the other hand only, except `hands_up` and `flung` (the mic goes up too), and
-`heart_push`, which needs both hands free, is a build error for a member holding a mic.
+`heart_push`, `butterfly` and `bloom`, which need both hands free, are a build error for a member holding a mic.
 
 | Move | What it does |
 |---|---|
@@ -1276,7 +1345,7 @@ leaves it at the mic and plays with the other hand only, except `hands_up` and `
 | `chest_pat` | the flat hand pats the chest on each beat; blush |
 | `paws` | both hands, cat paws under the chin, dipping on the beats; `omega` mouth |
 | `point` | the arm out, the index pointing at the camera |
-| `heart_wink` | a finger heart by the cheek, its thumb side to the camera; `wink_r`, `mouth_smile` |
+| `heart_wink` | a finger heart by the cheek: the thumb laid across the index's last segment (a solved `cross` thumb), the two tips up from their crossing and its face (the thumb's side) to the lens; `wink_r`, `mouth_smile` |
 | `peace_eye` | a peace sign by the eye; `wink_l` |
 | `sparkle` | both hands open beside the face; `smile_eyes` |
 | `drip_check` | the hand by the chest turns over halfway; `jito` eyes |
@@ -1286,33 +1355,87 @@ leaves it at the mic and plays with the other hand only, except `hands_up` and `
 | `mic_up` | the (mic) hand raised forward and up, the mic upright over it, the palm toward the head (a fist holds a mic across its palm, so a mic pointing forward from an upright forearm would twist the palm outward) |
 | `mic_across` | the (mic) hand held out across the body to the other side, the mic upright (offered to a partner on that side) |
 | `ears` | both hands over the ears, elbows wide; `hau` (">_<") face: too loud |
-| `heart_push` | both hands make one heart in front of the chest: the fingertips meet over its two lobes, the thumbs fold down to its point; `cheerful` face. Needs both hands free |
+| `heart_push` | both hands make one heart in front of the upper chest: the fingers curl over its two lobes to meet at the top, the thumbs point down to its point, each fingertip half a finger's radius off the body's midline so the two hands' tips touch; the heart upright with its face (the hands' little-finger sides) to the lens; `cheerful` face. Needs both hands free |
 | `bunny_paws` | both paws up over the head like bunny ears; `wink_r` |
 | `bonk` | a toy hammer (held in the fist, see the library's `squeaky_hammer`) cocked up and back over the shoulder, then brought forward and down on each beat or hit, its head's face meeting what is in front at the height of the chest; it starts cocked (its wind-up), so start it a little before the first hit |
 | `into_lens`, `lean_back` | the upper body leans 14 degrees forward; 11 back and 7 to the left |
 | `stank` | the head flicks back; `hau` face |
 | `blown` | blown back by a blast: the upper body leans 16 degrees back, the head snaps back; `surprised` face (the hands keep what they play) |
-| `hair_flip` | a pose: the hand runs into the hair by the ear, then tosses it back and out (at 40 % of the move), the head flicking the other way (a twitch for the hair to fly on) and tilted from the hand; `calm` eyes, a small smile |
+| `hair_flip` | a pose: the hand runs into the hair behind the ear, then flicks it out (at 40 % of the move), the fingers up and back, the palm up, the elbow kept out to the side so the upper arm keeps its turn out (a toss behind the head turned it past what it can), the head flicking the other way (a twitch for the hair to fly on) and tilted from the hand; `calm` eyes, a small smile |
 | `over_shoulder` | a pose: a look back over the shoulder of the move's `hand` side, the upper body turned 25 degrees and the head 45 more that way; `calm`, a small smile. Shoot it from behind her |
 | `hand_hip` | a pose: the hand on the hip, the elbow out, the head tilted toward it and the body leaning a little away; `smile_eyes`, `mouth_smile` |
 | `finger_gun` | a pose: the arm out ahead at the height of the eyes, the hand a finger gun (index out, the thumb up, the rest curled), leaning in 6 degrees, the head tilted toward it, winking the other eye; `mouth_smile`. Read from a three-quarter view: straight on, the hand stands in front of her face |
 | `free` | lets the hand go for the span to whatever else drives the arm (a walk VMD's swing; below) |
 | `float` | the arm drifts out and down, then up and open over three quarters of the move, weightless (the hand relaxed, palm down); played on both hands a beat apart, with `air`, `rise` and a slow `tumble`, a body floats off the ground in zero gravity |
+| `peek` | a pose: the hand up at its own eye, peeking through the ring of its thumb and index (a solved `ring` thumb: the tips meet), the ring's opening to the lens (a circle round the eye from the front) and the middle of its hole (the circle through the index's curl and the thumb's pad) on the line from the lens to the eye's visible pupil, 6.5 cm in front of it or as near as the face lets it come, the thumb toward the face and the other three fingers fanned up, 15 degrees in from upright, the elbow out to the side at about the shoulder's height so the forearm comes in from the side and the mouth stays clear (thumb to the lens, or the elbow low in front, the forearm would have to turn over past what a forearm turns); from its arrival to the end of its hold the hand goes with the head (keys marked `sight`), so the ring stays on the eye however the head moves; the other eye winked (whichever wink morph shuts it on the model: the build reads the morphs' shape keys), leaning in 4 degrees, the head tilted toward it; `mouth_smile` |
+| `butterfly` | the shadow-puppet butterfly before the collarbone: the wrists crossed (the right hand 5 cm in front of the left, so the forearms pass), the backs of the hands to the lens, the thumbs reaching across the midline (overlapping there as the butterfly's body, a hand's depth apart) and the spread fingers leaning up and out as wings, below the chin so the face stays clear; on each beat (or `hits`) the wings fold 30 degrees forward about the thumbs, opening between; `smile_eyes`, `mouth_smile`. Needs both hands free; `hand_mirror` takes the crossing's 5 cm out |
+| `bloom` | both hands cupped round a bud before the chest, then opening up and out at 40 % of the move, palms up, the fingers fanned like petals; `smile_eyes`, `mouth_smile`. Needs both hands free |
+| `reach` | a pose: the arm reaching to the lens, the open hand's palm to it, fingers spread, leaning in 8 degrees, the head tilted toward it; `calm`, `mouth_smile` |
+| `wings` | both arms out to the sides, the hands trailing, coming down on every second beat inside the move (or on its `hits`) and up between, like slow wings: for a floating body; `calm` |
+| `blow` | the palm up in front of the mouth, then pushed on out and open at half the move, blowing something off it (a kiss, a butterfly); `u` lips (not over sung words), `calm` |
+| `giggle` | a pose: the fingers over the lips, hiding a giggle, the head tilted toward the hand; `smile_eyes`, `blush` |
 | `face` | only its `morph` |
+| `yawn` | both fists stretched up high, then the arms opening out wide (at 55 % of the move), the back arched 9 degrees and the head tilted; the mouth opens slowly into a yawn (`a`, `o`) and closes by 90 %, the eyes shut (`calm`). With `prop` (a pillow: `use.anchor` `hug`, the middle of its back and the way its front faces, `use.rest` `hold_L` / `hold_R` planes on its ends, normals out, card `bounds`) she hugs it instead: it rides her chest upright, its back 12 mm off her body, its top 6 cm under her mouth, a palm flat on each end, leaning 6 degrees onto it with her head tilted |
+| `chomp` | a held prop (`prop`, a giant carrot: `use.grip` `hold` and `use.bite` `bite1`, `bite2` ...) brought to the mouth and bitten on each hit (`hits`, else the beats; at least 0.25 s apart): bite k's point 8 mm behind the lips on the prop's k-th hit, counted on across every chomp of it in time order, the mouth wide open as it comes and shut on the hit, chewing after; between bites the prop tips 20 degrees down about the fist. The prop's root property the bite names (`prop`, default `bite<k>`) is set to that clip second (its bite carves in, its chunks fly then); more hits than bites is a build error. `smile_eyes` |
+| `brush` | a held toothbrush (`prop`: `use.grip` `hold`, `use.anchor` `brush`, the middle of the bristles' tips and the way they face) across the mouth, the bristles on the teeth facing them, scrubbing 2 cm each way on the beats (or `hits`); held down its handle, 0.72 of the arm's reach from the bristles (a giant one too); `i` (the teeth bared), `smile_eyes` |
+| `run_in_place` | a cartoon run: the knees come up in turn on each beat (or hit) and halfway between (perform's `walk` on the spot: stride 0, the feet coming down where they rose, half the arm's reach high), the fists pumping opposite them (the arm on the raised knee's side back), leaning 7 degrees in; even steps, so each run starts on the left knee. On a treadmill (the record) stand her on it: `[[cast]] at` its spot, `[pose] feet = "<prop>:run"` |
+| `wag` | a scolding wag: the move's hand by the face, the forearm upright and the index up, tipped out on each beat (or hit) and in between, the palm to the lens; the other hand on the hip; `jito`, `mouth_down`, `angry` |
+| `wink_point` | a pose: the arm out pointing at the lens (`point`), a wink of the other eye, leaning in 7 degrees with the head tilted toward the hand and a little nod on its start; `mouth_smile` |
+| `bounce` | an EDM bounce: the knees pump on each hit (perform's `bounce` on them, 45 mm), both fists before the chest dipping with them, and on each accent (`accents`) both fists punch up and she hops: 7 cm over 0.3 s (`rise`), the legs tucking (`air`), the knees giving on the landing (`crouch`); an accent too soon after the last hop only punches |
+| `chores` | simple mimed loops on the beats (or `hits`), the move's hand the main one: `sweep`, two fists up a broom handle sweeping to the low (other) hand's side; `stir`, a fist circling once a beat over the other hand cupped as a bowl; `water`, a fist round a watering can's handle held out low, tipped forward on each beat; leaning 8 degrees, `calm` |
 
-The four poses (`hair_flip`, `over_shoulder`, `hand_hip`, `finger_gun`) are written for the left hand and mirrored for the right:
+The poses (`hair_flip`, `over_shoulder`, `hand_hip`, `finger_gun`, `peek`, `reach`, `giggle`, `wink_point`) and `wag` and `yawn`'s tilt are written for the left hand and mirrored for the right:
 their turns, tilts and the head's twitch go the other way, their lean does not. A move's body keys ease in over 0.12 s and back
 over the last 0.12 s; two moves that move the body at once are a build error.
 
+The gag moves (`yawn`, `chomp`, `brush`, `run_in_place`, `wag`, `bounce`, `chores`; `mkmmd/core/gags.py`) are played like the
+others (their hands travel, rest, stay natural and keep off the body the same way) and also key the legs and the mouth: their
+perform keys (`bounce`, `rise`, `crouch`, `walk`) cannot be the project's own as well (a build error), their `air` spans join the
+project's, and `mouth` gets the spans where `yawn`, `chomp` and `brush` have it, so lip sync gives way to their vowels there. A held
+prop rides the wrist of its hand (bone-parented at the end of the pose stage): the middle of its grip in the fist's hole (the
+member's own fingers closed round a handle of the grip's `radius`, or of its `profile` there: [[s, r], ...] from the business end,
+or `radius_tip` at that end) and its `use.grip` `hold` `axis` (toward the business end: a carrot's tip, a brush's head) out of the
+fist's thumb side, as a fist holds a mic. The fist closes on the span `center` +- `length` / 2 where the move needs it (a carrot as
+far from its tip as still brings its first bite to the lips with the wrist 0.88 of the reach from the shoulder, and 7 cm from the
+deepest bite; a brush down its handle), and the first move that holds a prop sets how it sits in the fist (its front to the lens,
+the bristles to the teeth): every place of it is then solved with that grip, the wrist moved until the prop's part is where the
+place wants it. A prop is held by one hand (or hugged) for the whole build; the pose report's `held` names the bone it rides and
+the moves report its `perform` keys, `held` props and the root `props` it set.
+
 A beat move needs a beat inside it (the timeline's `beats`, `audio/timeline.json`) or its own `hits`. The hand places are made from the member's
 rest pose (its arm joints, chest, mouth, eyes, the arm's two lengths and the hand's), so the library fits any body. Places by
-the face and the chest are on the hand's own side, clear of a mic at the mouth and of its cord. Each place is then made
-natural:
+the face and the chest are on the hand's own side, clear of a mic at the mouth and of its cord. A gesture (`peek`'s ring, the
+finger heart, half of the two-hand heart, a butterfly wing: `mkmmd.core.moves.GESTURES`) is placed by the member's own hand:
+the build reads its rest bones and skin (the landmark `fingers`: both hands averaged as the left), the core poses it in the
+gesture's shape (`mkmmd.core.fingers.pose`) and turns it so the part that must read faces the lens the right way up, setting
+the wrist so that part lands where it belongs (the ring's hole on the pupil's line to the lens, the heart's tips on the
+midline, the thumbs hooked across it); a gesture comes in to the body straight from the front, so it stays on its line of
+sight, and the two-hand ones keep the orientation they were given. The pupil is the landmark `pupil`: an MMD eye's iris is a
+mesh of its own about a centimetre out from the eye bone and 4 cm in front of it, so the build takes the middle, by area, of
+the faces whose every vertex the eye bone moves most (both eyes, averaged as the left; a model whose eyes no face follows
+falls back to the eye bone). A place seen through (`mkmmd.core.moves.SIGHTED`: the ring) is moved back onto that line after
+the wrist is turned toward its forearm and the approach has kept it off the face, and its keys are marked `sight`: the pose
+stage hands the hand's goal to a second goal riding the head bone from the first such key to the last (`_sight_ride`, handed
+over in 0.1 s either side), so the move's lean and head tilt and perform's nods and head rocks carry the ring with the eye.
+The moved hands ride the chest otherwise. Each place is then made natural:
 
 - **The wrist.** The elbow the arm IK will give (the default pole, `mkmmd.core.armreach`) fixes the forearm, and a hand that
-  would bend more than 60 degrees from it is turned toward it as a whole (the IK's own lands within about 10 degrees of that).
-  A place with something in the fist (a mic, a hammer) aims it instead: its hand continues the forearm as far as a fist round
-  a handle pointing that way allows (the mic at the mouth: the forearm rises to a fist under the lips).
+  would bend more than 56 degrees from it is turned toward it as a whole (`HELD`: the `wrist_bend` rule of 60, less the few
+  degrees the IK poses the arm off the plan; a ring at the eye 48, as the head that carries it tilts and nods). A place
+  with something in the fist (a mic, a hammer) aims it instead: its hand continues the forearm as far as a fist round a
+  handle pointing that way allows (the mic at the mouth: the forearm rises to a fist under the lips).
+- **The twist.** Where that elbow would leave the forearm or the upper arm turned past what an arm turns (less a 10 degree
+  margin; `mkmmd.core.armtwist`: the forearm -90 to +100 degrees from MMD's palms-down rest, the upper arm 95 either way,
+  more outward as it rises above the shoulder), the elbow is turned round the shoulder-wrist line the least way to where
+  they are not, rather than the forearm twisting (`mkmmd.core.moves.arm_for`): up and out for a hand turned palm out, down
+  and in under the hand for one turned palm up (`blow`), preferring an elbow the hand needs no turning toward (a gesture
+  still reads), no higher than the shoulder unless the hand is, on its own side of the body and out of the torso. The key
+  carries that elbow's pole. A trip between two places whose elbows sit far apart round the shoulder (from behind the back
+  up to the eye), or whose twists are 120 degrees or more apart, passes keys halfway with the pole round the shoulder, the
+  elbow turned toward the middle of the two ends' twists and the hand rolled with its forearm, so the forearm turns over
+  the short way, through the middle. The wrist of a key halfway goes round the shoulder at the mean of the two ends'
+  distances from it, as an arm swings: on the straight line from the hip up behind the head it passed 8 cm from the
+  shoulder, an arm folded so far that its upper arm turned past its range whichever way the elbow pointed.
 - **The skin.** The build measures the distance to every face of the member's meshes in the rest pose that belongs to neither
   arm: its body and clothes, but not the hair, ear, tail, skirt and ribbon chains its `[sim.<cast>]` table simulates (those
   make way for a hand, colliding with its fingers and palm, so long hair or a skirt at her sides does not push a hanging hand
@@ -1330,10 +1453,14 @@ forearm key adds to the strip's elbow instead of replacing it). Once the motion 
 have each let-go arm over its spans (the wrist, the hand's direction and palm, the elbow; in the frame of the chest the goal
 rides, so a strip that turns the chest under the arm carries the goal with it) and keys the hand again
 (`mkmmd.blender.build.pose.free_hands`): the goal follows the strip's hand over the span and the elbow's pole its elbow (turned
-at the span's ends by what the IK's elbow misses by), so the IK lets go and takes over on the strip's own arm and nothing moves
-at the hand-offs; the hand travels to where the strip has it at the span's start and away from it at its end at the human pace,
-as between any two places, and leaves the strip as late as still gets it to its next move on time (at the span's end or
-before: the report's `free_hands` has the spans as played). Over each span the forearm's pre-bend is off (the IK starts from
+at the span's ends by what the IK's elbow misses by; for an arm too straight to show its bend, the way its upper arm turns), so
+the IK lets go and takes over on the strip's own arm and nothing moves at the hand-offs; the hand travels to where the strip
+has it at the span's start and away from it at its end at the human pace, as between any two places, and leaves the strip as
+late as still gets it to its next move on time (at the span's end or before: the report's `free_hands` has the spans as
+played). It joins and leaves the strip only where the strip keeps the arm's twists in range (5 degrees inside): a dance that
+shrugs past what an upper arm turns where the span starts is joined after the shrug, and the IK lets go from there. Where the
+strip itself twists the arm past the range while the hand is let go to it, the build warns (`free_hands` `twisted`: let the
+hand go over another stretch). Over each span the forearm's pre-bend is off (the IK starts from
 the strip's own bent arm), and the hand's finger keys give way by its IK share to a strip that plays the fingers (the strip's
 curl alone, not composed with the hand's). Let a strip of the arm cover the span, eased in before it and out after it, and play
 the fingers in a strip of their own over the span itself, eased over 0.25 s: the build warns when no strip plays the arm fully
@@ -1342,7 +1469,7 @@ over the span, so the hand comes back from there. A hand that rests at the mic i
 
 Faces of the same morph closer than 0.12 s are held through. The pose report has `moves` per member (`moves`, `hand_keys` per
 side, `free` spans per side, `expressions`, `twitches`, and `places`: per side and place, `moved_mm`, how far the approach
-kept the hand out, and `wrist_deg`, the wrist's bend).
+kept the hand out, `wrist_deg`, the wrist's bend, and `twist_deg`, the forearm's and the upper arm's twists).
 
 ```toml
 [[move.len]]
@@ -1410,7 +1537,13 @@ By default (`extend = "hold"`) the motion's first pose holds before `start` and 
 `[perform]` key win over the motion (the active action plays on top of the strips): `pose` keys the spine, neck and head
 always, the pelvis with `sit` or `hips`, the arms with a `hands` table, the legs with `feet`; `perform` keys the spine, neck, head
 and eyes on every frame. Give a member that has both a motion and those tables `bones = "lower"` or a list of the bones the
-others leave alone. The report has, per entry, `vmd`, `source`, `strip` (first and last frame), `morphs`, `mirror` and
+others leave alone. A motion that switches the leg IK off (FK legs, as a BVH conversion's are) plays under the member's IK all
+the same: mmd_tools would switch it off for the whole scene at the import, so the stage keeps it on (and drops the switches the
+VMD keys); its leg keys give way to the IK, the feet stay where the leg IK bones are, and the rest of the body plays as keyed.
+A bone track keyed on the far side of the rest (quaternions with w below 0 throughout, as BVH conversions write them) is turned
+to the near side at the import (`near_rest`: the same rotations), so blends with the rest pose and other strips turn the short
+way instead of half a turn round.
+The report has, per entry, `vmd`, `source`, `strip` (first and last frame), `morphs`, `mirror` and
 `influence` when given and, with `retime`, `motion_bpm`, `song_bpm` and `scale`, and `free_hands` the hands let go to the
 strips (per member and side: the `spans` as played, the `samples` read and the `pole` stretches keyed); `retime` raises
 when no beat can be found in the motion (a very short or motionless VMD) or the timeline has fewer than two beats.
@@ -1418,16 +1551,16 @@ when no beat can be found in the motion (a very short or motionless VMD) or the 
 ### Perform
 
 `[perform.<cast>]` is a character's life on top of its pose: gaze, breathing, sway, nods, beat bob, startles, keyed lean / turn /
-tilt, blinks, expressions, lip sync, twitches and strumming. Times are clip seconds, angles degrees, targets are
-[Targets](#targets), with one exception: `"camera"` does not resolve here, the cameras are built by the shots stage after this
-one. The stage keys `upper_body`, `upper_body2`, `neck`, `head` and both eyes on every frame of the build (LINEAR), composed in
-the armature's frame, so characters riding vehicles stay correct. Those keys contain the pose's base (eased in over the settle)
-and replace the pose stage's own on the same bones. A model without eye bones gets head motion only; one without `upper_body2`
-takes the breathing on `upper_body`. The stage needs from earlier stages the pose's base and the pick hand's goal for `strum`,
-the props and members the targets name, `rig.json` for morph names (`blink`, the vowels `a i u e o`, the semantic names of
-`expressions`) and a timeline file for `bob`, `sing` and `strum`. `mk ref measure` recommends values for these keys from clips of
-real people (`blink.per_min`, `lids`, the rate, `rise` and `hold` of gaze events, `head_share`, `eye_max`, `nod`, `bob`, `sway`,
-`breath`, `sing.mouth`), each with a reason.
+tilt, turns and spins of the whole body, blinks, expressions, lip sync, twitches and strumming. Times are clip seconds, angles
+degrees, targets are [Targets](#targets), with one exception: `"camera"` does not resolve here, the cameras are built by the
+shots stage after this one. The stage keys `upper_body`, `upper_body2`, `neck`, `head` and both eyes on every frame of the
+build (LINEAR), composed in the armature's frame, so characters riding vehicles stay correct. Those keys contain the pose's
+base (eased in over the settle) and replace the pose stage's own on the same bones. A model without eye bones gets head motion
+only; one without `upper_body2` takes the breathing on `upper_body`. The stage needs from earlier stages the pose's base and the
+pick hand's goal for `strum`, the props and members the targets name, `rig.json` for morph names (`blink`, the vowels
+`a i u e o`, the semantic names of `expressions`) and a timeline file for `bob`, `sing` and `strum`. `mk ref measure`
+recommends values for these keys from clips of real people (`blink.per_min`, `lids`, the rate, `rise` and `hold` of gaze
+events, `head_share`, `eye_max`, `nod`, `bob`, `sway`, `breath`, `sing.mouth`), each with a reason.
 
 #### Gaze
 
@@ -1446,7 +1579,8 @@ Gaze blends unit directions from the eyes, so targets at any distance (a mirror 
 The head turns `head_share` of the way from where the pose holds it to the target, the neck carrying `neck_share` of that, the
 eyes the rest. So with a `[perform]` table the head is pulled toward `look` and the gaze events: aim it with those, and a pose
 `head` rotation survives only in the remaining share. The eyes lead the head by 70 ms (50 ms for a glance); the head's aim
-wanders by a fraction of a degree (a slow noise seeded by the member's name).
+wanders by a fraction of a degree (a slow noise seeded by the member's name). Over a `spin` the spin has the head and the eyes,
+all of the turn (they spot where she faced, [Body](#body)).
 
 #### Body
 
@@ -1465,11 +1599,13 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `rise` | `[[t, metres], ...]`: the whole body, feet too, lifts by that much (eased between keys): she floats |
 | `crouch` | `[[t, metres], ...]`: the hips drop by that much, the feet planted, so the knees bend (eased between keys, on top of `bounce`): a landing, a squat, a brace before a jump |
 | `kick` | `{foot = "L", height = 0.12, back = 0.08, hold = 0, beats, timeline, downbeat_accent, from, to, attack = 0.06, decay = 0.18}`: that foot flicks up and back on the beats; `hold` (0..1) keeps it that share of the way up between them (a foot kicked up behind a lovestruck girl) |
-| `air` | `{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30}` (or a list): the legs of a body off the ground (a jump, a blast; its height is the root's, keyed by `[[key]]`) from take-off `from` to landing `to`: over `rise` s both feet come up toward the hips by `tuck` m and back by `back` m (the knees bend forward), the foot `first` ahead and the other `lag` s later by `share` of it, the toes pointing `point` degrees down; they hold still (a [freeze](#freezes) in the air shows no jump when the world starts again) and over the last `extend` s reach down again, so the feet are under the hips at the landing. Added to `kick`. Mind the knees: a model's legs straight while its root is lifted look hung, not jumped |
+| `air` | `{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30, kicks}` (or a list): the legs of a body off the ground (a jump, a blast, a float; its height is the root's, keyed by `[[key]]`, or `rise`) from take-off `from` to landing `to`: over `rise` s both feet come up toward the hips by `tuck` m and back by `back` m (the knees bend forward), the foot `first` ahead and the other `lag` s later by `share` of it, the toes pointing `point` degrees down; they hold still (a [freeze](#freezes) in the air shows no jump when the world starts again; `kicks` give that up) and over the last `extend` s reach down again, so the feet are under the hips at the landing. `kicks` (`true` or `{knee = 10, hip = 2, foot = 15, period = 3.0, every, beats, timeline, wander = 0.3, seed = 0, ease = 1.0}`) makes the hold a float (weightless, treading water): from when both legs are tucked until they reach down, eased in and out over `ease` s, the legs take turns in small lazy kicks, each knee straightening and bending `knee` degrees either side of its tuck, the thigh swinging `hip` degrees a little ahead of it and the foot pointing as the knee straightens and flexing as it bends (`foot` degrees against the shin, a little after it). A leg kicks every `period` s; with `every` its knee is straightest on every n-th beat of the timeline (`timeline`, default `audio/timeline.json`) counted from a downbeat (`every = 2`: one leg on beat 1, the other on beat 3), with `beats` on those clip seconds. `wander` (at most 0.6) varies each kick's size and, off the beats, its pace by up to that share, smoothly (`seed`): no metronome. The bends are the knees' and hips' own, turned into the feet's places through the rig's legs (`mkmmd.core.perform.air_kicks`), so they look alike on any character with leg IK; a knee never straightens past 5 degrees (from a straight tuck the kicks bend it further). Side-on a tucked shin slopes back (about 40 degrees for a 0.12 m tuck) and a foot looks pointed only when `point` passes that slope: a float wants about 55. The report's `air.kicks` has, per span, each leg's landings (its knee straightest), its knee's range and how far its foot moves (`foot_mm`). Added to `kick`. Mind the knees: a model's legs straight while its root is lifted look hung, not jumped |
 | `step_turn` | `[{t, deg, dur, first, lift = 0.045, dip = 0.02, move}]`: the body turns round on the spot like a person, not a figure on a turntable. From `t` the cast root turns `deg` degrees toward the left (negative: right) over `dur` s (default 0.2 s and 0.11 s per 100 degrees: 0.36 s for 145), and travels `move` `[x, y]` m meanwhile (in the character's frame before its first turn: x its left, y behind; a step toward what it turns to), the chest leading the hips (by at most 30 degrees) and unwinding as they arrive; the foot `first` steps round, then the other (by default the order that keeps the feet further apart: about a point in front of the ankles or behind them, the other order sets a foot down where the other still stands), each lifted `lift` m between rolling off and setting down, one foot always down and none sliding; a foot is never more than 35 degrees from the hips (it swivels on its ankle), and the hips sink `dip` m meanwhile. The report has `feet_gap_mm`, the least distance between the ankles. Give the head a `gaze` at what the body turns to, a moment before, and it leads the chest. The root's yaw, and the axes `move` travels along, are keyed here, so a `[[key]]` on them is an error |
-| `walk` | `{steps = [t, ...], hops = [{from, to, move, height}], stride = 0.55, first = "L", lift = 0.07, dip = 0.015, slide = 0, roll = 0.15, hop = 0, arms = 0, cross = 0, sway = 0}`: the body walks (`mkmmd.core.perform.walk_plan`). Each step is a foot coming down (alternating from `first`) a `stride` past the other foot, on its own side of the body, or `cross` of the way in to the body's centre line (1: on it, a catwalk; up to 1.5: across it); it rolls off `roll` of the step's time after the other came down, swings through `lift` m and lands on the step, never sliding while down. A step more than 1.2 s after the one before (or after a hop's landing) starts from a stand, as the first does: the body waits where it stood and the foot swings over the last 0.35 s, so she can stop, hold a pose and walk on in one walk. The cast root travels with the body (straight ahead, at a steady pace, midway between the feet each time one lands) and the hips dip `dip` m at each landing; `sway` (m) carries the hips over the foot that is down, out and back while the other swings (a strut; the feet stay planted). Over a hop both feet leave the ground from `from` to `to`, the root flies a parabola `height` m high (default what the flight time gives, g T² / 8; `hop` sets one for every hop), carried `move` `[x, y]` m (its left, behind; default a stride ahead: a knight's L is `[1.2, -0.6]`), and the legs tuck as `air` does; the feet land a quarter stride either side of the body and the foot behind steps next. `slide` 1 puts the walk on a treadmill (the body stays, the feet down slide back under it: running on the spot), `arms` (m) swings each hand's IK goal forward as the other side's foot goes forward, while the feet move: it dies away over 0.25 s once they stop, so a hand posed between two walks is where its pose put it (the hands need a pose: a `rest` move gives one, and a hand riding the chest swings with it). The root's location is keyed: a `[[key]]` on it must be `relative` (a push on top of the walk). A walk and a `step_turn` in one table are refused: face the walk with `[[cast]] yaw`. The report has `walk` and `sway_mm` |
+| `spin` | `[{from, to, deg, spot = true, windup = 20, overshoot = 8, twist = 35, neck = 70, whip = 0.3, foot, lift = 0.1}]` (or one table): the body spins round like a dancer, not a figure on a turntable (`mkmmd.core.perform.spin_curves`). From `from` she winds up `windup` degrees the other way, turns `deg` toward her left (negative: right) and `overshoot` degrees past it, and has settled back by `to`, each eased; the chest leads and the hips trail it by 0.12 s (at most 8 % of the spin), so the spine twists with the speed, by `twist` degrees at most (50 at most: `joint_limits` keeps a spine to 60). With `spot` the head holds where she faced before the spin (a dancer's spot: the camera in front of her) while the neck lets it, `neck` degrees from the chest at most (80 at most: `joint_limits` keeps a neck to 85, and `head_limits` clips it at its `yaw`), then whips round in `whip` s ahead of the chest, as far ahead as the neck lets it, onto the next spot (every full turn, then where she ends facing) and holds it as the chest and hips come round under it; without `spot` it leads the chest by the speed. The eyes lead the head by 0.07 s. A spin has the head: the idle look and gaze events give way to it from 0.25 s before it to 0.25 s after. All inside an `air` span or a `rise` of more than 2 cm, the legs go round with the hips (their tuck and kicks go on); on the ground she turns on the toes of `foot` (default the side she turns toward): the weight goes over that foot as she winds up, both feet flat, then as the hips set off its heel rises 20 degrees about the toes (the body with it) and the other foot lifts `lift` m, drawn halfway in toward it, and both come down in her stance over the last 0.2 s, after she has settled; the root goes round the toes (its location is keyed). A spin partly in the air is an error. The root's yaw is keyed here, so the hair and skirt simulate from the real turn, and a `[[key]]` on it is an error; step turns and spins follow one another in time order, each starting after the one before has ended, and a walk or a tumble with them is refused. The report's `spin` has, per spin, `whips` (when the head whipped round), `twist_deg`, `neck_deg`, `air` and `foot` |
+| `walk` | `{steps = [t, ...], hops = [{from, to, move, height}], stride = 0.55, first = "L", lift = 0.07, dip = 0.015, slide = 0, roll = 0.15, hop = 0, arms = 0, cross = 0, sway = 0}`: the body walks (`mkmmd.core.perform.walk_plan`). Each step is a foot coming down (alternating from `first`) a `stride` past the other foot, on its own side of the body, or `cross` of the way in to the body's centre line (1: on it, a catwalk; up to 1.5: across it); it rolls off `roll` of the step's time after the other came down, swings through `lift` m and lands on the step, never sliding while down. A step more than 1.2 s after the one before (or after a hop's landing) starts from a stand, as the first does: the body waits where it stood and the foot swings over the last 0.35 s, so she can stop, hold a pose and walk on in one walk. The cast root travels with the body (straight ahead, at a steady pace, midway between the feet each time one lands) and the hips dip `dip` m at each landing; `sway` (m) carries the hips over the foot that is down, out and back while the other swings (a strut; the feet stay planted). Over a hop both feet leave the ground from `from` to `to`, the root flies a parabola `height` m high (default what the flight time gives, g T² / 8; `hop` sets one for every hop), carried `move` `[x, y]` m (its left, behind; default a stride ahead: a knight's L is `[1.2, -0.6]`), and the legs tuck as `air` does; the feet land a quarter stride either side of the body and the foot behind steps next. `slide` 1 puts the walk on a treadmill (the body stays, the feet down slide back under it: running on the spot), `arms` (m) swings each hand's IK goal forward as the other side's foot goes forward, while the feet move: it dies away over 0.25 s once they stop, so a hand posed between two walks is where its pose put it (the hands need a pose: a `rest` move gives one, and a hand riding the chest swings with it). The root's location is keyed: a `[[key]]` on it must be `relative` (a push on top of the walk). A walk and a `step_turn` or a `spin` in one table are refused: face the walk with `[[cast]] yaw`. The report has `walk` and `sway_mm` |
 | `tumble` | `[{from, to, deg, axis = "flip"}]`: the whole body turns in the air about its hips (the root turned and moved so the hips stay put), `deg` over `from`..`to` eased in and out, about its left axis (`"flip"`, positive: head forward) or its forward axis (`"cartwheel"`, positive: toward its left); turns add up and hold (360 lands upright). Give it `air` (or a walk's hop) so the legs tuck |
 | `drum` | `{hand = "R", fingers = ["little", "ring", "middle", "index"], deg = 25, lift = 0.16, roll = 0.02, beats, timeline, downbeat_accent, from, to}`: the fingers of one hand tap on the beats (a driver drumming on the wheel): each lifts at its base joint by `deg` (the middle joint by a third of it) about its own flexion axis, from wherever its keys hold it (a grip's solved curl), over the first half of the `lift` seconds before the beat and falls, fastest at the end, back onto it on the beat; the little finger leads the index by `roll` s per finger. The palm stays where the grip put it, so a hand wrapped round a rim never moves through it. The report has `drum` (`hand`, `fingers`, `taps`, `deg`, `frames`) |
+| `squash` | `{lane, min_db, every, from, to, depth = 0.1, stretch = 0.05, attack = 0.04, rebound = 0.14}` or `hits = [t, ...]` in place of the lane: a cartoon squash and stretch of the whole body on each hit of a `lane` of the [audio] hits file (or on `hits`, clip seconds), keeping its volume and anchored at the feet: the cast root's scale keyed on every frame about its origin (where she stands), the height squashing over `attack` s to 1 - `depth` on the hit, then springing back up past 1 to 1 + `stretch` `rebound` s after it and settling (a damped spring, `mkmmd.core.perform.squash`; overlapping hits add up), the width and depth by 1 / its square root. The report has `squash` (`hits`, `squash`, `stretch`) |
 
 #### Face and mouth
 
@@ -1480,6 +1616,7 @@ wanders by a fraction of a degree (a slow noise seeded by the member's name).
 | `expressions` | `[{morph, keys = [[t, value], ...]}]`: a morph's value over time, Bezier between the keys. `morph` is a semantic name (rig.json `morphs`) or the model's own, of any kind (a group or material morph through the bound sliders, see [Cast](#cast)); the stage raises when the model has no such morph. An expression on the `blink` morph replaces the blinks, and lip sync replaces an expression on a vowel morph |
 | `sing` | lip sync, below |
 | `twitch` | `[{bones, family, t, deg = 14, axis = [1, 0, 0], dur = 0.22}]`: a quick flick (out to `deg`, back past rest by a quarter of it, home) about an axis in the armature's frame. `bones` lists semantic or Blender names, `family` (`"ears"`, `"tail"`) takes the top bone of every chain of that family by its name; `t` is required |
+| `mouth` | `[[t0, t1], ...]`: clip seconds where the expressions on the vowels win over `sing` (eased in and out over 0.08 s): the moves write them for a yawn, a chomp and a brush, so their mouths are not lip-synced away |
 
 `sing` is `{timeline, lines, words, mouth = 0.8, lead = -0.03, voice = "en-gb"}`. The words of the timeline (`lines[].words[]` with
 `text`, `start` and `voiced_end` in clip seconds; the text is read and never printed) become IPA phonemes with `espeak-ng` and
@@ -1508,6 +1645,8 @@ guitar](#playing-a-worn-guitar)).
 | `prop` | the name of the guitar the hand grips (required) |
 | `grip` | the prop's `use.grip` point of the strum zone (default `"strum"`) |
 | `rhythm` | `"onsets:<stem>"` (the timeline's `onsets`, see [Timeline](#timeline): `mk timeline onsets`), `"beats:N"` (N strokes per bar of four beats, a multiple of 4: 8 is eighths), `"notes"` (pick the other hand's bass line one string at a time: [Playing a worn guitar](#playing-a-worn-guitar), Picking) or a list of strike times in clip seconds (default `"beats:8"`) |
+| `technique` | `"pick"` or `"fingers"` (rest strokes with the index and middle fingers; needs `rhythm = "notes"`): default the card strum entry's `technique` (the library bass's is `"fingers"`, as most bassists play, the guitar's `"pick"`), else `"pick"`. The first table's decides for every table of the hand ([Bass lines and picking](#bass-lines-and-picking), Fingerstyle) |
+| `hold`, `recover`, `shift`, `pause` | fingers: seconds a finger rests on the next string after its stroke (0.25), lifts back to hovering (0.12), the hand moves between stations (0.12); a gap longer than `pause` (0.8) starts the alternation again with the index. `attack` is the whole swing hover -> rest (0.11), `min_gap` 0.05 |
 | `from`, `to` | clip seconds: only the strikes inside are played (default the whole clip) |
 | `accent` | `"downbeats"`, `"beats"` or a list of times: strikes within `accent_window` of them are accented (wider and deeper by `accent_gain`) |
 | `accent_gain` | an accented stroke's amplitude and depth (default 1.25) |
@@ -1522,9 +1661,10 @@ guitar](#playing-a-worn-guitar)).
 | `attack` | seconds from the first string to the last, the audible spread of a strum (default 0.075) |
 | `lead`, `follow` | seconds of run-up before the first string and of follow-through after the last (default 0.09 each) |
 | `approach`, `retreat` | seconds the hand takes from rest to the first stroke and from the last stroke back to rest (default 0.3 each) |
-| `share` | the share of the sideways travel that the hand makes by turning about the wrist, about an axis along the strings; the rest is made by moving the hand (default 0.6) |
+| `share` | the share of the sideways travel that the hand makes by turning about the wrist, about an axis along the strings; the rest is made by moving the hand (default 0.6). Faded out where the turn would move the tip into the face more than across it (a hand hanging from a wrist above the strings: the arm carries the stroke). Picking a line (`rhythm = "notes"`, default 0.85) turns about the axis square to the sweep and to the wrist-to-tip lever (`core.strum.wrist_turn`: the wrist deviating, the forearm rolling), so the stroke is the hand turning and the arm hardly moves; the tip still follows the path exactly |
 | `kick` | degrees: on every accented stroke the guitar's neck kicks up that far (the prop turns about its face normal through its origin and eases back; the hands ride it). In the first table of a hand |
 | `windmill` | `[t, ...]`: before the down stroke nearest each time (within 0.12 s) the pick hand swings a full circle, over `windmill_dur` seconds (0.5): its goal turns once about an axis through the shoulder along the guitar's face normal and comes down onto the strings at the strike, which then plays as planned. In the first table of a hand; read it in a front or three-quarter view (side-on the circle is edge-on) |
+| `ring` | the strings the strokes play vibrate on screen (default `true`; `false`: still), or `{amp, decay, damp, shimmer}`: see [Strings that ring](#strings-that-ring). In the first table of a hand |
 | `sigma` | half the width of the six strings at the strum centre, metres (default taken from the card's strings, 0.0225 without a `neck` point) |
 | `timeline` | the timeline JSON with `onsets`, `beats` and `downbeats` (default `audio/timeline.json`) |
 
@@ -1534,15 +1674,17 @@ swing; a stroke in the same direction as the one before first returns over the s
 follow-through and the next run-up is longer than `approach + retreat + 0.1` s the hand goes back to rest (the tip on the string
 plane at the strum centre: the grip) and comes in again. The path is turned into IK goals relative to the grip and keyed every
 frame (LINEAR) from the first approach to the last retreat: the hand moves as a rigid body and turns about the wrist for `share`
-of the sideways travel (not at all when turning would hardly move the tip sideways, never more than 0.6 rad). Tables that
+of the sideways travel (`core.strum.turn_share`: not at all when turning would hardly move the tip sideways or would move it
+more into the face than across, never more than 0.6 rad). Tables that
 share a hand take the first one's `prop`, `grip`, `sigma`, `timeline` and path numbers (`span`, `lift`, `return_lift`, `attack`,
 `lead`, `follow`, `approach`, `retreat`, `share`); `rhythm`, `from`, `to`, `accent`, `accent_gain`, `up_scale`, `accent_window`,
 `min_gap`, `beat_tol` and `depth` are each table's own.
 
-The report has `strokes`, `down`, `up`, `frames` (first and last frame keyed), `sigma_mm`, `turn_share`, `first` (the first
-strike times) and `max_u_mm` (the widest sweep). With no strike in the window the stage logs a WARNING and keys nothing; it raises
-when the hand has no strum grip or its goal does not ride the prop. The `strum` check replays the plan on the timeline against
-the scene.
+The report has `technique`, `strokes`, `down`, `up`, `frames` (first and last frame keyed), `sigma_mm`, `turn_share`, `first`
+(the first strike times) and `max_u_mm` (the widest sweep); played with the fingers `fingers` (strokes per finger) and
+`stations` (the strings) instead of the pick's numbers. With no strike in the window the stage logs a WARNING and keys nothing;
+it raises when the hand has no strum grip or its goal does not ride the prop. The `strum` check replays the plan on the
+timeline against the scene.
 
 ```toml
 [perform.rin]
@@ -2124,9 +2266,11 @@ and prints or writes JSON; the build's pose stage calls the same solver through 
 | `pinch` | `type = "pinch"`: `width` (thickness between the pads), `span` (depth, becomes `depth`), `length`, `center`, `axis` (along the strap), `normal` (outward) | midway between the pads, z from the index pad to the thumb pad, x away from the wrist, y = z cross x | `--width`, `--edge M` (the pads' distance inside the edge, default 0.004) |
 | `rest` | a `use.rest` point: an `edge` with `a`, `b`, `normal`, or a plane with `center` (the solver takes `surface = "plane"`) | origin on the plane below the palm centre, z the normal, x the hand's heading | `--surface`, `--face palm` or `back` |
 | `neck` | `type = "neck"`: `frame`, `frets`, `strings`, `section`, `fret_height` (see [Playing a worn guitar](#playing-a-worn-guitar)) | on the board's centre line under the position fret's wire, x toward the nut, z out of the board, y = z cross x | `--card` (a prop card or its neck grip point), `--chord` (a name or a table), `--fret`; or `--prop` with the solver's own neck problem |
+| `pluck` | a `strum` point played with the fingers: its `fingers` table and the neck's strings, per string played (`core.strum.pluck_prop`; the build only) | a station: on the played string's axis in the middle of the plucking zone, x across toward the higher strings, y along toward the nut, z out of the face | `--params` `nfev`, `arm`; the result adds `poses` (each plucking finger's hover, cross, rest) and the report `travel` |
 
 A guitar's `strum` point (a pick pinched between thumb and index) has no style of its own: the build solves it as a `pinch` of
-the pick, with the grip frame x into the pick's face and z along the strings.
+the pick, with the grip frame x into the pick's face and z the squeeze axis, the thumb on the bass side leaning toward the
+neck, and with the arm (below).
 
 `mk grip STYLE [SCENE.blend]` takes these options:
 
@@ -2151,9 +2295,16 @@ Exit codes: 0 ok, 1 a gate missed (the file is still written, `problems` lists t
 degrees, from m, to m]}`, the contact slots on the barrel), `orient_starts` (32) and `nfev` (iteration limits); `wheel` `prior`
 (`{joint: degrees}`), `thumb_section` and `thumb_tangent` (`[min, max]`: degrees behind the palm, millimetres along the tube
 toward the index) and `nfev` (reach, polish); `pinch` `heading` (degrees, 25: how far the wrist-to-pinch direction may stray
-from the frame's x), `clear` (metres, 0.010: how far the middle, ring and little fingers stay from the object) and `nfev`;
-`rest` `angles` (`{joint: degrees}` replacing the relaxed priors), `pitch` and `roll` (`[degrees, tolerance]`), `gap_mm` (0.3)
-and `nfev`; `neck` `nfev`. The joints are `<finger>_mcp`, `_pip`, `_dip` and `_spr` for `index`, `middle`, `ring` and `little`,
+from the frame's x), `clear` (metres, 0.010: how far the middle, ring and little fingers stay from the object), `stop` (metres:
+no skin of the hand past the plane x = stop) and `nfev`; `rest` `angles` (`{joint: degrees}` replacing the relaxed priors),
+`pitch` and `roll` (`[degrees, tolerance]`), `gap_mm` (0.3) and `nfev`; `neck` `nfev` and `ref` (the solved shape the hand
+comes from: Playing a worn guitar). `pinch` and `neck` also take `arm`, the
+arm that carries the hand in the grip frame (`{shoulder, a, b, pole}`: the elbow the IK makes; or `{shoulder, a, b, up, out,
+avoid, fore_r}`: an elbow chosen out from the shoulder and below it, its forearm `fore_r` (0.028 m) clear of the `avoid` points,
+bending the wrist least past the style's free angle and hanging lowest): the wrist stays within 0.96 of the arm's length and
+its bend against that forearm within 20 (pinch) or 35 (neck, a fretting wrist is flexed) degrees where the contacts allow;
+the report adds `wrist_bend_deg`, `reach`, `elbow`, `elbow_from` and `forearm_clear_mm` (`mkmmd.solvers.grip._Arm`). The
+joints are `<finger>_mcp`, `_pip`, `_dip` and `_spr` for `index`, `middle`, `ring` and `little`,
 and `t_palmar`, `t_radial`, `t_roll`, `t_mcp`, `t_ip` for the thumb. An unknown name is a usage error.
 
 **Result.** `{"style", "side", "bones": {blender_bone: [w, x, y, z]}, "target_in_wrist": 4x4, "report", "solver"}`. `bones` are
@@ -2308,9 +2459,19 @@ for a wrist that ends more than 5 mm short of a goal, at the settle and at every
 | `fret_height` | metres a wire stands out of the board (default 0.0012) |
 
 The solver works in the neck frame N on the board under the position wire (x toward the nut, z out of the board, y = z cross x):
-each pressing finger's pad on its string a share (`press`, 0.3) of the way behind its wire, within a few millimetres across it,
-the distal phalanx steep onto the board, the thumb pad on the neck's back near the fingers, no skin in the neck, the other
-fingers hovering over the strings, no finger in another (`mkmmd/core/fretting.py`: chord tables, targets). `fret` is the
+each target finger's fingertip (all the skin of its distal phalanx, what is seen to touch: on some models the distal bone runs
+centimetres past the skin's end) with its lowest skin on its string and that skin's centroid within 1 mm across the string and
+1.5 mm along the neck of its target point, a share (`press`, 0.3) of the way behind its wire (two fingers on one fret of
+neighbouring strings stagger up to 5 mm along it), touching with the pad, the distal phalanx steep onto the board, the thumb
+pad on the neck's back behind the position's index and middle fingers (the same place for every shape at a position), no skin
+in the neck, the knuckles at most 12 mm out of the board (the hand under the neck: contacts alone are also met by a hand
+standing in front of the board, its knuckles centimetres out and its fingers curling back onto the strings, a claw over the
+fretboard from the front), the other fingers curled just over the strings (their pads over the board, 7 to 12 mm above it,
+each over its own fret, one finger per fret), no finger in another, and the wrist within the arm's reach and its bend against
+the forearm the IK makes for the hand's `pole` within 35 degrees (the build passes the arm) (`mkmmd/core/fretting.py`: chord
+tables, targets). Each start first lets the fingertips reach their targets with the neck seen softly (a reach that ignored it
+left the hand inside the neck, and the full solve then pushed it out to the front of the board), and the best start wins by
+the gates it misses, then its cost; when even it misses one, twice as many starts run again. `fret` is the
 position: the fret under the index finger in the shape's own numbering, a power chord at `fret = 5` has its index on fret 5 and
 its ring and little fingers on fret 7; the open chords are written for position 1, so open E at `fret = 1` presses frets 1, 2
 and 2. A shape is a name below or a table `{finger = [string, frets above the position]}` of `index`, `middle`, `ring`,
@@ -2332,12 +2493,26 @@ finger presses are left alone, fingers the shape does not use hover over the boa
 `fret` and `chord` come with the hand table; `keys = [{t, fret, chord, move}]` change the shape over time: a key says the shape
 in place at clip time `t`, reached over `move` seconds (default 0.12, or the hand's own `move`) before it, and a key without
 `fret` or `chord` keeps the previous one. Without `fret` and `chord` in the hand table the first key is the start and needs
-both. Every distinct (fret, chord) is solved once and cached (a few seconds each); a keyed change moves the wrist goal and
-every finger bone from one solved shape to the next.
+both. Every distinct (fret, chord) is solved once and cached (a few seconds each), in time order and each from the shape it
+follows (the solver's `ref`): the first shape solved at its position, so every shape there keeps that hand (its palm within
+millimetres, a few more along the neck for a stretch, the thumb where it was, the free fingers' joints) and moves only the
+fingers that change; at a new position the shape before it, so the hand slides along the neck from where it was. A keyed
+change passes through both shapes eased off the strings (`fretting.lifted`: every finger 3 mm over its place, solved from the
+shape): the fingers lift over the first quarter of `move`, the hand moves, they land over the last quarter
+(`fretting.change_keys`); a pressing finger presses from its shape's landing until the next move starts.
 
-The strum point (`center`, `along`, `across`, `normal`, `pick = {object, thickness, length, width, tip}`) is solved as a
-`pinch` of the pick: the grip frame has x into the face and z along the strings (`core.gripframe.strum_frame`; `thumb = "neck"`
-toward the nut, `"bridge"` away), its origin `tip` above `center` (the hand's `tip`, else the card's `pick.tip`, else 0.008);
+The strum point (`center`, `along`, `across`, `normal`, `pick = {object, thickness, length, width, tip}`, `avoid`, and optionally
+`palm = {center, normal, size: [across, along], lift}`: a patch over the strings by the bridge the heel of a picking hand rests
+over, at most `lift` above it, as a pick player's hand rests on the bridge; the pinch solve pulls the heel there) is solved as
+a `pinch` of the pick: the grip frame has x into the face and z the squeeze axis from the index pad to the thumb pad, on the
+bass side (against `across`) leaning 45 degrees toward the nut (`core.gripframe.strum_frame`; `thumb = "neck"`, `"bridge"`
+toward the bridge), its origin `tip` above `center` (the hand's `tip`, else the card's `pick.tip`, else 0.008); no skin of the
+hand comes nearer than 4 mm to the strings' plane, and the solver is given the arm: the elbow is chosen out from the shoulder
+and below it with the forearm clear of the card's `avoid` objects (the library cards name their body: the forearm comes over
+the body's edge, never through it) and the wrist straight on it (20 degrees free), and the build puts the pole where that
+elbow points. The pose stage warns when the forearm still passes more than 10 mm into the prop (the arm is too short to come
+over the edge there: wear the prop lower or further toward that arm), when a wrist bends more than 55 degrees against its
+forearm or reaches past 0.98 of the arm's length;
 the pick object, modelled in that frame, is bone-parented to the wrist. Hands on a `neck` or `strum` point ride the prop
 (`ride` defaults to its root). `mk grip neck --side L --card @card.json --chord power --fret 3` solves one without a build.
 
@@ -2390,7 +2565,9 @@ one-finger shape `{finger = [string, frets above the position]}` in place at the
 (0.12 s) cut to 0.75 of the time since the note before, so the hand arrives just before each note; a repeated note keys
 nothing. On an open string the finger of the note before lets go and hovers 3 mm over its string where it was (a shape's
 finger written `[string, frets, "hover"]` does that anywhere; strings are numbered from the highest, 1, to the lowest, 4 on
-a bass). The grip digest has `notes`: how many, the shapes, the strings and positions used, the open notes, the fret range.
+a bass). Every shape at the line's position is solved from its first one, so between two notes only the playing fingers move
+(a stretch to the little finger slides the palm a centimetre or two along the neck). The grip digest has `notes`: how many,
+the shapes, the strings and positions used, the open notes, the fret range.
 
 Picking (`rhythm = "notes"`): the strikes are the notes of the other hand's `notes` (the fretting hand must grip this prop's
 neck), each a stroke on the string its note is played on: it meets that string's near side at the note's time (u = c - d w:
@@ -2403,14 +2580,79 @@ long enough for the hand to rest (lead, attack, follow, approach, retreat and 0.
 report adds `picked` {strokes, strings}; the `strum` check judges every picked stroke (its `strokes` default is `all` for a
 picking spec) by the tip's distance from the string of its note when it crosses it, with the timing of the crossings.
 
+Fingerstyle (`technique = "fingers"`, the library bass's default: most bassists play with their fingers): the same notes are
+played with REST STROKES. The index and middle fingers alternate strictly (the index first, and again after a gap longer than
+`pause`); each stroke is one steady swing of the fingertip from hovering over its string (on the side toward the higher
+strings) through it toward the lower strings to rest on the next lower string (on the lowest string toward the thumb), and
+`Stroke.t` (`finger` set, `dir` -1) is when the fingertip crosses the string's axis, the moment the string is let go. The
+thumb is anchored: on the pickup cover's top beyond the lowest string while that string rings, on the lowest string while a
+higher one does; the hand moves between these STATIONS (one per string played) just before the notes that need it, the other
+finger hovers ready, the ring and little fingers stay curled off the strings, and the pick is not held (it stays where the
+builder laid it). The pose stage solves a station per string with the grip style `pluck` (`mkmmd/solvers/grip_pluck.py`: the
+frame, the thumb on its anchor, both fingers' crossings, the arm as for a pick: the forearm over the body's edge; then each
+finger's hover and rest with the hand held) and perform keys the wrist goal and every finger joint per frame from them
+(`core.strum.pluck_keys`: the swing is timed from where each solved pose has the fingertip across the string, `travel`, and
+`core.strum.retime` keeps its speed steady along each blend, from the fingertip's places the solve measured at nine blend
+weights of each segment, `curves`, so the crossing falls on the note's time on every frame rate). The
+card's strum entry says where: `technique` and `fingers = {zone: [along0, along1] (where the fingers pluck), anchor: {center,
+normal, size: [across, along]} (the thumb's rest on the cover), face: {point, normal} (the surface under the strings), blocks:
+[{center, size}] (boxes standing on it: the pickup covers)}` (`core.strum.pluck_prop`); a card without `fingers` is played
+with a pick. Fingers with another rhythm than `"notes"` raise. The `strum` check judges every rest stroke by the fingertip's
+skin (the distal phalanx's skin nearest the note's string): its gap to the string when it crosses the string's axis toward
+the lower strings, and the time it does.
+
 Checks to keep: `joint_limits` (the default elbow pole is under the shoulder; give `pole` per hand for another), `contact`
 between `bone("wrist.R").tail` and `obj("<cast>_hand.R").loc` (the IK reached its goal at every frame, `max` 5 mm), `strum`
-(distance at the down strokes, or every picked stroke; timing), `prop_body` (the guitar against the character's body), `form`
+(distance at the down strokes, or every picked or plucked stroke; timing), `prop_body` (the guitar against the character's body), `form`
 on the prop. A bass is worn lower than a guitar: the library bass's card hangs it at the hip with the neck 25 degrees up (`at`
-[-0.23, -0.07, -0.13], `neck_deg` 25, `yaw_deg` 8) and its pick zone between the pickup and the end of the neck, where a pick
+[-0.23, -0.07, -0.13], `neck_deg` 25, `yaw_deg` 8) and its pick zone between the bridge and the pickups (the heel of a picking
+hand over the strings by the saddles, its `palm`), where a pick
 player plays a Mustang and a hanging right arm reaches; with that, play the line from a `position` near the body (7 reaches on
 a small anime body; the first positions would need the bass hung high and far to the right). A longer-armed character can take
 a lower position or wear it differently with `wear = {cast, at = [...], neck_deg = ...}`.
+
+### Strings that ring
+
+Every string the pick hand plays vibrates on screen, and only those (`mkmmd/core/strings.py`, numpy, tested;
+`mkmmd/blender/build/strings.py` keys it at the end of the perform stage's strum). It needs a card whose neck `strings` name
+their objects (`object`: one mesh per string with a ring of vertices at every wire and every press point; the library guitar's
+`<name>_string_1` .. `_6` and bass's `_1` .. `_4`, 1 the highest, are built so); a card without them logs a WARNING and nothing
+rings.
+
+- **Presses.** A fretting finger holds its string down from its shape's landing until the hand leaves for the next shape (the
+  pose stage's neck states, `fretting.hand_states`), coming down over the last 0.05 s of the move and letting go over 0.04 s
+  (never more than a quarter of the move: the hand lifts its fingers in the first quarter of a change and lands them in the
+  last); a "hover" finger holds nothing. A held string runs straight from the nut down to the finger
+  (the `press` point behind its wire, at the wire's crown plus the string's radius: where the pad holds it), along the crown
+  and straight up to the saddle: the shape key `press_<fret>`.
+- **Hits.** A picked note sounds when the pick tip crosses its string's axis (the stroke's `t` plus half its `attack`), a
+  plucked one (fingerstyle) at its stroke's `t`; a strum crosses its strings one after another across its attack at the
+  contact speed of the stroke (down: the lowest first). A strum rings only the strings the shape at that moment holds and the
+  open strings its named chord lets ring (`strings.OPEN`: power chords none, open E all six; a chord table rings only the
+  strings it presses; no fretting hand: every string open).
+- **Rings.** A hit string vibrates from the fret held on it then (the highest, or the nut) to the saddle, its blur's half-width
+  at the antinode `amp` times the stroke's amplitude, decaying with time constant `decay`, until the next hit on it, the finger
+  that frets it letting go or, picking a line one note at a time, the next note on any string; then it is damped over `damp`.
+  Each frame flickers by `shimmer`.
+- **What renders.** The vibrating length becomes a spindle (the shape key `ring_<fret>`, its value the amplitude over 4 mm):
+  each ring of the string's surface an ellipse of half-axes r + a p(u) across the board and r + 0.45 a p(u) out of it, p(u) =
+  sin(pi (u - u0) / (1 - u0)) from the fret's place u0 to the saddle, so it is widest midway along the vibrating length. Its
+  material (any material of a string object, given a coverage mix once) draws it as a filmed string reads at 30 fps: a
+  translucent band, its middle as covered as a string swept over its width is (2 r / (pi a)), denser toward its edges where
+  the string turns, a faint shimmer along it, opaque again as it dies down; a still string is opaque. The object carries
+  `mk_amp` (m), `mk_u0`, `mk_phase` and `mk_r` (custom properties the material reads, keyed with the shape keys) and the
+  vertex attribute `mk_u` (its place from the nut, 0, to the saddle, 1). The flat looks (silhouette, vector, mk's renderer)
+  and `mk look --map` see the spindle as geometry, opaque; the shape keys bake as morph targets, so a frame costs a few shape
+  keys on four or six small meshes.
+
+| `strum` key `ring` | Meaning |
+|---|---|
+| `true` (default) / `false` | the strings ring / stay still |
+| `{amp, decay, damp, shimmer}` | metres at the antinode (default 0.0031 per metre of the card's `scale`: 2.4 mm on the bass, 2.0 on the guitar), seconds to 1/e (0.9), seconds a damped string takes to stop (0.06), the frame-to-frame flicker (0.06) |
+
+The strum report adds `strings`: `played` (per string its rings, the frets it rang from and the frets held on it), `hits`,
+`keys` and `amp_mm`. The `string_play` check measures every note against the plan: the right string ringing from the right
+fret, the fretting fingertip on it behind its wire, the pick or fingertip crossing it on time ([Checks](#checks)).
 
 ## Shots
 

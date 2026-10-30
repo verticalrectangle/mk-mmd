@@ -31,7 +31,7 @@ function rule(r) {
 function worst(r) {
   const d = r.detail || {}, out = [];
   if (r.args && r.args.cast) out.push(r.args.cast);
-  for (const k of ["side", "move", "worst", "bone", "into", "nearest", "point", "camera"]) {
+  for (const k of ["side", "move", "worst", "region", "bone", "into", "nearest", "point", "camera"]) {
     if (typeof d[k] === "string" && d[k]) out.push(k === "side" ? (d[k] === "L" ? "left hand" : "right hand") : d[k]);
   }
   if (r.t !== null && r.t !== undefined) out.push(`f ${d.at_frame} · ${r.t.toFixed(2)} s`);

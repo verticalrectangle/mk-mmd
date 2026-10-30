@@ -16,7 +16,7 @@ SIDES = ("L", "R")
 HAND = {k: None for k in ("at", "dir", "palm", "pole", "rest", "along", "offset", "lift", "ride", "fingers", "grip", "clock",
                           "approach", "wrap", "edge", "face", "seeds", "skin_radius", "posture", "track", "channel", "fret",
                           "chord", "press", "move", "thumb", "tip", "ik")}
-HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers", "pole")
+HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers", "pole", "sight")
 HAND["wobble"] = ("deg", "tau", "seed")
 HAND["notes"] = fretting.NOTES_KEYS
 
@@ -35,14 +35,16 @@ PERFORM = {
     "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "head_turn": None,
     "rock": ("deg", "period", "phase", "axis", "hips", "from", "to", "ease"),
     "head_rock": ("deg", "period", "phase", "axis", "from", "to", "ease"), "blink": ("per_min", "seed", "extra"), "lids": None,
-    "sing": ("timeline", "lines", "words", "mouth", "lead", "voice"), "expressions": ("morph", "keys"),
+    "sing": ("timeline", "lines", "words", "mouth", "lead", "voice"), "expressions": ("morph", "keys"), "mouth": None,
     "twitch": ("bones", "family", "t", "deg", "axis", "dur"),
     "bounce": ("depth", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"), "rise": None, "crouch": None,
     "kick": ("foot", "height", "back", "hold", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"),
-    "air": PF.AIR_KEYS, "step_turn": PF.TURN_KEYS, "tumble": PF.TUMBLE_KEYS,
+    "air": {**{k: None for k in PF.AIR_KEYS}, "kicks": PF.KICKS_KEYS}, "step_turn": PF.TURN_KEYS, "spin": PF.SPIN_KEYS,
+    "tumble": PF.TUMBLE_KEYS, "squash": PF.SQUASH_KEYS,
     "walk": {**{k: None for k in PF.WALK_KEYS}, "hops": PF.HOP_KEYS},
-    "strum": ("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "kick", "windmill",
-              "windmill_dur") + tuple(strum.DEFAULTS),
+    "strum": tuple(dict.fromkeys(("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "kick",
+                                  "windmill", "windmill_dur", "ring", "technique") + tuple(strum.DEFAULTS)
+                                 + tuple(strum.FINGERS))),
     "drum": ("hand", "fingers", "deg", "lift", "roll", "timeline", "beats", "downbeat_accent", "from", "to"),
 }
 

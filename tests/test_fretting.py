@@ -9,6 +9,7 @@ from mkmmd.core import cable as CB
 from mkmmd.core import fretting as FR
 from mkmmd.core import gripframe as GF
 from mkmmd.core import wear as WR
+from mkmmd.solvers import grip_neck as GN
 
 SCALE = 0.648
 
@@ -109,6 +110,10 @@ def test_solver_prop_is_the_card_seen_from_the_neck_frame():
         assert t["x"][0] < t["point"][0] < t["x"][1]
         assert t["point"][2] == pytest.approx(FR.FRET_HEIGHT + c["radius"])               # z is the height over the board
     assert prop["frets"][3] == pytest.approx(0.0) and prop["frets"][0] > prop["frets"][3] > prop["frets"][10]
+    tx = {t["finger"]: t["point"][0] for t in prop["targets"]}
+    assert prop["slots"][0] == pytest.approx(tx["index"]) and prop["slots"][2] == pytest.approx(tx["ring"])   # one finger per fret
+    assert tx["index"] > prop["slots"][1] > tx["ring"] and prop["slots"][3] < tx["little"]
+    assert FR.solver_prop(e, {"index": [6, 0]}, 21)[0]["slots"][2:] == [None, None]          # frets 23 and 24 are not on the neck
     s = prop["section"]
     assert s["x"][0] < min(t["point"][0] for t in prop["targets"]) and s["x"][1] > max(t["point"][0] for t in prop["targets"])
     assert 0.043 <= s["width"][1] <= s["width"][0] <= 0.056 and s["p"] == 2.6      # wider toward the body
@@ -136,6 +141,8 @@ def test_card_style_gives_the_neck_and_pick_problems():
     style, prop, params = GF.card_style(strum, {})
     assert style == "pinch" and prop == {"width": 0.0008, "depth": 0.031, "length": 0.026}
     assert params["edge"] == pytest.approx(0.023)                                           # the pads sit 23 mm from the base: 8 mm of tip
+    assert params["stop"] == pytest.approx(0.008 - GF.STRUM_CLEAR)                         # the hand stays above the strings (x = tip)
+    assert params["heading"] == GF.STRUM_HEADING                                            # the arm places the wrist, not a heading
     assert GF.card_style(strum, {"tip": 0.012})[2]["edge"] == pytest.approx(0.019)
     with pytest.raises(ValueError, match="inside its length"):
         GF.card_style(strum, {"tip": 0.05})
@@ -143,17 +150,25 @@ def test_card_style_gives_the_neck_and_pick_problems():
         GF.card_style({"name": "s", "type": "strum"}, {})
 
 
-def test_strum_frame_puts_the_pick_tip_on_the_strings():
-    centre, normal, along = np.array([0.0, -0.02, 0.4]), np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 1.0])
-    G = GF.strum_frame(centre, normal, along, 0.008, "neck")
+def test_strum_frame_puts_the_pick_tip_on_the_strings_with_the_thumb_on_top():
+    centre, normal = np.array([0.0, -0.02, 0.4]), np.array([0.0, -1.0, 0.0])
+    along, across = np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0])                   # toward the nut; lowest string -> highest
+    G = GF.strum_frame(centre, normal, along, across, 0.008, "neck")
     assert G[:3, :3].T @ G[:3, :3] == pytest.approx(np.eye(3)) and np.linalg.det(G[:3, :3]) == pytest.approx(1.0)
     assert G[:3, 0] == pytest.approx([0, 1, 0])                                             # x: the pick's direction toward its tip = into the face
-    assert G[:3, 2] == pytest.approx([0, 0, 1])                                             # z: the squeeze axis, thumb toward the neck
+    s = math.sqrt(0.5)
+    assert G[:3, 2] == pytest.approx([-s, 0, s])                                            # z: the thumb on the bass side, leaning to the neck
     tip = G[:3, 3] + 0.008 * G[:3, 0]
     assert tip == pytest.approx(centre)
-    assert GF.strum_frame(centre, normal, along, 0.008, "bridge")[:3, 2] == pytest.approx([0, 0, -1])
+    assert GF.strum_frame(centre, normal, along, across, 0.008, "bridge")[:3, 2] == pytest.approx([-s, 0, -s])
+    assert GF.strum_frame(centre, normal, along, across, 0.008, lean=0.0)[:3, 2] == pytest.approx([-1, 0, 0])    # square to the sweep
+    assert GF.strum_frame(centre, normal, along, across, 0.008, lean=90.0)[:3, 2] == pytest.approx([0, 0, 1])    # edge on
+    skewed = GF.strum_frame(centre, normal, along + 0.3 * normal, across - 0.2 * normal, 0.008)                # off the face plane
+    assert skewed[:3, 2] @ skewed[:3, 0] == pytest.approx(0.0, abs=1e-12)
     with pytest.raises(ValueError):
-        GF.strum_frame(centre, normal, along, 0.008, "left")
+        GF.strum_frame(centre, normal, along, across, 0.008, "left")
+    with pytest.raises(ValueError, match="normal"):
+        GF.strum_frame(centre, normal, along, normal, 0.008)
 
 
 # ------------------------------------------------------------------------------------------------ the neck solver
@@ -165,18 +180,123 @@ def test_neck_grip_presses_the_strings_with_arched_fingers_and_the_thumb_behind(
     prop, _frame = FR.solver_prop(neck_entry(), "power", 3)
     res = G.solve("neck", hand, prop, seeds=2, workers=1)
     rep = res["report"]
-    assert res["style"] == "neck" and len(res["bones"]) == 15
+    assert res["style"] == "neck" and len(res["bones"]) == 15 and rep["misses"] == []
     for f in ("index", "ring", "little"):
         c = rep["contacts"][f]
-        assert abs(c["gap_mm"]) < 1.0 and abs(c["across_mm"]) < 3.5 and c["along_mm"] < 1.5, (f, c)
+        tol_x = GN.PAD_TOL_X if f == "index" else GN.PAD_TOL_CROWD                       # ring and little side by side on fret 5
+        assert abs(c["gap_mm"]) < 1.0 and c["along_mm"] < 0.5, (f, c)
+        assert abs(c["across_mm"]) < GN.PAD_TOL_Y * 1e3 + 0.5 and abs(c["dx_mm"]) < tol_x * 1e3 + 1.0, (f, c)   # on the string, at its fret
+        assert c["pad_mm"] < GN.PAD_TOUCH * 1e3 + 0.2                                        # touching with the pad
         assert c["distal_deg"] < 50.0                                                       # arched onto the board
+    assert rep["contacts"]["ring"]["dx_mm"] - rep["contacts"]["little"]["dx_mm"] > 4.0        # side by side: staggered along the fret
     assert rep["contacts"]["thumb"]["gap_mm"] < 1.5 and rep["contacts"]["thumb"]["facing_deg"] < 60.0
     assert rep["penetration_mm"] < 0.5 and rep["finger_clash_mm"] < 0.5
     assert rep["hovering_clear_mm"] > 5.0                                                   # the middle finger hovers over the strings
+    assert rep["knuckles_mm"] < GN.KNUCKLE_Z * 1e3 + 3.0                                    # under the neck, not standing in front of it
+    mid = rep["hovering"]["middle"]
+    half = 0.5 * FR.section_at(neck_entry(), FR.fret_z(neck_entry())[4])[0] * 1e3
+    assert mid["gap_mm"] < GN.HOVER_MAX * 1e3 + 1.5 and abs(mid["y_mm"]) < half             # just over the strings, over the board
+    assert abs(mid["x_mm"] - prop["slots"][1] * 1e3) < GN.HOME_TOL * 1e3 + 1.0               # ... over its own fret
+    assert mid["distal_deg"] < 65.0                                                         # curled toward them, not sticking up
+    xh = 0.5 * (prop["slots"][0] + prop["slots"][1]) * 1e3                                   # the thumb behind the index and middle
+    assert xh + GN.THUMB_X[0] * 1e3 - 1.0 < rep["contacts"]["thumb"]["x_mm"] < xh + GN.THUMB_X[1] * 1e3 + 1.0
     wrist = rep["wrist_in_N_mm"]
     assert wrist[1] < 0 and wrist[2] < 0                                                    # the wrist below the neck and behind the board
     T = np.array(res["target_in_wrist"])
     assert T[:3, :3].T @ T[:3, :3] == pytest.approx(np.eye(3), abs=1e-6)
+
+
+def _ref(res, prop):
+    """The reference a shape's solve takes from the solved shape before it (as the pose stage builds it)."""
+    return {"angles": res["report"]["angles_deg"], "target_in_wrist": np.asarray(res["target_in_wrist"]).tolist(),
+            "targets": {t["finger"]: [t["string"], t["fret"]] for t in prop["targets"]}, "position": prop["position"]}
+
+
+def test_the_reach_keeps_the_hand_out_of_the_neck():
+    """The pads first reach their targets with the neck solid seen softly: a reach that ignored it left the hand deep in the
+    neck (a note on the far string, a stretch to the little finger), and the full problem then pushed it out in front of the
+    board, a claw over the fretboard instead of a hand under the neck."""
+    from scipy.optimize import least_squares
+    from test_grip import synthetic_hand
+    from mkmmd.solvers import grip as G
+    hand = synthetic_hand("L")
+    arm = G.arm_spec({"shoulder": [-0.20, 0.16, -0.26], "a": 0.25, "b": 0.20, "pole": [-0.24, -0.33, -0.36]})
+    for chord, fret in (({"index": [6, 0]}, 3), ({"little": [6, 3]}, 3), ({"middle": [6, 1]}, 9)):
+        prop, _ = FR.solver_prop(neck_entry(), chord, fret)
+        prob = GN._Neck(hand, prop["targets"], prop["section"], arm=arm, slots=prop["slots"], position=fret)
+        deg = np.clip(prob.design, prob.lo[:21] + 1e-6, prob.hi[:21] - 1e-6)
+        prob.R0, prob.p0 = prob.start_frame(deg)
+        res = least_squares(lambda v, p=prob: p.residuals(v, "reach"), np.r_[deg, np.zeros(6)], bounds=(prob.lo, prob.hi),
+                            x_scale=prob.X_SCALE, max_nfev=GN.NFEV[0], xtol=1e-12, ftol=1e-6)
+        depth = -prob.analyse(res.x)["sdf"][prob.skin].min()
+        assert depth < 0.002, (chord, fret, depth)
+
+
+def test_a_reference_keeps_the_hand_and_moves_only_the_playing_finger():
+    """A line at one position: each shape is solved from the one before it (`ref`). The hand stays (the palm a few
+    millimetres along the neck at most, the thumb behind it), the finger that played lifts off its string, the free fingers
+    keep their joints, and only the next note's finger goes down onto its string."""
+    from test_grip import synthetic_hand
+    from mkmmd.solvers import grip as G
+    hand = synthetic_hand("L")
+    a_prop, _ = FR.solver_prop(neck_entry(), {"index": [6, 0]}, 3)
+    a = G.solve("neck", hand, a_prop, seeds=1, workers=1)
+    b_prop, _ = FR.solver_prop(neck_entry(), {"middle": [5, 1]}, 3)
+    b = G.solve("neck", hand, b_prop, seeds=1, workers=1, ref=_ref(a, a_prop))
+    ra, rb = a["report"], b["report"]
+    assert rb["misses"] == [] and rb["starts"] == 2                                          # the reference's start and a design one
+    palm = rb["from_ref"]["palm_mm"]
+    assert abs(palm[0]) < 8.0 and abs(palm[1]) < 4.0 and abs(palm[2]) < 4.0 and rb["from_ref"]["turn_deg"] < 4.0
+    assert abs(rb["contacts"]["thumb"]["x_mm"] - ra["contacts"]["thumb"]["x_mm"]) < 8.0
+    for f in ("ring", "little"):                                                             # free before and after
+        for j in ("mcp", "pip", "dip"):
+            assert abs(rb["angles_deg"][f"{f}_{j}"] - ra["angles_deg"][f"{f}_{j}"]) < 4.0, (f, j)
+    assert rb["hovering"]["index"]["gap_mm"] > GN.CLEAR_HOVER * 1e3 - 1.0                    # the index left its string
+    c = rb["contacts"]["middle"]
+    assert abs(c["gap_mm"]) < 1.0 and abs(c["across_mm"]) < GN.PAD_TOL_Y * 1e3 + 0.5 and abs(c["dx_mm"]) < GN.PAD_TOL_X * 1e3 + 1.0
+    again = G.solve("neck", hand, b_prop, seeds=1, workers=1, ref=_ref(a, a_prop))
+    assert again["target_in_wrist"] == pytest.approx(b["target_in_wrist"])                   # the same inputs give the same shape
+
+
+def test_a_lifted_shape_eases_the_fingers_off_and_a_shift_slides_the_hand():
+    """The shapes a keyed change passes through: the chord eased off the strings (`FR.lifted`) solved from it keeps the
+    hand and lifts every finger HOVER over its string; the chord at another position solved from it slides the hand along
+    the neck (its start, the hand as it was relative to the board, wins and passes the gates)."""
+    from test_grip import synthetic_hand
+    from mkmmd.solvers import grip as G
+    hand = synthetic_hand("L")
+    p8, _ = FR.solver_prop(neck_entry(), "power", 8)
+    g8 = G.solve("neck", hand, p8, seeds=1, workers=1)
+    off, _ = FR.solver_prop(neck_entry(), FR.lifted("power"), 8)
+    lift = G.solve("neck", hand, off, seeds=1, workers=1, ref=_ref(g8, p8))["report"]
+    assert lift["misses"] == [] and max(abs(v) for v in lift["from_ref"]["palm_mm"]) < 2.0
+    for t_off, t_on in zip(off["targets"], p8["targets"]):
+        assert t_off["point"][2] - t_on["point"][2] > FR.HOVER                                # each pad over its string ...
+        assert abs(lift["contacts"][t_off["finger"]]["gap_mm"]) < 1.0                          # ... where its target says
+    p3, _ = FR.solver_prop(neck_entry(), "power", 3)
+    shift = G.solve("neck", hand, p3, seeds=1, workers=1, ref=_ref(g8, p8))["report"]
+    assert shift["misses"] == [] and shift["from_ref"]["turn_deg"] < 15.0
+    assert max(abs(v) for v in shift["from_ref"]["palm_mm"]) < 25.0                           # slid along: the same hand at fret 3
+
+
+def test_neck_grip_with_the_arm_keeps_the_wrist_on_the_forearm_and_within_reach():
+    """The fretting arm of a standing player (in N at fret 3: the shoulder toward the body and behind the board, the elbow's
+    pole below it): the solver keeps the wrist's bend against the forearm the IK makes within its free angle."""
+    from test_grip import synthetic_hand
+    from mkmmd.solvers import grip as G
+    hand = synthetic_hand("L")
+    prop, _frame = FR.solver_prop(neck_entry(), "power", 3)
+    arm = {"shoulder": [-0.20, 0.16, -0.26], "a": 0.25, "b": 0.20, "pole": [-0.24, -0.33, -0.36]}
+    res = G.solve("neck", hand, prop, seeds=2, workers=1, arm=arm)
+    rep = res["report"]
+    for f in ("index", "ring", "little"):
+        assert abs(rep["contacts"][f]["gap_mm"]) < 1.0, (f, rep["contacts"][f])
+    assert rep["elbow_from"] == "pole" and len(rep["elbow"]) == 3
+    assert rep["wrist_bend_deg"] < GN.NECK_ARM_FREE + 5.0 and rep["reach"] < G.ARM_REACH + 0.01
+    W, S = np.array(rep["wrist_in_N_mm"]) * 1e-3, np.array(arm["shoulder"])
+    assert np.linalg.norm(W - S) / (arm["a"] + arm["b"]) == pytest.approx(rep["reach"], abs=2e-3)
+    with pytest.raises(ValueError, match="pole"):
+        G.solve("neck", hand, prop, seeds=1, workers=1, arm={"shoulder": [0, 0, 0], "a": 0.2, "b": 0.2})
 
 
 def test_neck_solver_rejects_bad_problems():
@@ -191,6 +311,10 @@ def test_neck_solver_rejects_bad_problems():
     with pytest.raises(ValueError, match="finger"):
         G.solve("neck", hand, {"targets": [{"finger": "thumb", "point": [0, 0, 0], "x": [0, 0]}], "section": prop["section"]},
                 workers=1)
+    with pytest.raises(ValueError, match="ref"):
+        G.solve("neck", hand, prop, workers=1, ref={"angles": 3})
+    with pytest.raises(ValueError, match="slots"):
+        G.solve("neck", hand, dict(prop, slots=[0.0, 0.01]), workers=1)
 
 
 # ------------------------------------------------------------------------------------------------ wearing

@@ -809,6 +809,88 @@ def test_pinch_wider_objects_open_the_thumb():
     assert math.isfinite(thick["t_palmar"])
 
 
+# ---------------------------------------------------------------- the arm that carries a grip
+def test_arm_spec_validates_the_arm():
+    spec = G.arm_spec({"shoulder": [0, 0, 0.3], "a": 0.25, "b": 0.2, "pole": [0.3, 0, 0]})
+    assert spec["pole"].tolist() == [0.3, 0.0, 0.0] and spec["fore_r"] == G.ARM_FORE_R
+    free = G.arm_spec({"shoulder": [0, 0, 0.3], "a": 0.25, "b": 0.2, "up": [0, 0, 2], "out": [1, 0, 0], "avoid": [[0, 0, 0]]})
+    assert free["up"].tolist() == [0.0, 0.0, 1.0] and free["avoid"].shape == (1, 3)
+    assert G.arm_spec(spec)["shoulder"].tolist() == spec["shoulder"].tolist()                    # a spec passes again
+    for bad, msg in (({"shoulder": [0, 0, 0], "a": 0.2, "b": 0.2}, "pole"), ({"shoulder": [0, 0], "a": 0.2, "b": 0.2,
+                      "pole": [1, 0, 0]}, "shoulder"), ({"shoulder": [0, 0, 0], "a": -0.2, "b": 0.2, "pole": [1, 0, 0]},
+                     "positive"), ({"shoulder": [0, 0, 0], "a": 0.2, "b": 0.2, "pole": [1, 0, 0], "elbow": 1}, "unknown"),
+                     ("arm", "shoulder")):
+        with pytest.raises(ValueError, match=msg):
+            G.arm_spec(bad)
+
+
+def test_arm_elbow_is_the_iks_for_a_pole_and_a_clear_low_one_when_chosen():
+    S, W = np.array([0.0, 0.0, 0.40]), np.array([0.05, -0.20, 0.10])
+    pole = G._Arm(G.arm_spec({"shoulder": S, "a": 0.25, "b": 0.20, "pole": [0.4, 0.2, 0.1]}), 20.0, 8.0)
+    q = pole.place(W, np.array([0.0, -0.6, -0.8]))
+    assert q["elbow"] == pytest.approx(AR.pole_elbow(S, W, 0.25, 0.20, [0.4, 0.2, 0.1]))
+    assert q["reach"] == pytest.approx(np.linalg.norm(W - S) / 0.45) and q["clear"] is None
+    spec = {"shoulder": S, "a": 0.25, "b": 0.20, "up": [0, 0, 1], "out": [1, 0, 0]}
+    hand_dir = np.array([0.0, -0.6, -0.8])
+    open_ = G._Arm(G.arm_spec(spec), 90.0, 8.0).place(W, hand_dir)        # every bend is free: the lowest allowed elbow
+    E = AR.elbows(S, W, 0.25, 0.20, [0, 0, 1], [1, 0, 0], step=G.ARM_STEP)
+    assert open_["elbow"][2] == pytest.approx(E[:, 2].min())
+    mid = 0.5 * (open_["elbow"] + W)                                        # a block on the lowest elbow's forearm
+    wall = mid + np.array([[x, y, z] for x in (-0.01, 0.0, 0.01) for y in (-0.01, 0.0, 0.01) for z in (-0.01, 0.0, 0.01)])
+    walled = G._Arm(G.arm_spec(dict(spec, avoid=wall)), 90.0, 8.0).place(W, hand_dir)
+    assert walled["clear"] >= 0.0 and walled["elbow"][2] > open_["elbow"][2]      # the lowest elbow that clears it
+    assert G._seg_clear(open_["elbow"], W, wall, G.ARM_FORE_R)[0] < 0.0
+
+
+def _pick_over_a_guitar(side="R"):
+    """A pick on a guitar's strings as the build gives it (the prop frame is the world: strings along +z toward the nut,
+    the lowest at -x, the face looking along -y, the body's slab behind it) and the strumming arm of a standing player:
+    (pinch prop, solver params with the arm and the stop plane, the body's points in the grip frame)."""
+    G_ = GF.strum_frame([0.0, -0.0156, 0.075], [0, -1.0, 0], [0, 0, 1.0], [1.0, 0, 0], 0.008)
+    inv = np.linalg.inv(G_)
+    lo, hi = np.array([-0.157, 0.0, -0.115]), np.array([0.157, 0.045, 0.195])
+    axes = [np.arange(lo[i], hi[i] + 1e-9, 0.012) for i in range(3)]
+    body = np.array([[x, y, z] for x in axes[0] for y in axes[1] for z in axes[2]
+                     if min(x - lo[0], hi[0] - x, y - lo[1], hi[1] - y, z - lo[2], hi[2] - z) < 0.006])   # its surface
+    body_g = body @ inv[:3, :3].T + inv[:3, 3]
+    arm = {"shoulder": (inv @ [-0.24, 0.22, 0.22, 1.0])[:3].tolist(), "a": 0.25, "b": 0.21,
+           "up": (inv[:3, :3] @ [-0.907, 0.006, 0.422]).tolist(), "out": (inv[:3, :3] @ [-0.421, -0.087, -0.903]).tolist(),
+           "avoid": body_g.tolist()}
+    _, prop, params = GF.card_style({"name": "strum", "type": "strum",
+                                     "pick": {"thickness": 0.0008, "length": 0.031, "width": 0.026, "tip": 0.008}}, {})
+    return prop, dict(params, arm=arm), body_g
+
+
+@functools.lru_cache(maxsize=None)
+def _pick_solved():
+    prop, params, body = _pick_over_a_guitar()
+    return G.solve_pinch(HANDS["R"], prop, seeds=2, workers=1, **params), params, body
+
+
+def test_a_pick_is_held_over_the_strings_by_an_arm_that_comes_over_the_body():
+    res, params, body = _pick_solved()
+    rep = res["report"]
+    for k in ("index", "thumb"):
+        assert -0.5 <= rep["contacts"][k]["gap_mm"] <= 1.5, rep["contacts"][k]
+    assert rep["penetration_mm"] < 0.5 and rep["finger_clash_mm"] < 0.5
+    assert rep["stop_clear_mm"] > -GF.STRUM_CLEAR * 1e3                     # no skin past the strings under the pick
+    assert rep["elbow_from"] == "chosen" and rep["forearm_clear_mm"] > -5.0   # the forearm over the body's edge, not through it
+    assert rep["wrist_bend_deg"] < G.PINCH_ARM_FREE + 15.0 and rep["reach"] < G.ARM_REACH + 0.01
+    m = pinch_measure(HANDS["R"], res, 0.0008, depth=0.031, length=0.026, edge=params["edge"])
+    hand = HANDS["R"]
+    assert m["L"][hand.dom < hand.nb, 0].max() < params["stop"] + 0.0045    # the skin, measured, is above the strings
+    W = m["R"].T @ (hand.h[0] - m["p"])
+    assert W[0] < -0.005                                                     # the wrist on the hand's side of the pick
+    assert (W - np.array(params["arm"]["shoulder"])) @ np.array(params["arm"]["up"]) < 0.0   # below the shoulder
+
+
+def test_pinch_rejects_a_bad_arm_or_stop():
+    with pytest.raises(ValueError, match="arm"):
+        G.solve_pinch(HANDS["R"], {"width": 0.01}, seeds=1, workers=1, arm={"shoulder": [0, 0, 0], "a": 0.2})
+    with pytest.raises(ValueError, match="stop"):
+        G.solve_pinch(HANDS["R"], {"width": 0.01}, seeds=1, workers=1, stop=float("nan"))
+
+
 # ---------------------------------------------------------------- rest: a relaxed hand on a plane
 REST_PLANE = {"surface": "plane"}
 REST_FACES = ("palm", "back")

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from mkmmd import assets as A
-from mkmmd.checks import Context, camera, motion
+from mkmmd.checks import Context, Need, camera, motion, skin
 from mkmmd.project import Project
 from mkmmd.solvers import geom
 
@@ -165,7 +165,6 @@ def test_contact_uses_mask_and_skips_missing_track_values(tmp_path):
     ctx = Context(None, _project(tmp_path))
     m = motion.Contact()
     args = {"a": "obj('Pen').loc", "b": "track:nib.target", "when": "track:nib.writing"}
-    from mkmmd.checks import Need
     st = m.needs(args, ctx, Need())
     data = FakeData([10, 11, 12, 13], [[0.001, 0, 0], [0.002, 0, 0], [0.5, 0, 0], [0.9, 0, 0]])
     value, detail = m.compute(args, ctx, data, [10, 11, 12, 13], st)
@@ -203,6 +202,151 @@ def test_foot_slide_measures_consecutive_frames_only():
                                                {"arm": "a", "pts": ["ankle.L", "ankle.R"]})
     assert value == pytest.approx(5.0) and detail["at_frame"] in frames
     assert detail["ankle.L"]["max_mm_per_frame"] == 0.0 and detail["ankle.R"]["max_mm_per_frame"] == pytest.approx(5.0)
+
+
+# ---------------------------------------------------------------- joint limits: how far the arms turn about themselves
+def _rx(deg):
+    t = np.radians(deg)
+    return np.array([[1.0, 0.0, 0.0], [0.0, np.cos(t), -np.sin(t)], [0.0, np.sin(t), np.cos(t)]])
+
+
+def _ry(deg):
+    t = np.radians(deg)
+    return np.array([[np.cos(t), 0.0, np.sin(t)], [0.0, 1.0, 0.0], [-np.sin(t), 0.0, np.cos(t)]])
+
+
+class RigData:
+    """A rig's bones as Data.bones, Data.arm_world and Data.has give them to joint_limits, the armature at the world's
+    origin: {bone: (rest head, posed rotations (F, 3, 3), posed heads (F, 3))}, every rest rotation the identity."""
+    def __init__(self, bones):
+        self.b = bones
+
+    def bones(self, arm, names, frames):
+        rows = [self.b[n.lstrip("?")] for n in names]
+        W = np.tile(np.eye(4), (len(frames), len(rows), 1, 1))
+        rest = np.tile(np.eye(4), (len(rows), 1, 1))
+        for j, (head, R, P) in enumerate(rows):
+            W[:, j, :3, :3], W[:, j, :3, 3] = R[frames], P[frames]
+            rest[j, :3, 3] = head
+        return W, rest, names
+
+    def arm_world(self, arm, frames):
+        return np.tile(np.eye(4), (len(frames), 1, 1))
+
+    def has(self, arm, name):
+        return name.lstrip("?") in self.b
+
+
+def _t_pose(arms):
+    """A standing rig in a T pose (it faces -y, its left is +x), still on every frame but for the arms: `arms` is
+    {side: [(the upper arm's rotation, the hand's rotation relative to it)] one per frame}."""
+    F = len(next(iter(arms.values())))
+    still = lambda head: (np.array(head, float), np.tile(np.eye(3), (F, 1, 1)), np.tile(head, (F, 1)))  # noqa: E731
+    bones = {n: still(h) for n, h in (("lower_body", (0, 0, 0.9)), ("upper_body", (0, 0, 0.95)),
+                                      ("upper_body2", (0, 0, 1.1)), ("neck", (0, 0, 1.35)), ("head", (0, 0, 1.45)))}
+    for s, x in (("L", 1.0), ("R", -1.0)):
+        for n, h in (("leg", (0.1 * x, 0, 0.9)), ("knee", (0.1 * x, 0, 0.5)), ("ankle", (0.1 * x, 0, 0.1))):
+            bones[f"{n}.{s}"] = still(h)
+        sh = np.array([0.15 * x, 0.0, 1.3])
+        Ru = np.array([u for u, _ in arms[s]])
+        Rh = np.array([u @ h for u, h in arms[s]])
+        out = np.array([x, 0.0, 0.0])
+        for n, d, R in (("arm", 0.0, Ru), ("elbow", 0.25, Ru), ("wrist", 0.5, Rh), ("middle1", 0.6, Rh)):
+            P = sh + d * np.einsum("fij,j->fi", Ru, out) if n != "middle1" else \
+                sh + 0.5 * np.einsum("fij,j->fi", Ru, out) + 0.1 * np.einsum("fij,j->fi", Rh, out)
+            bones[f"{n}.{s}"] = (sh + d * out, R, P)
+    return RigData(bones)
+
+
+def test_joint_limits_turns_of_the_forearm_and_upper_arm_from_the_rest_mid_prone_roll():
+    """Frame 0 the T pose; 1 both hands turned 120 deg palm up (supination: the thumb from forward to up, the same Rx on
+    a mirrored pair); 2 both palms turned 100 deg down (pronation); 3 the upper arms turned 120 deg out (external
+    rotation) at shoulder height; 4 the same raised 60 deg above it, where an arm turns that far out on its way up; 5
+    turned 120 deg in. Supination ends at 100, pronation at -90, the upper arm at +-95 widened by the elevation past
+    level."""
+    I = np.eye(3)
+    poses = [(I, I), (I, _rx(-120)), (I, _rx(100)), (_rx(-120), I), (_ry(-60) @ _rx(-120), I), (_rx(120), I)]
+    mirror = np.diag([-1.0, 1.0, 1.0])
+    data = _t_pose({"L": poses, "R": [(mirror @ u @ mirror, mirror @ h @ mirror) for u, h in poses]})
+    frames = list(range(6))
+    st = motion.JointLimits().needs({"armature": "a"}, Context(None), Need())
+    value, detail = motion.JointLimits().compute({}, None, data, frames, st)
+    for s in ("L", "R"):
+        fa, ua = detail[f"forearm_twist.{s}"], detail[f"arm_twist.{s}"]
+        assert fa["max"] == pytest.approx(120.0, abs=0.1) and fa["min"] == pytest.approx(-100.0, abs=0.1)
+        assert fa["spans"] == [[1, 2, 1, 20.0]] and fa["over_deg"] == pytest.approx(20.0, abs=0.1)
+        assert ua["max"] == pytest.approx(120.0, abs=0.1) and ua["min"] == pytest.approx(-120.0, abs=0.1)
+        assert ua["spans"] == [[3, 3, 3, 25.0], [5, 5, 5, 25.0]]       # frame 4 is the same turn, raised: inside
+    assert value == pytest.approx(25.0, abs=0.1) and detail["worst"].startswith("arm_twist")
+    _, detail = motion.JointLimits().compute({"limits": {"forearm_twist": [-110, 130], "arm_twist": [-130, 130]}},
+                                              None, data, frames, st)
+    assert "over_deg" not in detail["forearm_twist.L"] and "over_deg" not in detail["arm_twist.R"]
+
+
+# ---------------------------------------------------------------- skin collapse
+def _tube(length=0.3, r=0.03, step=0.01, n=16):
+    """A tube along +x from the origin: rings of n vertices `step` apart, two triangles a quad."""
+    xs = np.arange(0.0, length + 1e-9, step)
+    a = 2 * np.pi * np.arange(n) / n
+    V = np.array([[x, r * np.cos(t), r * np.sin(t)] for x in xs for t in a])
+    T = [[i * n + j, i * n + (j + 1) % n, (i + 1) * n + (j + 1) % n] for i in range(len(xs) - 1) for j in range(n)]
+    T += [[i * n + j, (i + 1) * n + (j + 1) % n, (i + 1) * n + j] for i in range(len(xs) - 1) for j in range(n)]
+    return V, np.array(T)
+
+
+class TubeData:
+    """A forearm (elbow at the origin, wrist 0.3 m along +x) whose skin is a tube, as Data.skin / bones / arm_world give
+    it to skin_collapse: posed (F, n, 3); each vertex's heaviest bone the elbow's up to the middle, the twist bone's
+    after it."""
+    def __init__(self, V, T, posed):
+        self.V, self.T, self.P = V, T, np.asarray(posed)
+
+    def skin(self, i, frames):
+        n = len(self.V)
+        return {"rest": self.V.astype(np.float32), "posed": self.P[frames].astype(np.float32), "triangles": self.T,
+                "region": np.zeros(n, np.int16), "bone": (self.V[:, 0] >= 0.15).astype(np.int32),
+                "object": np.zeros(n, np.int16), "regions": ["forearm.L"], "region_bones": {"forearm.L": ["ひじ.L"]},
+                "bones": ["ひじ.L", "手捩.L"], "objects": ["sleeve"], "skipped": {}}
+
+    def bones(self, arm, names, frames):
+        rest = np.tile(np.eye(4), (2, 1, 1))
+        rest[1, 0, 3] = 0.3
+        return np.tile(rest, (len(frames), 1, 1, 1)), rest, names
+
+    def arm_world(self, arm, frames):
+        return np.tile(np.eye(4), (len(frames), 1, 1))
+
+
+def test_skin_collapse_finds_the_candy_wrapper_of_a_linear_blend_twist_and_not_a_rigid_or_spread_turn():
+    """The tube at rest; turned 170 deg about itself whole (a rigid turn); skinned by linear blend between the elbow and a
+    twist bone turned 170 deg, the weights ramping over its middle third (the candy wrapper: the middle ring pulled in to
+    cos 85 deg of its radius); each ring turned its share of 170 deg instead (a twist spread along the forearm, the faces
+    between the rings necking in only a little)."""
+    V, T = _tube()
+    w = np.clip((V[:, 0] - 0.1) / 0.1, 0.0, 1.0)
+    w = w * w * (3.0 - 2.0 * w)
+    blend = (1.0 - w)[:, None] * V + w[:, None] * (V @ _rx(170).T)
+    spread = np.einsum("nij,nj->ni", np.array([_rx(170 * x) for x in w]), V)
+    data = TubeData(V, T, [V, V @ _rx(170).T, blend, spread])
+    st = skin.SkinCollapse().needs({"armature": "a", "sides": "L", "limbs": "forearm"}, Context(None), Need())
+    got = {f: skin.SkinCollapse().compute({}, None, data, [f], st) for f in range(4)}
+    assert got[0][0] == pytest.approx(0.0, abs=1e-6) and got[1][0] == pytest.approx(0.0, abs=1e-6)
+    value, detail = got[2]
+    assert value == pytest.approx(1.0 - np.cos(np.radians(85.0)), abs=0.02)
+    assert (detail["kind"], detail["region"], detail["at"], detail["object"]) == ("collapse", "forearm.L", 0.5, "sleeve")
+    assert detail["bone"] in ("ひじ.L", "手捩.L") and detail["regions"]["forearm.L"]["loss"] == pytest.approx(value, abs=1e-4)
+    assert got[3][0] < 0.06 < skin.SkinCollapse.default_max
+    value, detail = skin.SkinCollapse().compute({}, None, data, [0, 1, 2, 3], st)
+    assert detail["at_frame"] == 2 and value > skin.SkinCollapse.default_max
+
+
+def test_a_cut_s_mean_radius_is_the_cross_section_s_size_and_none_where_the_plane_misses():
+    V, T = _tube(r=0.05, n=64)
+    u = np.array([[1.0, 0.0, 0.0]])
+    r, length = skin.cut_radius(V[None], T, np.zeros((1, 3)), u, np.array([0.3]), [0.5, 1.5])
+    assert r[0, 0] == pytest.approx(0.05, rel=2e-3) and length[0, 0] == pytest.approx(2 * np.pi * 0.05, rel=2e-3)
+    assert np.isnan(r[0, 1]) and length[0, 1] == 0.0
+
 
 
 # ---------------------------------------------------------------- framing projection

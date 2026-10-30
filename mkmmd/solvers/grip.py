@@ -13,6 +13,8 @@ Styles, each `solve_<style>(hand, prop, **params) -> dict`:
   rest   relaxed hand resting on a plane
   neck   fretting hand on a guitar-like neck (mkmmd.solvers.grip_neck): the thumb behind the neck, the pressing fingers
          arched onto their strings, the others hovering
+  pluck  a bass player's plucking hand, fingerstyle (mkmmd.solvers.grip_pluck): one station (the string it plays, the
+         thumb on its rest), the index and middle fingers' rest-stroke poses
 
 Result: {"style", "side", "bones": {blender_bone: [w, x, y, z]}, "target_in_wrist": 4x4, "report": {...}, ...}.
 `bones` are pose-bone `rotation_quaternion` values, bone-local and relative to rest (what Blender stores; a bone that
@@ -35,7 +37,7 @@ from scipy.spatial.transform import Rotation as Rot
 from ..core import armreach, bonemap, jsonx
 from . import geom
 
-VERSION = 2                                         # bump when a solver's results change (cache keys)
+VERSION = 3                                         # bump when a solver's results change (cache keys)
 FINGERS = tuple(bonemap.FINGERS)                    # thumb index middle ring little; 4 chain entries each
 FOUR = ("index", "middle", "ring", "little")
 DOF = [f"{f}_{j}" for f in FOUR for j in ("mcp", "pip", "dip", "spr")] + ["t_palmar", "t_radial", "t_roll", "t_mcp",
@@ -351,6 +353,115 @@ def _result(style, hand, Q, R, p, report, **extra):
     p, in the hand model's frame) in the wrist's frame, the report and any extras."""
     return {"style": style, "side": hand.side, "bones": hand.local_quats(Q),
             "target_in_wrist": hand.frame_in_wrist(R, p), "report": report, **extra}
+
+
+# ---------------------------------------------------------------- the arm that carries a grip
+# A grip the fingers can hold is not yet one the arm can bring the hand to: the wrist must be within the arm's reach, the
+# forearm the arm makes should meet the hand without a sharp bend, and it must not pass through the prop. A solver given
+# the arm (`arm`, in its grip frame) adds residuals for the three (_Arm): with a `pole` the elbow is the one the arm IK
+# makes (in the plane of the shoulder, the wrist and the pole), else it is chosen among the allowed elbows
+# (mkmmd.core.armreach: out from the shoulder and below it) as the one whose forearm clears the `avoid` points, bends least
+# past `free` degrees and hangs lowest; the build then puts the pole where that elbow points.
+ARM_REACH = 0.96                 # the wrist stays within this share of the arm's length (upper arm + forearm) of the shoulder
+ARM_FORE_R = 0.028               # m: the forearm's radius (a sleeve) against the `avoid` points
+ARM_CLIP = 0.004                 # m of forearm inside the prop per residual unit
+ARM_LOW = 0.3                    # the elbow choice: an elbow raised by the whole upper arm costs this much
+ARM_STEP = 6.0                   # deg: the allowed elbows are sampled this far apart round the shoulder-wrist line
+
+
+def _vec3(v, key):
+    a = np.asarray(v, float)
+    if a.shape != (3,) or not np.all(np.isfinite(a)):
+        raise ValueError(f"arm {key} must be [x, y, z], got {v!r}")
+    return a
+
+
+def arm_spec(arm):
+    """The validated `arm` of a grip (grip frame, metres): {shoulder, a (upper arm), b (forearm), and either pole (the arm
+    IK's elbow) or up and out (an elbow chosen among the allowed ones); optional avoid [[x, y, z], ...] (points of the prop
+    the forearm keeps clear of) and fore_r (the forearm's radius, ARM_FORE_R)}. ValueError when malformed."""
+    if not hasattr(arm, "get"):
+        raise ValueError("arm is {shoulder, a, b, pole} or {shoulder, a, b, up, out[, avoid, fore_r]} in the grip frame")
+    unknown = set(arm) - {"shoulder", "a", "b", "pole", "up", "out", "avoid", "fore_r"}
+    if unknown:
+        raise ValueError(f"unknown arm keys {sorted(unknown)} (have shoulder, a, b, pole, up, out, avoid, fore_r)")
+    try:
+        a, b = float(arm["a"]), float(arm["b"])
+        out = {"shoulder": _vec3(arm["shoulder"], "shoulder"), "a": a, "b": b,
+               "fore_r": float(arm.get("fore_r", ARM_FORE_R))}
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"arm needs shoulder, a and b ({e})") from None
+    if not (a > 0.0 and b > 0.0 and math.isfinite(a + b)):
+        raise ValueError("arm: a and b are positive lengths (m)")
+    if arm.get("pole") is not None:
+        out["pole"] = _vec3(arm["pole"], "pole")
+    elif arm.get("up") is not None and arm.get("out") is not None:
+        out["up"], out["out"] = _unit(_vec3(arm["up"], "up")), _unit(_vec3(arm["out"], "out"))
+    else:
+        raise ValueError("arm needs pole (the IK's elbow) or up and out (an elbow chosen among the allowed ones)")
+    if arm.get("avoid") is not None:
+        pts = np.asarray(arm["avoid"], float).reshape(-1, 3)
+        if not np.all(np.isfinite(pts)):
+            raise ValueError("arm avoid is a list of [x, y, z] points")
+        out["avoid"] = pts
+    return out
+
+
+def _seg_clear(E, W, pts, r):
+    """(k,) distance (m) from each forearm axis E[k] -> W to the nearest of `pts`, minus the forearm's radius r."""
+    E = np.atleast_2d(E)
+    ab = W[None, :] - E
+    rel = pts[None, :, :] - E[:, None, :]
+    t = np.clip(np.einsum("kmi,ki->km", rel, ab) / np.maximum(np.einsum("ki,ki->k", ab, ab), 1e-12)[:, None], 0.0, 1.0)
+    return np.linalg.norm(rel - t[..., None] * ab[:, None, :], axis=-1).min(1) - r
+
+
+class _Arm:
+    """The arm terms of a grip (see the section comment): `spec` from arm_spec, `free` the bend (deg) a wrist makes at no
+    cost, `sigma` degrees past it per residual unit."""
+
+    def __init__(self, spec, free, sigma):
+        self.m, self.free, self.sigma = spec, float(free), float(sigma)
+        self.length = spec["a"] + spec["b"]
+
+    def place(self, W, hand_dir):
+        """{elbow, bend (deg), clear (m, None without avoid points), reach (share of the arm's length)} for the wrist head W
+        and the hand's direction (wrist -> middle knuckle), both in the grip frame."""
+        m = self.m
+        S, a, b = m["shoulder"], m["a"], m["b"]
+        reach = float(np.linalg.norm(W - S)) / self.length
+        if "pole" in m:
+            E = armreach.pole_elbow(S, W, a, b, m["pole"])[None]
+        else:
+            E = armreach.elbows(S, W, a, b, m["up"], m["out"], step=ARM_STEP)
+            if not len(E):
+                return {"elbow": None, "bend": 90.0, "clear": None, "reach": reach}
+        bend = armreach.bend(E, W, hand_dir)
+        clear = _seg_clear(E, W, m["avoid"], m["fore_r"]) if "avoid" in m else None
+        i = 0
+        if len(E) > 1:
+            score = np.maximum(0.0, bend - self.free) / self.sigma
+            if clear is not None:
+                score = score + np.maximum(0.0, -clear) / ARM_CLIP
+            score = score + ARM_LOW * ((E - S) @ m["up"] + a) / a
+            i = int(np.argmin(score))
+        return {"elbow": E[i], "bend": float(bend[i]), "clear": None if clear is None else float(clear[i]), "reach": reach}
+
+    def residuals(self, W, hand_dir):
+        """[the bend past `free`, the forearm inside the prop, the wrist past ARM_REACH], in residual units."""
+        q = self.place(W, hand_dir)
+        return np.array([max(0.0, q["bend"] - self.free) / self.sigma,
+                         0.0 if q["clear"] is None else max(0.0, -q["clear"]) / ARM_CLIP,
+                         max(0.0, q["reach"] - ARM_REACH) / 0.01])
+
+    def report(self, W, hand_dir):
+        q = self.place(W, hand_dir)
+        out = {"wrist_bend_deg": round(q["bend"], 1), "reach": round(q["reach"], 3),
+               "elbow": None if q["elbow"] is None else [round(float(v), 4) for v in q["elbow"]],
+               "elbow_from": "pole" if "pole" in self.m else "chosen"}
+        if q["clear"] is not None:
+            out["forearm_clear_mm"] = round(q["clear"] * 1e3, 1)
+        return out
 
 
 # ================================================================ pen: the lateral tripod
@@ -1134,7 +1245,9 @@ def solve_wheel(hand, prop, approach=90.0, wrap=1, seeds=8, workers=None, **tuni
 # hand is inside the slab. The hand's pose relative to the frame is free (6 parameters) around a design start, with a
 # soft prior that the wrist -> pinch point heading stays near +x; the roll of the hand about it is whatever lets the
 # pads meet face to face (pad normal within PINCH_FACE of the squeeze axis). Joint angles stay near a relaxed pulp
-# pinch.
+# pinch. Given the arm (`arm`, see _Arm) the wrist also stays where the arm reaches it with a straight-ish wrist and a
+# forearm clear of the `avoid` points (a pick over a guitar's strings: the forearm over the body's edge); given `stop`
+# no skin of the hand passes the plane x = stop (the strings under the pick).
 PINCH_NAMES = ["i_mcp", "i_pip", "i_dip", "i_spr", "m_curl", "r_curl", "l_curl", "m_spr",
                "t_palmar", "t_radial", "t_roll", "t_mcp", "t_ip", "px", "py", "pz", "ua", "ub", "uc"]
 # priors: index slightly flexed, thumb opposed (palmar and radial abduction, rolled so the pad turns toward the index,
@@ -1153,6 +1266,11 @@ PINCH_FACE_SCALE = 0.08                               # ... and this much cosine
 PINCH_CLEAR = 0.010                                   # middle / ring / little skin stays this far from the object (m)
 PINCH_STEP = 15.0                                     # each outer finger is curled this much (deg) more than the last
 PINCH_NFEV = (400, 600, 300)                          # evaluations of the reach / grip / polish stages
+PINCH_ARM_FREE, PINCH_ARM_SIGMA = 20.0, 8.0           # deg: the wrist's free bend against the forearm, then per unit
+PINCH_STOP_SCALE = 0.002                              # m of skin past the `stop` plane per residual unit
+PALM_REACH = 0.5                                      # the heel of the hand: the palm's skin within this share of its length
+PALM_LIFT = 0.012                                     # m: ... rests at most this far above a `palm` patch (a bridge) ...
+PALM_W = 0.6                                          # ... with this weight against the pinch's own terms
 
 
 def _pinch_prop(prop, edge):
@@ -1188,10 +1306,13 @@ class _Pinch:
 
     X_SCALE = np.r_[PINCH_SIGMA, np.full(3, 1.0), np.full(3, 0.05)]
 
-    def __init__(self, hand, width, depth=0.15, length=0.16, edge=0.004, heading=25.0, clear=PINCH_CLEAR):
+    def __init__(self, hand, width, depth=0.15, length=0.16, edge=0.004, heading=25.0, clear=PINCH_CLEAR, arm=None,
+                 stop=None, palm=None):
         self.hand, self.w, self.depth = hand, float(width), float(depth)
         self.length, self.edge = float(length), float(edge)
         self.heading_tol, self.clear = float(heading), float(clear)
+        self.arm = None if arm is None else _Arm(arm_spec(arm), PINCH_ARM_FREE, PINCH_ARM_SIGMA)
+        self.stop = None if stop is None else float(stop)
         hd, F = hand, hand.F
         self.pad_i = hd.surface(F["index"][2], hd.ventral, 0.0, 1.0, 0.3)       # the pads: palmar skin of the distal
         self.pad_t = hd.surface(F["thumb"][2], hd.pad_t, 0.0, 1.0, 0.3)         # phalanges, as check_posed measures
@@ -1204,7 +1325,29 @@ class _Pinch:
         self.centre = np.array([self.depth / 2 - self.edge, 0.0, 0.0])
         self.half = np.array([self.depth / 2, self.length / 2, self.w / 2])
         self.others = np.where(np.isin(hd.dom, [b for f in ("middle", "ring", "little") for b in F[f][:3]]))[0]
+        self.skin = np.where(hd.dom < hd.nb)[0]                                   # skin that follows the hand's own bones
+        self.palm = None if palm is None else {k: np.asarray(palm[k], float) for k in ("center", "normal", "axes", "size")}
+        if self.palm is not None:                       # the heel of the hand: the palm's skin by the wrist, on the little
+            s = (hd.V - hd.h[0]) @ hd.along             # finger's side (where a pick hand rests on the bridge)
+            side = (hd.V - hd.palm_c) @ hd.across
+            self.heel = np.where((hd.dom == 0) & (s < PALM_REACH * hd.palm_length) & (side > 0.25 * np.ptp(side)))[0]
+            if len(self.heel) < 3:
+                raise ValueError("the hand model has too little skin at the heel of its palm for a `palm` rest")
+            self.palm["lift"] = float(palm.get("lift", PALM_LIFT))
         self.R0 = self.p0 = None
+
+    def palm_terms(self, L, tau):
+        """The heel of the hand over the `palm` patch (in the frame): its lowest skin at most `lift` above the patch's plane
+        (not into it) and its place inside the patch, in residual units."""
+        pm = self.palm
+        h = (L[self.heel] - pm["center"]) @ pm["normal"]
+        m = float(h.min())
+        w = np.exp(-(h - m) / 0.002)
+        low = m - tau * math.log(float(np.sum(np.exp(-(h - m) / tau))))
+        q = (w / w.sum()) @ L[self.heel] - pm["center"]
+        out = [max(0.0, low - pm["lift"]) / 0.004, max(0.0, -low) / 0.002]
+        out += [max(0.0, abs(float(q @ a)) - 0.5 * s) / 0.008 for a, s in zip(pm["axes"], pm["size"])]
+        return np.array(out) * PALM_W
 
     # ---- parameters
     def degrees(self, x):
@@ -1269,10 +1412,15 @@ class _Pinch:
                 ci["gap"], ct["gap"] = _softmin(A["sdf"][self.pad_i], tau), _softmin(A["sdf"][self.pad_t], tau)
         return A
 
+    def wrist(self, A):
+        """(wrist head, hand direction) in the frame: what the arm terms read."""
+        R, p, hd = A["R"], A["p"], self.hand
+        return R.T @ (hd.h[0] - p), R.T @ hd.along
+
     def residuals(self, x, stage="all"):
-        """stage 'reach': pads on their faces, facing each other, joint priors (skin may pass through the slab);
-        'grip': + nothing of the hand inside the slab, no finger inside another, the outer fingers clear;
-        'polish': the contact gaps on the measured pad surfaces (sharper softmin)."""
+        """stage 'reach': pads on their faces, facing each other, joint priors (skin may pass through the slab), the arm;
+        'grip': + nothing of the hand inside the slab or past the stop plane, no finger inside another, the outer fingers
+        clear; 'polish': the contact gaps on the measured pad surfaces (sharper softmin)."""
         A = self.analyse(x, stage)
         ci, ct = A["ci"], A["ct"]
         xy_i, xy_t = ci["xyz"][:2], ct["xyz"][:2]
@@ -1284,10 +1432,17 @@ class _Pinch:
              max(0.0, A["heading"] - self.heading_tol) / 10.0,
              *(np.maximum(0.0, tot[:3] + PINCH_STEP - tot[1:]) / 15.0)]
         r = np.concatenate([r, PINCH_PRIOR_W * (x[:13] - PINCH_PRIOR) / PINCH_SIGMA])
+        if self.arm is not None:
+            r = np.concatenate([r, self.arm.residuals(*self.wrist(A))])
+        if self.palm is not None:
+            r = np.concatenate([r, self.palm_terms(A["L"], 0.0004)])
         if stage == "reach":
             return r
-        return np.concatenate([r, np.maximum(0.0, 0.0002 - A["sdf"]) / 0.0002, A["clash"] / 0.0004,
-                               np.maximum(0.0, self.clear - A["sdf"][self.others]) / 0.003])
+        r = np.concatenate([r, np.maximum(0.0, 0.0002 - A["sdf"]) / 0.0002, A["clash"] / 0.0004,
+                            np.maximum(0.0, self.clear - A["sdf"][self.others]) / 0.003])
+        if self.stop is not None:
+            r = np.concatenate([r, np.maximum(0.0, A["L"][self.skin, 0] - self.stop) / PINCH_STOP_SCALE])
+        return r
 
     # ---- solving
     def seed(self, k, nfev=PINCH_NFEV):
@@ -1315,14 +1470,22 @@ class _Pinch:
             con[name] = {"gap_mm": round(float(sdf[pad].min()) * 1e3, 2), "x_mm": round(float(c["xyz"][0]) * 1e3, 2),
                          "y_mm": round(float(c["xyz"][1]) * 1e3, 2),
                          "facing_deg": round(math.degrees(math.acos(min(1.0, face))), 1)}
-        return {"contacts": con, "width_mm": round(self.w * 1e3, 2),
-                "pad_offset_mm": round(float(np.linalg.norm((A["ci"]["xyz"] - A["ct"]["xyz"])[:2])) * 1e3, 2),
-                "squeeze_mm": round(con["index"]["gap_mm"] + con["thumb"]["gap_mm"], 2),
-                "heading_deg": round(A["heading"], 1),
-                "penetration_mm": round(max(0.0, -float(sdf.min())) * 1e3, 3),
-                "finger_clash_mm": round(float(A["clash"].max()) * 1e3, 2),
-                "outer_fingers_clear_mm": round(float(sdf[self.others].min()) * 1e3, 1),
-                "angles_deg": _angles(A["deg"])}
+        out = {"contacts": con, "width_mm": round(self.w * 1e3, 2),
+               "pad_offset_mm": round(float(np.linalg.norm((A["ci"]["xyz"] - A["ct"]["xyz"])[:2])) * 1e3, 2),
+               "squeeze_mm": round(con["index"]["gap_mm"] + con["thumb"]["gap_mm"], 2),
+               "heading_deg": round(A["heading"], 1),
+               "penetration_mm": round(max(0.0, -float(sdf.min())) * 1e3, 3),
+               "finger_clash_mm": round(float(A["clash"].max()) * 1e3, 2),
+               "outer_fingers_clear_mm": round(float(sdf[self.others].min()) * 1e3, 1),
+               "angles_deg": _angles(A["deg"])}
+        if self.stop is not None:
+            out["stop_clear_mm"] = round((self.stop - float(A["L"][self.skin, 0].max())) * 1e3, 1)
+        if self.arm is not None:
+            out.update(self.arm.report(*self.wrist(A)))
+        if self.palm is not None:                                               # the heel over its patch (a bridge)
+            q = A["L"][self.heel] - self.palm["center"]
+            out["palm_mm"] = round(float((q @ self.palm["normal"]).min()) * 1e3, 1)
+        return out
 
 
 def _pinch_seed(job):
@@ -1344,16 +1507,21 @@ def solve_pinch(hand, prop, edge=0.004, seeds=8, workers=None, **tuning):
     seeds   parallel starts (the lowest cost wins); workers: processes (default: all cores, 1 = here)
     tuning  heading (deg, default 25: tolerance of the wrist -> pinch point direction around +x), clear (m, default 10
             mm: how far the middle, ring and little fingers stay from the object), nfev (evaluations of the reach /
-            grip / polish stages)
+            grip / polish stages), stop (m: no skin of the hand passes the plane x = stop), arm (the arm that carries
+            the hand, in the frame: see arm_spec and _Arm; its bend is free up to PINCH_ARM_FREE degrees)
     report  contacts {index, thumb: gap_mm (smallest distance from the phalanx's palmar skin to the slab, + outside),
             x_mm, y_mm (contact point in the frame: mean of the pad skin weighted by exp(-gap / 1 mm)), facing_deg (pad
             normal to squeeze axis)}, width_mm, pad_offset_mm (distance between the two contact points in the
             mid-plane), squeeze_mm (pads' distance along z minus width = the two gaps added), heading_deg (wrist ->
             frame origin against +x), penetration_mm (deepest skin vertex inside the slab), finger_clash_mm,
-            outer_fingers_clear_mm (middle / ring / little skin to the slab), angles_deg."""
-    unknown = set(tuning) - {"heading", "clear", "nfev"}
+            outer_fingers_clear_mm (middle / ring / little skin to the slab), angles_deg; with `stop` stop_clear_mm (the
+            skin's least distance before the plane); with `arm` wrist_bend_deg, reach, elbow (in the frame), elbow_from
+            (pole or chosen) and forearm_clear_mm (with avoid points: the forearm's least clearance, - inside); with `palm`
+            ({center, normal, axes: two unit vectors in the plane, size: [m, m], lift}: a patch in the frame the heel of
+            the hand rests over, a guitar's bridge) palm_mm (the heel's lowest skin over the patch's plane)."""
+    unknown = set(tuning) - {"heading", "clear", "nfev", "stop", "arm", "palm"}
     if unknown:
-        raise ValueError(f"unknown pinch tuning {sorted(unknown)} (have heading, clear, nfev)")
+        raise ValueError(f"unknown pinch tuning {sorted(unknown)} (have heading, clear, nfev, stop, arm, palm)")
     edge = float(edge)
     if not (math.isfinite(edge) and edge >= 0.0):
         raise ValueError(f"pinch edge must be a non-negative number of metres, got {edge!r}")
@@ -1363,6 +1531,15 @@ def solve_pinch(hand, prop, edge=0.004, seeds=8, workers=None, **tuning):
     nfev = tuple(int(n) for n in tuning.get("nfev", PINCH_NFEV))
     kw = dict(width=w, depth=depth, length=length, edge=edge, heading=tuning.get("heading", 25.0),
               clear=tuning.get("clear", PINCH_CLEAR))
+    if tuning.get("arm") is not None:
+        kw["arm"] = arm_spec(tuning["arm"])
+    if tuning.get("stop") is not None:
+        stop = float(tuning["stop"])
+        if not math.isfinite(stop):
+            raise ValueError(f"pinch stop must be a finite x (m), got {tuning['stop']!r}")
+        kw["stop"] = stop
+    if tuning.get("palm") is not None:
+        kw["palm"] = dict(tuning["palm"])
     pin = _Pinch(hand, **kw)
     runs = _run_seeds(_pinch_seed, [(_hand_args(hand), kw, s, nfev) for s in range(int(seeds))], workers)
     cost, z, pin.R0, pin.p0 = min(runs, key=lambda c: c[0])
@@ -1576,18 +1753,22 @@ def solve_rest(hand, prop, face="palm", seeds=6, workers=None, **tuning):
                    solver={"version": VERSION, "cost": cost, "seeds": int(seeds), "x": x})
 
 
-STYLES = ("pen", "wheel", "pinch", "rest", "neck")
+STYLES = ("pen", "wheel", "pinch", "rest", "neck", "pluck")
 
 
 def solve(style, hand, prop, **params):
-    """Dispatch to solve_<style> ("ring" is the wheel style; `neck` lives in mkmmd.solvers.grip_neck)."""
+    """Dispatch to solve_<style> ("ring" is the wheel style; `neck` lives in mkmmd.solvers.grip_neck, `pluck` in
+    mkmmd.solvers.grip_pluck)."""
     name = "wheel" if style == "ring" else style
     if name == "neck":
         from . import grip_neck
         return grip_neck.solve_neck(hand, prop, **params)
+    if name == "pluck":
+        from . import grip_pluck
+        return grip_pluck.solve_pluck(hand, prop, **params)
     fn = globals().get(f"solve_{name}") if name in STYLES else None
     if fn is None:
-        raise ValueError(f"unknown grip style {style!r} (have pen, wheel, pinch, rest, neck)")
+        raise ValueError(f"unknown grip style {style!r} (have pen, wheel, pinch, rest, neck, pluck)")
     return fn(hand, prop, **params)
 
 
@@ -1596,11 +1777,12 @@ def main(argv=None):
     """python -m mkmmd.solvers.grip IN.npz OUT.npz. Returns the exit code: 0 ok, 2 bad input.
 
     IN: the arrays of the Blender op `hand_model` (side, names, parents, heads, tails, rest_rot, V, W, ...) and `spec`,
-    JSON text {"style": pen | wheel | pinch | rest | neck, "prop": {...}, "params": {...}} (solve_<style>'s prop and keyword
-    arguments; `workers` defaults to all cores).
+    JSON text {"style": pen | wheel | pinch | rest | neck | pluck, "prop": {...}, "params": {...}} (solve_<style>'s prop and
+    keyword arguments; `workers` defaults to all cores).
     OUT: `bones` (n,) Blender bone names, `quats` (n, 4) w x y z pose-bone rotation_quaternion values, `target_in_wrist`
     (4, 4), `report` JSON text {"style", "side", "report", "solver", ...} (a pen with a writing posture adds
-    "frame_world_quat")."""
+    "frame_world_quat"); a style with more poses than one (pluck) adds `pose_names` (m,), `pose_bones` (m, k) and
+    `pose_quats` (m, k, 4): each pose's bones and their rotations."""
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) != 2:
         print("usage: python -m mkmmd.solvers.grip IN.npz OUT.npz", file=sys.stderr)
@@ -1621,9 +1803,15 @@ def main(argv=None):
     extra = {k: res[k] for k in ("frame_world_quat",) if k in res}
     report = {"style": res["style"], "side": res["side"], "report": res["report"],
               "solver": dict(res.get("solver", {}), seconds=seconds), **extra}
+    poses = {}
+    if res.get("poses"):
+        pn = list(res["poses"])
+        pb = [list(res["poses"][n]) for n in pn]
+        poses = {"pose_names": np.array(pn), "pose_bones": np.array(pb),
+                 "pose_quats": np.array([[res["poses"][n][b] for b in bs] for n, bs in zip(pn, pb)], float)}
     np.savez(argv[1], bones=np.array(names), quats=np.array([res["bones"][n] for n in names], float).reshape(-1, 4),
              target_in_wrist=np.asarray(res["target_in_wrist"], float),
-             report=np.array(json.dumps(jsonx.to_jsonable(report), ensure_ascii=False)))
+             report=np.array(json.dumps(jsonx.to_jsonable(report), ensure_ascii=False)), **poses)
     print(f"grip {res['style']} {res['side']}: {seconds}s", file=sys.stderr)
     return 0
 

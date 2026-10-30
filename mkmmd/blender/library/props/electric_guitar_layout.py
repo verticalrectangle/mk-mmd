@@ -257,6 +257,7 @@ TRUSS = {"center": (0.0, SCALE + 0.0226), "size": (0.0105, 0.0215)}       # the 
 PICK = {"thickness": 0.0008, "length": 0.031, "width": 0.026, "tip": 0.008}
 PICK_REST = {"at": (0.0440, 0.0750)}         # x, z where it lies on the pickguard (tip toward +z)
 STRUM_ZONE = (0.0625, 0.0880)                # between the bridge and middle pickups' covers
+TECHNIQUE = "pick"                           # the default way the strum hand plays it (`[perform.<cast>] strum` technique)
 
 # cable (a bevelled curve) and its end
 CABLE_R = 0.0032
@@ -320,7 +321,8 @@ def card(name, roles=None, size=None):
     strings = []
     for i in range(6):
         a, b = string_ends(i)
-        strings.append({"name": STRING_NAMES[i], "nut": _r(a), "bridge": _r(b), "radius": round(STRING_R[i], 6)})
+        strings.append({"name": STRING_NAMES[i], "nut": _r(a), "bridge": _r(b), "radius": round(STRING_R[i], 6),
+                        "object": f"{name}_string_{6 - i}"})
     center = strum_center()
     mouth, jdir, jend = jack_geometry()
     top, bot = STRAP_TOP, STRAP_BOTTOM
@@ -333,9 +335,10 @@ def card(name, roles=None, size=None):
                         "board_width": [W_NUT, W_LAST], "board_radius": BOARD_R},
             "fret_height": FRET_H, "object": f"{name}_neck"}
     strum = {"name": "strum", "type": "strum", "center": _r(center), "along": [0, 0, 1], "across": [1, 0, 0],
-             "normal": [0, -1, 0], "zone": list(STRUM_ZONE),
+             "normal": [0, -1, 0], "zone": list(STRUM_ZONE), "avoid": [f"{name}_body"],
              "pick": {"object": f"{name}_pick", "thickness": PICK["thickness"], "length": PICK["length"],
-                      "width": PICK["width"], "tip": PICK["tip"]}}
+                      "width": PICK["width"], "tip": PICK["tip"]},
+             "technique": TECHNIQUE}
     anchors = [{"name": "strap_top", "point": _r(top["point"]), "dir": _r(_unit(top["dir"])), "object": f"{name}_strap_top"},
                {"name": "strap_bottom", "point": _r(bot["point"]), "dir": _r(_unit(bot["dir"])),
                 "object": f"{name}_strap_bottom"},

@@ -909,6 +909,44 @@ def test_a_strip_that_extends_forward_holds_its_last_pose_after_it_and_nothing_b
     assert np.linalg.norm(np.array(q["values"][0]) - rest) < 2e-3            # the later entry wins
 
 
+def test_a_motion_that_switches_the_leg_ik_off_leaves_the_member_s_ik_on(make, capsys):
+    """A VMD whose first frame switches the leg IK off (FK legs, as a BVH conversion's are) made mmd_tools switch the
+    member's IK off for the whole scene, so every later stage's legs lost their IK: the stage keeps it on, and the thigh
+    the motion swings by FK gives way to it (the ankle stays on its IK bone)."""
+    vmd = make.root / "fk.vmd"
+    _vmd(vmd, {"左足": [(0, (0.5, 0.0, 0.0, 0.866)), (60, (0.5, 0.0, 0.0, 0.866))]})      # the thigh swung 60 deg
+    ik_off = b"".join(n.encode("shift_jis").ljust(20, b"\0") + b"\0" for n in ("左足ＩＫ", "右足ＩＫ"))
+    vmd.write_bytes(vmd.read_bytes() + struct.pack("<IIBI", 1, 0, 1, 2) + ik_off)          # frame 0: both IKs off
+    code, out = make(f'[[motion.mq]]\nvmd = "{vmd}"\nstart = 0.0\n', until="motion")
+    assert code == 0, out.get("error")
+    expr = ("[[c.influence for o in bpy.data.objects if o.type == 'ARMATURE' for pb in o.pose.bones "
+            "for c in pb.constraints if c.type == 'IK' and c.subtarget], list(bone('ankle.L').head), "
+            "list(bone('leg_ik.L').head)]")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "61", "--project", str(make.root)],
+                  capsys)
+    influence, ankle, ik = q["values"][0]
+    assert influence and min(influence) == 1.0                                  # the IK still on
+    assert np.linalg.norm(np.subtract(ankle, ik)) < 0.02                        # the swung thigh gave way to it
+
+
+def test_a_track_keyed_on_the_far_side_of_the_rest_blends_in_the_short_way(make, capsys):
+    """q and -q are one rotation, but Blender blends quaternions component by component: a track keyed at w < 0 (as BVH
+    conversions write whole tracks) swung the arm half a turn round on its way in over a blend. Turned to the near side
+    at the import, it eases in as the same motion keyed at w > 0 does."""
+    vmd = make.root / "arm.vmd"
+    strip = 'start = 0.5\nfrom = 0\nto = 30\nextend = "none"\nblend_in = 0.4\nblend_out = 0.4\n'   # frames 46-76
+    wrist = {}
+    for run, up in (("near", (0.0, 0.0, 0.4226, 0.9063)), ("far", (0.0, 0.0, -0.4226, -0.9063))):   # raised 50 deg
+        _vmd(vmd, {"左腕": [(0, up), (60, up)]})
+        code, out = make(FREE.format(vmd=vmd, moves=strip), until="motion")
+        assert code == 0, out.get("error")
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), "list(bone('wrist.L').head)", "--frames", "52,61",
+                       "--project", str(make.root)], capsys)                    # halfway in, held
+        wrist[run] = [np.array(v) for v in q["values"]]
+    for near, far in zip(wrist["near"], wrist["far"]):
+        assert np.linalg.norm(near - far) < 2e-3
+
+
 def test_a_camera_riding_her_head_bone_stays_where_it_is_on_her_head_as_the_head_turns(make, capsys):
     """`at = {cast, bone, point}` is a point given where it is at rest, carried by that bone's move: a close-up in front
     of her face keeps its place on her head while a motion turns the head 40 deg (without the bone the camera stays in
@@ -1006,17 +1044,56 @@ def test_moved_hands_ride_the_chest_through_a_lean_and_come_in_to_the_body_from_
     (chest0, world0), (chest1, world1) = ([np.array(v) for v in f] for f in q["values"])
     assert np.linalg.norm(world1 - world0) > 0.02                 # the lean moved the mic hand in the world ...
     assert np.linalg.norm(chest1 - chest0) < 3e-3                 # ... with the chest: the mic stays at the mouth
-    code, q = cli(["q", str(make.root / "build" / "t.blend"), "[list(bone(b).head) for b in ('arm.L', 'elbow.L', 'wrist.L')]",
+    code, q = cli(["q", str(make.root / "build" / "t.blend"),
+                   "[list(bone(b).head) for b in ('arm.L', 'elbow.L', 'wrist.L')] + [list(obj('mq_elbow.L').loc)]",
                    "--frames", "40", "--project", str(make.root)], capsys)                # t 0.3: on the chest
-    S, E, W = (np.array(v) for v in q["values"][0])
+    S, E, W, P = (np.array(v) for v in q["values"][0])
     from mkmmd.core import armreach as AR
-    predicted = AR.pole_elbow(S, W, np.linalg.norm(E - S), np.linalg.norm(W - E), S + np.array(AR.POLE) * [1, 1, -1])
-    assert np.linalg.norm(predicted - E) < 5e-3                   # the elbow the move library planned the wrist for
+    predicted = AR.pole_elbow(S, W, np.linalg.norm(E - S), np.linalg.norm(W - E), P)   # its pole: the stage's own, or
+    assert np.linalg.norm(predicted - E) < 5e-3                   # the one the move library turned the elbow to
     code, q = cli(["q", str(make.root / "build" / "t.blend"), "[list(bone(b).head) for b in ('arm.R', 'elbow.R', 'wrist.R')]",
                    "--frames", "40", "--project", str(make.root)], capsys)                # the mic hand
     S, E, W = (np.array(v) for v in q["values"][0])
     planned = AR.pole_elbow(S, W, np.linalg.norm(E - S), np.linalg.norm(W - E), S + np.array(AR.POLE) * [-1, 1, -1])
     assert np.linalg.norm(planned - E) < 5e-3 and S[2] - E[2] > 0.12  # its elbow hangs under the shoulder, as planned
+
+
+PEEK_ROCK = """[pose.mq]
+feet = "floor"
+
+[[move.mq]]
+name = "peek"
+t = 0.5
+dur = 1.0
+hand = "L"
+
+[perform.mq]
+head_rock = { deg = 6.0, period = 0.8 }
+"""
+
+
+def test_a_peek_s_hand_goes_with_the_head_over_its_hold_as_the_head_rocks(tmp_path, mannequin, capsys):
+    """The ring at the eye (a place seen through, mkmmd.core.moves.SIGHTED) is held with the head from its arrival to the
+    end of its hold, not with the chest the moved hands ride: the move's own lean and head tilt and a head rocking on top
+    (perform's head_rock) carry the hand with the head, so the ring stays on the eye."""
+    rig = json.loads(Path(mannequin[1]).read_text(encoding="utf-8"))
+    rig["morphs"]["mouth_smile"] = rig["morphs"]["smile_eyes"]           # the mannequin's one smile, for the peek's face
+    (tmp_path / "mq.rig.json").write_text(json.dumps(rig), encoding="utf-8")
+    (tmp_path / "mk.toml").write_text(HEAD + f'\n[[cast]]\nname = "mq"\npmx = "{mannequin[0]}"\n'
+                                      f'rig = "{tmp_path / "mq.rig.json"}"\n\n' + PEEK_ROCK, encoding="utf-8")
+    code, out = cli(["build", "--project", str(tmp_path), "--until", "perform"], capsys)
+    assert code == 0, out.get("error")
+    assert out["stages"]["pose"]["mq"]["sight"] == {"L": [[46.0, 76.0]]}          # t 0.5 to 1.5
+    expr = ("[list(bone('head').matrix.inverted() @ bone('wrist.L').head), "
+            "list(bone('upper_body2').matrix.inverted() @ bone('wrist.L').head)]")
+    code, q = cli(["q", str(tmp_path / "build" / "t.blend"), expr, "--frames", "46,52,58,64,70,76",
+                   "--project", str(tmp_path)], capsys)
+    assert code == 0, q
+    import numpy as np
+    head, chest = (np.array([v[i] for v in q["values"]]) for i in (0, 1))
+    assert np.linalg.norm(head - head[0], axis=1).max() < 2e-3          # still against the head from its arrival on ...
+    assert np.linalg.norm(chest - chest[0], axis=1).max() > 5e-3        # ... as the head rocks it about over the chest
+
 
 
 @pytest.fixture(scope="module")
@@ -1522,6 +1599,54 @@ def test_the_hand_checks_measure_the_moves_holds_in_the_frame_of_the_body_they_r
     assert got["mic_palm"]["detail"]["side"] == "L" and got["mic_palm"]["value"] > 0.5
 
 
+def _turn(bone, deg):
+    """A VMD rotation (x y z w, MMD's axes) of `deg` degrees about a PMX twist bone's fixed axis."""
+    ax = np.asarray(bone.fixed_axis, float)
+    s = np.sin(np.radians(deg) / 2.0) * ax / np.linalg.norm(ax)
+    return (float(s[0]), float(s[1]), float(s[2]), float(np.cos(np.radians(deg) / 2.0)))
+
+
+def test_the_twist_checks_flag_an_arm_turned_past_a_human_one_and_its_skin_pulled_in(make, mannequin, capsys):
+    """A motion turns the left forearm's twist bone 150 deg about its axis, then 150 the other way, the right one 40,
+    and the right upper arm's 130: joint_limits flags both of the left forearm's turns (a palm turned up where the thumb
+    rises: supination, + on either side), the right upper arm's and not the right forearm's; skin_collapse finds the
+    left forearm and the right upper arm pulled in where the twist bones' weights meet the elbow's and the arm's, and
+    the right forearm's skin within a few per cent."""
+    bones = {b.name: b for b in X.read(str(mannequin[0])).bones}
+    vmd = make.root / "twist.vmd"
+    _vmd(vmd, {"左手捩": [(0, _turn(bones["左手捩"], 150)), (25, _turn(bones["左手捩"], 150)),
+                          (35, _turn(bones["左手捩"], -150)), (60, _turn(bones["左手捩"], -150))],
+               "右手捩": [(0, _turn(bones["右手捩"], 40)), (60, _turn(bones["右手捩"], 40))],
+               "右腕捩": [(0, _turn(bones["右腕捩"], 130)), (60, _turn(bones["右腕捩"], 130))]})
+    code, out = make(f'[[motion.mq]]\nvmd = "{vmd}"\nstart = 0.0\n', until="motion")
+    assert code == 0, out.get("error")
+    root = str(make.root)
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "bone('thumb2.L').tail.z - bone('wrist.L').head.z",
+                   "--frames", "46,76", "--project", root], capsys)
+    thumb_up = dict(zip((46, 76), q["values"]))
+    turned = {}
+    for f in (46, 76):
+        code, res = cli(["check", "joint_limits", "--args", '{"cast": "mq"}', "--max", "0", "--frames", str(f),
+                         "--project", root], capsys)
+        turned[f] = res["results"][0]["detail"]
+    for f in (46, 76):
+        fa = turned[f]["forearm_twist.L"]
+        assert abs(fa["max"]) == pytest.approx(150.0, abs=3.0) and fa["over_deg"] > 45.0
+        assert (fa["max"] > 0) == (thumb_up[f] > thumb_up[76 if f == 46 else 46])   # the thumb rises: supination, +
+        assert "over_deg" not in turned[f]["forearm_twist.R"]
+        assert abs(turned[f]["forearm_twist.R"]["max"]) == pytest.approx(40.0, abs=3.0)
+        assert abs(turned[f]["arm_twist.R"]["max"]) == pytest.approx(130.0, abs=3.0)
+        assert turned[f]["arm_twist.R"]["over_deg"] > 30.0 and "over_deg" not in turned[f]["arm_twist.L"]
+    assert turned[46]["forearm_twist.L"]["max"] * turned[76]["forearm_twist.L"]["max"] < 0     # one each way
+    code, res = cli(["check", "skin_collapse", "--args", '{"cast": "mq"}', "--project", root], capsys)
+    got = res["results"][0]
+    assert code == 1 and not got["ok"] and got["value"] > 0.3, got
+    regions = got["detail"]["regions"]
+    assert regions["forearm.L"]["loss"] > 0.3 and regions["upper_arm.R"]["loss"] > 0.3
+    assert regions["forearm.R"]["loss"] < 0.1 and regions["upper_arm.L"]["loss"] < 0.05
+    assert got["detail"]["region"] in ("forearm.L", "upper_arm.R") and got["detail"]["kind"] == "collapse"
+
+
 DRAWN = """[vector]
 colors = { background = "#FFD21F", line = "#1B2A6B" }
 shadow = 0.3
@@ -1786,6 +1911,54 @@ def test_a_strut_sets_the_feet_on_one_line_sways_the_hips_over_the_planted_foot_
     assert hips[mid, 1] - root[mid, 1] == pytest.approx(0.04, abs=0.005)              # over it: toward her left
     assert hips[on(1.05), 1] - root[on(1.05), 1] == pytest.approx(-0.04, abs=0.005)   # then over R
     assert np.degrees(head[on(1.85), 2] - head[on(1.55), 2]) > 30                     # the head turned toward her left
+
+
+TWIRL = """[pose.mq]
+feet = "floor"
+[perform.mq]
+{extra}spin = {{ from = 0.25, to = 1.95, deg = 360 }}
+"""
+FACING = ('[math.degrees(math.atan2(d.x, -d.y)) for d in [bone(n).matrix.to_3x3() @ arm("Mq_arm").data.bones[bone(n).name]'
+          '.matrix_local.to_3x3().inverted() @ Vector((0, -1, 0)) for n in ("head", "upper_body2", "lower_body")]] '
+          '+ [bpy.data.objects["Mq"].rotation_euler[2]] + list(bone("toe_ik.L").head) + list(bone("ankle.R").head)')
+
+
+def test_a_spin_turns_her_round_chest_first_hips_last_the_head_spotting_the_front_in_the_air_and_on_her_toes(make, capsys):
+    """A twirl was a [[key]] turning the root on a turntable. A spin turns the root (so the hair and skirt flare from the
+    real turn) once round from a wind-up the other way to an overshoot settling back; the chest leads the hips, and the
+    head holds the front until the neck runs out of turn, then whips round ahead of the chest. Floating (`rise`, `air`)
+    the legs go round with her; standing, she turns on her left toes (they stay put) with the right foot lifted. A
+    [[key]] that also turns the root is refused."""
+    import numpy as np
+    t = (np.arange(31, 92) - 31) / 30.0
+    got = {}
+    for where, extra in (("air", 'rise = [[0.0, 0.0], [0.15, 0.3]]\nair = { from = 0.0, to = 2.0 }\n'), ("ground", "")):
+        code, out = make(TWIRL.format(extra=extra), until="perform")
+        assert code == 0, out.get("error")
+        (sp,) = out["stages"]["perform"]["mq"]["spin"]["spins"]
+        assert sp["air"] == (where == "air") and len(sp["whips"]) == 1 and sp["neck_deg"] <= 70.0 and sp["twist_deg"] <= 35
+        code, q = cli(["q", str(make.root / "build" / "t.blend"), FACING, "--frames", "31:91", "--project",
+                       str(make.root)], capsys)
+        assert code == 0, q
+        v = np.array(q["values"])
+        head, chest, hips = (np.degrees(np.unwrap(np.radians(v[:, i] - v[0, i]))) for i in range(3))
+        root = np.degrees(v[:, 3])
+        assert root.min() < -10.0 and root.max() > 365.0 and root[-1] == pytest.approx(360.0, abs=0.01)
+        whip = sp["whips"][0]
+        held = (t > 0.25) & (t < whip)
+        assert np.abs(head[held]).max() < 3.0 and chest[held].max() > 40.0              # the head spots the front
+        turning = (hips > 30.0) & (hips < 330.0)
+        assert (chest[turning] > hips[turning]).all()                                     # the chest leads, the hips trail
+        later = (t > whip + 0.25) & (head < 355.0)
+        assert later.any() and (head[later] - chest[later]).min() > 30.0                  # the head ahead of the chest
+        got[where] = (t, v, hips)
+    t, v, hips = got["ground"]
+    on = (hips > 20.0) & (hips < 340.0)
+    assert np.ptp(v[on, 4:7], axis=0).max() < 1e-3                                       # on her left toes ...
+    assert (v[on, 9] - v[0, 9]).min() > 0.05                                              # ... the right foot lifted
+    code, out = make(TWIRL.format(extra="") + '\n[[key]]\ntarget = "Mq"\nprop = "rotation_euler"\nindex = 2\n'
+                     'keys = [[0.0, 0.0], [1.0, 1.0]]\n', until="perform")
+    assert code == 3 and "a [[key]] also keys 'Mq' rotation_euler[2]" in out["error"]
 
 
 # ---------------------------------------------------------------- the camera: follow, dolly, keyed roll

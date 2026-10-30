@@ -24,7 +24,10 @@
   [pose.<cast>.hands.<L|R>]   arm IK on the wrist through the twist bones:
      at = target ref, dir = [x, y, z] (hand direction), palm = [x, y, z] (palm normal), pole = target ref
      rest = "prop:edge" (+ along = 0..1, lift = m): the hand lies on an edge use point
-     keys = [{t, at, dir, palm}]  moving targets (clip seconds, eased)
+     keys = [{t, at, dir, palm, sight}]  moving targets (clip seconds, eased); `sight = true` on consecutive keys holds
+        the hand with the HEAD from the first to the last of them (`_sight_ride`: a ring held at the eye stays on it as
+        the head leans, tilts, nods and rocks), handed over in SIGHT_RAMP seconds either side; the moves mark the keys of
+        a place seen through (mkmmd.core.moves.SIGHTED)
      ride = "<object>" | "cast:NAME.BONE"   the goal FOLLOWS something: an object (a steering wheel), or a bone of this
         character (NAME is its own name: the chest, `cast:rin.upper_body2`). The goal and the elbow pole are then
         bone-parented to the bone (Blender parents to its TAIL) and their keys are computed from the world goal as the bone
@@ -85,11 +88,13 @@ import numpy as np
 from mathutils import Euler, Matrix, Quaternion, Vector
 
 from ...core import armreach as AR
+from ...core import armtwist as AT
 from ...core import fingers as FG
 from ...core import fretting as FR
 from ...core import gripframe as GF
 from ...core import moves as MV
 from ...core import pentrack as PT
+from ...core import strum as SM
 from ...core import wear as WR
 from .. import keys as K
 from .. import scene as S
@@ -261,48 +266,79 @@ def _chain_points(arm, smap, side, sems):
     return pts
 
 
+_HANDS, _JOINTS = {}, {}         # the hands at rest, and the joints of each shape on them: a solved thumb is solved once
+
+
+def hand_rest(arm, smap, side):
+    """The hand `side` of `arm` at rest in the world, as mkmmd.core.fingers.joints reads it: {"points": {finger: its
+    rest chain (`_chain_points`)}, "palm": the palm normal, "tips": {finger: where its skin ends}, "radii": {finger: its
+    last segment's skin radius}} (mkmmd.core.fingers.finger_end, from the skin the last bone of each finger moves most;
+    a finger without such skin, or a model whose hand the grip export cannot read, ends at its tip bone). None for a
+    hand without wrist, index and little finger bones."""
+    from ...core import bonemap
+    from ..ops_hand import hand_arrays
+    if not all(f"{k}.{side}" in smap for k in ("wrist", "index1", "little1")):
+        return None
+    key = (arm.name, side, tuple(round(v, 6) for row in arm.matrix_world for v in row))
+    if key in _HANDS:
+        return _HANDS[key]
+    points = {f: np.array([list(p) for p in _chain_points(arm, smap, side, sems)])
+              for f, sems in bonemap.FINGERS.items() if sum(f"{s}.{side}" in smap for s in sems) >= 2}
+    tips, radii = {}, {}
+    try:
+        a = hand_arrays(arm, side)
+    except (KeyError, ValueError):
+        a = None
+    if a is not None:
+        owner = np.argmax(a["W"], axis=1)
+        for k, f in enumerate(bonemap.FINGERS):
+            last = 1 + 4 * k + 2                       # the chain's third bone: the one the fingertip's skin follows
+            if f in points and a["names"][last]:
+                tip, r = FG.finger_end(a["heads"][last - 2:last + 2], a["V"][owner == last])
+                if tip is not None:
+                    tips[f], radii[f] = tip, r
+    _HANDS[key] = {"points": points, "palm": np.array(palm_normal(arm, smap, side)), "tips": tips, "radii": radii}
+    return _HANDS[key]
+
+
 def _finger_quats(arm, smap, side, preset):
-    """Bone -> local quaternion curling each finger toward the palm about its own flexion axis (finger direction x
-    palm normal, from the rest pose), its base joint first turned about the palm normal by its spread (away from the
-    middle finger; the thumb away from the index). `preset`: a name of mkmmd.core.fingers.PRESETS or a table
-    {finger: [a, b, c], spread}. A tucked thumb (`point`, or "tuck" in a table) gets the spread and curls that fold it
-    over this hand's curled middle finger (mkmmd.core.fingers.tuck_thumb)."""
+    """Bone -> local quaternion of each finger joint of the hand `side` in the shape `preset` (a name of
+    mkmmd.core.fingers.PRESETS or a table {finger: [a, b, c], spread}): each finger curled toward the palm about its own
+    flexion axis (finger direction x palm normal, from the rest pose), its base joint first turned about the palm normal
+    by its spread (away from the middle finger; the thumb away from the index); a solved thumb (mkmmd.core.fingers.THUMBS:
+    "tuck" folds it over the curled middle finger, "ring" meets the index's tip with it, "cross" lays it across the
+    index's tip) solved for this hand's own rest bones and skin (`hand_rest`, mkmmd.core.fingers.joints)."""
     from ...core import bonemap
     try:
-        angles, spread = FG.curls(preset), FG.spreads(preset)
+        FG.curls(preset), FG.spreads(preset)
     except ValueError as e:
         raise BuildError(str(e))
-    if not all(f"{k}.{side}" in smap for k in ("wrist", "index1", "little1")):
+    hand = hand_rest(arm, smap, side)
+    if hand is None:
         return {}
-    palm = palm_normal(arm, smap, side)
-    if FG.tucked(preset):
-        pts = {f: _chain_points(arm, smap, side, bonemap.FINGERS[f]) for f in ("thumb", "index", "middle")}
-        if all(len(p) >= 3 for p in pts.values()):
-            spread["thumb"], angles["thumb"] = FG.tuck_thumb(pts["thumb"], pts["index"], pts["middle"], np.array(palm),
-                                                             angles["index"], angles["middle"])
-    base = {f: _world_head(arm, smap[f"{sems[0]}.{side}"]) for f, sems in bonemap.FINGERS.items()
-            if f"{sems[0]}.{side}" in smap}
+    key = (id(hand), json.dumps(preset, sort_keys=True))
+    if key not in _JOINTS:
+        try:
+            _JOINTS[key] = FG.joints(hand, preset, side)
+        except ValueError as e:
+            raise BuildError(f"{arm.name} {side} hand: {e}")
     out = {}
-    for name, sems in bonemap.FINGERS.items():
-        bones = [smap[f"{s}.{side}"] for s in sems if f"{s}.{side}" in smap]
-        if len(bones) < 2:
-            continue
-        d = (_world_head(arm, bones[1]) - _world_head(arm, bones[0])).normalized()
-        axis = d.cross(palm).normalized()
-        turn = Quaternion()
-        ref = "index" if name == "thumb" else "middle"
-        if spread.get(name) and ref in base and name != ref:
-            away = base[name] - base[ref]                     # from the reference finger's base to this one's, in the palm
-            away = away - away.dot(palm) * palm
-            if away.length > 1e-6:
-                spin = d.cross(away.normalized())
-                if spin.length > 1e-6:
-                    turn = Quaternion(spin.normalized(), math.radians(spread[name]))
-        for i, (b, deg) in enumerate(zip(bones[:3], angles[name])):
+    for name, rots in _JOINTS[key].items():
+        bones = [smap[f"{s}.{side}"] for s in bonemap.FINGERS[name] if f"{s}.{side}" in smap]
+        for b, R in zip(bones[:3], rots):
             B = K.rest_rot(arm, b)
-            R = (turn if i == 0 else Quaternion()).to_matrix() @ _q(axis, deg).to_matrix()
-            out[b] = (B.inverted() @ R @ B).to_quaternion()
+            out[b] = (B.inverted() @ Matrix([list(r) for r in R]) @ B).to_quaternion()
     return out
+
+
+def _rest_bend(arm, base, fore, fold):
+    """The way (unit, armature space) the elbow points from the shoulder-hand line in the pose the arm IK starts from
+    (the rest arm with the forearm folded by `fold`, an armature-space rotation about the elbow: `_prebend`), with the
+    line from the chain root `base` to the hand: the pole's direction there."""
+    bones = arm.data.bones
+    head, knee = bones[base].head_local, bones[fore].head_local
+    axis = (knee + fold @ (bones[fore].tail_local - knee) - head).normalized()
+    return ((knee - head) - axis * (knee - head).dot(axis)).normalized()
 
 
 def _pole_angle(arm, base, fore, fold):
@@ -310,32 +346,57 @@ def _pole_angle(arm, base, fore, fold):
     the chain root to the target, from the root bone's X axis, and rigs roll that axis differently on the two sides (MMD
     rigs mirror it), so one fixed angle sends one elbow the wrong way. The angle returned is the one under which the pose
     the solver starts from (the rest arm with the forearm folded by `fold`, an armature-space rotation about the elbow:
-    `_prebend`) solves with the pole where that elbow points: the elbow then points at the pole in every pose."""
+    `_prebend`) solves with the pole where that elbow points (`_rest_bend`): the elbow then points at the pole in every
+    pose."""
     bones = arm.data.bones
     root = bones[base]
     head, tail = root.head_local, root.tail_local
     knee = bones[fore].head_local
-    hand = knee + fold @ (bones[fore].tail_local - knee)
-    reach = hand - head
-    axis = reach.normalized()
-    bend = (knee - head) - axis * (knee - head).dot(axis)
-    pole = knee + bend.normalized() * reach.length
+    reach = knee + fold @ (bones[fore].tail_local - knee) - head
+    pole = knee + _rest_bend(arm, base, fore, fold) * reach.length
     projected = reach.cross(pole - head).cross(tail - head)
     x_axis = root.matrix_local.to_3x3().col[0]
     angle = x_axis.angle(projected)
     return -angle if x_axis.cross(projected).dot(tail - head) > 0 else angle
 
 
-TWIST_SHARE = 1.0          # share of the hand's roll the forearm twist bone takes: all of it (a forearm pronates, a wrist
-                           # only bends; MMD rigs spread the twist bone's roll down the forearm), so a sleeve turns with the
-                           # hand instead of the hand turning inside the cuff
+WRIST_ROLL = 15.0          # degrees the wrist turns the hand about its own length past the forearm twist bone, at most
+ARM_TWIST = (AT.UPPER[0] + 2.0 * MV.TWIST_MARGIN, AT.UPPER[1] - 2.0 * MV.TWIST_MARGIN)   # degrees the upper arm's twist
+                           # bone turns under the IK, at most: the human range less twice the moves' margin, which
+                           # leaves room inside the range for the IK's own turn of the arm bone (up to ~10 at a hand-off)
+ARM_RANGE = (AT.UPPER[0] + MV.TWIST_MARGIN, AT.UPPER[1] - MV.TWIST_MARGIN)   # degrees the upper arm's twist bone turns
+                           # whatever drives the arm (a motion strip's own shrug while a hand is let go): the range less
+                           # the margin left for the arm bone's own turn
+FORE_RANGE = (AT.FOREARM[0] + WRIST_ROLL, AT.FOREARM[1] - WRIST_ROLL)        # degrees the forearm twist bone turns,
+                           # whatever drives it: the range less what the wrist may add, so the hand stays in range too
+
+
+def _twist_limit(arm, bone, side, limits, axis, name, order="AUTO"):
+    """A LIMIT_ROTATION named `name` on `bone` holding its turn about its own length (its local Y) within `limits`
+    (degrees, + supination / external rotation on either side: mkmmd.core.armtwist.SIGN), `axis` the arm's direction out
+    along it at rest (armature space): which way the bone's Y points along the arm decides the sign."""
+    k = AT.SIGN[side] * (1.0 if arm.data.bones[bone].matrix_local.to_3x3().col[1].dot(axis) >= 0.0 else -1.0)
+    lo, hi = sorted((k * limits[0], k * limits[1]))
+    c = arm.pose.bones[bone].constraints.new("LIMIT_ROTATION")
+    c.name = name
+    c.owner_space = "LOCAL"
+    c.use_limit_y = True
+    c.min_y, c.max_y = math.radians(lo), math.radians(hi)
+    c.euler_order = order
+    return c
 
 
 def _arm_ik(ctx, m, smap, side):
     """The arm rig. The goal empty `<name>_hand.<side>` is the wrist bone's tail and orientation. A position-only IK on
     the forearm (chain up to the upper arm) puts the forearm's tail where the goal says the wrist's head is and bends the
     elbow toward the pole (`_pole_angle`: the pole is where the elbow points, on either side of any rig); the wrist copies
-    the goal's rotation; the forearm twist bone, when the rig has one, rolls with the hand (TWIST_SHARE).
+    the goal's rotation. The forearm twist bone, when the rig has one, rolls with the hand (a forearm pronates, a wrist
+    only bends; MMD rigs spread the twist bone's roll down the forearm, so a sleeve turns with the hand instead of the
+    hand turning inside the cuff) within FORE_RANGE, and the wrist turns the hand on past that at most WRIST_ROLL, so the
+    hand stays inside mkmmd.core.armtwist.FOREARM and a goal that asks more leaves the hand short of its roll instead of
+    wringing the sleeve (the moves library turns the elbow so that none does: mkmmd.core.moves.arm_for). The upper arm's
+    twist bone stays within ARM_RANGE, and within ARM_TWIST while the IK holds the arm (the IK itself never turns it).
+    These limits hold whatever drives the arm: a motion strip's own shrug while the hand is let go levels off at them.
     (A single IK that also matched the hand's rotation let the solver swing the elbow away from the pole.)
     Returns (goal, pole, [(bone, constraint name), ...]): the constraints whose influence the settle ramps up."""
     arm = m.arm
@@ -378,9 +439,14 @@ def _arm_ik(ctx, m, smap, side):
     at.target, at.subtarget, at.head_tail = arm, fore, 1.0          # so rolling that bone would slide the hand off it
     at.owner_space = at.target_space = "WORLD"
     cons.append((wrist, at.name))
+    along = bones[wrist].head_local - bones[fore].head_local       # out along the forearm, and the upper arm, at rest
     if f"arm_twist.{side}" in smap:
         tb = arm.pose.bones[smap[f"arm_twist.{side}"]]
-        tb.lock_ik_x = tb.lock_ik_z = True
+        tb.lock_ik_x = tb.lock_ik_y = tb.lock_ik_z = True   # the IK turns the arm bone; this one keeps what it is given
+        up = bones[fore].head_local - bones[upper].head_local
+        _twist_limit(arm, tb.name, side, ARM_RANGE, up, "mk_arm_twist_range")    # always: a dance's shrug too
+        lim = _twist_limit(arm, tb.name, side, ARM_TWIST, up, "mk_arm_twist_limit")
+        cons.append((tb.name, lim.name))
     twist = smap.get(f"wrist_twist.{side}")
     if twist and twist != fore:
         aim = bpy.data.objects.new(f"{m.name}_twist.{side}", None)
@@ -393,26 +459,24 @@ def _arm_ik(ctx, m, smap, side):
         t.name = "mk_forearm_twist"
         t.target = aim
         t.lock_axis, t.track_axis = "LOCK_Y", "TRACK_X"
-        t.influence = TWIST_SHARE
         cons.append((twist, t.name))
+        _twist_limit(arm, twist, side, FORE_RANGE, along, "mk_forearm_limit")      # always: IK, strip or neither
+        _twist_limit(arm, wrist, side, (-WRIST_ROLL, WRIST_ROLL), along, "mk_wrist_roll", order="YXZ")
     return tgt, pole, cons, (fore, local_fold)
 
 
-PREBEND_DEG = 20.0         # the forearm's starting fold for the IK solver
-
-
 def _prebend(arm, fore):
-    """(armature-space rotation, local quaternion) folding the forearm bone PREBEND_DEG toward the model's front
+    """(armature-space rotation, local quaternion) folding the forearm bone AT.PREBEND degrees toward the model's front
     (armature -Y). The IK solver starts from the pose it is given, and from a straight rest arm it bends the elbow
     whichever way the solve drifts: started folded the way an elbow folds, it keeps that fold, so the pole decides alone
-    where the elbow points."""
+    where the elbow points (and mkmmd.core.armtwist predicts its twist from that fold)."""
     b = arm.data.bones[fore]
     along = (b.tail_local - b.head_local).normalized()
     axis = along.cross(Vector((0.0, -1.0, 0.0)))
     if axis.length < 1e-6:                             # a forearm pointing straight ahead at rest: fold it up
         axis = along.cross(Vector((0.0, 0.0, 1.0)))
     B = b.matrix_local.to_3x3().normalized()
-    q = Quaternion(axis.normalized(), math.radians(PREBEND_DEG)).to_matrix()
+    q = Quaternion(axis.normalized(), math.radians(AT.PREBEND)).to_matrix()
     return q, (B.inverted() @ q @ B).to_quaternion()
 
 
@@ -486,6 +550,63 @@ def _key_goal(tgt, mats, par_inv, interp="BEZIER"):
         rots.append(tuple(Ml.to_quaternion()))
     K.key_vec(tgt, "location", frames, locs, interp=interp)
     K.key_vec(tgt, "rotation_quaternion", frames, K.continuous(rots), interp=interp)
+
+
+SIGHT_RAMP = 0.1          # s: a hand held with the head (keys marked `sight`) is handed to it and back this fast
+
+
+def _sight_ride(ctx, m, smap, name, side, h, tgt, back, f1):
+    """Carry the hand `side` with the head over each run of its keys marked `sight` (a place seen through,
+    mkmmd.core.moves.SIGHTED: a ring held at the eye): a second goal `<name>_sight.<side>` riding the head bone holds
+    those keys' goals, read in the head's frame as it stands in the settled pose (`_ride_bone`), and the hand's goal
+    `tgt` copies it (its `mk_sight` constraint) from the run's first key to its last, handed over in SIGHT_RAMP seconds
+    before the first and back after the last. Riding the chest, the ring would slide off the eye as the move leans the
+    body and tilts the head, and with every nod on the beat or head rock perform adds; this way it stays on it. Keyed
+    again (the goal and the constraint reused) when the moves are compiled again (`free_hands`). Returns the runs
+    [(first frame, last frame)]."""
+    keys = h.get("keys") or []
+    ramp = SIGHT_RAMP * ctx.fps
+    runs = []
+    for k, prev in zip(keys, [None] + keys[:-1]):
+        if not k.get("sight"):
+            continue
+        fr = ctx.frame(float(k["t"]))
+        if prev is not None and prev.get("sight") and runs:
+            runs[-1][1] = fr
+        elif runs and fr - runs[-1][1] <= 2.0 * ramp:             # two holds too close to hand over between: one
+            runs[-1][1] = fr
+        else:
+            runs.append([fr, fr])
+    runs = [(a, b) for a, b in runs if b - a > 1e-6]
+    c = tgt.constraints.get("mk_sight")
+    if not runs:
+        if c is not None:
+            c.influence = 0.0
+            K.key_prop(tgt, f'constraints["{c.name}"].influence', [f1], [0.0], interp="CONSTANT")
+        return []
+    arm = m.arm
+    hb, head_inv = _ride_bone(m, smap, name, side, f"cast:{name}.head", f1)
+    helper = bpy.data.objects.get(f"{m.name}_sight.{side}")
+    if helper is None:
+        helper = bpy.data.objects.new(f"{m.name}_sight.{side}", None)
+        helper.empty_display_size = 0.03
+        helper.rotation_mode = "QUATERNION"
+        collection("Rig").objects.link(helper)
+        attach_to_bone(helper, arm, hb, Matrix())
+    mats = [(ctx.frame(float(k["t"])), _hand_matrix(arm, smap, side, targets.point(ctx, k["at"]),
+                                                    k.get("dir", h.get("dir", tuple(-back))), k.get("palm", h.get("palm"))))
+            for k in keys if k.get("sight")]
+    _key_goal(helper, mats, Matrix.Translation((0.0, -arm.data.bones[hb].length, 0.0)) @ head_inv)
+    if c is None:
+        c = tgt.constraints.new("COPY_TRANSFORMS")
+        c.name = "mk_sight"
+        c.target = helper
+    frames, shares = [], []
+    for a, b in runs:
+        frames += [a - ramp, a, b, b + ramp]
+        shares += [0.0, 1.0, 1.0, 0.0]
+    K.key_prop(tgt, f'constraints["{c.name}"].influence', frames, shares)
+    return runs
 
 
 def _key_ik(ctx, arm, name, side, rig, ik, f0, f1, unbent=()):
@@ -565,23 +686,57 @@ def _driven(arm):
 
 
 POLE_OUT = 0.55           # m from the shoulder, at least, that a pole on its way between a strip's elbow and home passes
+STRIP_MARGIN = 5.0        # degrees: a strip's arm is in range for a let-go hand to join or leave it when its twists keep
+                          # this far inside the human range (the IK's arm on the strip's hand differs by a few)
 
 
-def _pole_of(S, E, W, out=0.3):
+STRAIGHT_FOLD = (10.0, 30.0)   # degrees of elbow fold: an arm folded less than the first shows the side its elbow points
+                               # by its upper arm's turn, one folded more than the second by where its elbow is
+
+
+def _pole_of(S, E, W, turned, out=0.3):
     """A pole `out` metres from the elbow E across the shoulder (S) - wrist (W) line, so the arm IK bends the elbow where
-    E is; None for an arm too straight to tell."""
+    E is and turns the upper arm as it is turned: across the line toward E for a folded arm, and for one too straight to
+    show its side (a motion's arm out in a T: there it swings round on a millimetre) the way `turned` says it points
+    (the IK's rest pole direction turned with the upper arm), blended between the folds of STRAIGHT_FOLD."""
     axis = (W - S).normalized()
     across = (E - S) - axis * (E - S).dot(axis)
-    return E + across.normalized() * out if across.length > 1e-4 else None
+    side = turned - axis * turned.dot(axis)
+    fold = math.degrees((E - S).angle(W - E, 0.0)) if (E - S).length > 1e-6 and (W - E).length > 1e-6 else 0.0
+    w = min(max((fold - STRAIGHT_FOLD[0]) / (STRAIGHT_FOLD[1] - STRAIGHT_FOLD[0]), 0.0), 1.0)
+    w = w * w * (3.0 - 2.0 * w)
+    way = (across.normalized() if across.length > 1e-6 else Vector()) * w + (
+        side.normalized() if side.length > 1e-6 else Vector()) * (1.0 - w)
+    return E + way.normalized() * out if way.length > 1e-6 else None
+
+
+def arm_twists(arm, smap, side, pb):
+    """(forearm, upper arm, elevation) degrees of the arm `side` of `arm` as its pose bones `pb` stand (an evaluated
+    armature's): mkmmd.core.armtwist's twists, the hand against the elbow and the arm's twist bone (else the arm bone)
+    against the chest, + supination / external rotation, and how far the upper arm is raised from the chest's down."""
+    bones = arm.data.bones
+    n = {k: smap.get(f"{k}.{side}") for k in ("arm", "arm_twist", "elbow", "wrist")}
+    chest = smap.get("upper_body2") or smap["upper_body"]
+    rot = lambda b: np.array(pb[b].matrix.to_3x3().normalized())                                  # noqa: E731
+    rest = lambda b: np.array(bones[b].matrix_local.to_3x3().normalized())                        # noqa: E731
+    head = lambda b: np.array(bones[b].head_local)                                                 # noqa: E731
+    hi = n["arm_twist"] or n["arm"]
+    fore = AT.relative_twist(rot(n["elbow"]), rest(n["elbow"]), rot(n["wrist"]), rest(n["wrist"]),
+                             head(n["wrist"]) - head(n["elbow"]), side)
+    upper = AT.relative_twist(rot(chest), rest(chest), rot(hi), rest(hi), head(n["elbow"]) - head(n["arm"]), side)
+    down = rot(chest) @ rest(chest).T @ np.array(AT.DOWN)
+    return fore, upper, AT.elevation(np.array(pb[n["elbow"]].head) - np.array(pb[n["arm"]].head), down)
 
 
 def _strip_samples(ctx, m, smap, side, spans, inv):
     """Where the member's motion strips have the hand `side` over its free `spans` (clip seconds), at their ends and on
     every frame between: {"t", "at", "dir", "palm"} in the member's own frame (`inv`: the inverse of its root's world
-    matrix), as mkmmd.core.moves places (the wrist joint, the way the hand points and the way its palm faces), and
-    "pole" (a pole in the world that bends the arm IK's elbow where the strip has it). Each is read in the frame of the
-    bone the goal rides as that bone stands in the settled pose, so a strip that turns the chest under the arm carries
-    the goal with it. The arm rig (its constraints and the forearm's pre-bend) is muted meanwhile: the strip's arm."""
+    matrix), as mkmmd.core.moves places (the wrist joint, the way the hand points and the way its palm faces), "pole" (a
+    pole in the world that bends the arm IK's elbow where the strip has it and turns its upper arm as the strip turns
+    it: `_pole_of`) and "ok" (whether the strip keeps the arm's twists in the human range there: `arm_twists`,
+    mkmmd.core.moves.overtwist, less STRIP_MARGIN). Each is read in the frame of the bone the goal rides as that bone
+    stands in the settled pose, so a strip that turns the chest under the arm carries the goal with it. The arm rig (its
+    constraints and the forearm's pre-bend) is muted meanwhile: the strip's arm."""
     arm, rig = m.arm, m.hands[side]
     wrist, upper = smap[f"wrist.{side}"], smap[f"arm.{side}"]
     times = sorted({round(t, 6) for t0, t1 in spans for t in [t0, t1] + [ctx.time(f) for f in range(
@@ -592,9 +747,11 @@ def _strip_samples(ctx, m, smap, side, spans, inv):
         fc for fc in (act.fcurves if act else ()) if fc.data_path == path]
     was = [o.mute for o in muted]
     n_local = K.rest_rot(arm, wrist).inverted() @ palm_normal(arm, smap, side)
+    bend = arm.data.bones[upper].matrix_local.to_3x3().inverted() @ _rest_bend(arm, upper, rig["fore"],
+                                                                               _prebend(arm, rig["fore"])[0])
     turn = inv.to_3x3().normalized()
     sc = bpy.context.scene
-    out = {k: [] for k in ("t", "at", "dir", "palm", "pole", "S", "E", "W")}
+    out = {k: [] for k in ("t", "at", "dir", "palm", "pole", "ok", "S", "E", "W")}
     try:
         for o in muted:
             o.mute = True
@@ -613,7 +770,8 @@ def _strip_samples(ctx, m, smap, side, spans, inv):
             out["dir"].append(list(turn @ (R @ Vector((0.0, 1.0, 0.0)))))
             out["palm"].append(list(turn @ (R @ n_local)))
             S0, E = X @ (mw @ pb[upper].head), X @ (mw @ pb[rig["fore"]].head)
-            out["pole"].append(_pole_of(S0, E, W.translation))
+            out["pole"].append(_pole_of(S0, E, W.translation, (X @ mw @ pb[upper].matrix).to_3x3().normalized() @ bend))
+            out["ok"].append(MV.overtwist(arm_twists(arm, smap, side, pb), STRIP_MARGIN) <= 0.0)
             out["S"].append(S0)
             out["E"].append(E)
             out["W"].append(W.translation.copy())
@@ -755,7 +913,8 @@ def free_hands(ctx):
         strip = {s: _strip_samples(ctx, m, smap, s, plan["free"][s], inv) for s in sides}
         try:
             res = MV.compile(plan["entries"], plan["marks"], plan["beats"], yaw=plan["yaw"], clear=plan["clear"],
-                             strip=strip)
+                             strip=strip, cloth=plan["cloth"], winks=plan["winks"], downbeats=plan["downbeats"],
+                             props=plan["props"])
         except MV.MoveError as e:
             raise BuildError(f"move.{name}: {e}") from None
         sc.frame_set(f0)
@@ -765,6 +924,7 @@ def free_hands(ctx):
             h = dict(rig["h"], keys=MOVES.hand_keys(name, keys), ik=res["ik"].get(s))
             _key_goal(rig["tgt"], _hand_targets(ctx, name, s, h, m.arm, smap, rig["back"], rig["out_dir"], f1),
                       rig["par_inv"])
+            _sight_ride(ctx, m, smap, name, s, h, rig["tgt"], rig["back"], f1)
             _key_move_poles(ctx, rig["pole"], h["keys"], rig["pole_w"], rig["pole_inv"])
             ik = h["ik"] or []
             spans = [(ik[i][0], ik[i + 3][0]) for i in range(0, len(ik), 4)]
@@ -779,10 +939,30 @@ def free_hands(ctx):
                     ctx.log("WARNING", f"pose.{name}.hands.{s}: let go at {a:g}-{b:g} s where no motion strip plays the "
                                        f"arm fully (one eases in or out there, or none plays): the IK lets go of a half-"
                                        f"played arm; let a strip of the arm cover the span, eased in before and out after")
+            twisted = _past_range(strip[s], spans)
+            if twisted:
+                ctx.log("WARNING", f"pose.{name}.hands.{s}: let go to a strip that twists the arm past a human arm's range "
+                                   f"at {', '.join(f'{a:g}-{b:g}' for a, b in twisted)} s (mkmmd.core.armtwist): let the "
+                                   f"hand go over another stretch of the motion")
             out.setdefault(name, {})[s] = {"spans": [[a, b] for a, b in spans], "samples": len(strip[s]["t"]),
-                                           "pole": _key_pole(ctx, m, rig, strip[s], keys)}
+                                           "pole": _key_pole(ctx, m, rig, strip[s], keys),
+                                           **({"twisted": twisted} if twisted else {})}
             ctx.log("pose", f"{name}.{s}: let go on the strips over {out[name][s]['spans']}")
     sc.frame_set(keep)
+    return out
+
+
+def _past_range(samples, spans):
+    """[[t0, t1], ...] clip seconds where a strip's samples (`_strip_samples`) twist the arm past the human range within
+    the spans (t0, t1) the hand is let go to it."""
+    out = []
+    for t, ok in zip(samples["t"], samples["ok"]):
+        if ok or not any(a - 1e-6 <= t <= b + 1e-6 for a, b in spans):
+            continue
+        if out and t - out[-1][1] < 0.05:
+            out[-1][1] = round(t, 3)
+        else:
+            out.append([round(t, 3), round(t, 3)])
     return out
 
 
@@ -876,6 +1056,10 @@ def _pen_posture(ctx, m, smap, side, h, positions, pole, where):
 
 WHEEL_APPROACHES = (0.0, 30.0, 60.0, 90.0)       # palm on the rim's outer and driver sides: the grips a driver uses (deg)
 WRIST_BEND_WARN = 35.0                            # deg: a wheel hand bent more than this against its forearm is a WARNING
+ARM_BEND_WARN = 55.0                              # deg: a fretting or pick hand bent more than this against its forearm ...
+FOREARM_CLIP_WARN = 10.0                          # mm: ... or a pick hand's forearm this deep in the prop's body
+REACH_WARN = 0.98                                 # ... or a wrist this share of the arm's length from the shoulder
+AVOID_CELL = 0.012                                # m: the prop geometry a forearm keeps clear of, one point per cube this big
 
 
 def _elbow(S, W, P, a, b):
@@ -964,11 +1148,165 @@ def _wheel_for_arm(ctx, where, G, prop, params, arrays, af, label, free_elbow, w
     return cand, res, rep, info, (E if free_elbow else None)
 
 
-def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
+def _prop_points(p, names, where, cell=AVOID_CELL):
+    """The evaluated vertices of the prop's objects `names` (a card's `avoid`) in the prop's frame, one per `cell`-metre
+    cube: the geometry a forearm keeps clear of."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    inv = np.array(p.root.matrix_world.inverted())
+    out = []
+    for n in names:
+        o = bpy.data.objects.get(n)
+        if o is None or o.type != "MESH":
+            raise BuildError(f"{where}: the card's avoid object {n!r} is not a mesh in the scene")
+        e = o.evaluated_get(dg)
+        me = e.to_mesh()
+        V = np.empty(len(me.vertices) * 3)
+        me.vertices.foreach_get("co", V)
+        M = inv @ np.array(e.matrix_world)
+        out.append(V.reshape(-1, 3) @ M[:3, :3].T + M[:3, 3])
+        e.to_mesh_clear()
+    P = np.concatenate(out)
+    _, keep = np.unique(np.floor(P / cell).astype(np.int64), axis=0, return_index=True)
+    return P[np.sort(keep)]
+
+
+def _carrying_arm(ctx, m, smap, side, p, u, h, G, out_dir, where):
+    """The `arm` a neck or strum grip is solved with (mkmmd.solvers.grip.arm_spec, in the grip frame G) and what the build
+    needs to place the elbow afterwards: the fretting arm's elbow is the one its pole gives the IK; a pick hand's is chosen
+    with the grip (out from the shoulder, below it, its forearm clear of the card's `avoid` objects: over the body's edge),
+    unless the hand gives a `pole`. Returns (arm, frame) with frame {af, Gl, g0, Rg, free}."""
+    af = _arm_frame(ctx, m, smap, side, p, out_dir)
+    Gl = af["to_prop"] @ np.asarray(G, float)
+    g0, Rg = Gl[:3, 3], Gl[:3, :3] / np.linalg.norm(Gl[:3, :3], axis=0)
+    arm = {"shoulder": [float(c) for c in Rg.T @ (af["S"] - g0)], "a": af["a"], "b": af["b"]}
+    free = u.get("type") == "strum" and h.get("pole") is None
+    if free:
+        arm.update(up=[float(c) for c in Rg.T @ af["up"]], out=[float(c) for c in Rg.T @ af["out"]])
+    else:
+        arm["pole"] = [float(c) for c in Rg.T @ (af["P"] - g0)]
+    if u.get("type") == "strum" and u.get("avoid"):
+        arm["avoid"] = np.round((_prop_points(p, u["avoid"], where) - g0) @ Rg, 5).tolist()
+    return arm, {"af": af, "Gl": Gl, "g0": g0, "Rg": Rg, "free": free}
+
+
+GRIP_TURN = 60.0          # degrees: the most `_grip_pole` turns a held grip's elbow round the shoulder-wrist line
+
+
+def _grip_pole(m, smap, side, goals, pole, f1):
+    """Turn the elbow's pole of a hand on a neck or strum grip round the shoulder, about the line to its wrist, the least
+    way (5-degree steps, at most GRIP_TURN) that keeps the arm's twists mkmmd.core.moves.TWIST_MARGIN inside the human
+    range at every goal of the grip (`goals`: world matrices; the fret changes, a pick hand's stroke ends,
+    `_stroke_ends`), as the arm IK will pose them (mkmmd.core.armtwist.twists, the elbow mkmmd.core.armreach.pole_elbow
+    gives) with the chest as it stands in the settled pose, frame `f1`; perform's sway and the IK's own few degrees use
+    the margin. The grip puts the hand, the elbow only turns its arm: a fretting hand down by the nut turns its forearm
+    over past what it can from an elbow hanging under the shoulder, a picking hand whose elbow sits forward of the body's
+    edge turns its upper arm in past its range at the end of a down stroke. A turn that would bend the wrist past
+    ARM_BEND_WARN counts against it. Returns the degrees turned (0: none needed, or none helps)."""
+    arm, bones = m.arm, m.arm.data.bones
+    rest = MOVES.arm_rest(m)
+    if rest is None or not goals:
+        return 0.0
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    sc.frame_set(f1)
+    pb = arm.evaluated_get(bpy.context.evaluated_depsgraph_get()).pose.bones
+    chest = smap.get("upper_body2") or smap["upper_body"]
+    Aw, inv = np.array(arm.matrix_world), np.array(m.root.matrix_world.inverted())
+    Rm = inv @ Aw                                                    # armature -> the character's frame
+    X = Rm @ np.array(bones[chest].matrix_local) @ np.linalg.inv(np.array(pb[chest].matrix)) @ np.linalg.inv(Aw)
+    P_w = np.array(pole.matrix_world.translation)
+    S = (X @ np.r_[Aw[:3, :3] @ np.array(pb[smap[f"arm.{side}"]].head) + Aw[:3, 3], 1.0])[:3]
+    sc.frame_set(keep)
+    at = lambda b, end="head": (Rm @ np.r_[np.array(getattr(bones[smap[b]], f"{end}_local")), 1.0])[:3]   # noqa: E731
+    a = float(np.linalg.norm(at(f"elbow.{side}") - at(f"arm.{side}")))
+    b = float(np.linalg.norm(at(f"wrist.{side}") - at(f"elbow.{side}")))
+    L = float(np.linalg.norm(at(f"wrist.{side}", "tail") - at(f"wrist.{side}")))
+    unit = lambda M: M / np.linalg.norm(M, axis=0)                                          # noqa: E731
+    R0 = unit((Rm @ np.array(bones[smap[f"wrist.{side}"]].matrix_local))[:3, :3])
+    p0 = Rm[:3, :3] @ np.linalg.inv(Aw[:3, :3]) @ np.array(palm_normal(arm, smap, side))
+    p0 = p0 / np.linalg.norm(p0)
+    hands = []
+    for G in goals:
+        Gx = X @ np.array(G)
+        R = unit(Gx[:3, :3])
+        hands.append((Gx[:3, 3] - L * R[:, 1], R[:, 1], R @ R0.T @ p0))
+    Px = (X @ np.r_[P_w, 1.0])[:3]
+    u = np.mean([W for W, _, _ in hands], axis=0) - S
+    u = u / np.linalg.norm(u)
+
+    def score(P):
+        worst = 0.0
+        for W, d, p in hands:
+            E = AR.pole_elbow(S, W, a, b, P)
+            fore, upper = AT.twists(rest, side, S, E, W, d, p, P)
+            limits = AT.upper_limits(AT.elevation(E - S))
+            bend = MV.bend(d, (W - E) / np.linalg.norm(W - E))
+            worst = max(worst, AT.excess(fore, AT.FOREARM, MV.TWIST_MARGIN) + AT.excess(upper, limits, MV.TWIST_MARGIN)
+                        + max(bend - ARM_BEND_WARN, 0.0))
+        return round(worst, 1)
+
+    turns = sorted(range(-int(GRIP_TURN), int(GRIP_TURN) + 1, 5), key=abs)
+    best = min(turns, key=lambda t: (score(S + AT.rotation(u, t) @ (Px - S)), abs(t)))
+    if best == 0 or score(S + AT.rotation(u, best) @ (Px - S)) >= score(Px):
+        return 0.0
+    Pn = np.linalg.inv(X) @ np.r_[S + AT.rotation(u, best) @ (Px - S), 1.0]
+    pole.matrix_world = Matrix.Translation(Vector(tuple(Pn[:3])))
+    return float(best)
+
+
+def strum_specs(ctx, name, side, u, where):
+    """The `[perform.<name>] strum` tables of the hand `side` ([] when there are none), each with the `technique` of the first
+    decided with the card's strum entry `u` (mkmmd.core.strum.resolved): a hand plays one way."""
+    specs = ((ctx.data.get("perform") or {}).get(name) or {}).get("strum")
+    mine = [s for s in ([specs] if isinstance(specs, dict) else list(specs or [])) if s.get("hand", "R") == side]
+    if not mine:
+        return []
+    try:
+        tech = SM.technique(mine[0], u)
+    except SM.StrumError as e:
+        raise BuildError(f"{where}: perform.{name}.strum: {e}") from None
+    return [dict(s, technique=tech) for s in mine]
+
+
+def picked_notes(ctx, name, side, prop, neck, entry, where):
+    """[(t, c, w, string)] the strum hand plays with `rhythm = "notes"` (mkmmd.core.strum.pick_notes): the bass line of the
+    other hand (`[pose.<cast>.hands.<other>] notes`, gripping this prop's neck), each note on the string the fretting hand
+    plays it on, placed on the strum axis of the strum entry `entry`."""
+    other = "L" if side == "R" else "R"
+    h = ((ctx.section("pose", name) or {}).get("hands") or {}).get(other) or {}
+    if h.get("notes") is None:
+        raise BuildError(f"{where}: rhythm = \"notes\" plays the bass line of the fretting hand: give "
+                         f"[pose.{name}.hands.{other}] notes = {{lane = \"...\" | times = [[t, midi], ...]}}")
+    ref = str(h.get("grip", ""))
+    fret_prop, _, use = ref.partition(":")
+    if fret_prop != prop.name or neck is None:
+        raise BuildError(f"{where}: rhythm = \"notes\": the fretting hand must grip the neck of {prop.name!r} "
+                         f"(its grip is {ref!r})")
+    placed, _keys = bass_line(ctx, h, prop.use("grip", use or None), where)
+    return SM.pick_notes(placed, neck, entry)
+
+
+def _stroke_ends(ctx, name, side, p, u, goal):
+    """The goals of a pick hand at the two ends of its widest stroke: its grip's `goal` (a world matrix) moved along the
+    strum zone's `across` (`u`, the prop `p`'s use.grip entry) by half the sweep of an accented stroke of the hand's
+    `[perform.<name>] strum` (mkmmd.core.strum.params: `span`, `accent_gain`), as the strokes carry the hand; [] when
+    perform strums with no hand of this side, or plays with the fingers (the hand stays at its stations)."""
+    specs = strum_specs(ctx, name, side, u, f"pose.{name}.hands.{side}")
+    if not specs or SM.fingerstyle(specs[0]) or u.get("across") is None:
+        return []
+    k = SM.params(specs[0])
+    half = 0.5 * float(k["span"]) * max(float(k["accent_gain"]), 1.0)
+    across = p.world_dir(u["across"])
+    across = across / across.length
+    return [Matrix.Translation(across * (s * half)) @ goal for s in (-1.0, 1.0)]
+
+
+def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None, reference=None):
     """Solve the grip of one hand (docs/design.md: Grips): the grip frame G in the world from the prop's card and its
     current transform, the solver's finger rotations and `target_in_wrist`, and the IK goal that puts the wrist where
     G @ inv(target_in_wrist) says. Returns {goal (Matrix), bones {bone: quaternion}, digest}; a pen hand with a
-    `track` also returns `pen` = {prop, T (target_in_wrist), R (the pen's writing orientation in the world), track}."""
+    `track` also returns `pen` = {prop, T (target_in_wrist), R (the pen's writing orientation in the world), track}, a
+    neck hand `ref` (what the next shape's solve takes as its `reference`: mkmmd.solvers.grip_neck, `_neck_grips`)."""
     from ..ops_hand import hand_arrays
     arm, where = m.arm, f"pose.{name}.hands.{side}"
     wrist = smap[f"wrist.{side}"]
@@ -1014,12 +1352,36 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
                 N[:3, :3], N[:3, 3] = Rn, origin
                 G = np.array(p.root.matrix_world) @ N
                 info = {"fret": int(hh["fret"]), "chord": hh["chord"]}
+                if reference is not None:                        # the shape the hand comes from (_neck_grips)
+                    params["ref"] = reference
+            elif u.get("type") == "strum" and hh.get("technique") == "fingers":     # a plucking station: string `string`
+                neck = next((g for g in p.card.get("use", {}).get("grip", []) if g.get("type") == "neck"), None)
+                if neck is None:
+                    raise BuildError(f"{where}: grip {ref!r}: fingerstyle plays the strings of the card's neck entry, and "
+                                     f"{p.name!r} has none")
+                try:
+                    prop, (origin, Rs) = SM.pluck_prop(neck, u, int(hh["string"]))
+                except SM.StrumError as e:
+                    raise BuildError(f"{where}: grip {ref!r}: {e}") from None
+                N = np.eye(4)
+                N[:3, :3], N[:3, 3] = Rs, origin
+                G = np.array(p.root.matrix_world) @ N
+                style, params = "pluck", ({"seeds": int(hh["seeds"])} if hh.get("seeds") is not None else {})
+                info = {"technique": "fingers", "string": int(hh["string"]), "anchor": prop["anchor"]["type"]}
             elif u.get("type") == "strum":                       # the pick's pinch frame: its tip on the strings at the strum centre
                 tip = float(hh.get("tip", u["pick"].get("tip", 0.008)))
                 G = GF.strum_frame(p.world(u["center"]), p.world_dir(u.get("normal", (0, -1, 0))),
-                                   p.world_dir(u.get("along", (0, 0, 1))), tip, hh.get("thumb", "neck"))
+                                   p.world_dir(u.get("along", (0, 0, 1))), p.world_dir(u.get("across", (1, 0, 0))), tip,
+                                   hh.get("thumb", "neck"))
                 info = {"thumb": hh.get("thumb", "neck"), "tip_mm": round(tip * 1000, 1)}
                 pick = u["pick"].get("object")
+                if u.get("palm"):                               # the heel of the hand over the card's patch (the bridge)
+                    pm, Gi = u["palm"], np.linalg.inv(np.asarray(G, float))
+                    turn = lambda v: GF.unit(Gi[:3, :3] @ np.asarray(p.world_dir(v), float)).tolist()      # noqa: E731
+                    params["palm"] = {"center": (Gi @ np.r_[np.asarray(p.world(pm["center"]), float), 1.0])[:3].tolist(),
+                                      "normal": turn(pm["normal"]), "axes": [turn(u["across"]), turn(u["along"])],
+                                      "size": [float(v) for v in pm["size"]], "lift": float(pm.get("lift", 0.012))}
+                    info["palm"] = True
             elif style == "wheel":
                 G, info = GF.ring_frame(p.world(u["center"]), p.world_dir(u["axis"]), u["radius"],
                                         p.world_dir((0, 0, 1)), GF.clock_of(h, side), toward)
@@ -1056,6 +1418,38 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
                                                f"wheel (over {WRIST_BEND_WARN})" if bend is not None else
                                                "no grip of the wheel leaves the elbow out and below the shoulder")
                     + ": try another clock, move the seat, or give no `pole` so the elbow is chosen with the grip")
+    elif style != "rest" and u.get("type") in ("neck", "strum") and side in m.ik:     # solved with the arm that carries it
+        arm_in, fr = _carrying_arm(ctx, m, smap, side, p, u, h, G, out_dir, where)
+        res, rep = ctx.solve("mkmmd.solvers.grip", arrays, {"style": style, "prop": prop, "params": dict(params, arm=arm_in)},
+                             f"grip-{name}-{side}")
+        r = rep.get("report", {})
+        info.update({k: r[k] for k in ("wrist_bend_deg", "reach", "forearm_clear_mm", "knuckles_mm") if r.get(k) is not None})
+        if style == "neck":                                        # each pad on its string (across) where it is pressed (along)
+            info["pads_mm"] = {f: [c["across_mm"], c["dx_mm"]] for f, c in (r.get("contacts") or {}).items() if "dx_mm" in c}
+            if r.get("from_ref"):
+                info["from_ref"] = r["from_ref"]
+        info["elbow"] = "chosen" if fr["free"] and r.get("elbow") is not None else "pole"
+        if fr["free"] and r.get("elbow") is not None:              # the pole goes where the chosen elbow points
+            S_ = fr["af"]["S"]
+            elbow = fr["Rg"] @ np.asarray(r["elbow"], float) + fr["g0"]
+            W = (fr["Gl"] @ np.linalg.inv(np.asarray(res["target_in_wrist"], float)))[:3, 3]
+            d = (W - S_) / np.linalg.norm(W - S_)
+            foot = S_ + float((elbow - S_) @ d) * d
+            if np.linalg.norm(elbow - foot) > 1e-3:
+                pole_l = elbow + 2.0 * (elbow - foot)
+                m.ik[side][1].matrix_world = Matrix.Translation(Vector(tuple((fr["af"]["to_world"] @ np.r_[pole_l, 1.0])[:3])))
+                info["pole"] = [round(float(v), 3) for v in pole_l]
+        bend, clear, reach = r.get("wrist_bend_deg"), r.get("forearm_clear_mm"), r.get("reach")
+        if bend is not None and bend > ARM_BEND_WARN:
+            ctx.log("WARNING", f"{where}: the wrist bends {bend} deg against its forearm (over {ARM_BEND_WARN}): the arm "
+                               "cannot bring the hand to the grip straight (move the prop closer, or give the hand a `pole`)")
+        if clear is not None and clear < -FOREARM_CLIP_WARN:
+            ctx.log("WARNING", f"{where}: the forearm passes {-clear:.0f} mm into {p.name!r} on its way to the strings: "
+                               "the arm is too short to come over the body's edge there (wear it lower, or further to the "
+                               "side the arm comes from: [[prop]] wear.at)")
+        if reach is not None and reach > REACH_WARN:
+            ctx.log("WARNING", f"{where}: the wrist is {reach:.2f} arm lengths from the shoulder: the arm stretches "
+                               "straight (bring the prop closer: [[prop]] wear.at, neck_deg)")
     else:
         res, rep = ctx.solve("mkmmd.solvers.grip", arrays, {"style": style, "prop": prop, "params": params},
                              f"grip-{name}-{side}")
@@ -1076,6 +1470,11 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
         if pick not in bpy.data.objects:
             raise BuildError(f"{where}: grip {ref!r}: the card's pick object {pick!r} is not in the scene")
         out["pick"] = {"object": bpy.data.objects[pick], "T": np.asarray(res["target_in_wrist"], float)}
+    if "pose_names" in res:                                      # a plucking station: each finger's poses (grip style pluck)
+        out["poses"] = {str(n): {str(b): tuple(float(x) for x in q) for b, q in zip(bs, qs)}
+                        for n, bs, qs in zip(res["pose_names"], res["pose_bones"], res["pose_quats"])}
+        out["travel"] = {str(f): {str(p): float(u) for p, u in v.items()} for f, v in (r.get("travel") or {}).items()}
+        out["curves"] = {str(f): {str(p): [float(u) for u in us] for p, us in v.items()} for f, v in (r.get("curves") or {}).items()}
     if track is not None:
         if "frame_world_quat" not in rep:
             raise BuildError(f"{where}: the pen solve returned no writing orientation (frame_world_quat)")
@@ -1084,6 +1483,9 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None):
                            "nib_mm": [round(float(v) * 1000, 1) for v in np.ptp(track[1], axis=0)]}
         out["pen"] = {"prop": p, "T": np.asarray(res["target_in_wrist"], float),
                       "R": PT.quat_matrix(rep["frame_world_quat"]), "track": track}
+    if style == "neck":
+        out["ref"] = {"angles": r["angles_deg"], "target_in_wrist": np.asarray(res["target_in_wrist"], float).tolist(),
+                      "targets": {t["finger"]: [t["string"], t["fret"]] for t in prop["targets"]}, "position": int(hh["fret"])}
     return out
 
 
@@ -1102,22 +1504,28 @@ def _grip_card(ctx, h):
         return p, None
 
 
+def lane_hits(ctx, h, where):
+    """The [audio] hits file's lanes when a fretting hand's `notes` name a `lane` (mkmmd.core.lanes), else None."""
+    from ...core import lanes as LN
+    spec = h.get("notes")
+    if not (hasattr(spec, "get") and spec.get("lane") is not None):
+        return None
+    hits_file = (ctx.data.get("audio") or {}).get("hits")
+    if not hits_file:
+        raise BuildError(f"{where}: notes lane {spec['lane']!r} reads the [audio] hits file (write it with "
+                         f"`mk timeline hits --notes NAME=STEM:LO-HI` and name it in [audio] hits)")
+    try:
+        return LN.load(ctx.path(hits_file))
+    except LN.LaneError as e:
+        raise BuildError(f"{where}: {e}") from None
+
+
 def bass_line(ctx, h, entry, where):
     """(placed notes, hand keys) of a fretting hand's `notes` (mkmmd.core.fretting.line) on its neck entry: the times from the
-    table's `times`, or from the `lane` it names in the [audio] hits file (mkmmd.core.lanes)."""
-    from ...core import lanes as LN
-    spec, hits = h["notes"], None
-    if hasattr(spec, "get") and spec.get("lane") is not None:
-        hits_file = (ctx.data.get("audio") or {}).get("hits")
-        if not hits_file:
-            raise BuildError(f"{where}: notes lane {spec['lane']!r} reads the [audio] hits file (write it with "
-                             f"`mk timeline hits --notes NAME=STEM:LO-HI` and name it in [audio] hits)")
-        try:
-            hits = LN.load(ctx.path(hits_file))
-        except LN.LaneError as e:
-            raise BuildError(f"{where}: {e}") from None
+    table's `times`, or from the `lane` it names in the [audio] hits file (`lane_hits`)."""
+    hits = lane_hits(ctx, h, where)
     try:
-        return FR.line(spec, entry, hits, float(h.get("move", FR.MOVE)))
+        return FR.line(h["notes"], entry, hits, float(h.get("move", FR.MOVE)))
     except FR.FrettingError as e:
         raise BuildError(f"{where}: {e}") from None
 
@@ -1127,43 +1535,85 @@ def _neck_grips(ctx, m, smap, name, side, h, back, out_dir, pole):
     `chord` at the start, then `keys = [{t, fret, chord, move}]`: the shape that is in place at clip time t, reached over `move`
     seconds (default 0.12) before it. A key without `fret` or `chord` keeps the previous one; without `fret` and `chord` in the
     hand table the first key is the start. `notes` (a bass line, `bass_line`) makes the keys instead: a shape of one finger
-    per note, the first note's from the start. Every distinct (fret, chord) is solved once (cached). Returns the first grip
-    with `changes` = [(landing frame, move frames, goal, bones)] and every state's digest in `digest["states"]` (and the
-    line's numbers in `digest["notes"]`)."""
+    per note, the first note's from the start (mkmmd.core.fretting.hand_states). Every distinct (fret, chord) is solved once
+    (cached), in time order, each from the shape it follows (its `reference`, mkmmd.solvers.grip_neck): the first shape solved
+    at its position, so that every shape there keeps that hand and moves only its own fingers, or, at a new position, the
+    shape before it (the hand slides there). A change passes through both shapes eased off the strings (`FR.lifted`, solved
+    from them): the fingers lift over the first FR.LIFT of the move, the hand moves (along the neck to a new position) and
+    they land over the last FR.LIFT (keyed by FR.change_keys). Returns the first grip with `changes` = [(landing frame, move
+    frames, goal, bones, via)], via = [(share of the move, goal, bones)] the keys inside the move, `states` (the shapes in
+    time) and every solved shape's digest in `digest["states"]` (and the line's numbers in `digest["notes"]`)."""
     where = f"pose.{name}.hands.{side}"
+    entry = _grip_card(ctx, h)[1]
     line = None
-    if h.get("notes") is not None:
-        if any(h.get(k) is not None for k in ("fret", "chord", "keys")):
-            raise BuildError(f"{where}: `notes` chooses the string and fret of every note: leave out fret, chord and keys")
-        placed, nkeys = bass_line(ctx, h, _grip_card(ctx, h)[1], where)
-        states = [(None, nkeys[0]["fret"], nkeys[0]["chord"], 0.0)] + [(k["t"], k["fret"], k["chord"], k["move"])
-                                                                        for k in nkeys[1:]]
-        line = {"notes": len(placed), "shapes": len(nkeys), "strings": sorted({n["string"] for n in placed}),
+    try:
+        states, placed = FR.hand_states(h, entry, lane_hits(ctx, h, where))
+    except FR.FrettingError as e:
+        raise BuildError(f"{where}: {e}") from None
+    if placed is not None:
+        line = {"notes": len(placed), "shapes": len(states), "strings": sorted({n["string"] for n in placed}),
                 "positions": sorted({n["position"] for n in placed}), "open": sum(1 for n in placed if not n["fret"]),
                 "frets": [min(n["fret"] for n in placed), max(n["fret"] for n in placed)],
                 "span_s": [round(placed[0]["t"], 3), round(placed[-1]["t"], 3)]}
-    else:
-        keys = sorted(h.get("keys") or [], key=lambda k: float(k["t"]))
-        if h.get("fret") is not None and h.get("chord") is not None:
-            states, later = [(None, h["fret"], h["chord"], 0.0)], keys
-        elif keys and keys[0].get("fret") is not None and keys[0].get("chord") is not None:
-            states, later = [(None, keys[0]["fret"], keys[0]["chord"], 0.0)], keys[1:]
-        else:
-            raise BuildError(f"{where}: a neck grip needs `fret` and `chord` (or keys that start with both), or `notes`")
-        for k in later:
-            _t, fret, chord, _mv = states[-1]
-            states.append((float(k["t"]), k.get("fret", fret), k.get("chord", chord), float(k.get("move", h.get("move", 0.12)))))
-    solved, seq = {}, []
-    for t, fret, chord, move in states:
+    solved, anchor, n_str = {}, {}, len(entry["strings"])
+
+    def grip_of(fret, chord, after):
         key = json.dumps([fret, chord], sort_keys=True)
         if key not in solved:
-            solved[key] = _grip(ctx, m, smap, name, side, dict(h, fret=fret, chord=chord), back, out_dir, pole)
-        seq.append((t, move, solved[key]))
+            solved[key] = _grip(ctx, m, smap, name, side, dict(h, fret=fret, chord=chord), back, out_dir, pole,
+                                reference=None if after is None else after["ref"])
+            anchor.setdefault(fret, solved[key])
+        return solved[key]
+
+    seq, prev = [], None
+    for t, fret, chord, move in states:
+        g = grip_of(fret, chord, anchor.get(fret, None if prev is None else prev[2]))
+        via = []
+        if prev is not None and json.dumps(prev[:2], sort_keys=True) != json.dumps([fret, chord], sort_keys=True):
+            via = [(FR.LIFT, grip_of(prev[0], FR.lifted(prev[1], n_str), prev[2])),
+                   (1.0 - FR.LIFT, grip_of(fret, FR.lifted(chord, n_str), g))]
+        seq.append((t, move, g, via))
+        prev = (fret, chord, g)
     out = dict(seq[0][2])
-    out["changes"] = [(ctx.frame(t), max(1.0, move * ctx.fps), g["goal"], g["bones"]) for t, move, g in seq[1:]]
+    out["changes"] = [(ctx.frame(t), max(1.0, move * ctx.fps), g["goal"], g["bones"],
+                       [(s, v["goal"], v["bones"]) for s, v in via]) for t, move, g, via in seq[1:]]
     out["digest"] = dict(seq[0][2]["digest"], states=[g["digest"] for g in solved.values()])
+    out["states"] = states                                   # the shapes in time: the strings they hold (mkmmd.core.strings)
     if line is not None:
         out["digest"]["notes"] = line
+    return out
+
+
+def _pluck_grips(ctx, m, smap, name, side, h, back, out_dir, pole):
+    """The stations of a strum hand that plays with the fingers (`[perform.<name>] strum` technique "fingers", grip =
+    "<prop>:strum"): one grip of style pluck (mkmmd.solvers.grip_pluck) per string the bass line plays (`picked_notes`,
+    planned as perform plays it), each solved with the arm, the first string played solved last so that its chosen elbow
+    places the pole. Returns the first string's grip (the hand settles there) with `pluck` = {"stations": {string: {goal,
+    bones, poses}}, "travel": {string: {finger: {pose: m}}} (where the fingertip is across the string in each pose: what
+    times a stroke, mkmmd.core.strum.pluck_keys), "first": string} and every station's digest in `digest["stations"]`."""
+    where = f"pose.{name}.hands.{side}"
+    p, u = _grip_card(ctx, h)
+    specs = strum_specs(ctx, name, side, u, where)
+    neck = next((g for g in p.card.get("use", {}).get("grip", []) if g.get("type") == "neck"), None)
+    if not all(SM.picking(s) for s in specs):
+        raise BuildError(f"{where}: perform.{name}.strum plays with the fingers (technique \"fingers\", the card's default "
+                         f"for {p.name!r}), which plucks the fretting hand's bass line: give every table of this hand "
+                         f"rhythm = \"notes\", or technique = \"pick\" to strum")
+    notes = picked_notes(ctx, name, side, p, neck, u, where)
+    tl = ctx.timeline(specs[0], f"perform.{name}.strum")
+    try:
+        strokes = sorted((s for sp in specs for s in SM.plan(sp, tl, ctx.duration, notes)), key=lambda s: s.t)
+    except SM.StrumError as e:
+        raise BuildError(f"perform.{name}.strum ({side}): {e}") from None
+    order = list(dict.fromkeys(s.string for s in strokes)) or [int(notes[0][3]) if notes else len(neck["strings"])]
+    solved = {}
+    for s in reversed(order):
+        solved[s] = _grip(ctx, m, smap, name, side, dict(h, technique="fingers", string=s), back, out_dir, pole)
+    out = dict(solved[order[0]])
+    out["pluck"] = {"stations": {s: {"goal": g["goal"], "bones": g["bones"], "poses": g["poses"]} for s, g in solved.items()},
+                    "travel": {s: g["travel"] for s, g in solved.items()}, "curves": {s: g["curves"] for s, g in solved.items()},
+                    "first": order[0]}
+    out["digest"] = dict(out["digest"], stations=[solved[s]["digest"] for s in order])
     return out
 
 
@@ -1348,18 +1798,28 @@ def run(ctx):
                 if h.get("keys") and not neck:
                     raise BuildError(f"pose.{name}.hands.{side}: grip and keys cannot be combined (only a neck grip takes "
                                      f"keys: {{t, fret, chord}})")
-                grip = (_neck_grips if neck else _grip)(ctx, m, smap, name, side, h, back, out_dir, pole_w)
+                pluck = (gu is not None and gu.get("type") == "strum"
+                         and any(SM.fingerstyle(s) for s in strum_specs(ctx, name, side, gu, f"pose.{name}.hands.{side}")))
+                grip = (_neck_grips if neck else _pluck_grips if pluck else _grip)(ctx, m, smap, name, side, h, back,
+                                                                                  out_dir, pole_w)
+                if neck:                                   # the strings it holds down, for the strings that ring
+                    m.necks[side] = {"prop": gp.name, "entry": gu, "states": grip["states"],
+                                     "press": float(h.get("press", FR.PRESS))}
                 if grip.get("pen"):                        # the nib follows a track: a goal on every frame
                     mats, interp = _pen_goals(ctx, m, wrist, h, grip), "LINEAR"
                     probe[name, side] = np.union1d(probe[name, side], ctx.frames[ctx.frames >= f1][::6])
                 else:
-                    mats, prev = [(f1, grip["goal"])], grip["goal"]
-                    for fr, mv, goal, _bones in grip.get("changes", []):     # a fretting hand moves to its next shape
-                        mats += [(max(fr - mv, f1 + 0.5), prev), (fr, goal)]
-                        prev = goal
+                    mats = FR.change_keys(grip["goal"], grip.get("changes", []), f1, 0)     # a fretting hand's next shapes
                     probe[name, side] = np.union1d(probe[name, side], [math.ceil(fr) for fr, *_ in grip.get("changes", [])])   # reach at every landing
                 if grip.get("pick"):                       # the pick rides the wrist in the solved pinch
                     attach_to_bone(grip["pick"]["object"], arm, wrist, K.mat(grip["pick"]["T"]))
+                if gu is not None and gu.get("type") in ("neck", "strum") and not grip.get("pen"):
+                    goals = [M for _, M in mats] + (_stroke_ends(ctx, name, side, gp, gu, grip["goal"])
+                                                    if gu.get("type") == "strum" else [])
+                    goals += [st["goal"] for st in (grip.get("pluck") or {}).get("stations", {}).values()]
+                    turned = _grip_pole(m, smap, side, goals, m.ik[side][1], f1)
+                    if turned:                             # the elbow turned to keep the arm's twists in range
+                        grip["digest"]["pole_turn_deg"] = turned
                 info.setdefault("grip", {})[side] = grip["digest"]
                 ctx.log("grip", name, side, grip["digest"])
             else:
@@ -1367,11 +1827,17 @@ def run(ctx):
             mats.sort(key=lambda fm: fm[0])
             par_inv = ride_inv if ride_inv is not None else (tgt.parent.matrix_world.inverted() if tgt.parent else Matrix())
             _key_goal(tgt, mats, par_inv, interp)
+            sight = _sight_ride(ctx, m, smap, name, side, h, tgt, back, f1)
+            if sight:
+                info.setdefault("sight", {})[side] = [[round(a, 1), round(b, 1)] for a, b in sight]
             rig = {"tgt": tgt, "pole": pole, "fore": fore, "bend": bend, "par_inv": par_inv, "ride_bone": ride_bone,
                    "ride_set": ride_set, "pole_loc": pole.location.copy(), "h": h, "back": back, "out_dir": out_dir,
                    "full": {(bone, cname): arm.pose.bones[bone].constraints[cname].influence for bone, cname in cons},
                    "pole_w": pole_w, "pole_inv": ride_inv if ride_inv is not None else (
                        (pole.parent.matrix_world @ pole.matrix_parent_inverse).inverted() if pole.parent else Matrix())}
+            if grip and grip.get("pluck"):                 # a plucking hand's stations, its goals in the goal's parent frame
+                rig["pluck"] = dict(grip["pluck"], stations={s: dict(st, local=par_inv @ st["goal"])
+                                                             for s, st in grip["pluck"]["stations"].items()})
             m.hands[side] = rig
             _key_move_poles(ctx, pole, h.get("keys") or [], pole_w, rig["pole_inv"])
             _key_ik(ctx, arm, name, side, rig, h.get("ik"), f0, f1)
@@ -1380,10 +1846,7 @@ def run(ctx):
                 info.setdefault("ik", {})[side] = len(h["ik"])     # pre-bend goes with the IK)
             fp = h.get("fingers")
             if grip:
-                seq, prev = [(f1, grip["bones"])], grip["bones"]
-                for fr, mv, _goal, bones in grip.get("changes", []):
-                    seq += [(max(fr - mv, f1 + 0.5), prev), (fr, bones)]
-                    prev = bones
+                seq = FR.change_keys(grip["bones"], grip.get("changes", []), f1, 1)
                 for b in grip["bones"]:
                     K.key_bone_quats(arm, b, [f0] + [f for f, _ in seq], [(1, 0, 0, 0)] + [bn[b] for _, bn in seq],
                                      interp="BEZIER")
@@ -1395,6 +1858,9 @@ def run(ctx):
         out[name] = info
         ctx.log("pose", name)
     out["attached"] = attach_props(ctx)
+    held = MOVES.attach_held(ctx)                              # what the gag moves hold: in a fist, hugged to the chest
+    if held:
+        out["held"] = held
     cables = WEAR.fit_cables(ctx)                              # worn props' leads hang from their jacks to the floor
     if cables:
         out["cables"] = cables

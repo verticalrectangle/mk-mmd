@@ -34,6 +34,7 @@ PRESS = 0.30                  # a fingertip presses this share of the gap betwee
 PRESS_LO, PRESS_HI = 0.12, 0.70   # ... and may sit anywhere between these shares of the gap (from the playing wire)
 HOVER = 0.003                 # a hovering finger's pad stays this far (m) over the top of its string
 HOVER_MARK = "hover"          # the third element of a finger that hovers: [string, frets, "hover"]
+LIFT = 0.25                   # share of a keyed change's move the fingers take to ease off the strings, and to land again
 
 # shape -> {finger: (string, frets above the position fret)}
 CHORDS = {
@@ -91,6 +92,29 @@ def hovering(chord):
     if not hasattr(chord, "items"):
         return set()
     return {f for f, spec in chord.items() if isinstance(spec, (list, tuple)) and len(spec) > 2 and spec[2] == HOVER_MARK}
+
+
+def lifted(chord, strings=6):
+    """`chord` eased off the strings: a table with every finger of the shape hovering over its place (`[string, frets,
+    "hover"]`), the hand otherwise as it is. A keyed change passes through it on the way to the next shape."""
+    return {f: [s, k, HOVER_MARK] for f, (s, k) in shape(chord, strings).items()}
+
+
+def change_keys(first, changes, start, which):
+    """[(frame, value)] keys of one channel of a fretting hand over its keyed changes: `first` its value from frame `start`
+    (the end of the settle), `changes` = [(landing frame, move frames, goal, bones, via)] with via = [(share of the move,
+    goal, bones)] (the shapes eased off the strings a change passes through), `which` 0 for the goals, 1 for the bones. The
+    shape before holds until the move starts (never before start + 0.5), the via keys follow at their shares of the move
+    and the next shape lands on its frame."""
+    out, prev = [(start, first)], first
+    for fr, mv, goal, bones, via in changes:
+        t0 = max(fr - mv, start + 0.5)
+        out.append((t0, prev))
+        if fr > t0:
+            out += [(t0 + s * (fr - t0), v[which]) for s, *v in via]
+        prev = (goal, bones)[which]
+        out.append((fr, prev))
+    return out
 
 
 def _arr(v):
@@ -200,6 +224,8 @@ def solver_prop(entry, chord, fret, press=PRESS):
         section   {x [x_a, x_b], width [..], depth [..], p}: the neck solid below z = 0 over the span the hand can reach
                   (the superellipse back of the card's `section`; width and depth linear in x)
         frets     x of every fret wire in N (index 0 = the nut); fret_height; position (the fret)
+        slots     x of the `press` point of the frets p .. p + 3 (one finger per fret, index .. little; None past the
+                  neck): where a free finger hovers, and the thumb's place behind the index and middle fingers
 
     Returns (prop dict, (origin, R) of N in the prop frame)."""
     origin, R = neck_frame(entry, fret)
@@ -213,13 +239,16 @@ def solver_prop(entry, chord, fret, press=PRESS):
                 "x": [t["lo"] - o_along, t["hi"] - o_along], "radius": t["radius"]}
                for t in finger_targets(entry, chord, fret, press)]
     xs = zs - o_along
+    n = len(xs) - 1
+    slot = lambda k: float(xs[k] + float(press) * (xs[k - 1] - xs[k]))   # noqa: E731  the press point of fret k
     x_lo = float(xs[min(len(xs) - 1, int(fret) + 5)]) - 0.02              # the hand reaches 5 frets toward the body
     x_hi = float(xs[max(0, int(fret) - 3)]) + 0.03                         # and 3 toward the nut
     (wa, da), (wb, db) = section_at(entry, x_lo + o_along), section_at(entry, x_hi + o_along)
     prop = {"targets": targets,
             "strings": [[to_n(st["nut"]), to_n(st["bridge"]), float(st.get("radius", 0.0006))] for st in entry["strings"]],
             "section": {"x": [x_lo, x_hi], "width": [wa, wb], "depth": [da, db], "p": float(entry["section"].get("p", 2.6))},
-            "frets": xs.tolist(), "fret_height": float(entry.get("fret_height", FRET_HEIGHT)), "position": int(fret)}
+            "frets": xs.tolist(), "fret_height": float(entry.get("fret_height", FRET_HEIGHT)), "position": int(fret),
+            "slots": [slot(int(fret) + i) if int(fret) + i <= n else None for i in range(4)]}
     return prop, (origin, R)
 
 
@@ -391,3 +420,30 @@ def line(spec, entry, hits=None, move=MOVE):
         raise FrettingError(f"notes: position = {position!r}: a whole fret number (the lowest the index finger goes)")
     placed = place(notes, tuning_of(spec, entry), fret_z(entry), position)
     return placed, hand_keys(placed, move)
+
+
+def hand_states(h, entry, hits=None):
+    """The shapes of a fretting hand over time as the pose stage solves and keys them: ([(t, fret, chord, move)], placed),
+    shape `chord` at position `fret` in place at clip time t (None: from the start), reached over `move` seconds before it.
+    `h` is the hand's table: `notes` (a bass line, `line`: one finger per note, the first note's shape from the start;
+    `placed` its notes), else `fret` and `chord` at the start and `keys` = [{t, fret, chord, move}] (a key without fret or
+    chord keeps the one before; without both in the table the first key is the start; placed None). A move defaults to
+    the hand's `move` (MOVE). `hits` are the hits file's lanes for a `lane`. Raises FrettingError naming what is wrong."""
+    move = float(h.get("move", MOVE))
+    if h.get("notes") is not None:
+        if any(h.get(k) is not None for k in ("fret", "chord", "keys")):
+            raise FrettingError("`notes` chooses the string and fret of every note: leave out fret, chord and keys")
+        placed, keys = line(h["notes"], entry, hits, move)
+        return ([(None, keys[0]["fret"], keys[0]["chord"], 0.0)] + [(k["t"], k["fret"], k["chord"], k["move"]) for k in keys[1:]],
+                placed)
+    keys = sorted(h.get("keys") or [], key=lambda k: float(k["t"]))
+    if h.get("fret") is not None and h.get("chord") is not None:
+        states, later = [(None, h["fret"], h["chord"], 0.0)], keys
+    elif keys and keys[0].get("fret") is not None and keys[0].get("chord") is not None:
+        states, later = [(None, keys[0]["fret"], keys[0]["chord"], 0.0)], keys[1:]
+    else:
+        raise FrettingError("a neck grip needs `fret` and `chord` (or keys that start with both), or `notes`")
+    for k in later:
+        _t, fret, chord, _mv = states[-1]
+        states.append((float(k["t"]), k.get("fret", fret), k.get("chord", chord), float(k.get("move", move))))
+    return states, None

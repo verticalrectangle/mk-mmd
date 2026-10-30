@@ -53,6 +53,7 @@ class Member:
         self.hands = {}             # side -> the arm rig the pose stage keyed (goal, pole, constraints, ride, hand table)
         self.moves = None           # what the pose stage compiled the [[move]] entries from (pose.free_hands again)
         self.seat = None            # world seat frame used by the pose stage
+        self.necks = {}             # side -> a fretting hand's neck grip {prop, entry, states, press} (perform rings strings)
 
 
 class Ctx:

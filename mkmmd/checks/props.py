@@ -85,18 +85,67 @@ def _picked(ctx, cast, side, prop, neck, entry):
     return SM.pick_notes(placed, neck, entry)
 
 
+def _finger_rows(data, st, frames, ts, strokes, neck, entry, Mroot):
+    """Per stroke played with the fingers: the plucking finger's last phalanx (its skin) against the note's string. On each
+    frame near the stroke the skin vertex nearest the string's axis, its offset across the string (along `across` made square
+    to the string) and its gap to the string's surface; the crossing is when that offset passes the axis going the stroke's
+    way (toward the lower strings), the distance the gap then."""
+    if "skin" not in st:
+        raise CheckError("strum: the fingers were not sampled (the spec says technique = \"pick\")")
+    sk = data.skin(st["skin"], frames)
+    M = np.linalg.inv(Mroot) @ data.arm_world(st["arm"], frames)                   # armature -> the prop's frame
+    across = np.asarray(entry["across"], float)
+    rows = []
+    for s in strokes:
+        if not (ts[0] <= s.t <= ts[-1]):
+            continue
+        idx = np.where(sk["region"] == sk["regions"].index(s.finger))[0] if s.finger in sk["regions"] else []
+        if not len(idx):
+            raise CheckError(f"strum: no skin of the {s.finger} finger's last phalanx was sampled")
+        g = FR.string_entry(neck, s.string)
+        a0, b0 = np.asarray(g["nut"], float), np.asarray(g["bridge"], float)
+        e = (b0 - a0) / np.linalg.norm(b0 - a0)
+        ux = across - (across @ e) * e
+        ux = ux / np.linalg.norm(ux)
+        near = np.where((ts >= s.t - 0.12) & (ts <= s.t + 0.12))[0]
+        us, gaps = [], []
+        for k in near:
+            V = sk["posed"][k, idx].astype(float) @ M[k, :3, :3].T + M[k, :3, 3] - a0
+            off = V - (V @ e)[:, None] * e
+            d = np.linalg.norm(off, axis=1) - float(g.get("radius", 0.0006))
+            j = int(np.nanargmin(d))
+            us.append(float(off[j] @ ux))
+            gaps.append(float(d[j]))
+        cross = gap = None
+        for m in range(len(near) - 1):
+            if us[m] * s.dir <= 0.0 < us[m + 1] * s.dir:                       # passing the axis the stroke's way
+                x = us[m] / (us[m] - us[m + 1])
+                cross = ts[near[m]] + x * (ts[near[m + 1]] - ts[near[m]])
+                gap = gaps[m] + x * (gaps[m + 1] - gaps[m])
+                break
+        d = max(gap if gap is not None else (min(gaps) if gaps else np.inf), 0.0) * 1000.0
+        rows.append({"t": round(s.t, 3), "dir": s.dir, "accent": s.accent, "dist_mm": round(d, 2),
+                     "error_ms": None if cross is None else round((cross - s.t) * 1000.0, 1), "string": int(s.string),
+                     "finger": s.finger})
+    return rows
+
+
 @metric
 class Strum(Metric):
     name = "strum"
-    doc = ("The pick against the strings at every stroke of a strum spec: the largest distance (mm) of the pick tip from the "
-           "nearest string at the strike of a DOWN stroke (the pick meets the lowest string at its strike time), with the "
-           "timing of the strikes in `detail` (when the tip really crosses the first string against the planned strike time). "
-           "A picking spec (rhythm \"notes\") is judged at every stroke against the string its note is played on. The "
-           "strokes are the project's: `[perform.<cast>] strum` replayed on its timeline.")
-    args = {"cast": "cast member whose strum is checked (default: the only one)", "hand": "R (default) | L: the pick hand",
+    doc = ("The strum hand against the strings at every stroke of a strum spec. With a pick: the largest distance (mm) of the "
+           "pick tip from the nearest string at the strike of a DOWN stroke (the pick meets the lowest string at its strike "
+           "time), with the timing of the strikes in `detail` (when the tip really crosses the first string against the "
+           "planned strike time); a picking spec (rhythm \"notes\") is judged at every stroke against the string its note is "
+           "played on. With the fingers (technique \"fingers\", the spec's or the card's): every rest stroke, by the plucking "
+           "finger's last phalanx: the gap of its skin nearest the note's string when that skin crosses the string's axis "
+           "toward the lower strings, and the time it does against the stroke's. The strokes are the project's: "
+           "`[perform.<cast>] strum` replayed on its timeline.")
+    args = {"cast": "cast member whose strum is checked (default: the only one)", "hand": "R (default) | L: the strum hand",
             "pick": "the pick object (default <prop>_pick, built with the guitar)",
             "tip": "metres from the pick object's origin to its tip along its x (default: the card's pick.tip, 0.008)",
-            "strokes": "down (the default for a strum: the value is the worst down stroke) | all (the default for picking)"}
+            "strokes": "down (the default for a strum: the value is the worst down stroke) | all (the default for picking "
+                       "and for the fingers)"}
     default_max = 10.0
 
     def needs(self, args, ctx, need):
@@ -104,10 +153,16 @@ class Strum(Metric):
         prop = specs[0].get("prop")
         if not prop:
             raise CheckError("strum: the strum spec names no `prop`")
+        side = args.get("hand", "R")
         pick = args.get("pick", f"{prop}_pick")
         need.prop_use(prop)
         need.obj(prop, pick)
-        return {"cast": cast, "specs": specs, "prop": prop, "pick": pick}
+        st = {"cast": cast, "specs": specs, "prop": prop, "pick": pick, "side": side}
+        if specs[0].get("technique") != "pick":                 # the card may play it with the fingers: their last phalanges
+            arm, _ = ctx.cast({"cast": cast})
+            regions = {f: {"bones": [f"{f}3.{side}"], "stop": [f"?{f}_tip.{side}"]} for f in ("index", "middle")}
+            st.update(arm=arm, skin=need.skin(arm, regions))
+        return st
 
     def compute(self, args, ctx, data, frames, st):
         use = data.use(st["prop"])
@@ -116,6 +171,11 @@ class Strum(Metric):
         neck = next((g for g in grips.values() if g.get("type") == "neck"), None)
         if entry is None or neck is None:
             raise CheckError(f"strum: prop {st['prop']!r} needs use.grip entries `strum` and one of type neck")
+        try:
+            tech = SM.technique(st["specs"][0], entry)
+        except SM.StrumError as e:
+            raise CheckError(f"strum: {e}") from None
+        specs = [dict(sp, technique=tech) for sp in st["specs"]]
         a, c, n = (np.asarray(entry[k], float) for k in ("along", "across", "normal"))
         centre = np.asarray(entry["center"], float)
         tip_off = float(args.get("tip", (entry.get("pick") or {}).get("tip", 0.008)))
@@ -132,12 +192,16 @@ class Strum(Metric):
         tip = np.einsum("fij,fj->fi", np.linalg.inv(Mroot)[:, :3, :3], tip_w) + np.linalg.inv(Mroot)[:, :3, 3]   # prop frame
         u = (tip - centre) @ c
         h = (tip - centre) @ n
-        tl = _timeline(ctx, st["specs"])
-        picking = any(SM.picking(sp) for sp in st["specs"])
-        picked = _picked(ctx, st["cast"], args.get("hand", "R"), st["prop"], neck, entry) if picking else None
-        strokes = sorted((s for sp in st["specs"] for s in SM.plan(sp, tl, ctx.project.duration, picked)), key=lambda s: s.t)
-        rows = []
-        for s in strokes:
+        tl = _timeline(ctx, specs)
+        picking = any(SM.picking(sp) for sp in specs)
+        picked = _picked(ctx, st["cast"], st["side"], st["prop"], neck, entry) if picking else None
+        try:
+            strokes = sorted((s for sp in specs for s in SM.plan(sp, tl, ctx.project.duration, picked)), key=lambda s: s.t)
+        except SM.StrumError as e:
+            raise CheckError(f"strum: {e}") from None
+        fingers = tech == "fingers"
+        rows = _finger_rows(data, st, frames, ts, strokes, neck, entry, Mroot) if fingers else []
+        for s in ([] if fingers else strokes):
             if not (ts[0] <= s.t <= ts[-1]):
                 continue
             c0, w0 = SM.geometry(s, sigma)
@@ -164,6 +228,8 @@ class Strum(Metric):
             raise CheckError("strum: no stroke of the spec falls inside the checked frames")
         which = args.get("strokes", "all" if picking else "down")
         want = [r for r in rows if r["dir"] > 0] if which == "down" else rows
+        if not want:
+            raise CheckError("strum: strokes = \"down\" selects no stroke (every stroke goes up: give strokes = \"all\")")
         miss = [r for r in rows if r["error_ms"] is None]
         err = np.array([r["error_ms"] for r in rows if r["error_ms"] is not None], float)
         stats = {}
@@ -174,12 +240,14 @@ class Strum(Metric):
         vals = [(r["dist_mm"] if r["error_ms"] is not None else max(r["dist_mm"], 50.0)) for r in want]
         k = int(np.argmax(vals))
         worst = sorted(want, key=lambda r: -r["dist_mm"])[:5]
-        detail = {"at_frame": int(round(ctx.project.frame(want[k]["t"]))), "strokes": len(rows),
-                  "down": sum(1 for r in rows if r["dir"] > 0), "missed": len(miss),
-                  "timing": stats, "sigma_mm": round(sigma * 1000.0, 1),
-                  "tip_range_mm": {"u": [round(float(u.min()) * 1000, 1), round(float(u.max()) * 1000, 1)],
-                                   "h": [round(float(h.min()) * 1000, 1), round(float(h.max()) * 1000, 1)]},
-                  "worst": worst, "missed_strokes": [r["t"] for r in miss][:8]}
+        detail = {"technique": tech, "at_frame": int(round(ctx.project.frame(want[k]["t"]))), "strokes": len(rows),
+                  "down": sum(1 for r in rows if r["dir"] > 0), "missed": len(miss), "timing": stats,
+                  "sigma_mm": round(sigma * 1000.0, 1), "worst": worst, "missed_strokes": [r["t"] for r in miss][:8]}
+        if fingers:
+            detail["fingers"] = {f: sum(1 for r in rows if r["finger"] == f) for f in ("index", "middle")}
+        else:
+            detail["tip_range_mm"] = {"u": [round(float(u.min()) * 1000, 1), round(float(u.max()) * 1000, 1)],
+                                      "h": [round(float(h.min()) * 1000, 1), round(float(h.max()) * 1000, 1)]}
         if picking:
             detail["picked_strings"] = sorted({r["string"] for r in rows if "string" in r})
         return float(vals[k]), detail

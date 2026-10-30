@@ -13,8 +13,8 @@ ad hoc. All sampled metrics share one Blender pass over the union of their frame
 
 A [[check]] entry is  name, metric, args = {...} (the metric's arguments, below), frames (a frame spec, default the
 whole clip), min and max. It passes when min <= value <= max; a metric with a default limit (form 0.25, prop_body 8,
-strum 10, wrist_bend 60, hand_mirror 5, mic_palm at least 0.3, hand_room at least 0) uses it when the entry gives
-neither. A check that cannot be computed fails with an `error`. Exit 1 when any check fails, 0 when all pass. The
+strum 10, wrist_bend 60, hand_mirror 5, mic_palm at least 0.3, hand_room at least 0, skin_collapse 0.15) uses it when the
+entry gives neither. A check that cannot be computed fails with an `error`. Exit 1 when any check fails, 0 when all pass. The
 project's checks keep their last results in .mk/checks.json (the site's Checks tab reads them; not with --frames).
 
 Metrics (mk check --list for their arguments):
@@ -22,7 +22,8 @@ Metrics (mk check --list for their arguments):
   contact        distance between two tracked points (nib on paper, hand on a wheel)
   penetration    chains sinking into the body and scene colliders (mm)
   foot_slide     planted feet sliding (mm per frame)
-  joint_limits   elbows, knees, wrists, neck, spine in human ranges (degrees over)
+  joint_limits   elbows, knees, wrists, neck, spine, arm twists in human ranges (degrees over)
+  skin_collapse  a limb's skin pulled in or out against its rest, a twisted sleeve's candy wrapper (share of its size)
   framing        subject inside every output's safe area (margin)
   occlusion      subject hidden behind objects (share of points)
   camera_inside  camera inside a closed mesh (frames)

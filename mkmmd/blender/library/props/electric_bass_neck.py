@@ -8,8 +8,8 @@ rounded rectangle) while its depth stays that of the nut, so the back of the C f
 headstock's face is the plane the board is glued on.
 
     neck_mesh, board_mesh, frets_mesh, nut_mesh, inlay_mesh       the wood, the radiused rosewood slab, the wires, the bone
-    tuners_mesh, tree_mesh, strings_mesh                          four bass machine heads with clover keys, the string
-                                                                  retainer of the D and G strings, the strings
+    tuners_mesh, tree_mesh, string_meshes                         four bass machine heads with clover keys, the string
+                                                                  retainer of the D and G strings, the strings (one tube each)
 """
 import math
 
@@ -266,21 +266,23 @@ def guide(i):
     return L.NUT_X[i], Z_NUT_BACK
 
 
-def strings_mesh():
-    """Four strings as thin tubes (role `strings`): from the saddle over the nut (the D and G under the retainer's washer) to
-    a post, which they are wound round one and a half times, and down through the bridge plate behind the saddle on the
-    other side. The part between the saddle and the nut's front edge lies EXACTLY on the card's nut and bridge points."""
+def string_meshes():
+    """The four strings, the low E first, each its own thin tube (role `strings`): from the saddle over the nut (the D and G
+    under the retainer's washer) to a post, which it is wound round one and a half times, and down through the bridge plate
+    behind the saddle on the other side. The part between the saddle and the nut's front edge lies EXACTLY on the card's nut
+    and bridge points, with a ring at every wire and where a finger holds it down (electric_guitar_neck.playable)."""
     out = []
     z_tree = L.TREE[0]
+    wires = [L.fret_z(n) for n in range(L.N_FRETS + 1)]
     for i in range(4):
         nut, sad = (np.array(p) for p in L.string_ends(i))
         back = np.array([nut[0], nut[1], Z_NUT_BACK])
         wraps = post_wraps(i, Y_FACE - 0.0080)
         tail = np.array([sad[0], -L.BRIDGE["t"] + 0.0002, L.STRING_HOLE_Z])
-        run = [back, nut, sad, tail]
+        run = [back, *GN.playable(nut, sad, wires), tail]
         if i >= 2:                                      # under the retainer's washer (7 mm over the face)
             gx, _gz = guide(i)
             run = [np.array([gx, Y_FACE - 0.0070 + L.STRING_R[i], z_tree])] + run
         path = np.concatenate([wraps[::-1], run])
         out.append(S.tube(path, L.STRING_R[i], sides=8, up=OUT, mat=M["strings"]))
-    return S.merge(out)
+    return out

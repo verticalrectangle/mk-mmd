@@ -120,12 +120,18 @@ def test_strings_are_inside_the_board_and_clear_the_wires(card):
     assert 0.0035 < min(hs) and max(hs) < 0.0075                                              # saddles stand 4-7 mm over the board plane
 
 
-def test_string_meshes_run_through_the_card_points(parts):
-    V = parts["strings"].V
+def test_string_meshes_run_through_the_card_points(card, parts):
+    strings = entry(card, "grip", "neck")["strings"]
     for i, st in enumerate(L.STRING_NAMES):
+        assert strings[i]["object"] == f"guitar_string_{6 - i}"                              # one object per string, 1 = high e
+        V = parts[f"string_{6 - i}"].V
         for p in L.string_ends(i):
             d = np.linalg.norm(V - np.array(p), axis=1).min()
             assert d == pytest.approx(L.STRING_R[i], rel=0.15, abs=2e-5)
+        centres = V[:len(V) - 2].reshape(-1, 6, 3).mean(1)                                   # 6 sides a ring, then the caps
+        zs = centres[:, 2]
+        for n in range(1, L.N_FRETS + 1):                                                     # a ring on every wire (where a
+            assert np.abs(zs - L.fret_z(n)).min() < 1e-7                                      # pressed string bends)
 
 
 def test_neck_section_is_the_cards_superellipse(card):
@@ -250,7 +256,7 @@ def test_wear_entry_is_the_contract(card):
 # ======================================================================================================= the meshes
 def test_every_part_is_a_closed_solid(parts):
     assert set(parts) >= {"body", "pickguard", "neck", "fretboard", "frets", "nut", "tuners", "pickups", "bridge", "knobs", "switch",
-                          "jack_plate", "buttons", "strings", "plug", "pick"}
+                          "jack_plate", "buttons", *(f"string_{n}" for n in range(1, 7)), "plug", "pick"}
     for k, m in parts.items():
         assert m.is_closed() and m.volume() > 0, k
 
@@ -352,7 +358,7 @@ def test_form_is_far_from_boxy(parts):
 
 def test_build_stays_under_five_seconds():
     t0 = time.time()
-    for f in (B.body_mesh, B.guard_mesh, N.neck_mesh, N.board_mesh, N.frets_mesh, N.tuners_mesh, N.strings_mesh, H.pickups_mesh,
+    for f in (B.body_mesh, B.guard_mesh, N.neck_mesh, N.board_mesh, N.frets_mesh, N.tuners_mesh, N.string_meshes, H.pickups_mesh,
               H.bridge_mesh, H.knobs_mesh, H.jack_plate_mesh, H.plug_mesh, H.buttons_mesh, H.pick_mesh):
         f()
     assert time.time() - t0 < 4.0

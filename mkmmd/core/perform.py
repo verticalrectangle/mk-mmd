@@ -183,6 +183,33 @@ def startles(ts, times, deg=4.5, tau=0.35):
     return math.radians(deg) * out
 
 
+SQUASH = {"depth": 0.1, "stretch": 0.05, "attack": 0.04, "rebound": 0.14}
+SQUASH_KEYS = ("lane", "min_db", "every", "from", "to", "hits") + tuple(SQUASH)
+
+
+def squash(ts, hits, depth=0.1, stretch=0.05, attack=0.04, rebound=0.14):
+    """A cartoon squash and stretch of a whole body on each of `hits` (clip seconds): (F,) the scale of its height over
+    `ts`, 1 at rest (the body keeps its volume: its width and depth scale by 1 / sqrt of it). Over `attack` s it squashes
+    to 1 - `depth` on the hit, then springs back up past 1 to 1 + `stretch` `rebound` s after the hit and settles: a
+    damped spring let go at rest at the squash (`depth` e^-u/tau (cos wu + sin wu / (w tau)), w = pi / rebound, tau =
+    rebound / ln(depth / stretch)). The hits' springs add up where they overlap."""
+    ts = np.asarray(ts, float)
+    depth, stretch, attack, rebound = float(depth), float(stretch), float(attack), float(rebound)
+    if not 0.0 < depth < 0.6 or not 0.0 < stretch < depth or attack <= 0.0 or rebound <= 0.0:
+        raise ValueError("depth within 0..0.6, stretch above 0 and under depth, attack and rebound above 0")
+    w = math.pi / rebound
+    tau = rebound / math.log(depth / stretch)
+    out = np.zeros(len(ts))
+    for h in hits:
+        u = ts - float(h)
+        before = (u > -attack) & (u < 0.0)
+        out[before] -= depth * smooth((u[before] + attack) / attack)
+        after = (u >= 0.0) & (u < 8.0 * tau)
+        ua = u[after]
+        out[after] -= depth * np.exp(-ua / tau) * (np.cos(w * ua) + np.sin(w * ua) / (w * tau))
+    return 1.0 + out
+
+
 def drift(n, seed=11, tau_frames=40, scale=(0.02, 0.01, 0.015)):
     """Slow random wander (n, 3) (m) for gaze targets: attention is never perfectly still."""
     rng = np.random.default_rng(seed)
@@ -239,7 +266,131 @@ ROLL = 0.15                      # ... each rolling off and setting down, unmove
 TWIST_MAX = math.radians(35.0)   # a foot turns at most this far from the hips: farther, it swivels on its ankle
 TURN_KEYS = ("t", "deg", "dur", "first", "lift", "dip", "move")
 AIR = {"tuck": 0.24, "back": 0.10, "first": "L", "share": 0.7, "lag": 0.06, "rise": 0.14, "extend": 0.22, "point": 30.0}
-AIR_KEYS = ("from", "to") + tuple(AIR)
+AIR_KEYS = ("from", "to") + tuple(AIR) + ("kicks",)
+KICKS = {"knee": 10.0, "hip": 2.0, "foot": 15.0, "period": 3.0, "every": 0, "wander": 0.3, "seed": 0, "ease": 1.0}
+KICKS_KEYS = tuple(KICKS) + ("beats", "timeline")
+KICK_HIP_LEAD = 0.15             # cycles: a kicking thigh swings ahead of its knee (a wave down the leg, not a piston) ...
+KICK_FOOT_LAG = 0.1              # ... and the foot points after the knee has straightened, trailing it
+KICK_DRIFT = 0.2                 # cycles per unit of `wander`: how far the legs drift from taking turns exactly
+WANDER_MAX = 0.6                 # more, and a leg drifting from its turn could kick backward for a moment
+KICK_KNEE_MIN = math.radians(5.0)   # the straightest a kicking knee gets: from a straight tuck the kicks bend it first
+WOBBLE = ((1.618, 0.5), (2.718, 0.3), (4.236, 0.2))   # (period in leg cycles, weight): the wander's slow sines
+SPIN = {"spot": True, "windup": 20.0, "overshoot": 8.0, "twist": 35.0, "neck": 70.0, "whip": 0.3, "lift": 0.1}
+SPIN_KEYS = ("from", "to", "deg", "foot") + tuple(SPIN)
+SPIN_TWIST_MAX = 50.0            # deg: the most `twist` may be (a spine twists 60 at most: joint_limits' spine_twist) ...
+SPIN_NECK_MAX = 80.0             # ... and `neck` (85: its neck_twist; the gaze's head_limits yaw, 75, clips it first)
+SPIN_LAG = 0.12                  # s: the hips trail the chest by this much (at most 8 % of the spin)
+SPIN_EASE = (0.45, 0.2)          # s, share of the spin: the wind-up and the settle back each take the shorter of these
+SPIN_WHIP = 0.25                 # the head's whip takes at most this share of the turn
+SPIN_SOFT = math.radians(20.0)   # the head eases into the end of the neck's range, and onto a spot, over this much
+SPIN_OWN = 0.25                  # s: a spin takes the head from the gaze over this much before it and gives it back after
+SPIN_LIFT = 0.15                 # s: on the ground the other foot lifts off, and the heel, over this much as the hips go
+SPIN_LAND = 0.2                  # s: and they come down over the last this much, once the body has settled
+RELEVE = math.radians(20.0)      # on the ground the foot turned on rises onto its toes: the heel this far up
+SPIN_TUCK = 0.5                  # the other foot comes this share of the way in toward the one turned on
+EYE_LEAD = 0.07                  # s: the eyes lead the head, as they lead a gaze
+ALOFT = 0.02                     # m: a body `rise` lifts more than this is off the ground
+
+
+def aloft(ts, air=None, rise=None):
+    """Where the body is off the ground, (F,) bools over `ts`: inside an `air` span (a table {from, to} or a list of them)
+    or lifted more than ALOFT by the `rise` keys."""
+    ts = np.asarray(ts, float)
+    up = np.zeros(len(ts), bool)
+    for sp in air if isinstance(air, list) else [air] if air else []:
+        if isinstance(sp, dict) and "from" in sp and "to" in sp:
+            up |= (ts >= float(sp["from"])) & (ts <= float(sp["to"]))
+    if rise:
+        up |= eased_keys(ts, rise) > ALOFT
+    return up
+
+
+def eased_rate(ts, keys):
+    """The rate of `eased_keys` (per second): zero before the first key, after the last and on every key."""
+    ts = np.asarray(ts, float)
+    out = np.zeros(len(ts))
+    ks = sorted((float(t), float(v)) for t, v in keys)
+    for (t0, v0), (t1, v1) in zip(ks, ks[1:]):
+        m = (ts >= t0) & (ts < t1)
+        x = (ts[m] - t0) / max(t1 - t0, 1e-6)
+        out[m] = (v1 - v0) * 6.0 * x * (1.0 - x) / max(t1 - t0, 1e-6)
+    return out
+
+
+def _smax(a, b, k):
+    """The larger of a and b, eased over a band k wide where they meet (exact outside it, never below either)."""
+    return np.maximum(a, b) + np.maximum(k - np.abs(a - b), 0.0) ** 2 / (4.0 * k)
+
+
+def _smin(a, b, k):
+    return -_smax(-a, -b, k)
+
+
+def spin_curves(ts, sp, ground=False, where="spin"):
+    """One spin {from, to, deg, spot, windup, overshoot, twist, neck, whip} (defaults SPIN) of a dancer, not of a figure
+    on a turntable: the turns of her hips, chest, head and eyes about the vertical, relative to where she faced before it,
+    rad, + toward her left. From `from` she winds up `windup` degrees the other way, turns `deg` and `overshoot` degrees
+    past it, and settles back by `to` (by SPIN_LAND earlier on the `ground`, so the feet come down on a body at rest),
+    each eased (SPIN_EASE); the chest leads and the hips trail it by SPIN_LAG, so the spine twists with the speed, by
+    `twist` degrees at most. With `spot` the head holds where she faced (a dancer's spot: the camera in front of her) while
+    the neck lets it, `neck` degrees at most, then whips round in `whip` s (SPIN_WHIP of the turn at most) ahead of the
+    chest, as far ahead as the neck lets it, onto the next spot (every full turn, then where she ends facing) and holds
+    it as the chest comes round under it; without, it leads the chest by the speed, `neck` at most. The eyes lead the
+    head by EYE_LEAD. Returns {"hips", "chest", "head", "eye": (F,) rad, "phases": {"windup", "turn", "settle": the
+    hips' (t, t), "whips": [t, ...], "land": t}}. Raises ValueError for a bad spin."""
+    ts = np.asarray(ts, float)
+    t0, t1 = _spin_span(sp, where)
+    c = dict(SPIN, **{k: v for k, v in sp.items() if k in SPIN})
+    deg = float(sp["deg"])
+    windup, over, twist, neck, whip = (float(c[k]) for k in ("windup", "overshoot", "twist", "neck", "whip"))
+    if not isinstance(c["spot"], bool):
+        raise ValueError(f"{where}: spot is true or false, not {c['spot']!r}")
+    if deg == 0 or windup < 0 or over < 0 or whip <= 0 or not 0 < twist <= SPIN_TWIST_MAX or not 0 < neck <= SPIN_NECK_MAX:
+        raise ValueError(f"{where}: deg not 0, windup and overshoot not negative, whip positive, twist within "
+                         f"0..{SPIN_TWIST_MAX:g} and neck within 0..{SPIN_NECK_MAX:g} degrees")
+    lag = min(SPIN_LAG, 0.08 * (t1 - t0))
+    end = t1 - lag - (SPIN_LAND if ground else 0.0)              # the chest has settled; the hips a lag later
+    ease = min(SPIN_EASE[0], SPIN_EASE[1] * (end - t0))
+    up, back = (ease if windup else 0.0), (ease if over else 0.0)
+    if end - t0 - up - back < 0.2:
+        raise ValueError(f"{where}: {t1 - t0:g} s is too short a spin (from before to, the turn itself 0.2 s at least)")
+    whip = min(whip, SPIN_WHIP * (end - t0 - up - back))
+    sign, D = math.copysign(1.0, deg), math.radians(abs(deg))
+    keys = [(t0, 0.0)] + ([(t0 + up, -math.radians(windup))] if up else []) + [(end - back, D + math.radians(over))]
+    keys += [(end, D)] if back else []
+    T, N = math.radians(twist), math.radians(neck)
+
+    def chest(t):
+        return eased_keys(t - lag, keys) + T * np.tanh((eased_keys(t, keys) - eased_keys(t - lag, keys)) / T)
+
+    spots = [2.0 * math.pi * k for k in range(int(math.floor(D / (2.0 * math.pi) + 1e-9)) + 1)]
+    spots += [D] if D - spots[-1] > 1e-6 else []
+    whips, after = [], t0
+    if c["spot"]:
+        tf = np.arange(t0, t1, 0.002)
+        cf = chest(tf)
+        for k in range(len(spots) - 1):                          # the head whips as the neck runs out of turn
+            hold = min(N - 0.5 * SPIN_SOFT, 0.5 * (spots[k + 1] - spots[k]))
+            past = np.nonzero((cf - spots[k] >= hold) & (tf >= after))[0]
+            whips.append(float(tf[past[0]]) if len(past) else max(after, end - back - whip))
+            after = whips[-1] + whip
+
+    def head(t):
+        ch = chest(t)
+        if not c["spot"]:
+            return ch + N * np.tanh(lag * eased_rate(t, keys) / N)
+
+        def on(s):                                               # the spot, as far as the neck lets the head hold it
+            return _smin(_smax(np.full(len(t), s), ch - N, SPIN_SOFT), ch + N, SPIN_SOFT)
+        out = on(spots[0])
+        for k, tw in enumerate(whips):
+            out = out + smooth((t - tw) / whip) * (on(spots[k + 1]) - on(spots[k]))
+        return out
+
+    return {"hips": sign * eased_keys(ts - lag, keys), "chest": sign * chest(ts), "head": sign * head(ts),
+            "eye": sign * head(ts + EYE_LEAD),
+            "phases": {"windup": (t0 + lag, t0 + lag + up), "turn": (t0 + lag + up, end + lag - back),
+                       "settle": (end + lag - back, end + lag), "whips": whips, "land": t1 - SPIN_LAND}}
 
 
 def turn_dur(deg):
@@ -253,33 +404,63 @@ def _side(v, where):
     return v
 
 
-def turn_plan(ts, turns, feet):
-    """Turning round on the spot as a person does, not as a statue on a turntable. `turns` [{t, deg, dur, first, lift,
-    dip, move}]: from `t` the body turns `deg` degrees toward its left (negative: its right) over `dur` seconds (default
-    `turn_dur`), and travels `move` [x, y] metres meanwhile (in the character's frame before its first turn: x its left, y
-    behind). The chest leads the hips by TURN_LEAD (at most about CHEST_MAX ahead) and unwinds as they arrive; the foot
-    `first` steps over the first TURN_STEPS share of the span and the other foot over the second (by default the order
-    that keeps the feet further apart: turning about a point in front of the ankles or behind them, one order sets a foot
-    down where the other still stands), each rolling off and setting down over ROLL of its step and lifted `lift` metres
-    (TURN_LIFT) between, set down where the turned (and moved) stance puts it; a foot never turns more than TWIST_MAX from
-    the hips (planted, it swivels on its ankle); the hips sink `dip` metres (TURN_DIP) meanwhile. `feet` {side: (x, y)}
-    are the ankles' floor positions relative to the point the body turns about, in that frame. Returns {"yaw": the hips'
-    turn (F,) rad, "shift": the point's travel (F, 2) m, "chest": the chest's lead on top of the turn (F,) rad, "dip": (F,)
-    m, "feet": {side: (F, 2) floor positions}, "lift": {side: (F,) m}, "foot_yaw": {side: (F,) rad}, "gap": the least
-    distance between the ankles during the turns, m (inf with one foot)}, positions and foot yaws in that frame. Raises
-    ValueError for a bad or overlapping turn."""
+def _rot(ang, v):
+    """Floor vectors v (2,) or (k, 2) turned by `ang` (rad or (k,) rad, + toward the left: x left, y behind)."""
+    c, s, v = np.cos(ang), np.sin(ang), np.asarray(v, float)
+    return np.stack([c * v[..., 0] - s * v[..., 1], s * v[..., 0] + c * v[..., 1]], -1)
+
+
+def turn_plan(ts, turns, feet, spins=(), aloft=None, toes=None, legs=None):
+    """Turning round as a person does, not as a statue on a turntable: stepping round on the spot (`turns`) and spinning
+    (`spins`), one after the other in time order. `turns` [{t, deg, dur, first, lift, dip, move}]: from `t` the body
+    turns `deg` degrees toward its left (negative: its right) over `dur` seconds (default `turn_dur`), and travels `move`
+    [x, y] metres meanwhile (in the character's frame before its first turn: x its left, y behind). The chest leads the
+    hips by TURN_LEAD (at most about CHEST_MAX ahead) and unwinds as they arrive; the foot `first` steps over the first
+    TURN_STEPS share of the span and the other foot over the second (by default the order that keeps the feet further
+    apart: turning about a point in front of the ankles or behind them, one order sets a foot down where the other still
+    stands), each rolling off and setting down over ROLL of its step and lifted `lift` metres (TURN_LIFT) between, set
+    down where the turned (and moved) stance puts it; a foot never turns more than TWIST_MAX from the hips (planted, it
+    swivels on its ankle); the hips sink `dip` metres (TURN_DIP) meanwhile. `feet` {side: (x, y)} are the ankles' floor
+    positions relative to the point the body turns about, in that frame.
+    `spins` [{from, to, deg, spot, windup, overshoot, twist, neck, whip, foot, lift}] turn the hips, chest, head and eyes
+    as `spin_curves` does. One all in the air (`aloft`, (F,) bools: where the body is off the ground) turns about the
+    point turned about, the legs going round with the hips. One on the ground turns about the toe point of the foot `foot`
+    (default the side it turns toward), `toes` {side: (x, y, up)} its floor offset from the ankle in that frame and the
+    ankle's height over it (without, about the ankle): the weight goes over that foot as she winds up, the other foot
+    stays down until the hips set off and then lifts `lift` m (SPIN["lift"]), drawn SPIN_TUCK of the way in and under the
+    hips, while the foot turned on rises onto its toes, the heel RELEVE up about them (the body rising with it and the
+    hips coming over them, sinking as far as `legs` {side: {"hip": the hip joint from the ankle as she stands}} need for
+    that leg to stay no straighter than it stands), and turns on them with the hips; both come down where the turned
+    stance puts them over the last SPIN_LAND s, the body at rest.
+    Returns {"yaw": the hips' turn (F,) rad, "shift": the point's travel (F, 2) m, "chest": the chest's lead on top of the
+    turn (F,) rad, "dip": (F,) m, "feet": {side: (F, 2) floor positions}, "lift": {side: (F,) m}, "foot_yaw": {side:
+    (F,) rad}, "pitch": {side: (F,) the heel's lift about the toe point, rad}, "hips": the hips' shift (F, 2) m (x its
+    left, y behind), "look", "eye": the head's and the eyes' turn from the hips (F,) rad, "own": how much a spin has the
+    head (F,) 0..1, "gap": the least distance between the ankles during the step turns, m (inf with one foot), "spins": [a
+    report per spin]}, positions and foot yaws in that frame. Raises ValueError for a bad or overlapping turn."""
     ts = np.asarray(ts, float)
     n = len(ts)
     out = {"yaw": np.zeros(n), "shift": np.zeros((n, 2)), "chest": np.zeros(n), "dip": np.zeros(n), "feet": {}, "lift": {},
-           "foot_yaw": {}, "gap": math.inf}
+           "foot_yaw": {}, "pitch": {}, "hips": np.zeros((n, 2)), "look": np.zeros(n), "eye": np.zeros(n), "own": np.zeros(n),
+           "gap": math.inf, "spins": []}
     state = {}                                                   # side: [offset in the body's frame, yaw, neutral yaw]
     for s, (x, y) in feet.items():
         _side(s, "turn feet")
         state[s] = [np.array([float(x), float(y)]), 0.0, 0.0]
         out["feet"][s] = np.tile([float(x), float(y)], (n, 1))
-        out["lift"][s], out["foot_yaw"][s] = np.zeros(n), np.zeros(n)
+        out["lift"][s], out["foot_yaw"][s], out["pitch"][s] = np.zeros(n), np.zeros(n), np.zeros(n)
     body, shift, end = 0.0, np.zeros(2), -math.inf
-    for i, tr in enumerate(sorted(turns, key=lambda tr: float(tr["t"]) if isinstance(tr, dict) and "t" in tr else 0.0)):
+    events = [(tr["t"] if isinstance(tr, dict) and "t" in tr else 0.0, i, tr, None) for i, tr in enumerate(turns)]
+    events += [(sp["from"] if isinstance(sp, dict) and "from" in sp else 0.0, i, None, sp) for i, sp in enumerate(spins)]
+    for _t, i, tr, sp in sorted(events, key=lambda e: (float(e[0]), e[2] is None, e[1])):
+        if sp is not None:
+            where = f"spin {i}"
+            t0, t1 = _spin_span(sp, where)
+            if t0 < end - 1e-6:
+                raise ValueError(f"{where} at {t0:g} s starts before the turn before it ends ({end:g} s)")
+            end = t1
+            body, shift = _spin(ts, sp, where, state, body, shift, out, aloft, toes, legs)
+            continue
         where = f"turn {i}"
         if not isinstance(tr, dict) or "t" not in tr or "deg" not in tr or set(tr) - set(TURN_KEYS):
             raise ValueError(f"{where}: expected {{{', '.join(TURN_KEYS)}}} with t and deg")
@@ -334,16 +515,111 @@ def turn_plan(ts, turns, feet):
     return out
 
 
-def air_plan(ts, spans):
-    """The legs of a body in the air (a jump, a blast): each span {from, to, tuck, back, first, share, lag, rise, extend,
-    point} runs from take-off `from` to landing `to` (clip seconds). Over `rise` s the feet come up toward the hips by
-    `tuck` metres and back by `back` (the knees bend and come forward), the foot `first` ahead and the other `lag` s later,
-    by `share` of it; the toes point down by `point` degrees; over the last `extend` s the legs reach down again, so the
-    feet are back under the hips at the landing. Defaults AIR. Returns ({side: (F, 3) offsets (x its left, y behind, z
-    up) m}, {side: (F,) the toes' pitch down, rad}); overlapping spans take the larger. Raises ValueError for a bad span."""
+def _spin_span(sp, where):
+    """A spin's (from, to), clip seconds, after checking its keys."""
+    if not isinstance(sp, dict) or not {"from", "to", "deg"} <= set(sp) or set(sp) - set(SPIN_KEYS):
+        raise ValueError(f"{where}: expected {{{', '.join(SPIN_KEYS)}}} with from, to and deg")
+    return float(sp["from"]), float(sp["to"])
+
+
+def _spin(ts, sp, where, state, body, shift, out, aloft, toes, legs):
+    """turn_plan's spin `sp`, from the body's turn `body` and the point turned about at `shift` (its feet in `state`):
+    keys `out` from its start on and returns the turn and the point after it."""
+    t0, t1 = _spin_span(sp, where)
+    inside = (ts >= t0) & (ts <= t1)
+    up = aloft is not None and bool(inside.any()) and bool(np.asarray(aloft, bool)[inside].all())
+    if aloft is not None and not up and bool(np.asarray(aloft, bool)[inside].any()):
+        raise ValueError(f"{where} ({t0:g}-{t1:g} s) is partly in the air: a spin turns all in the air or all on the "
+                         f"ground")
+    cur = spin_curves(ts, sp, ground=not up, where=where)
+    deg = math.radians(float(sp["deg"]))
+    m = ts >= t0
+    tm, hips = ts[m], cur["hips"][m]
+    out["yaw"][m] = body + hips
+    out["chest"][m] = (cur["chest"] - cur["hips"])[m]
+    out["look"][m] = (cur["head"] - cur["hips"])[m]
+    out["eye"][m] = (cur["eye"] - cur["hips"])[m]
+    out["own"] = np.maximum(out["own"], smooth((ts - t0) / SPIN_OWN + 1.0) * (1.0 - smooth((ts - t1) / SPIN_OWN)))
+    info = {"from": t0, "to": t1, "deg": float(sp["deg"]), "air": up, "foot": None,
+            "whips": [round(t, 3) for t in cur["phases"]["whips"]],
+            "twist_deg": round(float(np.degrees(np.abs(cur["chest"] - cur["hips"]).max())), 1),
+            "neck_deg": round(float(np.degrees(np.abs(cur["head"] - cur["chest"]).max())), 1)}
+    out["spins"].append(info)
+    if up:                                                       # the legs go round with the hips
+        if "foot" in sp:
+            raise ValueError(f"{where}: foot: she is in the air all through it, with no foot on the ground to turn on")
+        for s, (local, _yaw, neutral) in state.items():
+            out["feet"][s][m] = shift + _rot(body + hips, local)
+            out["foot_yaw"][s][m] = body + hips + neutral
+            out["lift"][s][m] = out["pitch"][s][m] = 0.0
+            state[s][1] = body + deg + neutral
+        return body + deg, shift
+    sup = _side(sp.get("foot", "L" if deg > 0 else "R"), f"{where} foot")
+    lift = float(sp.get("lift", SPIN["lift"]))
+    if sup not in state or lift < 0:
+        raise ValueError(f"{where}: on the ground she turns on a foot, here {sup} (its leg IK), and lifts the other "
+                         f"`lift` m, not negative")
+    info["foot"] = sup
+    ph = cur["phases"]
+    t_off, t_land = ph["turn"][0], ph["land"]
+    local, _yaw, neutral = state[sup]
+    tx, ty, rise = (float(v) for v in (toes or {}).get(sup, (0.0, 0.0, 0.0)))
+    toe = local + _rot(neutral, (tx, ty))                        # the point she turns on, in the body's frame ...
+    pivot = shift + _rot(body, toe)                              # ... and on the floor: it never moves
+    root = pivot - _rot(body + hips, toe)
+    out["shift"][m] = root
+    length = math.hypot(tx, ty)                                  # the toe point to the ankle
+    heel = np.array([-tx, -ty]) / length if length > 1e-9 else np.zeros(2)
+    rising, coming = smooth((tm - t_off) / SPIN_LIFT), smooth((tm - t_land) / SPIN_LAND)
+    pitch = (RELEVE if length > 1e-9 else 0.0) * rising * (1.0 - coming)   # up on its toes
+    back = length * np.cos(pitch) - rise * np.sin(pitch)        # the ankle behind the toe point, and over it
+    over = length * np.sin(pitch) + rise * np.cos(pitch)
+    swivel = hips * rising                                       # flat on the floor until the heel rises, then round
+    out["feet"][sup][m] = pivot + _rot(body + neutral + swivel, back[:, None] * heel)
+    out["foot_yaw"][sup][m] = body + neutral + swivel
+    out["lift"][sup][m], out["pitch"][sup][m] = over - rise, pitch
+    out["dip"][m] -= over - rise                                 # the body rises with the heel
+    weight = smooth((tm - t0) / max(t_off - t0, 1e-6)) * (1.0 - coming)
+    out["hips"][m] += np.stack([toe[0] * weight, toe[1] * rising * (1.0 - coming)], 1)   # over the foot, then its toes
+    leg = (legs or {}).get(sup)
+    if leg is not None:                                          # that leg no straighter than it stands: the hips sink
+        hip = np.asarray(leg["hip"], float)
+        ankle = toe + _rot(neutral + swivel - hips, back[:, None] * heel)      # both in the body's frame
+        flat = np.linalg.norm(local + hip[:2] + out["hips"][m] - ankle, axis=1)
+        out["dip"][m] += np.maximum(hip[2] - np.sqrt(np.maximum(hip @ hip - flat ** 2, 0.0)), 0.0)
+    for s, (other, _y, neu) in state.items():
+        if s == sup:
+            continue
+        tuck = other + np.array([SPIN_TUCK * (local[0] - other[0]), toe[1]])     # in under the hips
+        u_off, u_on = (tm - t_off) / SPIN_LIFT, (tm - t_land) / SPIN_LAND
+        off = smooth((u_off - ROLL) / (1.0 - 2.0 * ROLL))        # its way, off the ground
+        on = smooth((u_on - ROLL) / (1.0 - 2.0 * ROLL))
+        planted = shift + _rot(body, other)
+        carried = root + _rot(body + hips, tuck + on[:, None] * (other - tuck))
+        out["feet"][s][m] = planted + off[:, None] * (carried - planted)
+        out["foot_yaw"][s][m] = body + neu + off * hips
+        out["lift"][s][m], out["pitch"][s][m] = lift * smooth(u_off) * (1.0 - smooth(u_on)), 0.0
+    for s in state:
+        state[s][1] = body + deg + state[s][2]
+    return body + deg, pivot - _rot(body + deg, toe)
+
+
+def air_plan(ts, spans, legs=None):
+    """The legs of a body in the air (a jump, a blast, a float): each span {from, to, tuck, back, first, share, lag, rise,
+    extend, point, kicks} runs from take-off `from` to landing `to` (clip seconds). Over `rise` s the feet come up toward
+    the hips by `tuck` metres and back by `back` (the knees bend and come forward), the foot `first` ahead and the other
+    `lag` s later, by `share` of it; the toes point down by `point` degrees; over the last `extend` s the legs reach down
+    again, so the feet are back under the hips at the landing. Defaults AIR. `kicks` (true or a table: `air_kicks`) kicks
+    the tucked legs lazily while they hold, from when both are tucked until they set off to land; it needs `legs` (see
+    `air_kicks`). Returns ({side: (F, 3) offsets (x its left, y behind, z up) m}, {side: (F,) the toes' pitch down, rad},
+    [a report per span that kicks]); overlapping spans take the larger tuck and add their kicks. Raises ValueError for a
+    bad span."""
     ts = np.asarray(ts, float)
     off = {s: np.zeros((len(ts), 3)) for s in ("L", "R")}
     pitch = {s: np.zeros(len(ts)) for s in ("L", "R")}
+    kick_off = {s: np.zeros((len(ts), 3)) for s in ("L", "R")}
+    kick_pitch = {s: np.zeros(len(ts)) for s in ("L", "R")}
+    reports = []
     for i, sp in enumerate(spans):
         where = f"air {i}"
         if not isinstance(sp, dict) or "from" not in sp or "to" not in sp or set(sp) - set(AIR_KEYS):
@@ -355,13 +631,162 @@ def air_plan(ts, spans):
         if t1 <= t0 or rise <= 0 or extend <= 0 or lag < 0 or not 0.0 <= share <= 1.0:
             raise ValueError(f"{where}: from before to, rise and extend positive, lag not negative, share within 0..1")
         down = 1.0 - smooth((ts - (t1 - extend)) / extend)
+        tucked = {}
         for s in ("L", "R"):
             k, late = (1.0, 0.0) if s == first else (share, lag)
             e = smooth((ts - t0 - late) / rise) * down * k
             v = np.stack([np.zeros(len(ts)), float(c["back"]) * e, float(c["tuck"]) * e], 1)
             off[s] = np.where(np.abs(v) > np.abs(off[s]), v, off[s])
             pitch[s] = np.maximum(pitch[s], math.radians(float(c["point"])) * e)
-    return off, pitch
+            tucked[s] = (0.0, float(c["back"]) * k, float(c["tuck"]) * k)
+        kicks = kicks_spec(sp.get("kicks"), f"{where} kicks")
+        if kicks is not None:
+            if legs is None:
+                raise ValueError(f"{where} kicks: the legs (hip joints, thigh and shin lengths) are needed to kick")
+            o, p, rep = air_kicks(ts, t0 + rise + lag, t1 - extend, kicks, legs, tucked, first, f"{where} kicks")
+            for s in ("L", "R"):
+                kick_off[s] += o[s]
+                kick_pitch[s] += p[s]
+            reports.append(rep)
+    return ({s: off[s] + kick_off[s] for s in ("L", "R")}, {s: pitch[s] + kick_pitch[s] for s in ("L", "R")}, reports)
+
+
+def kicks_spec(v, where="kicks"):
+    """An air span's `kicks`: None when it is missing or false, the defaults for true, else the table, checked."""
+    if v is None or v is False:
+        return None
+    if v is True:
+        return {}
+    if not isinstance(v, dict) or set(v) - set(KICKS_KEYS):
+        raise ValueError(f"{where}: true or {{{', '.join(KICKS_KEYS)}}}, not {v!r}")
+    return dict(v)
+
+
+def kick_beats(beats, downbeats=(), every=1):
+    """Every `every`-th of `beats` (clip seconds), counted from the beat nearest the first downbeat (from the first beat
+    without downbeats): where a float's kicks land, on the strong beats of the bar."""
+    bs = np.sort(np.asarray(list(beats), float))
+    every = int(every)
+    if every < 1:
+        raise ValueError(f"kicks every {every} beats: a count of beats, 1 or more")
+    if not len(bs):
+        return []
+    i0 = int(np.argmin(np.abs(bs - float(downbeats[0])))) if len(downbeats) else 0
+    return [float(b) for i, b in enumerate(bs) if (i - i0) % every == 0]
+
+
+def leg_angles(p, thigh, shin):
+    """(the thigh's angle forward of straight down, the knee's bend), radians, of a leg whose ankle is at p = (forward,
+    up) metres from its hip joint, the knee bending backward; a point out of reach straightens it."""
+    f, u = float(p[0]), float(p[1])
+    d = min(math.hypot(f, u), thigh + shin)
+    knee = math.acos(float(np.clip((d * d - thigh * thigh - shin * shin) / (2.0 * thigh * shin), -1.0, 1.0)))
+    return math.atan2(f, -u) + math.atan2(shin * math.sin(knee), thigh + shin * math.cos(knee)), knee
+
+
+def leg_ankle(phi, knee, thigh, shin):
+    """The ankle (forward, up) from the hip joint of a leg whose thigh is `phi` forward of straight down and whose knee is
+    bent `knee` (radians, scalars or arrays): the inverse of leg_angles."""
+    return (thigh * np.sin(phi) + shin * np.sin(phi - knee), -thigh * np.cos(phi) - shin * np.cos(phi - knee))
+
+
+def _wobble(ts, cycle, phases):
+    """A slow irregular signal within -1..1: the WOBBLE sines, periods in units of `cycle` seconds, at `phases`."""
+    ts = np.asarray(ts, float)
+    return sum(c * np.sin(2.0 * math.pi * ts / (cycle * r) + p) for (r, c), p in zip(WOBBLE, phases))
+
+
+def _wobble_area(ts, cycle, phases):
+    """An antiderivative of _wobble over time (seconds)."""
+    ts = np.asarray(ts, float)
+    return sum(-c * cycle * r / (2.0 * math.pi) * np.cos(2.0 * math.pi * ts / (cycle * r) + p)
+               for (r, c), p in zip(WOBBLE, phases))
+
+
+def air_kicks(ts, t0, t1, spec, legs, tucked, first="L", where="kicks"):
+    """Lazy kicks of legs floating in the air (treading water, dangling weightless) from t0 (both legs tucked) to t1
+    (they set off to reach down for the landing). The legs take turns: each knee straightens and bends again by `knee`
+    degrees either side of its tucked bend, the thigh swinging `hip` degrees forward and back a little ahead of it
+    (KICK_HIP_LEAD) and the foot pointing and flexing against the shin by `foot` degrees a little after it
+    (KICK_FOOT_LAG), so each kick runs down the leg. A leg kicks every `period` s, the foot `first` first; with `beats`
+    (clip seconds) its knee is straightest on every `every`-th of them at or after t0 instead, the legs taking turns
+    (`kick_beats` picks a timeline's). `wander` (0..WANDER_MAX) makes them irregular, smoothly and seeded by `seed`: each
+    kick's size and, off the beats, its pace vary by up to that share, the legs drifting a little from taking turns
+    exactly (KICK_DRIFT). The kicks ease in over `ease` s from t0 and out by t1. A knee never straightens past
+    KICK_KNEE_MIN: from a tuck too straight for its kick it bends further on average. Defaults KICKS.
+    `legs` {side: {"hip": (x, y, z) the hip joint from the ankle's place at the base pose, "thigh", "shin": lengths}} and
+    `tucked` {side: the ankle's air offset while the legs hold} are metres in the character's axes (x its left, y behind,
+    z up); the bends are turned into ankle positions in each leg's side-on plane, which the leg IK bends back into them.
+    Returns ({side: (F, 3) ankle offsets on top of `tucked`}, {side: (F,) the foot's pitch down on top of the air's,
+    rad}, a report). Raises ValueError for a bad table or too few beats."""
+    c = dict(KICKS, **spec)
+    knee, hip, foot = (math.radians(float(c[k])) for k in ("knee", "hip", "foot"))
+    period, wander, ease, every = float(c["period"]), float(c["wander"]), float(c["ease"]), int(c["every"])
+    if min(knee, hip, foot) < 0 or period <= 0 or ease <= 0 or every < 0 or not 0.0 <= wander <= WANDER_MAX:
+        raise ValueError(f"{where}: knee, hip and foot not negative, period and ease positive, every a count of beats, "
+                         f"wander within 0..{WANDER_MAX:g}")
+    ts = np.asarray(ts, float)
+    n = len(ts)
+    off = {s: np.zeros((n, 3)) for s in ("L", "R")}
+    pitch = {s: np.zeros(n) for s in ("L", "R")}
+    report = {"from": round(float(t0), 3), "to": round(float(t1), 3)}
+    if t1 <= t0:
+        report["kicks"] = {"L": 0, "R": 0}
+        return off, pitch, report
+    ease = min(ease, 0.5 * (t1 - t0))
+    w = smooth((ts - t0) / ease) * (1.0 - smooth((ts - (t1 - ease)) / ease))
+    rnd = random.Random(int(c["seed"]))
+    ph = {k: [rnd.uniform(0.0, 2.0 * math.pi) for _ in WOBBLE] for k in ("pace", "drift", "L", "R")}
+    other = "R" if first == "L" else "L"
+    beats = c.get("beats")
+    if beats is not None:
+        if not isinstance(beats, (list, tuple, np.ndarray)):
+            raise ValueError(f"{where}: beats = [t, ...], clip seconds, not {beats!r}")
+        lands = np.unique(np.asarray(beats, float))
+        lands = lands[lands >= t0 - 1e-9][::max(every, 1)]
+        if len(lands) < 2 or lands[1] > t1:
+            raise ValueError(f"{where}: fewer than two beats to kick on between {t0:g} and {t1:g} s")
+        k = np.interp(ts, lands, np.arange(len(lands), dtype=float))
+        k = np.where(ts < lands[0], (ts - lands[0]) / (lands[1] - lands[0]), k)
+        k = np.where(ts > lands[-1], len(lands) - 1 + (ts - lands[-1]) / (lands[-1] - lands[-2]), k)
+        cycle, drift = 2.0 * float(np.mean(np.diff(lands))), 0.0
+        report["on"] = "beats"
+    elif every:
+        raise ValueError(f"{where}: every {every} beats needs the beats (a timeline's, see kick_beats)")
+    else:
+        cycle = period
+        pace = _wobble_area(ts, period, ph["pace"]) - _wobble_area(t0, period, ph["pace"])
+        k = -0.5 + 2.0 / period * (ts - t0 + wander * pace)
+        drift = 2.0 * math.pi * KICK_DRIFT * wander * _wobble(ts, period, ph["drift"])
+        report["on"] = "period"
+    report["cycle_s"] = round(cycle, 3)
+    theta = {first: math.pi * k, other: math.pi * (k - 1.0) + drift}
+    report.update(kicks={}, landings={}, tuck_knee_deg={}, knee_deg={}, foot_mm={})
+    for s in ("L", "R"):
+        lg = legs[s]
+        a, b = float(lg["thigh"]), float(lg["shin"])
+        hy, hz = float(lg["hip"][1]), float(lg["hip"][2])
+        ty, tz = float(tucked[s][1]), float(tucked[s][2])
+        phi, bend = leg_angles((hy - ty, tz - hz), a, b)          # the tucked ankle from the hip: (forward, up)
+        amp = w * (1.0 + wander * _wobble(ts, cycle, ph[s]))
+        th = theta[s]
+        dk = -knee * amp * np.cos(th) + w * max(0.0, knee * (1.0 + wander) + KICK_KNEE_MIN - bend)
+        dh = hip * amp * np.cos(th + 2.0 * math.pi * KICK_HIP_LEAD)
+        dr = foot * amp * np.cos(th - 2.0 * math.pi * KICK_FOOT_LAG)
+        f0, u0 = leg_ankle(phi, bend, a, b)
+        f1, u1 = leg_ankle(phi + dh, bend + dk, a, b)
+        off[s] = np.stack([np.zeros(n), f0 - f1, u1 - u0], 1)
+        pitch[s] = dk - dh + dr                                   # the shin's turn back, and the foot's own on it
+        turn = np.floor(th / (2.0 * math.pi))
+        at = [float(ts[j]) for j in np.nonzero(np.diff(turn) > 0)[0] + 1 if w[j] >= 0.5]
+        report["kicks"][s] = len(at)
+        report["landings"][s] = [round(x, 2) for x in at]
+        report["tuck_knee_deg"][s] = round(math.degrees(bend), 1)
+        live = w > 0
+        report["knee_deg"][s] = [round(math.degrees(bend + float(x)), 1) for x in (dk[live].min(), dk[live].max())] \
+            if live.any() else [round(math.degrees(bend), 1)] * 2
+        report["foot_mm"][s] = round(float(np.linalg.norm(off[s], axis=1).max()) * 1000, 1)
+    return off, pitch, report
 
 
 # ------------------------------------------------------------------------------ walking, hopping, tumbling

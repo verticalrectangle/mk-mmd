@@ -187,12 +187,161 @@ def test_a_turn_on_the_spot_steps_one_foot_then_the_other_into_the_turned_stance
         PF.turn_plan(ts, [{"t": 5.86, "deg": 145}, {"t": 6.0, "deg": -145}], FEET)
 
 
+TWIRL = {"from": 18.25, "to": 20.95, "deg": 360}         # Reisen's twirl in the air, line 7
+TOES = {"L": (0.01, -0.14, 0.07), "R": (-0.01, -0.14, 0.07)}   # toe points 14 cm ahead of the ankles, 7 cm under them
+
+
+def _twirl(**kw):
+    ts = np.arange(17.8, 21.4, 0.01)
+    cur = PF.spin_curves(ts, dict(TWIRL, **kw))
+    return ts, {k: np.degrees(cur[k]) for k in ("hips", "chest", "head", "eye")}, cur["phases"]
+
+
+def test_a_spin_winds_up_turns_chest_first_hips_last_and_settles_from_an_overshoot():
+    """Reisen's twirl in the air turned her root once round on a turntable: a spin winds up the other way first, the
+    chest setting off before the hips both ways, turns with the chest ahead of the hips (the spine twisting by the
+    speed), overshoots and settles back by its end; the head lands on the turn before the chest and the chest before
+    the hips. Nothing moves before it and all of it ends where it turned to."""
+    ts, a, ph = _twirl()
+    hips, chest, head = a["hips"], a["chest"], a["head"]
+    before, after = ts < TWIRL["from"], ts >= TWIRL["to"]
+    assert not any(a[k][before].any() for k in a)
+    assert all(a[k][after] == pytest.approx(360.0, abs=1e-6) for k in ("hips", "chest", "head"))
+    assert hips.min() == pytest.approx(-PF.SPIN["windup"], abs=0.01) and chest.min() < -0.8 * PF.SPIN["windup"]
+    off = [int(np.argmax(np.abs(v) > 1.0)) for v in (chest, hips)]
+    assert off[0] < off[1] and chest[off[0]] < 0 and hips[off[1]] < 0           # the other way, the chest first
+    back = [int(np.argmax(np.diff(v) > 0)) for v in (chest, hips)]               # and turning back the chest first
+    assert back[0] < back[1]
+    turning = (hips > 30) & (hips < 330)
+    assert (chest[turning] > hips[turning]).all() and (chest - hips).max() > 20.0
+    assert hips.max() == pytest.approx(360.0 + PF.SPIN["overshoot"], abs=0.01) and chest.max() > 365.0
+    assert ts[np.argmax(chest)] < ts[np.argmax(hips)] < TWIRL["to"] - 0.3        # each overshoots, then settles back
+    home = [ts[np.argmax(v >= 359.0)] for v in (head, chest, hips)]
+    assert home[0] < home[1] < home[2]
+
+
+def test_the_head_spots_where_she_faced_then_whips_round_ahead_of_the_chest_and_the_eyes_lead_it():
+    """Like a dancer's: the head holds where she faced (the lens) while the body winds up and turns under it, until the
+    neck has turned well round, then whips round in `whip` seconds, past the chest and ahead of it as far as the neck
+    lets it, lands on the spot again before the chest comes round, and holds it while the chest and hips arrive under
+    it; the eyes lead the head by EYE_LEAD."""
+    ts, a, ph = _twirl()
+    head, chest = a["head"], a["chest"]
+    (whip,) = ph["whips"]
+    held = ts < whip
+    assert np.abs(head[held]).max() < 2.0 and (chest - head)[held].max() > 55.0   # on the spot, the neck turned round
+    free = chest - head < PF.SPIN["neck"] - np.degrees(PF.SPIN_SOFT)
+    assert np.abs(head[held & free]).max() < 1e-9                                # exactly, until the neck nears its end
+    during = (ts >= whip) & (ts <= whip + PF.SPIN["whip"])
+    assert np.ptp(head[during]) > 180.0                                          # a whip, not a drift
+    ahead = (ts > whip + PF.SPIN["whip"]) & (head < 359.0)
+    assert ahead.sum() > 20 and (head[ahead] - chest[ahead]).min() > 50.0       # leading the chest
+    landed = ts >= ts[np.argmax(head >= 360.0 - 1e-6)]
+    assert chest[landed][0] < 330.0 and np.abs(head[landed] - 360.0).max() < 1e-6
+    lead = int(round(PF.EYE_LEAD / 0.01))
+    assert a["eye"][:-lead] == pytest.approx(head[lead:], abs=1e-6)
+    _, b, ph2 = _twirl(spot=False)                                               # without spotting it just leads
+    turning = (b["chest"] > 30) & (b["chest"] < 330)
+    assert ph2["whips"] == [] and (b["head"][turning] > b["chest"][turning]).all()
+
+
+@pytest.mark.parametrize("spin", [TWIRL, {"from": 0.0, "to": 1.0, "deg": 360}, {"from": 0.0, "to": 3.0, "deg": -720},
+                                  {"from": 0.0, "to": 1.2, "deg": 180, "twist": 50, "neck": 80, "windup": 40},
+                                  {"from": 0.0, "to": 1.0, "deg": 90, "spot": False}])
+def test_a_spin_keeps_the_spine_and_the_neck_inside_their_twist_ranges(spin):
+    """joint_limits holds a spine to 60 degrees of twist and a neck to 85: a spin's chest leads its hips by `twist` at
+    most and its head turns from the chest by `neck` at most, fast or slow, one turn or two, either way; a spin of two
+    turns spots twice."""
+    ts = np.arange(spin["from"] - 0.2, spin["to"] + 0.2, 1 / 240)
+    cur = PF.spin_curves(ts, spin)
+    twist, neck = (np.degrees(np.abs(cur[a] - cur[b])).max() for a, b in (("chest", "hips"), ("head", "chest")))
+    assert twist <= spin.get("twist", PF.SPIN["twist"]) + 1e-6 < 60.0 and neck <= spin.get("neck", PF.SPIN["neck"]) + 1e-6 < 85.0
+    assert np.degrees(cur["hips"][-1]) == pytest.approx(spin["deg"])
+    assert len(cur["phases"]["whips"]) == (2 if abs(spin["deg"]) == 720 else 0 if spin.get("spot") is False else 1)
+    if spin["deg"] < 0:                                                          # the same spin, mirrored
+        assert -cur["head"] == pytest.approx(PF.spin_curves(ts, dict(spin, deg=-spin["deg"]))["head"])
+
+
+def test_without_a_spin_nothing_turns_and_a_spin_gives_the_head_back_to_the_gaze_around_it():
+    """No spin, nothing: the plan of a body that does not turn keys no turn and leaves the head to the gaze. A spin takes
+    the head from the gaze only around its own span (over SPIN_OWN on either side), its look turned from the hips only
+    inside it; bad spins are refused by name."""
+    ts = np.arange(17.0, 22.5, 1 / 30)
+    still = PF.turn_plan(ts, [], FEET)
+    assert still["spins"] == [] and not any(still[k].any() for k in ("yaw", "chest", "look", "eye", "own", "hips", "dip"))
+    plan = PF.turn_plan(ts, [], FEET, [TWIRL], np.ones(len(ts), bool))
+    t0, t1 = TWIRL["from"], TWIRL["to"]
+    assert (plan["own"][(ts >= t0) & (ts <= t1)] == 1.0).all()
+    assert not plan["own"][(ts < t0 - PF.SPIN_OWN) | (ts > t1 + PF.SPIN_OWN)].any()
+    assert not plan["look"][(ts < t0) | (ts > t1)].any() and np.degrees(plan["yaw"][-1]) == pytest.approx(360.0)
+    (rep,) = plan["spins"]
+    assert rep["air"] and rep["foot"] is None and rep["twist_deg"] <= PF.SPIN["twist"] and rep["neck_deg"] <= PF.SPIN["neck"]
+    for s in "LR":                                                               # in the air the legs go round with her
+        assert plan["feet"][s] == pytest.approx(np.stack(_turned(FEET[s], np.degrees(plan["yaw"])), 1))
+        assert not plan["lift"][s].any()
+    for bad, frag in [({"from": 18.0, "to": 20.0}, "with from, to and deg"), (dict(TWIRL, whirl=1), "with from, to"),
+                      (dict(TWIRL, deg=0), "deg not 0"), (dict(TWIRL, twist=70), "twist within"),
+                      (dict(TWIRL, spot="yes"), "spot is true or false"), (dict(TWIRL, to=18.6), "too short")]:
+        with pytest.raises(ValueError, match=frag):
+            PF.turn_plan(ts, [], FEET, [bad], np.ones(len(ts), bool))
+    with pytest.raises(ValueError, match="starts before the turn before it ends"):
+        PF.turn_plan(ts, [{"t": 18.0, "deg": 90, "dur": 0.5}], FEET, [TWIRL], np.ones(len(ts), bool))
+    with pytest.raises(ValueError, match="partly in the air"):
+        PF.turn_plan(ts, [], FEET, [TWIRL], ts > 19.0)
+    with pytest.raises(ValueError, match="no foot on the ground"):
+        PF.turn_plan(ts, [], FEET, [dict(TWIRL, foot="L")], np.ones(len(ts), bool))
+
+
+def test_on_the_ground_she_spins_on_the_toes_of_one_foot_the_other_lifted_and_comes_down_in_her_stance():
+    """On the ground a spin turns about the toe point of the foot on her turning side: the weight goes over it as she
+    winds up (both feet flat and still), the heel rises as the hips set off (the body with it) and the other foot lifts
+    and goes round with her, never moving while it is down; both come down in her stance as she ends, and the toe
+    point turned on never moves. After a step turn the spin goes on from where it left her."""
+    ts = np.arange(0.5, 3.6, 1 / 120)
+    spin = {"from": 1.0, "to": 3.2, "deg": 360}
+    plan = PF.turn_plan(ts, [], FEET, [spin], np.zeros(len(ts), bool), TOES)
+    (rep,) = plan["spins"]
+    assert rep["foot"] == "L" and not rep["air"]
+    toe = np.add(FEET["L"], TOES["L"][:2])
+    pivot = plan["shift"] + np.stack(_turned(toe, np.degrees(plan["yaw"])), 1)
+    assert np.ptp(pivot, axis=0).max() < 1e-9                                    # the toe point she turns on stays put
+    windup = (ts > spin["from"]) & (plan["yaw"] < 0) & (np.diff(plan["yaw"], prepend=0.0) < 0)
+    assert windup.sum() > 20 and not plan["lift"]["L"][windup].any() and not plan["lift"]["R"][windup].any()
+    assert all(np.ptp(plan["feet"][s][windup], axis=0).max() < 1e-9 for s in "LR")   # both flat and still
+    turning = (np.degrees(plan["yaw"]) > 30) & (np.degrees(plan["yaw"]) < 330)
+    assert plan["lift"]["L"][turning].min() > 0.03 and plan["pitch"]["L"][turning] == pytest.approx(PF.RELEVE)
+    assert plan["dip"][turning] == pytest.approx(-plan["lift"]["L"][turning])   # the body rises with the heel
+    assert plan["lift"]["R"][turning] == pytest.approx(PF.SPIN["lift"])
+    assert plan["hips"][turning] == pytest.approx(np.tile(toe, (turning.sum(), 1)))   # the hips over the toes she turns on
+    moved = np.linalg.norm(np.diff(plan["feet"]["R"], axis=0), axis=1) > 1e-9
+    up = (plan["lift"]["R"][1:] > 0) | (plan["lift"]["R"][:-1] > 0)
+    assert moved.any() and not (moved & ~up).any()                              # the other foot moves only off the floor
+    end = ts >= spin["to"]
+    for s in "LR":
+        assert plan["feet"][s][end] == pytest.approx(np.tile(FEET[s], (end.sum(), 1)), abs=1e-9)
+        assert not plan["lift"][s][end].any() and not plan["hips"][end].any()
+    right = PF.turn_plan(ts, [], FEET, [dict(spin, deg=-360)], np.zeros(len(ts), bool), TOES)
+    assert right["spins"][0]["foot"] == "R" and right["lift"]["L"].max() == pytest.approx(PF.SPIN["lift"])
+    both = PF.turn_plan(ts, [{"t": 0.55, "deg": 90}], FEET, [spin], np.zeros(len(ts), bool), TOES)
+    assert np.degrees(both["yaw"][-1]) == pytest.approx(450.0)
+    pivot = both["shift"] + np.stack(_turned(toe, np.degrees(both["yaw"])), 1)
+    assert np.ptp(pivot[ts >= spin["from"]], axis=0).max() < 1e-9               # turning on her toes where she now stands
+
+
+def test_aloft_is_inside_an_air_span_or_risen_off_the_ground():
+    ts = np.arange(0.0, 10.0, 0.5)
+    up = PF.aloft(ts, {"from": 1.0, "to": 2.0}, [[5.0, 0.0], [6.0, 0.4], [8.0, 0.4], [9.0, 0.0]])
+    assert list(ts[up]) == [1.0, 1.5, 2.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5]
+    assert not PF.aloft(ts).any() and PF.aloft(ts, [{"from": 0.0, "to": 9.5}]).all()
+
+
 def test_in_the_air_the_legs_tuck_one_after_the_other_hold_still_and_reach_down_to_land():
     """Blown up by the blast, Len hung in the air with straight legs: in the air the feet come up and back, the first
     ahead of the other, the toes pointed; the pose holds still in between (a freeze shows one frame of it while the world
     stops, so it must not have moved on when the world starts again) and the feet are under the hips at the landing."""
     ts = np.arange(9.3, 10.6, 1 / 120)
-    off, pitch = PF.air_plan(ts, [{"from": 9.392, "to": 10.455}])
+    off, pitch, kicks = PF.air_plan(ts, [{"from": 9.392, "to": 10.455}])
+    assert kicks == []
     at = lambda t: int(np.argmin(np.abs(ts - t)))                              # noqa: E731
     for s in "LR":
         assert not off[s][: at(9.39)].any() and not off[s][at(10.455) + 1:].any() and not pitch[s][at(10.455) + 1:].any()
@@ -206,3 +355,99 @@ def test_in_the_air_the_legs_tuck_one_after_the_other_hold_still_and_reach_down_
     assert hold.sum() > 30 and all(np.ptp(off[s][hold], axis=0).max() == 0 for s in "LR")
     with pytest.raises(ValueError, match="from before to"):
         PF.air_plan(ts, [{"from": 10.0, "to": 9.5}])
+
+
+LEGS = {s: {"hip": (x, -0.035, 0.68), "thigh": 0.34, "shin": 0.345} for s, x in (("L", 0.08), ("R", -0.08))}
+
+
+def _leg(off, pitch, s, legs=LEGS):
+    """(thigh forward of straight down, knee bend, the foot's pitch against the shin) over time, rad, of a leg whose
+    ankle the air offsets move (from its place under the hip joint `legs[s]["hip"]`)."""
+    hip, lg = legs[s]["hip"], legs[s]
+    ang = np.array([PF.leg_angles((hip[1] - o[1], o[2] - hip[2]), lg["thigh"], lg["shin"]) for o in off[s]])
+    return ang[:, 0], ang[:, 1], pitch[s] - (ang[:, 1] - ang[:, 0])
+
+
+def test_a_leg_s_angles_and_its_ankle_are_each_other_s_inverse():
+    for phi, knee in ((0.0, 0.0), (0.4, 1.2), (-0.2, 0.3), (0.5, 2.0)):
+        f, u = PF.leg_ankle(phi, knee, 0.34, 0.345)
+        assert PF.leg_angles((f, u), 0.34, 0.345) == pytest.approx((phi, knee), abs=1e-9)
+    assert PF.leg_angles((0.0, -0.9), 0.34, 0.345) == pytest.approx((0.0, 0.0))          # out of reach: straight
+
+
+def test_floating_legs_kick_in_turns_about_their_tuck_from_the_tuck_until_they_reach_down_to_land():
+    """Floating weightless through four lines of a song, a girl held her tucked legs still for twelve seconds, a stiff
+    pose: `kicks` bends and straightens each knee in turn about its tuck, the thigh swinging with it and the foot pointing
+    as the knee straightens and flexing as it bends; they ease in once both legs are tucked and out before the legs
+    reach down to land, and without `kicks` the plan is what it was."""
+    ts = np.arange(0.0, 14.0, 1 / 60)
+    span = {"from": 1.0, "to": 13.0, "tuck": 0.12, "back": 0.06, "rise": 0.6, "point": 35}
+    still, still_pitch, none = PF.air_plan(ts, [span], LEGS)
+    off, pitch, (rep,) = PF.air_plan(ts, [dict(span, kicks={"wander": 0})], LEGS)
+    assert none == [] and PF.air_plan(ts, [dict(span, kicks=False)], LEGS)[2] == []
+    t0, t1 = 1.0 + 0.6 + PF.AIR["lag"], 13.0 - PF.AIR["extend"]
+    assert (rep["from"], rep["to"]) == (pytest.approx(t0, abs=1e-3), pytest.approx(t1, abs=1e-3))
+    calm = (ts <= t0) | (ts >= t1)
+    for s in "LR":                                                   # the tuck, the take-off and the landing untouched
+        assert np.array_equal(off[s][calm], still[s][calm]) and np.array_equal(pitch[s][calm], still_pitch[s][calm])
+    full = (ts > t0 + PF.KICKS["ease"]) & (ts < t1 - PF.KICKS["ease"])
+    moved = {s: [a - b for a, b in zip(_leg(off, pitch, s), _leg(still, still_pitch, s))] for s in "LR"}
+    for s in "LR":
+        hip, knee, foot = (np.degrees(v) for v in moved[s])
+        assert knee[full].max() == pytest.approx(PF.KICKS["knee"], abs=0.2)           # bends ...
+        assert knee[full].min() == pytest.approx(-PF.KICKS["knee"], abs=0.2)          # ... and straightens
+        assert np.abs(hip[full]).max() == pytest.approx(PF.KICKS["hip"], abs=0.2)
+        assert np.abs(foot[full]).max() == pytest.approx(PF.KICKS["foot"], abs=0.2)
+        assert np.corrcoef(knee[full], foot[full])[0, 1] < -0.7          # pointing as it straightens
+        for edge in ((ts > t0) & (ts < t0 + 0.1), (ts > t1 - 0.1) & (ts < t1)):        # eased in and out
+            assert np.abs(knee[edge]).max() < 0.5 and np.abs(foot[edge]).max() < 0.5
+    assert np.corrcoef(moved["L"][1][full], moved["R"][1][full])[0, 1] < -0.99           # in turns
+    assert rep["on"] == "period" and rep["cycle_s"] == PF.KICKS["period"]
+    assert all(n >= 3 for n in rep["kicks"].values()) and rep["landings"]["L"][0] < rep["landings"]["R"][0]
+
+
+def test_floating_kicks_land_on_every_other_beat_from_the_downbeat_in_turns():
+    beats = [0.25 + 0.75 * k for k in range(20)]
+    lands = PF.kick_beats(beats, beats[3::4], 2)                     # bars of four from 2.5 s: beats 1 and 3
+    assert lands[:4] == pytest.approx([1.0, 2.5, 4.0, 5.5])
+    ts = np.arange(0.0, 14.0, 1 / 60)
+    span = {"from": 1.0, "to": 13.0, "tuck": 0.12, "back": 0.06, "rise": 0.6, "first": "R"}
+    still, still_pitch, _ = PF.air_plan(ts, [span], LEGS)
+    off, pitch, (rep,) = PF.air_plan(ts, [dict(span, kicks={"beats": lands, "wander": 0})], LEGS)
+    on = [b for b in lands if 1.66 <= b <= 12.78]
+    assert rep["on"] == "beats" and rep["landings"]["R"] == pytest.approx(on[0::2], abs=0.02)   # the first foot first
+    assert rep["landings"]["L"] == pytest.approx(on[1::2], abs=0.02)
+    knee = _leg(off, pitch, "R")[1] - _leg(still, still_pitch, "R")[1]
+    for b in on[2:-2:2]:                                             # straightest on its beats
+        near = np.abs(ts - b) < 0.5
+        assert ts[near][np.argmin(knee[near])] == pytest.approx(b, abs=1 / 60)
+    with pytest.raises(ValueError, match="fewer than two beats"):
+        PF.air_plan(ts, [dict(span, kicks={"beats": [5.0]})], LEGS)
+    with pytest.raises(ValueError, match="needs the beats"):
+        PF.air_plan(ts, [dict(span, kicks={"every": 2})], LEGS)
+
+
+def test_floating_kicks_wander_seeded_and_never_lock_a_knee():
+    """Not a metronome: each kick comes at its own pace and size, the same for a seed; from a tuck too straight for its
+    kick (no tuck at all) the knee bends further on average instead of straightening past KICK_KNEE_MIN."""
+    ts = np.arange(0.0, 20.0, 1 / 60)
+    span = {"from": 1.0, "to": 19.0, "tuck": 0.12, "back": 0.06, "rise": 0.6}
+    _, _, (a,) = PF.air_plan(ts, [dict(span, kicks=True)], LEGS)
+    _, _, (b,) = PF.air_plan(ts, [dict(span, kicks=True)], LEGS)
+    _, _, (c,) = PF.air_plan(ts, [dict(span, kicks={"seed": 4})], LEGS)
+    assert a == b and a["landings"] != c["landings"]
+    gaps = np.diff(a["landings"]["L"])
+    assert gaps.std() > 0.05 and abs(gaps.mean() - PF.KICKS["period"]) < 0.5
+    assert a["knee_deg"]["L"][1] - a["knee_deg"]["L"][0] > 2 * PF.KICKS["knee"] * 1.05    # some kicks bigger
+    straight = {s: dict(LEGS[s], hip=(LEGS[s]["hip"][0], 0.0, 0.684)) for s in "LR"}      # a bend of 6 degrees
+    off, pitch, (rep,) = PF.air_plan(ts, [dict(span, tuck=0.0, back=0.0, kicks=True)], straight)
+    knee = np.degrees(_leg(off, pitch, "L", straight)[1])
+    full = (ts > rep["from"] + PF.KICKS["ease"]) & (ts < rep["to"] - PF.KICKS["ease"])
+    assert knee[full].min() >= np.degrees(PF.KICK_KNEE_MIN) - 1e-6 and knee.min() >= knee[0] - 1e-6
+    assert knee[full].mean() > knee[0] + 5.0                         # bent further on average
+    with pytest.raises(ValueError, match="legs"):
+        PF.air_plan(ts, [dict(span, kicks=True)])
+    with pytest.raises(ValueError, match="kicks"):
+        PF.air_plan(ts, [dict(span, kicks={"amount": 1})], LEGS)
+    with pytest.raises(ValueError, match="wander within"):
+        PF.air_plan(ts, [dict(span, kicks={"wander": 0.9})], LEGS)

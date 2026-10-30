@@ -21,9 +21,10 @@ numbers (see docs/modelling.md: the bass).
 Objects `<name>_<part>`: body, pickguard, control_plate, neck (wood with heel and headstock), fretboard (with its dots), frets,
 nut, tuners (machine heads with clover keys), tree (the D and G strings' retainer), pickups (the two covers with their screws
 and the guard's screws), bridge, knobs, plate_parts (the plate's screws and the jack's nut), decals (graphic layers: the string
-holes), stripes (with a `stripe` slot; a graphic layer), buttons, back_plates (the neck plate and the string ferrules), strings,
-plug, pick (modelled in the grip solver's pinch frame, lying on the face at rest), cable (a bevelled curve from the plug end down
-to the floor, z = -0.14: the wear stage re-hangs it), the empties `<name>_strap_top`, `<name>_strap_bottom`, `<name>_jack` and
+holes), stripes (with a `stripe` slot; a graphic layer), buttons, back_plates (the neck plate and the string ferrules),
+string_1 .. string_4 (one per string, 1 the G: they ring when played, mkmmd.core.strings), plug, pick (modelled in the grip
+solver's pinch frame, lying on the face at rest), cable (a bevelled curve from the plug end down to the floor, z = -0.14: the
+wear stage re-hangs it), the empties `<name>_strap_top`, `<name>_strap_bottom`, `<name>_jack` and
 the hidden colliders `<name>_col_body` / `_horn` / `_neck` / `_head`. The material `<name>_strap` (a woven band) is made for the
 strap the pose stage builds; no strap object exists here.
 
@@ -31,9 +32,9 @@ Card keys (the guitar's contract, four strings)
   size, origin ("bridge"), front ("-Y"), slots (the colour roles, below)
   use.grip    neck: frame {along (0,0,1) toward the nut, across (1,0,0) low E to G, normal (0,-1,0) out of the board}, thumb
               (0,1,0), scale, frets (the board's crown centre under each wire, index 0 = the nut), strings (low E first: nut and
-              bridge points on the axis, radius, midi: the open string's pitch), tuning [28, 33, 38, 43] (E1 A1 D2 G2: what a
-              `notes` line is placed with), section {width, depth (nut, last fret), p 2.6, board_width, board_radius} (the
-              neck's back is exactly this superellipse), fret_height
+              bridge points on the axis, radius, midi: the open string's pitch, object: its own `<name>_string_<n>`), tuning
+              [28, 33, 38, 43] (E1 A1 D2 G2: what a `notes` line is placed with), section {width, depth (nut, last fret), p 2.6,
+              board_width, board_radius} (the neck's back is exactly this superellipse), fret_height
               strum: center (the pick tip's rest point, on the string plane between the pickup and the neck's end), along,
               across, normal, zone [z0, z1] and pick {object, thickness, length, width, tip} (the pick object's frame: origin
               where the pads meet, +x toward the tip at x = tip, y across, z through the thickness)

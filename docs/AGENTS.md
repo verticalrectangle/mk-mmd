@@ -112,9 +112,14 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
 - **Perform** ([Perform](design.md#perform)): gaze events over an idle target, eye-only glances, breathing, sway, nods, beat bob, blinks,
   expressions, lip sync from the timeline (`sing`; `words = [[2, -1]]` mouths only chosen words, a partner shouting the line endings), twitches,
   strumming (`strum`: down strokes on the downbeats, the pick meeting the string at each strike).
-  A character that turns round uses `step_turn` (the head, chest and hips in turn, the feet stepping), not a `[[key]]` on its root's
-  rotation: that spins it like a figure on a turntable. A character in the air (a jump, a blast; its height keyed on the root) gets
-  `air`, so its legs tuck and reach down to land instead of hanging straight, and a `crouch` before it to brace.
+  A character that turns round uses `step_turn` (the head, chest and hips in turn, the feet stepping), and one that twirls (in the
+  air or on the ground) `spin` (a wind-up, the head spotting the camera and whipping round ahead of the chest, the hips trailing,
+  an overshoot settling back), not a `[[key]]` on its root's rotation: that spins it like a figure on a turntable. Look at a spin
+  in a front and a top strip every 0.1 s (`mk look --view front,0:89 --frames t=A:B:0.1 --strip`). A character in the air (a
+  jump, a blast; its height keyed on the root) gets `air`, so its legs tuck and reach down to land instead of hanging straight, and
+  a `crouch` before it to brace. One that floats for seconds (`rise`) gets `air` with `kicks` too (`every = 2` lands them on the
+  beats), so its legs tread lazily in turns instead of holding the tuck like a statue, and a `point` past the tucked shin's slope
+  (about 55) so its feet hang pointed, not flexed.
   A strut is `walk = {steps, cross = 1, sway = 0.035}` (the feet on one line, the hips over the foot that is down). For arms that
   swing like a person's, not a robot's, let both hands go with `free` moves over each run of steps and play a walk VMD's arms there
   (`[[motion.<cast>]] bones = ["arms", "upper_body", "upper_body2"], extend = "none"`, its cycle scaled to two steps and its left heel
@@ -127,6 +132,12 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   `hands_up`, `stank` ...) or on clip seconds of their own (`hits = [...]`: a `bonk` on the snares; `flung` throws both arms up on its
   time, as a reaction does, where other moves set off early to arrive on it), and `{name = "rest", hand = "R", place = "mic"}` keeps a mic hand at the mouth between them (a two-hand move then
   plays with the free hand only; `place = "dainty"` rests a hand lightly on the front of a skirt, elbows in); they compile to the pose's hand keys (riding the chest) and perform's lean, twitches and faces.
+  The gag moves of a kids' show (`mkmmd/core/gags.py`): `bounce` (an EDM bounce, knees pumping on `hits = { lane = "sub" }`, fists up
+  and a hop on `accents`), `run_in_place` (knees up, fists pumping; on a treadmill prop stand her on its `run` feet), `yawn` (a
+  stretch, or hugging a pillow with `prop`), `chomp` (a held carrot bitten on its hits, its `bite<k>` fired), `brush` (a toothbrush on
+  the teeth), `wag`, `wink_point` and mimed `chores` (`chore = "sweep" | "stir" | "water"`); a held prop is placed by the move (no
+  `attach` of its own: key its `scale` to show it). `[perform.<cast>] squash = { lane = "sub" }` squashes and stretches the whole body
+  on a lane's hits, keeping its volume.
   The poses `hair_flip`, `over_shoulder`, `hand_hip` and `finger_gun` hold a body and head attitude too (mirrored for the right hand): put
   one on a dead stop of the music, between two walks, and shoot it from the side it reads from. A `hair_flip`'s hand runs
   through the hair: with long simulated hair watch it in motion before keeping it (a lock can fly out like a whip). The hands
@@ -149,7 +160,16 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   it. Read the report's `pen_mm` (how deep the cloth went into her and on which frame) and `lag_mm`, and look at that frame; `hold` keeps
   the cloth closer to its shape when a move is too fast for it, `mk build --skip cloth` is the fast loop for everything else.
 - **Worn props** (a guitar on its strap, [Playing a worn guitar](design.md#playing-a-worn-guitar)): `wear = "rin"` on the prop, `grip = "guitar:neck"` and
-  `grip = "guitar:strum"` on the hands, `strum = {...}` in `perform`; check `strum`, `prop_body` and the arm `contact`.
+  `grip = "guitar:strum"` on the hands, `strum = {...}` in `perform`; check `strum`, `string_play`, `prop_body` and the arm `contact`. The
+  strings the hand plays vibrate on their own ([Strings that ring](design.md#strings-that-ring): only those strings, from the fret
+  held, a strum's one after another): look at a close-up of the neck and of the picking hand frame by frame before trusting a take.
+- **Gag props** (their rows in [Props](design.md#props)): `library:pillow_cloud` (key `puff` 0 -> 1: the pillow puffs into a cloud; `hug`
+  anchor, `hold_L` / `hold_R` palms), `giant_carrot` (key `bite1`..`bite4` CONSTANT at the chomps, in order; `use.grip` `hold`, `use.bite`
+  points; the chunks fly and fall on their own), `record_treadmill` (stand the cast at [-0.45, 0, 0.16] with `feet = "<name>:run"`, key
+  `rpm`), `parent_cutout` (`figure` father / mother; key the father's `wag` or `wagging`), `sandbox_piano` (`sit = "<name>:bench"`, hands on
+  `"<name>:keys"`), `chalkboard` (`[[text]] on = "<name>:board"`, `drawing = "noughts"`), `carrot_plush`, `dinner_plate` (`veggies =
+  false` empties it) and `colorbar_card` (`style`: the bars of `mkmmd.core.colorbars`). Light a cut-out against a backdrop: its drop
+  shadow is a printed layer behind it.
 
 Hands. `grip = "car:wheel"` (or `"rest"` with `rest = "car:sill_R"`) in `[pose.<cast>.hands.L]` solves the fingers on the model's own skin
 ([Grips](design.md#grips)), where `at` plus a finger preset only guesses. A `WARNING ... short of its goal` means the seat is out of the arm's
@@ -224,9 +244,10 @@ A project's `[[check]]` entries define done; `mk check` runs them all in one Ble
 | Hair, ears, tails do not shake | `jitter` per family, `max = 0.5` (side locks that swing: 0.8) |
 | Hair stays out of the body and props | `penetration` with the project's collider set, `max = 5` (mm) |
 | Feet do not skate | `foot_slide`, `max = 1.5` (mm per frame) |
-| No broken elbows, knees, necks | `joint_limits`, `max = 0` |
+| No broken elbows, knees, necks; no arm turned past a human one | `joint_limits`, `max = 0` (a dance motion that turns the arms' twist bones further: widen `forearm_twist` and `arm_twist` in `limits` and keep `skin_collapse`) |
+| No sleeve or skin collapsing round a twisted arm or leg | `skin_collapse` (default `max` 0.15) |
 | A hand really holds or touches something | `contact` between two points or a point and a track (see Hands above) |
-| A worn prop (a guitar) is played in time and stays out of the body | `strum` (the pick meets the strings at every down stroke, `max = 10` mm; `detail.timing` is the strike error in ms), `prop_body` (`max = 8` mm), and `contact` of `bone("wrist.R").tail` against `obj("<cast>_hand.R").loc` (the arm reached every goal, `max = 5`) |
+| A worn prop (a guitar) is played in time and stays out of the body | `strum` (the pick meets the strings at every down stroke, `max = 10` mm; `detail.timing` is the strike error in ms), `string_play` (every note: its string rings from its fret, the fretting fingertip on it behind the wire, the pick or fingertip crossing it on time; `max = 0`, `detail.misses` names what each missed note lacks), `prop_body` (`max = 8` mm), and `contact` of `bone("wrist.R").tail` against `obj("<cast>_hand.R").loc` (the arm reached every goal, `max = 5`) |
 | The subject is in frame in every output | `framing` per shot (`frames` of that shot), `min = 0` |
 | Nothing blocks the subject | `occlusion`, `max = 0.3` |
 | The camera is not inside a car body or a wall | `camera_inside`, `max = 0` |
@@ -243,7 +264,10 @@ Reading results:
 - `clearance` measures the rig's collision bodies, which often stop at the ankles and wrists: a word that clears the ankle capsules by less than a shoe's height
   goes through the shoe. `detail.at_frame` and `detail.body` say where to look.
 - `joint_limits` does not flag sideways elbow bends: MMD rigs treat the elbow as a ball joint and professional motions put upper-arm rotation there. It flags fold-through, in-plane
-  hyperextension, knees bending the wrong way or sideways, wrists past 110 degrees, and necks and spines past what dances do.
+  hyperextension, knees bending the wrong way or sideways, wrists past 110 degrees, necks and spines past what dances do, and forearms and upper arms turned about
+  themselves past a human arm's range (`forearm_twist`, `arm_twist`: the series' `spans` say when).
+- `skin_collapse` names the frame, the limb (`region`), the bone and the mesh object where a cut through the skin lost the most of its rest size: look at that
+  frame from the side the sleeve faces (`mk look --view ... --target 'bone("elbow.L").tail'`).
 - `framing` margins are fractions of the frame; negative means outside the safe area. Configure it per shot: a page close-up is not supposed to contain the head.
 
 ## 8. Look sheets

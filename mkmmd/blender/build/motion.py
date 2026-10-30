@@ -59,7 +59,10 @@ def _vmd_path(ctx, ref):
 
 
 def import_vmd(member, path, key):
-    """VMD -> (bone action, morph action or None), detached from the model for NLA use."""
+    """VMD -> (bone action, morph action or None), detached from the model for NLA use. The member's IK is left as it
+    was: mmd_tools switches a member's IK off for the whole scene (the IK constraints' influence) when the VMD's first
+    frame turns it off, as FK motions (a BVH conversion's legs) do, which left the legs of every later stage without
+    their IK; the switches the VMD keys are dropped too (nothing reads them during playback)."""
     root, arm = member.root, member.arm
     bpy.ops.object.select_all(action="DESELECT")
     root.select_set(True)
@@ -69,15 +72,26 @@ def import_vmd(member, path, key):
     prev = arm.animation_data.action if arm.animation_data else None
     if arm.animation_data:
         arm.animation_data.action = None
+    toggles = {pb.name: pb.mmd_ik_toggle for pb in arm.pose.bones}
+    influence = {(pb.name, c.name): c.influence for pb in arm.pose.bones for c in pb.constraints}
     sc.frame_current = 0                       # mmd_tools offsets imported keys by the current frame
     bpy.ops.mmd_tools.import_vmd(filepath=path, scale=0.08, bone_mapper="PMX", use_pose_mode=False,
                                  update_scene_settings=False, use_nla=False, create_new_action=True,
                                  log_level="ERROR")
     sc.frame_start, sc.frame_end, sc.frame_current = keep
+    for name, on in toggles.items():
+        pb = arm.pose.bones[name]
+        if pb.mmd_ik_toggle != on:
+            pb.mmd_ik_toggle = on              # its update sets the chain's constraints, which are restored next
+    for (b, c), v in influence.items():
+        arm.pose.bones[b].constraints[c].influence = v
     act = arm.animation_data.action if arm.animation_data else None
     if act:
         act.name = f"{key}_bone"
         act.use_fake_user = True
+        for fc in [fc for fc in act.fcurves if fc.data_path.endswith(".mmd_ik_toggle")]:
+            act.fcurves.remove(fc)
+        near_rest(act)
     arm.animation_data.action = prev
     mact = None
     holders = S.morph_holders(arm)                 # the bound sliders' placeholder, or the meshes
@@ -90,6 +104,25 @@ def import_vmd(member, path, key):
                 mact.use_fake_user = True
             sk.animation_data.action = None
     return act, mact
+
+
+def near_rest(act):
+    """Turn every bone's quaternion track of `act` that sits on the far side of the rest (w below 0 over its keys) to
+    the near side: the same rotations (q and -q are one), but a strip that blends with the rest pose or with another
+    strip turns the short way. Blender blends quaternions component by component, and BVH conversions key whole tracks
+    at w < 0, so a blend-in swung the neck and twisted the arms half a turn on the way."""
+    tracks = {}
+    for fc in act.fcurves:
+        if fc.data_path.endswith(".rotation_quaternion"):
+            tracks.setdefault(fc.data_path, {})[fc.array_index] = fc
+    for fcs in tracks.values():
+        w = fcs.get(0)
+        if w is None or sum(k.co[1] for k in w.keyframe_points) >= 0.0:
+            continue
+        for fc in fcs.values():
+            for k in fc.keyframe_points:
+                k.co[1], k.handle_left[1], k.handle_right[1] = -k.co[1], -k.handle_left[1], -k.handle_right[1]
+            fc.update()
 
 
 def _group(sem):

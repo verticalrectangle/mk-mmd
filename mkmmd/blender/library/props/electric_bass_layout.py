@@ -310,8 +310,14 @@ TREE = (SCALE + 1e-3 * HEAD_K * 79.4, HEAD_K * 0.0134)    # the string retainer 
 # the plectrum (351 shape) in the pinch frame
 PICK = {"thickness": 0.0010, "length": 0.031, "width": 0.026, "tip": 0.008}
 PICK_REST = {"at": (-0.0450, 0.0560)}        # x, z where it lies on the body's face (tip toward +z), between the bridge and guard
-STRUM_ZONE = (0.1700, 0.2350)                # between the pickup's covers and the end of the neck, where a pick player plays a
-                                             # Mustang (and where a hanging arm reaches a bass worn at the hip)
+STRUM_ZONE = (0.0800, 0.1200)                # between the bridge and the pickup's covers: a pick player's hand rests its heel
+                                             # by the bridge (PALM) and picks a few centimetres up the strings from it
+PALM = {"z": (-0.0150, 0.0400), "across": 0.0700, "lift": 0.0120}   # the patch over the strings by the saddles the heel of
+                                             # a picking hand rests over (along z, across, at most `lift` over the strings)
+TECHNIQUE = "fingers"                        # the default way the strum hand plays it: rest strokes with the index and middle
+                                             # fingers, as most bassists do (`[perform.<cast>] strum` technique = "pick" picks)
+FINGER_ZONE = (0.1000, 0.1900)               # along the strings: where the fingers pluck (over and around the pickup)
+THUMB_CLEAR = 0.0020                         # the thumb's rest on the bass cover keeps this far inside its end and off the E
 
 # cable (a bevelled curve) and its end
 CABLE_R = 0.0032
@@ -350,10 +356,36 @@ def jack_geometry():
 
 
 def strum_center():
-    """The pick tip's rest point: centred across the four strings, on their plane, between the pickup and the neck's end."""
+    """The pick tip's rest point: centred across the four strings, on their plane, between the bridge and the pickups."""
     z = 0.5 * sum(STRUM_ZONE)
     y = float(np.mean([string_at(i, z)[1] for i in range(4)]))
     return (0.0, y, z)
+
+
+def palm_entry():
+    """The strum entry's `palm`: the patch over the strings by the saddles that a picking hand's heel rests over (the pinch
+    solve keeps the heel at most `lift` above it)."""
+    z = 0.5 * sum(PALM["z"])
+    y = min(float(string_at(i, z)[1]) - STRING_R[i] for i in range(4))                # the strings' tops (the face looks to -y)
+    return {"center": _r((0.0, y, z)), "normal": [0, -1, 0], "size": _r((PALM["across"], PALM["z"][1] - PALM["z"][0])),
+            "lift": PALM["lift"]}
+
+
+def fingers_entry():
+    """The strum entry's `fingers` table (mkmmd.core.strum.pluck_prop): the zone the fingers pluck in, the thumb's rest while
+    the low E rings (the bass cover's top between its end and the E string), the guard's face under the strings and the two
+    pickup covers standing on it."""
+    y_base = -GUARD_T + 0.0001                                           # the covers stand on the guard (hw: pickups_mesh)
+    y_top = y_base - PICKUP_H
+    cx, cz = PICKUPS["bass"]["center"]
+    end = cx - 0.5 * PICKUP_L + THUMB_CLEAR
+    e_x = float(string_at(0, cz)[0]) - STRING_R[0] - THUMB_CLEAR
+    blocks = [{"center": _r((x, 0.5 * (y_base + y_top), z)), "size": _r((PICKUP_L, PICKUP_H, PICKUP_W))}
+              for x, z in (p["center"] for p in PICKUPS.values())]
+    return {"zone": list(FINGER_ZONE),
+            "anchor": {"center": _r((0.5 * (end + e_x), y_top, cz)), "normal": [0, -1, 0],
+                       "size": _r((e_x - end, 0.5 * PICKUP_W))},
+            "face": {"point": _r((0.0, -GUARD_T, 0.0)), "normal": [0, -1, 0]}, "blocks": blocks}
 
 
 def wear_entry(name):
@@ -374,7 +406,7 @@ def card(name, roles=None, size=None):
     for i in range(4):
         a, b = string_ends(i)
         strings.append({"name": STRING_NAMES[i], "nut": _r(a), "bridge": _r(b), "radius": round(STRING_R[i], 6),
-                        "midi": TUNING[i]})
+                        "midi": TUNING[i], "object": f"{name}_string_{4 - i}"})
     center = strum_center()
     mouth, jdir, jend = jack_geometry()
     top, bot = STRAP_TOP, STRAP_BOTTOM
@@ -388,9 +420,10 @@ def card(name, roles=None, size=None):
                         "board_width": [W_NUT, W_LAST], "board_radius": BOARD_R},
             "fret_height": FRET_H, "object": f"{name}_neck"}
     strum = {"name": "strum", "type": "strum", "center": _r(center), "along": [0, 0, 1], "across": [1, 0, 0],
-             "normal": [0, -1, 0], "zone": list(STRUM_ZONE),
+             "normal": [0, -1, 0], "zone": list(STRUM_ZONE), "avoid": [f"{name}_body"],
              "pick": {"object": f"{name}_pick", "thickness": PICK["thickness"], "length": PICK["length"],
-                      "width": PICK["width"], "tip": PICK["tip"]}}
+                      "width": PICK["width"], "tip": PICK["tip"]},
+             "technique": TECHNIQUE, "fingers": fingers_entry(), "palm": palm_entry()}
     anchors = [{"name": "strap_top", "point": _r(top["point"]), "dir": _r(_unit(top["dir"])), "object": f"{name}_strap_top"},
                {"name": "strap_bottom", "point": _r(bot["point"]), "dir": _r(_unit(bot["dir"])),
                 "object": f"{name}_strap_bottom"},

@@ -31,13 +31,22 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      list of tables is several sways, summed (a sway in each span where she stands idle)
   crouch = [[t, metres], ...]        the hips drop by that much, the feet planted (the knees bend: a landing, a squat), eased
                                      between keys like `rise`
-  air = [{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30}]
-                                     the legs while the body is off the ground (a jump, a blast; the root's height is keyed
-                                     elsewhere): they tuck up and back, one after the other, the toes point, and they reach down
-                                     again for the landing (mkmmd.core.perform.air_plan)
+  air = [{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30,
+          kicks = true | {knee = 10, hip = 2, foot = 15, period = 3.0, every, beats, timeline, wander = 0.3, seed = 0,
+          ease = 1.0}}]              the legs while the body is off the ground (a jump, a blast, a float; the root's height is
+                                     keyed elsewhere): they tuck up and back, one after the other, the toes point, and they
+                                     reach down again for the landing (mkmmd.core.perform.air_plan); `kicks` floats them
+                                     between: small lazy kicks in turns, the knees bending and straightening, the feet
+                                     pointing and flexing, every `period` s or on every `every`-th beat (air_kicks)
   step_turn = [{t, deg, dur, first, lift = 0.045, dip = 0.02, move = [x, y]}]   the body turns round on the spot like a
                                      person: the cast root's yaw (and its travel), the chest leading the hips, the feet
                                      stepping round one after the other, the hips sinking (mkmmd.core.perform.turn_plan)
+  spin = [{from, to, deg, spot = true, windup = 20, overshoot = 8, twist = 35, neck = 70, whip = 0.3, foot, lift = 0.1}]
+                                     the body spins like a dancer, not a figure on a turntable: a wind-up the other way,
+                                     the chest leading and the hips trailing (the spine twists), the head spotting where
+                                     she faced and whipping round ahead of the body, an overshoot settling back; in the
+                                     air the legs go round with the hips, on the ground she turns on the toes of `foot`,
+                                     the other foot lifted (mkmmd.core.perform.spin_curves, turn_plan)
   walk = {steps = [t, ...], hops = [{from, to, move = [x, y], height}], stride = 0.55, first = "L", lift = 0.07,
           dip = 0.015, slide = 0.0, roll = 0.15, hop = 0.0}   the body walks: a foot comes down on each step a stride
                                      past the other, the root travels with the body, the hips dip; over a hop both feet
@@ -57,6 +66,11 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      (mkmmd.core.strum; docs/design.md: Perform)
   drum = {hand = "R", fingers = [...], deg = 25, lift = 0.16, roll = 0.02, beats | timeline, from, to}   the fingers tap on
                                      the beats from where their keys hold them (a grip's curl): lifted before, down on it
+  squash = {lane = "sub" | hits = [t, ...], depth = 0.1, stretch = 0.05, attack = 0.04, rebound = 0.14, min_db, every, from,
+            to}                      the whole body squashes on each hit and springs back up past its height, keeping its
+                                     volume: the cast root scaled about her feet (mkmmd.core.perform.squash)
+  mouth = [[t0, t1], ...]            spans where the expressions on the vowels win over `sing` (the moves stage writes them
+                                     for a yawn, a chomp, a brush)
 A table that is empty does nothing (the log says so); a table named after no cast member or holding a key this stage does
 not read is refused (mkmmd.core.tables).
 Everything is composed in the armature's frame (correct for characters riding vehicles), keyed per frame (LINEAR)."""
@@ -69,12 +83,14 @@ import numpy as np
 from mathutils import Matrix, Quaternion, Vector
 
 from ...core import families as FAM
+from ...core import lanes as LN
 from ...core import lipsync as LS
 from ...core import perform as PF
 from ...core import timeline as TL
 from .. import keys as K
 from .. import scene as S
 from . import BuildError, targets
+from . import strings as STRINGS
 
 SPINE = ("upper_body", "upper_body2", "neck", "head")
 
@@ -109,20 +125,23 @@ def _sample_pass(ctx, m, look_refs, frames):
 
 
 def _strum(ctx, name, m, specs):
-    """[perform.<cast>] strum: key the pick hand's IK goal (relative to the grip the pose stage solved) so that the pick tip
-    strokes across the strings of the guitar-like prop the hand grips: strokes from the timeline's onsets or the beat grid
-    (mkmmd.core.strum.plan), or picking the notes of the other hand's bass line one string at a time (`rhythm = "notes"`:
-    the fretting hand's `notes`, mkmmd.core.fretting.line), the pick tip's path over them (`path`), turned into goals that
-    move the hand as a rigid body: the tip goes where the path says, part of the sideways travel (`share`) made by turning
-    the hand about the wrist, about an axis along the strings. Returns {side: numbers}."""
+    """[perform.<cast>] strum: key the strum hand of a guitar-like prop. With a pick (technique "pick", the guitar's default):
+    its IK goal (relative to the grip the pose stage solved) so that the pick tip strokes across the strings: strokes from
+    the timeline's onsets or the beat grid (mkmmd.core.strum.plan), or picking the notes of the other hand's bass line one
+    string at a time (`rhythm = "notes"`: the fretting hand's `notes`, mkmmd.core.fretting.line), the pick tip's path over
+    them (`path`), turned into goals that move the hand as a rigid body: the tip goes where the path says, part of the
+    sideways travel (`share`) made by turning the hand about the wrist, about an axis along the strings. With the fingers
+    (technique "fingers", the bass's default): rest strokes on the bass line from the stations the pose stage solved
+    (`_pluck`). The technique is the first table's (else the card's strum entry's) for every table of a hand. Returns {side:
+    numbers}."""
     from ...core import fretting as FR
     from ...core import strum as SM
+    from .pose import picked_notes
     specs = [specs] if isinstance(specs, dict) else list(specs)
     sides = {}
     for sp in specs:
         sides.setdefault(sp.get("hand", "R"), []).append(sp)
     out = {}
-    f1 = ctx.start + ctx.settle
     for side, entries in sides.items():
         where = f"perform.{name}.strum ({side})"
         first = entries[0]
@@ -135,6 +154,12 @@ def _strum(ctx, name, m, specs):
         if tgt.parent is not prop.root:
             raise BuildError(f"{where}: the hand's goal must ride the prop {prop.name!r} (a grip on its strum zone does by default)")
         entry = prop.use("grip", first.get("grip", "strum"))
+        try:
+            tech = SM.technique(first, entry)
+        except SM.StrumError as e:
+            raise BuildError(f"{where}: {e}") from None
+        entries = [dict(e, technique=tech) for e in entries]
+        first = entries[0]
         a, c, n = (np.asarray(entry.get(k), float) for k in ("along", "across", "normal"))
         a, c, n = a / np.linalg.norm(a), c / np.linalg.norm(c), n / np.linalg.norm(n)
         centre = np.asarray(entry["center"], float)
@@ -147,76 +172,132 @@ def _strum(ctx, name, m, specs):
         else:
             sigma = 0.0225
         tl = ctx.timeline(first, where)
-        picked = _picked_notes(ctx, name, side, prop, neck, entry, where) if any(SM.picking(e) for e in entries) else None
-        strokes = sorted((s for e in entries for s in SM.plan(e, tl, ctx.duration, picked)), key=lambda s: s.t)
+        picked = picked_notes(ctx, name, side, prop, neck, entry, where) if any(SM.picking(e) for e in entries) else None
+        try:
+            strokes = sorted((s for e in entries for s in SM.plan(e, tl, ctx.duration, picked)), key=lambda s: s.t)
+        except SM.StrumError as e:
+            raise BuildError(f"{where}: {e}") from None
         keep = SM.params(first)
-        win = SM.window(strokes, **keep)
-        if win is None:
+        if not strokes:
             ctx.log("WARNING", f"{where}: no strokes (rhythm and window select no strike time)")
             out[side] = {"strokes": 0}
             continue
-        fr = np.arange(max(f1 + 1, math.floor(ctx.frame(win[0]))), min(ctx.end, math.ceil(ctx.frame(win[1]))) + 1)
-        P = SM.path(strokes, [ctx.time(f) for f in fr], sigma, **keep)
-        act = tgt.animation_data.action
-        loc0 = np.array([act.fcurves.find("location", index=i).evaluate(f1) for i in range(3)])
-        q0 = Quaternion([act.fcurves.find("rotation_quaternion", index=i).evaluate(f1) for i in range(4)])
-        R0 = np.array(q0.to_matrix())
-        wrist = S.semantic_map(m.arm)[f"wrist.{side}"]
-        pivot = loc0 - R0 @ np.array([0.0, m.arm.data.bones[wrist].length, 0.0])      # the wrist head: the goal acts on the tail
-        r = centre - pivot
-        r = r - (r @ a) * a
-        kappa = float(np.cross(a, r) @ c)                      # sideways travel of the tip per radian about the wrist
-        share = float(keep["share"]) if abs(kappa) > 0.03 else 0.0
-        locs, rots = [], []
-        for u, h in zip(P["u"], P["h"]):
-            th = float(np.clip(share * u / kappa, -0.6, 0.6)) if share else 0.0
-            Rt = np.array(Quaternion(Vector(a), th).to_matrix())
-            tip = centre + u * c + h * n                       # where the path wants the pick tip
-            move = tip - (pivot + Rt @ (centre - pivot))
-            locs.append(tuple(pivot + Rt @ (loc0 - pivot) + move))
-            rots.append(tuple(Matrix((Rt @ R0).tolist()).to_quaternion()))
-        rots = K.continuous(rots)
-        if float(np.dot(rots[0], np.array(q0))) < 0:
-            rots = -rots
-        mills = []
-        if first.get("windmill"):
-            locs, rots, mills = _windmill(ctx, m, side, prop, n, fr, locs, rots, strokes,
-                                          [float(t) for t in first["windmill"]], float(first.get("windmill_dur", 0.5)), where)
-        K.key_vec(tgt, "location", fr, locs, interp="LINEAR", replace=False)
-        K.key_vec(tgt, "rotation_quaternion", fr, rots, interp="LINEAR", replace=False)
-        down = sum(1 for s in strokes if s.dir > 0)
-        out[side] = {"strokes": len(strokes), "down": down, "up": len(strokes) - down, "frames": [int(fr[0]), int(fr[-1])],
-                     "sigma_mm": round(sigma * 1e3, 1), "turn_share": share, "first": [round(s.t, 3) for s in strokes[:6]],
-                     "max_u_mm": round(float(np.abs(P["u"]).max()) * 1e3, 1)}
+        if SM.fingerstyle(first):
+            out[side] = _pluck(ctx, m, side, strokes, keep, where)
+        else:
+            out[side] = _pick(ctx, m, side, prop, first, strokes, keep, sigma, entry, where)
         if picked is not None:
             ps = [s for s in strokes if s.string is not None]
             out[side]["picked"] = {"strokes": len(ps), "strings": sorted({s.string for s in ps})}
-        if mills:
-            out[side]["windmills"] = mills
         if first.get("kick"):
             out[side]["kick"] = _neck_kick(ctx, prop, n, [s.t for s in strokes if s.accent], float(first["kick"]))
+        rung = STRINGS.play(ctx, name, m, side, prop, strokes, keep, sigma, entry, neck)    # the strings it plays ring
+        if rung:
+            out[side]["strings"] = rung
         ctx.log("strum", name, side, json.dumps(out[side]))
     return out
 
 
-def _picked_notes(ctx, name, side, prop, neck, entry, where):
-    """[(t, c, w, string)] the pick hand plays with `rhythm = "notes"` (mkmmd.core.strum.pick_notes): the bass line of the
-    other hand (`[pose.<cast>.hands.<other>] notes`, gripping this prop's neck), each note on the string the fretting hand
-    plays it on, placed on the strum axis of the strum entry `entry`."""
+def _pick(ctx, m, side, prop, first, strokes, keep, sigma, entry, where):
+    """A pick hand's goal over its strokes (see `_strum`), keyed every frame (LINEAR) from the first approach to the last
+    retreat. Returns the numbers of the report."""
     from ...core import strum as SM
-    from .pose import bass_line
-    other = "L" if side == "R" else "R"
-    h = ((ctx.section("pose", name) or {}).get("hands") or {}).get(other) or {}
-    if h.get("notes") is None:
-        raise BuildError(f"{where}: rhythm = \"notes\" picks the bass line of the fretting hand: give "
-                         f"[pose.{name}.hands.{other}] notes = {{lane = \"...\" | times = [[t, midi], ...]}}")
-    ref = str(h.get("grip", ""))
-    fret_prop, _, use = ref.partition(":")
-    if fret_prop != prop.name or neck is None:
-        raise BuildError(f"{where}: rhythm = \"notes\": the fretting hand must grip the neck of {prop.name!r} "
-                         f"(its grip is {ref!r})")
-    placed, _keys = bass_line(ctx, h, prop.use("grip", use or None), where)
-    return SM.pick_notes(placed, neck, entry)
+    f1 = ctx.start + ctx.settle
+    tgt = m.ik[side][0]
+    a, c, n = (np.asarray(entry.get(k), float) for k in ("along", "across", "normal"))
+    a, c, n = a / np.linalg.norm(a), c / np.linalg.norm(c), n / np.linalg.norm(n)
+    centre = np.asarray(entry["center"], float)
+    win = SM.window(strokes, **keep)
+    fr = np.arange(max(f1 + 1, math.floor(ctx.frame(win[0]))), min(ctx.end, math.ceil(ctx.frame(win[1]))) + 1)
+    P = SM.path(strokes, [ctx.time(f) for f in fr], sigma, **keep)
+    act = tgt.animation_data.action
+    loc0 = np.array([act.fcurves.find("location", index=i).evaluate(f1) for i in range(3)])
+    q0 = Quaternion([act.fcurves.find("rotation_quaternion", index=i).evaluate(f1) for i in range(4)])
+    R0 = np.array(q0.to_matrix())
+    wrist = S.semantic_map(m.arm)[f"wrist.{side}"]
+    pivot = loc0 - R0 @ np.array([0.0, m.arm.data.bones[wrist].length, 0.0])      # the wrist head: the goal acts on the tail
+    if SM.picking(first):                                  # picking a line: the stroke is a turn of the hand about the wrist
+        axis, kappa = SM.wrist_turn(pivot, centre, c)
+        share = float(keep["share"]) if axis is not None else 0.0
+    else:                                                  # a strum: a turn about the strings' direction, where it goes sideways
+        share, kappa = SM.turn_share(keep["share"], pivot, centre, a, c)
+        axis = a
+    locs, rots = [], []
+    for u, h in zip(P["u"], P["h"]):
+        th = float(np.clip(share * u / kappa, -0.6, 0.6)) if share else 0.0
+        Rt = np.array(Quaternion(Vector(axis if share else a), th).to_matrix())
+        tip = centre + u * c + h * n                       # where the path wants the pick tip
+        move = tip - (pivot + Rt @ (centre - pivot))
+        locs.append(tuple(pivot + Rt @ (loc0 - pivot) + move))
+        rots.append(tuple(Matrix((Rt @ R0).tolist()).to_quaternion()))
+    rots = K.continuous(rots)
+    if float(np.dot(rots[0], np.array(q0))) < 0:
+        rots = -rots
+    mills = []
+    if first.get("windmill"):
+        locs, rots, mills = _windmill(ctx, m, side, prop, n, fr, locs, rots, strokes,
+                                      [float(t) for t in first["windmill"]], float(first.get("windmill_dur", 0.5)), where)
+    K.key_vec(tgt, "location", fr, locs, interp="LINEAR", replace=False)
+    K.key_vec(tgt, "rotation_quaternion", fr, rots, interp="LINEAR", replace=False)
+    down = sum(1 for s in strokes if s.dir > 0)
+    out = {"technique": "pick", "strokes": len(strokes), "down": down, "up": len(strokes) - down,
+           "frames": [int(fr[0]), int(fr[-1])], "sigma_mm": round(sigma * 1e3, 1), "turn_share": round(share, 2),
+           "first": [round(s.t, 3) for s in strokes[:6]], "max_u_mm": round(float(np.abs(P["u"]).max()) * 1e3, 1)}
+    if mills:
+        out["windmills"] = mills
+    return out
+
+
+def _pluck(ctx, m, side, strokes, keep, where):
+    """Fingerstyle (technique "fingers"): key the plucking hand from the stations the pose stage solved (grip style pluck,
+    `m.hands[side]["pluck"]`): its goal at the station of the string it plays and each finger's joints in its pose
+    (mkmmd.core.strum.pluck_keys: hover, touch, cross at the stroke's time, rest), blended per frame (LINEAR keys) from the
+    first move to the last; the thumb, ring and little fingers keep each station's. Returns the numbers of the report."""
+    from ...core import strum as SM
+    pl = (m.hands.get(side) or {}).get("pluck")
+    if not pl:
+        raise BuildError(f"{where}: technique \"fingers\": the pose stage solved no plucking stations for this hand (give it "
+                         f"`[pose.<cast>.hands.{side}] grip = \"<prop>:strum\"`)")
+    st = pl["stations"]
+    missing = sorted({s.string for s in strokes} - set(st))
+    if missing:
+        raise BuildError(f"{where}: strings {missing} have no plucking station (the pose stage planned other notes)")
+    keys = SM.pluck_keys(strokes, pl["travel"], **keep)
+    lo, hi = SM.pluck_window(keys)
+    f1 = ctx.start + ctx.settle
+    fr = np.arange(max(f1 + 1, math.floor(ctx.frame(lo)) - 1), min(ctx.end, math.ceil(ctx.frame(hi)) + 1) + 1)
+    ts = np.array([ctx.time(f) for f in fr])
+    s0, s1, ws = SM.station_track(keys["station"], ts)
+    tgt = m.ik[side][0]
+    locs, rots = [], []
+    for a, b, w in zip(s0, s1, ws):
+        Ma, Mb = st[a]["local"], st[b]["local"]
+        locs.append(tuple(Ma.translation.lerp(Mb.translation, float(w))))
+        rots.append(tuple(Ma.to_quaternion().slerp(Mb.to_quaternion(), float(w))))
+    K.key_vec(tgt, "location", fr, locs, interp="LINEAR", replace=False)
+    K.key_vec(tgt, "rotation_quaternion", fr, K.continuous(rots), interp="LINEAR", replace=False)
+    track = {f: SM.pose_track(keys[f], ts) for f in ("index", "middle")}
+    curves = pl.get("curves") or {}
+    for f, (p0, p1, w) in track.items():                      # the stroke at a steady fingertip speed through the string
+        for i in range(len(fr)):
+            us = ((curves.get(s0[i]) or {}).get(f) or {}).get(p0[i])
+            if us and s0[i] == s1[i] and (p0[i], p1[i]) in (("hover", "cross"), ("cross", "rest")):
+                w[i] = SM.retime(w[i], us)
+    owner = {b: f for f in ("index", "middle") for b in st[s0[0]]["poses"][f"{f}.hover"]}
+    for b in st[s0[0]]["bones"]:
+        f = owner.get(b)
+
+        def at(s, i, b=b, f=f):
+            if f is None:
+                return Quaternion(st[s]["bones"][b])
+            p0, p1, w = track[f][0][i], track[f][1][i], float(track[f][2][i])
+            return Quaternion(st[s]["poses"][f"{f}.{p0}"][b]).slerp(Quaternion(st[s]["poses"][f"{f}.{p1}"][b]), w)
+
+        quats = [tuple(at(s0[i], i).slerp(at(s1[i], i), float(ws[i]))) for i in range(len(fr))]
+        K.key_bone_quats(m.arm, b, fr, K.continuous(quats), interp="LINEAR", replace=False)
+    return {"technique": "fingers", "strokes": len(strokes),
+            "fingers": {f: sum(1 for s in strokes if s.finger == f) for f in ("index", "middle")},
+            "stations": sorted(st), "frames": [int(fr[0]), int(fr[-1])], "first": [round(s.t, 3) for s in strokes[:6]]}
 
 
 def _windmill(ctx, m, side, prop, normal, fr, locs, rots, strokes, times, dur, where):
@@ -319,37 +400,67 @@ def _rocks(spec, key, name):
     return out
 
 
+def _spun(points, eyes, yaw, own):
+    """Look points (F, 3), 1 m from the eyes (armature space), turned to a spin's: level, `yaw` (F,) rad from the
+    armature's forward toward its left, taking over from the gaze by `own` (F,) 0..1."""
+    d = points - eyes
+    d = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    spin = np.stack([np.sin(yaw), -np.cos(yaw), np.zeros(len(yaw))], 1)
+    d = d * (1.0 - own)[:, None] + spin * own[:, None]
+    return eyes + d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+
+
 def _turn(ctx, name, m, spec, ts, frames):
-    """step_turn: the body turns round on the spot like a person (mkmmd.core.perform.turn_plan): the cast root's yaw, and
-    its travel for turns that `move`, are keyed here, before the gaze is sampled, so the head keeps to its targets through
-    the turn; the chest's lead and the feet's steps and the hips' dip are keyed by the caller and `_body` from the plan
-    this returns (None without turns), with report numbers. The point turned about is the root's origin."""
-    turns = spec.get("step_turn")
-    if not turns:
+    """step_turn and spin: the body turns round on the spot like a person, or spins like a dancer
+    (mkmmd.core.perform.turn_plan): the cast root's yaw, and its travel for turns that `move` and spins on the ground
+    (about the toes of a foot), are keyed here, before the gaze is sampled, so the head keeps to its targets through a
+    turn and spots through a spin; the chest's lead, the head's and eyes' spin, the feet's steps and the hips' dip are
+    keyed by the caller and `_body` from the plan this returns (None without turns), with report numbers. The point
+    turned about is the root's origin. A spin is in the air where `air` spans or `rise` lift the body (PF.aloft)."""
+    turns, spins = spec.get("step_turn"), spec.get("spin")
+    if not turns and not spins:
         return None, {}
-    where = f"perform.{name}.step_turn"
-    if not isinstance(turns, list):
-        raise BuildError(f"{where}: a list of turns [{{t, deg, dur, first, lift, dip, move}}]")
+    where = f"perform.{name}"
+    if turns and not isinstance(turns, list):
+        raise BuildError(f"{where}.step_turn: a list of turns [{{t, deg, dur, first, lift, dip, move}}]")
+    spins = spins if isinstance(spins, list) else [spins] if spins else []
     root, arm = m.root, m.arm
     if root is None or root == arm:
-        raise BuildError(f"{where}: the member has no root object to turn")
+        raise BuildError(f"{where}: step_turn / spin: the member has no root object to turn")
     if root.rotation_mode not in ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"):
-        raise BuildError(f"{where}: the root {root.name!r} turns in {root.rotation_mode}, not in Euler angles")
+        raise BuildError(f"{where}: step_turn / spin: the root {root.name!r} turns in {root.rotation_mode}, not in Euler "
+                         f"angles")
     smap = S.semantic_map(arm)
     W0 = arm.matrix_world.to_3x3().normalized()                 # the character's frame before the turns
     Wi = W0.inverted()
     centre = arm.matrix_world.inverted() @ root.matrix_world.translation
-    feet0 = (m.base or {}).get("feet") or {}
-    feet = {}
+    base = m.base or {}
+    feet0, toes0 = base.get("feet") or {}, base.get("toes") or {}
+    feet, toes, axes = {}, {}, {}
     for s in ("L", "R"):
         ik = smap.get(f"leg_ik.{s}")
-        if ik:
-            p = arm.data.bones[ik].head_local + Wi @ Vector(feet0.get(s, Vector()))
-            feet[s] = (p.x - centre.x, p.y - centre.y)
+        if not ik:
+            continue
+        ankle = arm.data.bones[ik].head_local
+        p = ankle + Wi @ Vector(feet0.get(s, Vector()))
+        feet[s] = (p.x - centre.x, p.y - centre.y)
+        toe = smap.get(f"toe_ik.{s}") or smap.get(f"toe.{s}")
+        if toe:                                                  # the point a spin on this foot turns on
+            d = arm.data.bones[toe].head_local - ankle
+            if d.xy.length > 1e-6:
+                axes[s] = Vector((-d.y, d.x, 0.0)).normalized()      # the foot's own across: its heel lifts about it
+                xy = Matrix.Rotation(math.radians(float(toes0.get(s, 0.0))), 2) @ d.xy     # turned out as posed
+                toes[s] = (xy.x, xy.y, -d.z)
     try:
-        plan = PF.turn_plan(ts, turns, feet)
+        aloft = PF.aloft(ts, spec.get("air"), spec.get("rise")) if spins else None
+        legs = None                                              # a spin on a foot keeps that leg as straight as it stands
+        if spins and all(smap.get(f"{b}.{s}") for b in ("leg", "knee", "ankle") for s in ("L", "R")):
+            legs = _legs(m, smap, W0, Vector(base.get("center", (0.0, 0.0, 0.0))),
+                         {s: Vector(v) for s, v in feet0.items()}, f"{where}.spin")
+        plan = PF.turn_plan(ts, turns or [], feet, spins, aloft, toes, legs)
     except ValueError as e:
-        raise BuildError(f"{where}: {e}") from None
+        raise BuildError(f"{where}.{'spin' if str(e).startswith('spin') else 'step_turn'}: {e}") from None
+    plan["toe_axis"] = axes
     P = root.parent.matrix_world.to_3x3().normalized().inverted() if root.parent else Matrix.Identity(3)
     loc0 = Vector(root.location)
     locs = [loc0 + P @ (W0 @ Vector((float(x), float(y), 0.0))) for x, y in plan["shift"]]   # as the steps carry it
@@ -358,17 +469,22 @@ def _turn(ctx, name, m, spec, ts, frames):
     for path, i in [("rotation_euler", 2)] + [("location", i) for i in moved]:
         for k in ctx.data.get("key", []):
             if k.get("target") == root.name and k.get("prop") == path and int(k.get("index", 0)) == i:
-                raise BuildError(f"{where}: a [[key]] also keys {root.name!r} {path}[{i}], which the turns key: keep one of them")
+                raise BuildError(f"{where}: a [[key]] also keys {root.name!r} {path}[{i}], which the turns key: keep one "
+                                 f"of them")
         if ad and ad.action and ad.action.fcurves.find(path, index=i):
             raise BuildError(f"{where}: {root.name!r} {path}[{i}] is already keyed by an earlier stage")
     yaw0 = float(root.rotation_euler[2])
     K.key_prop(root, "rotation_euler", frames, [yaw0 + float(y) for y in plan["yaw"]], index=2, interp="LINEAR")
     for i in moved:
         K.key_prop(root, "location", frames, [v[i] for v in locs], index=i, interp="LINEAR")
-    lead = float(np.degrees(np.abs(plan["chest"]).max())) if len(ts) else 0.0
-    return plan, {"step_turn": {"turns": len(turns), "deg": round(float(np.degrees(plan["yaw"][-1])), 1),
-                                "chest_lead_deg": round(lead, 1), "feet": sorted(feet),
-                                "feet_gap_mm": round(plan["gap"] * 1000, 1) if math.isfinite(plan["gap"]) else None}}
+    info, deg = {}, round(float(np.degrees(plan["yaw"][-1])), 1)
+    if turns:
+        lead = float(np.degrees(np.abs(plan["chest"][plan["own"] == 0]).max(initial=0.0)))
+        info["step_turn"] = {"turns": len(turns), "deg": deg, "chest_lead_deg": round(lead, 1), "feet": sorted(feet),
+                             "feet_gap_mm": round(plan["gap"] * 1000, 1) if math.isfinite(plan["gap"]) else None}
+    if spins:
+        info["spin"] = {"spins": plan["spins"], "deg": deg}
+    return plan, info
 
 
 def _walk(ctx, name, m, spec, ts, frames, turned=None):
@@ -381,8 +497,8 @@ def _walk(ctx, name, m, spec, ts, frames, turned=None):
         return None, {}
     where = f"perform.{name}"
     if turned is not None:
-        raise BuildError(f"{where}: walk / tumble and step_turn all move the root, and a turn inside a walk is not "
-                         f"supported: face the walk with [[cast]] yaw, or give step_turn without a walk")
+        raise BuildError(f"{where}: walk / tumble and step_turn / spin all move the root, and a turn inside a walk is not "
+                         f"supported: face the walk with [[cast]] yaw, or give step_turn / spin without a walk or tumble")
     root, arm = m.root, m.arm
     if root is None or root == arm:
         raise BuildError(f"{where}: walk / tumble: the member has no root object to move")
@@ -452,16 +568,45 @@ def _walk(ctx, name, m, spec, ts, frames, turned=None):
     return plan, info
 
 
+def _air_beats(ctx, sp, where):
+    """An air span whose `kicks` land `every` n beats without beats of their own gets them from its timeline (`timeline`,
+    default audio/timeline.json): every n-th beat counted from a downbeat (mkmmd.core.perform.kick_beats)."""
+    kicks = sp.get("kicks") if isinstance(sp, dict) else None
+    if not isinstance(kicks, dict) or not kicks.get("every") or "beats" in kicks:
+        return sp
+    beats, downbeats = TL.beats(ctx.timeline(kicks, f"{where}.kicks"))
+    lands = PF.kick_beats(beats, downbeats, kicks["every"])
+    return dict(sp, kicks=dict({k: v for k, v in kicks.items() if k not in ("every", "timeline")}, beats=lands))
+
+
+def _legs(m, smap, W, centre0, feet0, where):
+    """The legs air kicks bend (mkmmd.core.perform.air_kicks): {side: {"hip": the hip joint from the ankle at the base
+    pose, in the armature's axes, "thigh", "shin": lengths}}, metres, from the rest skeleton and the pose stage's world
+    offsets of the hips (`centre0`) and the feet (`feet0`)."""
+    arm, Wi, out = m.arm, W.inverted(), {}
+    for s in ("L", "R"):
+        bones = [smap.get(f"{b}.{s}") for b in ("leg", "knee", "ankle")]
+        if not all(bones):
+            raise BuildError(f"{where}: kicks bend the legs, and the {s} leg has no hip, knee or ankle bone")
+        hip, knee, ankle = (arm.matrix_world @ arm.data.bones[b].head_local for b in bones)
+        out[s] = {"hip": tuple(Wi @ (hip + centre0 - ankle - feet0.get(s, Vector()))),
+                  "thigh": (knee - hip).length, "shin": (ankle - knee).length}
+    return out
+
+
 def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
-    """bounce, crouch, rise, kick, air, a step_turn's feet, a walk's feet and the rock's hips: the hips (the `center`
-    bone) and the feet (the leg IK bones) move on top of the offsets the pose stage gave them (eased in over the settle
-    like them). `bounce` dips the hips on the beats while the feet stay planted (the knees bend: a punk's pump); `crouch =
-    [[t, metres], ...]` lowers them so (a landing, a squat); `rock.hips` shifts them toward the model's left with the
-    rock's own swing (the weight goes from foot to foot); `rise = [[t, metres], ...]` lifts the whole body, feet too (she
-    floats); `kick` flicks one foot up and back on the beats, `hold` of the way lifted between them; `air` tucks both legs
-    while the body is off the ground and points the toes (mkmmd.core.perform.air_plan); `turn`, a step_turn's plan
-    (`_turn`), steps the feet round to the turned stance and sinks the hips while the root turns; `walk`, a walk's plan
-    (`_walk`), steps the feet, dips the hips as each comes down and tucks the legs over its hops. Returns report numbers."""
+    """bounce, crouch, rise, kick, air, a step_turn's or spin's feet, a walk's feet and the rock's hips: the hips (the
+    `center` bone) and the feet (the leg IK bones) move on top of the offsets the pose stage gave them (eased in over the
+    settle like them). `bounce` dips the hips on the beats while the feet stay planted (the knees bend: a punk's pump);
+    `crouch = [[t, metres], ...]` lowers them so (a landing, a squat); `rock.hips` shifts them toward the model's left
+    with the rock's own swing (the weight goes from foot to foot); `rise = [[t, metres], ...]` lifts the whole body, feet
+    too (she floats); `kick` flicks one foot up and back on the beats, `hold` of the way lifted between them; `air` tucks
+    both legs while the body is off the ground and points the toes, and its `kicks` kick them lazily in turns while they
+    float (mkmmd.core.perform.air_plan, through the legs `_legs` measures); `turn`, the plan of the step turns and spins
+    (`_turn`), steps the feet round to the turned stance and sinks the hips while the root turns, and for a spin on the
+    ground carries the hips over the foot turned on, lifts the other and raises the heel (the body with it) about the
+    toes; `walk`, a walk's plan (`_walk`), steps the feet, dips the hips as each comes down and tucks the legs over its
+    hops. Returns report numbers."""
     bn, rs, kk, cr, ai = spec.get("bounce"), spec.get("rise"), spec.get("kick"), spec.get("crouch"), spec.get("air")
     rocks = [(r, win) for r, win in _rocks(spec, "rock", name) if float(r.get("hips", 0.0))]
     if walk and walk.get("air"):
@@ -471,13 +616,13 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
     arm = m.arm
     smap = S.semantic_map(arm)
     W = arm.matrix_world.to_3x3().normalized()       # armature offsets to world ones: key_bone_locs turns them back
-    up_w, left_w = W @ Vector((0.0, 0.0, 1.0)), W @ Vector((1.0, 0.0, 0.0))
+    up_w, left_w, back_w = (W @ Vector(v) for v in ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
     base = m.base or {}
     centre0 = Vector(base.get("center", (0.0, 0.0, 0.0)))
     feet0 = {s: Vector(v) for s, v in (base.get("feet") or {}).items()}
     toes0 = {s: math.radians(float(v)) for s, v in (base.get("toes") or {}).items()}
     n = len(ts)
-    lift, dip, side, info = np.zeros(n), np.zeros(n), np.zeros(n), {}
+    lift, dip, side, behind, info = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n), {}
     if bn:
         beats, acc = _beat_marks(ctx, bn, f"perform.{name}.bounce")
         dip = float(bn.get("depth", 0.03)) * _window(ts, bn) * PF.beat_pulse(
@@ -487,8 +632,8 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
         down = PF.eased_keys(ts, cr)
         dip = dip + down
         info["crouch_mm"] = round(float(np.abs(down).max()) * 1000, 1)
-    if turn:
-        dip = dip + turn["dip"]
+    if turn:                                                     # a spin on a foot: the hips over it, then its toes
+        dip, side, behind = dip + turn["dip"], side + turn["hips"][:, 0], turn["hips"][:, 1]
     if walk and walk.get("feet"):
         dip = dip + walk["dip"]
     for r, win in rocks:
@@ -515,14 +660,19 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
         info["kick"] = {"foot": kick_side, "peak_mm": round(float(kick.max()) * float(np.linalg.norm(reach)) * 1000, 1)}
     air_off, air_pitch = None, None
     if ai:
+        where = f"perform.{name}.air"
         try:
-            air_off, air_pitch = PF.air_plan(ts, ai if isinstance(ai, list) else [ai])
+            spans = [_air_beats(ctx, sp, where) for sp in (ai if isinstance(ai, list) else [ai])]
+            kicking = any(isinstance(sp, dict) and PF.kicks_spec(sp.get("kicks")) is not None for sp in spans)
+            air_off, air_pitch, kicks = PF.air_plan(ts, spans, _legs(m, smap, W, centre0, feet0, where) if kicking else None)
         except ValueError as e:
-            raise BuildError(f"perform.{name}.air: {e}") from None
+            raise BuildError(f"{where}: {e}") from None
         info["air"] = {s: {"tuck_mm": round(float(air_off[s][:, 2].max()) * 1000, 1),
                            "point_deg": round(float(np.degrees(air_pitch[s].max())), 1)} for s in ("L", "R")}
-    centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i]) + left_w * float(side[i]))
-              for i, s in enumerate(settle)]
+        if kicks:
+            info["air"]["kicks"] = kicks
+    centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i]) + left_w * float(side[i])
+                    + back_w * float(behind[i])) for i, s in enumerate(settle)]
     K.key_bone_locs(arm, smap["center"], frames, centre, interp="LINEAR")
     if not (rs or kk or ai or turn or (walk and walk.get("feet"))):
         return info
@@ -551,11 +701,13 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
         K.key_bone_locs(arm, ik, frames, [tuple(f0 * float(st) + W @ Vector(d[i])) for i, st in enumerate(settle)],
                         interp="LINEAR")
         pitch = air_pitch[s] if air_pitch is not None else np.zeros(n)
+        heel = turn["pitch"][s] if turn and s in turn["pitch"] else np.zeros(n)
         if (turn and s in turn["feet"]) or pitch.any():           # the foot's yaw and its toes, on top of the pose's toes
             toes = toes0.get(s, 0.0) * np.asarray(settle, float)
             up, lat = Vector((0.0, 0.0, 1.0)), Vector((1.0, 0.0, 0.0))
+            across = turn["toe_axis"].get(s, lat) if turn else lat  # a spin's heel lifts about the foot's own across
             K.key_bone_arm(arm, ik, frames, [Quaternion(up, float(yaw_rel[i] + toes[i])) @ Quaternion(lat, float(pitch[i]))
-                                             for i in range(n)], interp="LINEAR")
+                                             @ Quaternion(across, float(heel[i])) for i in range(n)], interp="LINEAR")
     if walk and any(np.abs(v).max() > 0 for v in walk.get("swing", {}).values()):
         info["arm_swing"] = _arm_swing(ctx, m, walk, frames)
     return info
@@ -653,6 +805,68 @@ def _drum(ctx, name, m, d, ts, frames):
             "frames": [int(fr[0]), int(fr[-1])]}
 
 
+MOUTH_EASE = 0.08                                         # s: a move's hold on the mouth comes in and goes over this
+
+
+def _mouth_windows(spans, name):
+    """[(t0, t1)] of `mouth = [[t0, t1], ...]`: the clip seconds where a move has the mouth (the moves stage writes them
+    for a yawn, a chomp, a brush): the lip sync gives way there to the expressions on its vowels."""
+    if not spans:
+        return []
+    if not isinstance(spans, list) or not all(isinstance(s, (list, tuple)) and len(s) == 2 for s in spans):
+        raise BuildError(f"perform.{name}.mouth: [[t0, t1], ...] (clip seconds)")
+    return [(float(a), float(b)) for a, b in spans]
+
+
+def _mouth_blend(ctx, m, spec, mn, pts, windows, ts, frames):
+    """(frames, values) of the vowel morph `mn`: its lip sync keys `pts` [(t, v)], giving way inside `windows` (eased
+    over MOUTH_EASE) to what the member's expressions key on the same morph there (eased between their keys)."""
+    w = np.zeros(len(ts))
+    for a, b in windows:
+        w = np.maximum(w, PF.smooth((ts - (a - MOUTH_EASE)) / MOUTH_EASE) * (1.0 - PF.smooth((ts - b) / MOUTH_EASE)))
+    lt, lv = zip(*sorted(pts))
+    lip = np.interp(ts, lt, lv, left=0.0, right=0.0)
+    keys = sorted(k for ex in spec.get("expressions", []) if _morph(m, ex["morph"]) == mn for k in ex["keys"])
+    own = PF.eased_keys(ts, keys) if keys else np.zeros(len(ts))
+    return list(frames), list(lip * (1.0 - w) + own * w)
+
+
+def _squash(ctx, name, m, sq, ts, frames):
+    """squash: the whole body squashes and stretches on hits (mkmmd.core.perform.squash), keeping its volume: the cast
+    root's scale keyed on every frame (LINEAR), its height by the curve and its width and depth by 1 / its square root,
+    about the root's origin, which is where she stands (her feet's floor). The hits are `hits` (clip seconds) or a
+    `lane` of the [audio] hits file (`min_db`, `every`), inside `from` .. `to`."""
+    where = f"perform.{name}.squash"
+    if not isinstance(sq, dict):
+        raise BuildError(f"{where}: a table {{lane | hits, depth, stretch, attack, rebound, min_db, every, from, to}}")
+    if ("lane" in sq) == ("hits" in sq):
+        raise BuildError(f"{where}: give `lane` (a lane of the [audio] hits file) or `hits` (clip seconds), one of them")
+    if "lane" in sq:
+        hits_file = (ctx.data.get("audio") or {}).get("hits")
+        if not hits_file:
+            raise BuildError(f"{where}: `lane` reads the [audio] hits file (write it with `mk timeline hits`)")
+        try:
+            c = LN.choice(sq, where)
+            hits = LN.pick(LN.load(ctx.path(hits_file)), c["lane"], c["min_db"], c["every"], c["t0"], c["t1"])
+        except LN.LaneError as e:
+            raise BuildError(f"{where}: {e}") from None
+    else:
+        hs = sq["hits"]
+        if not isinstance(hs, list) or not all(isinstance(h, (int, float)) and not isinstance(h, bool) for h in hs):
+            raise BuildError(f"{where}: hits is a list of clip seconds")
+        lo, hi = float(sq.get("from", -math.inf)), float(sq.get("to", math.inf))
+        hits = sorted(float(h) for h in hs if lo <= float(h) < hi)
+    if not hits:
+        raise BuildError(f"{where}: no hit to squash on (lane, from, to, min_db)")
+    try:
+        s = PF.squash(ts, hits, **{k: float(sq.get(k, v)) for k, v in PF.SQUASH.items()})
+    except ValueError as e:
+        raise BuildError(f"{where}: {e}") from None
+    base, w = tuple(m.root.scale), 1.0 / np.sqrt(s)
+    for i, f in enumerate((w, w, s)):
+        K.key_prop(m.root, "scale", frames, base[i] * f, index=i, interp="LINEAR")
+    return {"hits": len(hits), "squash": round(float(1.0 - s.min()), 3), "stretch": round(float(s.max() - 1.0), 3)}
+
 
 def run(ctx):
     ctx.check_tables("perform")
@@ -707,6 +921,9 @@ def run(ctx):
 
         look_eye = PF.lowpass(blend(W_eye, G_eye), 1.5)
         look_head = PF.lowpass(blend(W), 3.0) + PF.drift(len(ts), seed=zlib.crc32(name.encode()) % 1000) * 0.3
+        own = plan["own"] if plan is not None else np.zeros(len(ts))     # a spin has the head: it spots, then whips round
+        if own.any():
+            look_head, look_eye = _spun(look_head, En, plan["look"], own), _spun(look_eye, En, plan["eye"], own)
         w_away = W.sum(0) if len(W) else np.zeros(len(ts))
         lift = np.zeros(len(ts))                                  # degrees the head lifts during glances
         if glances:
@@ -727,7 +944,7 @@ def run(ctx):
         lean_x = np.radians(PF.eased_keys(ts, spec.get("lean", [])))
         turn_x = np.radians(PF.eased_keys(ts, spec.get("turn", [])))
         if plan is not None:
-            turn_x = turn_x + plan["chest"]                        # the chest leads a step_turn
+            turn_x = turn_x + plan["chest"]                        # the chest leads a step_turn or a spin
         tilt_x = np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
         head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
         head_pitch_x = np.zeros(len(ts))
@@ -773,13 +990,14 @@ def run(ctx):
             Dh_base = Dn_base @ q4b
             eye_pos = E[i]
             look = (Vector(look_head[i]) - eye_pos).normalized()
+            share = k_head + (1.0 - k_head) * float(own[i])      # a spin turns the head all the way to its spot
             aim = PF.clamp_look(tuple((Dh_base @ fwd).normalized()), tuple((Dh_base @ up).normalized()), tuple(look),
-                                k_head, head_limits)
+                                share, head_limits)
             R_full = (Dh_base @ fwd).rotation_difference(look if aim is None else Vector(aim))
             pitch = Quaternion(lat, nod[i] + bob[i] + head_pitch_x[i] - math.radians(lift[i]))
-            Dn = Quaternion().slerp(R_full, k_head * k_neck) @ Dn_base
+            Dn = Quaternion().slerp(R_full, share * k_neck) @ Dn_base
             Dh = (Quaternion(up, head_yaw_x[i]) @ Quaternion(back, head_tilt_x[i]) @ pitch
-                  @ Quaternion().slerp(R_full, k_head) @ Dh_base)
+                  @ Quaternion().slerp(R_full, share) @ Dh_base)
             R_eye = (Dh @ fwd).rotation_difference((Vector(look_eye[i]) - eye_pos).normalized())
             if R_eye.angle > eye_max:
                 R_eye = Quaternion().slerp(R_eye, eye_max / R_eye.angle)
@@ -828,9 +1046,14 @@ def run(ctx):
             except ValueError as e:
                 raise BuildError(f"perform.{name}.sing: {e}") from None
             done = []
+            windows = _mouth_windows(spec.get("mouth"), name)
             for v, pts in kf.items():
                 mn = _morph(m, v)
-                if pts and K.key_morph(holders, mn, [ctx.frame(t) for t, _ in pts], [x for _, x in pts]):
+                if pts and windows:                       # a move has the mouth there (a yawn, a bite): it wins
+                    fr, vals = _mouth_blend(ctx, m, spec, mn, pts, windows, ts, frames)
+                    if K.key_morph(holders, mn, fr, vals, interp="LINEAR"):
+                        done.append(mn)
+                elif pts and K.key_morph(holders, mn, [ctx.frame(t) for t, _ in pts], [x for _, x in pts]):
                     done.append(mn)
             info["sing_morphs"] = len(done)
             info["sing_keys"] = sum(len(p) for p in kf.values())
@@ -854,6 +1077,8 @@ def run(ctx):
             info["strum"] = _strum(ctx, name, m, spec["strum"])
         if spec.get("drum"):
             info["drum"] = _drum(ctx, name, m, spec["drum"], ts, frames)
+        if spec.get("squash"):
+            info["squash"] = _squash(ctx, name, m, spec["squash"], ts, frames)
         out[name] = info
         ctx.log("perform", name, json.dumps(info, ensure_ascii=False))
     return out

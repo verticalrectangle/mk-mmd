@@ -9,7 +9,8 @@ headstock's flat back and the headstock's face is the plane the board is glued o
 little (a radius that grows toward the headstock).
 
     neck_mesh, board_mesh, frets_mesh, nut_mesh, inlay_mesh       the wood, the radiused rosewood slab, the wires, the bone
-    tuners_mesh, truss_mesh, strings_mesh                         the machine heads and string retainers, truss rod cover, strings
+    tuners_mesh, truss_mesh, string_meshes                        the machine heads and string retainers, truss rod cover, the
+                                                                  six strings (one tube each, `playable`: their rings)
 """
 import math
 
@@ -238,6 +239,30 @@ def truss_mesh():
 # ===================================================================================================================
 # the strings
 # ===================================================================================================================
+STRING_STEP = 0.006                                  # m: a string's rings are at most this far apart up to the last wire ...
+STRING_STEP_FAR = 0.010                              # ... and this far from there to the saddle
+
+
+def playable(nut, saddle, wires, press=0.30):
+    """Points (k, 3) on a string's axis from the nut to the saddle (both included, z decreasing) where its tube has a ring:
+    every fret wire's place and the point `press` of each gap behind its wire (where a fretting finger holds the string down,
+    mkmmd.core.fretting.PRESS), the stretches between them split into steps of at most STRING_STEP (STRING_STEP_FAR past
+    the last wire). `wires` = the along (z) coordinates of the wires, the nut first. A pressed or ringing string bends and
+    widens on these rings (mkmmd.core.strings), so they are dense where its shape changes."""
+    nut, saddle = (np.asarray(p, float) for p in (nut, saddle))
+    zs = [float(z) for z in wires]
+    marks = {zs[0]}
+    for k in range(1, len(zs)):
+        marks |= {zs[k], zs[k] + press * (zs[k - 1] - zs[k])}
+    marks = sorted(marks, reverse=True) + [float(saddle[2])]
+    out = [marks[0]]
+    for a, b in zip(marks, marks[1:]):
+        n = max(1, math.ceil((a - b) / (STRING_STEP if b >= zs[-1] - 1e-9 else STRING_STEP_FAR) - 1e-9))
+        out += list(a + (b - a) * np.arange(1, n + 1) / n)
+    t = (np.array(out) - nut[2]) / (saddle[2] - nut[2])
+    return nut + t[:, None] * (saddle - nut)
+
+
 def post_wraps(i, y_start, turns=2.5, n_per_turn=14):
     """The points (k, 3) where string i touches its post, from the tangent point of the straight run from the nut round the post
     counter-clockwise (seen from the front), sinking toward the headstock's face by a string diameter a turn."""
@@ -259,16 +284,18 @@ def post_wraps(i, y_start, turns=2.5, n_per_turn=14):
     return np.stack([px + rho * np.cos(th), y, pz + rho * np.sin(th)], 1)
 
 
-def strings_mesh():
-    """Six strings as thin tubes (role `strings`): from the saddle over the nut to a post, which they are wound round 2.5 times,
-    and down into the bridge plate behind the saddle on the other side. The part between the saddle and the nut's front edge
-    lies EXACTLY on the card's nut and bridge points."""
+def string_meshes():
+    """The six strings, the low E first, each its own thin tube (role `strings`): from the saddle over the nut to a post,
+    which it is wound round 2.5 times, and down into the bridge plate behind the saddle on the other side. The part between
+    the saddle and the nut's front edge lies EXACTLY on the card's nut and bridge points, with a ring at every wire and
+    where a finger holds it down (`playable`)."""
     out = []
+    wires = [L.fret_z(n) for n in range(L.N_FRETS + 1)]
     for i in range(6):
         nut, sad = (np.array(p) for p in L.string_ends(i))
         back = np.array([nut[0], nut[1], Z_NUT_BACK])
         wraps = post_wraps(i, Y_FACE - 0.0062)
         tail = np.array([sad[0], -L.BRIDGE["t"] + 0.0002, L.BRIDGE_HOLE_Z])
-        path = np.concatenate([wraps[::-1], [back, nut, sad, tail]])
+        path = np.concatenate([wraps[::-1], [back], playable(nut, sad, wires), [tail]])
         out.append(S.tube(path, L.STRING_R[i], sides=6, up=OUT, mat=M["strings"]))
-    return S.merge(out)
+    return out

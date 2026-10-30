@@ -1,6 +1,7 @@
 """Metrics on sampled motion: jitter, contact, penetration, clearance, foot_slide, joint_limits."""
 import numpy as np
 
+from ..core import armtwist as AT
 from ..core import families as FAM
 from ..solvers import geom
 from . import CheckError, Metric, metric
@@ -444,16 +445,39 @@ def _swing_twist(R, axis):
 
 LIMITS = {"elbow_fold": (0.0, 170.0), "elbow_back": (0.0, 20.0), "knee_bend": (-8.0, 165.0),
           "knee_side": (-20.0, 20.0), "wrist": (0.0, 110.0), "neck_swing": (0.0, 75.0), "neck_twist": (0.0, 85.0),
-          "spine_swing": (0.0, 75.0), "spine_twist": (0.0, 60.0)}
+          "spine_swing": (0.0, 75.0), "spine_twist": (0.0, 60.0), "forearm_twist": AT.FOREARM, "arm_twist": AT.UPPER}
+
+
+def _unit(v):
+    return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)
+
+
+def _spans(over, frames, n=10):
+    """The runs of consecutive checked frames over a limit, the n worst in time order: [[first, last, worst frame,
+    degrees over there], ...]."""
+    out, start = [], None
+    for k, bad in enumerate(np.append(over > 0, False)):
+        if bad and start is None:
+            start = k
+        elif not bad and start is not None:
+            j = start + int(np.argmax(over[start:k]))
+            out.append([int(frames[start]), int(frames[k - 1]), int(frames[j]), round(float(over[j]), 1)])
+            start = None
+    return sorted(sorted(out, key=lambda s: -s[3])[:n])
+
+
 
 
 @metric
 class JointLimits(Metric):
     name = "joint_limits"
     doc = ("Anatomy: elbows do not fold through themselves or bend backward, knees bend one way and not sideways, "
-           "wrists, neck and spine stay in ranges professional MMD motions keep to. Angles come from the pose "
-           "(bones rotated relative to their rest pose; MMD models face -Y at rest). Value: the worst excess over a "
-           "limit in degrees (0 = all inside).")
+           "wrists, neck and spine stay in ranges professional MMD motions keep to, and the arms turn about themselves "
+           "no further than a human arm does (mkmmd.core.armtwist: the hand about the forearm against the elbow, "
+           "pronation and supination from the rest's mid-prone roll; the upper arm about itself against the chest, its "
+           "external bound widening as the arm rises above level). Angles come from the pose (bones rotated relative to "
+           "their rest pose; MMD models face -Y at rest). Value: the worst excess over a limit in degrees (0 = all "
+           "inside).")
     args = {"cast": "cast member (or armature)", "limits": "override {name: [lo, hi]}: " + ", ".join(LIMITS),
             "sides": "L R (default both)"}
 
@@ -481,8 +505,16 @@ class JointLimits(Metric):
             delta = Rw @ R0.T @ np.linalg.inv(A)                  # world rotation of the bone since rest
             return W[:, 0, :3, 3], delta
 
+        def turn(n):
+            """Posed world rotations (F, 3, 3), the rest one and the rest head (armature space) of bone n."""
+            W, rest, _ = data.bones(arm, [n], frames)
+            return geom.unscaled(W[:, 0])[:, :3, :3], geom.unscaled(rest[0])[:3, :3], rest[0, :3, 3]
+
+        chest = "upper_body2" if data.has(arm, "?upper_body2") else "upper_body"
+        P_ch, R_ch, _ = turn(chest)
+        down = np.einsum("fij,j->fi", P_ch @ R_ch.T, np.array(AT.DOWN))      # the chest's down as it stands
         fwd = np.einsum("fij,j->fi", A, np.array([0.0, -1.0, 0.0]))
-        series = {}
+        series, widen = {}, {}
         for s in st["sides"]:
             sh, _ = get(f"arm.{s}")
             el, _ = get(f"elbow.{s}")
@@ -502,6 +534,16 @@ class JointLimits(Metric):
                 f1, f2 = wr - el, mid - wr
                 cosang = np.sum(f1 * f2, 1) / (np.linalg.norm(f1, axis=1) * np.linalg.norm(f2, axis=1) + 1e-12)
                 series[f"wrist.{s}"] = np.degrees(np.arccos(np.clip(cosang, -1, 1)))
+            # how far the arm turns about itself (mkmmd.core.armtwist): the hand about the forearm against the elbow,
+            # the upper arm's distal bone about its length against the chest, each against the rest pose
+            P_el, R_el, h_el = turn(f"elbow.{s}")
+            P_wr, R_wr, h_wr = turn(f"wrist.{s}")
+            P_up, R_up, _ = turn(hinge)
+            h_sh = turn(f"arm.{s}")[2]
+            series[f"forearm_twist.{s}"] = AT.relative_twist(P_el, R_el, P_wr, R_wr, _unit(h_wr - h_el), s)
+            series[f"arm_twist.{s}"] = AT.relative_twist(P_ch, R_ch, P_up, R_up, _unit(h_el - h_sh), s)
+            elev = np.array([AT.elevation(up_dir, dn) for up_dir, dn in zip(el - sh, down)])
+            widen[f"arm_twist.{s}"] = (elev, np.array([AT.upper_limits(e)[1] - AT.UPPER[1] for e in elev]))
             hip, dl = get(f"leg.{s}")
             kn, _ = get(f"knee.{s}")
             an, _ = get(f"ankle.{s}")
@@ -520,13 +562,19 @@ class JointLimits(Metric):
         worst, detail, at = 0.0, {}, None
         for key, v in series.items():
             lo, hi = lim[key.split(".")[0]]
-            over = np.maximum(v - hi, 0) + np.maximum(lo - v, 0)
+            top = hi + widen[key][1] if key in widen else hi      # the upper arm: its external bound widens above level
+            over = np.maximum(v - top, 0) + np.maximum(lo - v, 0)
             entry = {"min": round(float(v.min()), 1), "max": round(float(v.max()), 1), "limits": [lo, hi]}
             if over.max() > 0:
+                k = int(np.argmax(over))
                 entry["over_deg"] = round(float(over.max()), 1)
                 entry["frames"] = [int(f) for f in np.asarray(frames)[over > 0][:10]]
+                entry["at_frame"] = int(np.asarray(frames)[k])
+                entry["spans"] = _spans(over, frames)
+                if key in widen:
+                    entry["elevation_deg"] = round(float(widen[key][0][k]), 1)
                 if float(over.max()) > worst:
-                    worst, at = float(over.max()), (key, int(np.asarray(frames)[int(np.argmax(over))]))
+                    worst, at = float(over.max()), (key, int(np.asarray(frames)[k]))
             detail[key] = entry
         detail["at_frame"] = at[1] if at else None
         detail["worst"] = at[0] if at else None

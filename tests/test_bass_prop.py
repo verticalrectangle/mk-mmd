@@ -108,11 +108,33 @@ def test_strings_are_inside_the_board_and_clear_the_wires(card):
     assert 0.005 < min(hs) and max(hs) < 0.009                                            # the saddles stand that high over the board
 
 
-def test_string_meshes_run_through_the_card_points(parts):
-    V = parts["strings"].V
+def test_string_meshes_run_through_the_card_points(card, parts):
+    strings = entry(card, "grip", "neck")["strings"]
     for i in range(4):
+        assert strings[i]["object"] == f"bass_string_{4 - i}"                                # one object per string, 1 = G
+        V = parts[f"string_{4 - i}"].V
         for p in L.string_ends(i):
             assert np.linalg.norm(V - np.array(p), axis=1).min() == pytest.approx(L.STRING_R[i], rel=0.15, abs=2e-5)
+
+
+def test_a_string_has_a_ring_at_every_wire_and_where_a_finger_presses(parts):
+    """A pressed or ringing string bends and widens on its rings (mkmmd.core.strings): one at every wire's place and at
+    the press point behind it, and none further apart than 6 mm up to the last wire."""
+    for i in range(4):
+        nut, sad = (np.array(p) for p in L.string_ends(i))
+        V = parts[f"string_{4 - i}"].V
+        centres = V[:len(V) - 2].reshape(-1, 8, 3).mean(1)                               # 8 sides a ring, then the caps
+        d = sad - nut
+        u = (centres - nut) @ d / (d @ d)
+        on = centres[(u > -1e-9) & (u < 1 + 1e-9)]
+        assert np.linalg.norm(np.cross(on - nut, d), axis=1).max() / np.linalg.norm(d) < 1e-7      # all on the card's axis
+        zs = np.sort(on[:, 2])[::-1]                                                      # from the nut down the neck
+        for n in range(1, L.N_FRETS + 1):
+            z = L.fret_z(n)
+            assert np.abs(zs - z).min() < 1e-7                                                # a ring on the wire
+            assert np.abs(zs - (z + 0.3 * (L.fret_z(n - 1) - z))).min() < 1e-7             # and where it is pressed
+        steps = zs[:-1] - zs[1:]
+        assert steps[zs[1:] >= L.Z_LAST - 1e-9].max() <= 0.006 + 1e-9 and steps.max() <= 0.010 + 1e-9
 
 
 def test_neck_section_is_the_cards_superellipse(card, parts):
@@ -140,14 +162,17 @@ def test_neck_section_is_the_cards_superellipse(card, parts):
 
 
 # ======================================================================================================= picking
-def test_strum_point_is_between_the_pickup_and_the_neck_on_the_string_plane(card):
+def test_strum_point_is_between_the_bridge_and_the_pickup_on_the_string_plane(card):
     s = entry(card, "grip", "strum")
     c, (z0, z1) = vec(s["center"]), s["zone"]
     assert c[0] == 0.0 and z0 < c[2] < z1
     pts = np.array([L.string_at(i, c[2]) for i in range(4)])
     assert abs(c[1] - pts[:, 1].mean()) < 1e-5 and np.ptp(pts[:, 1]) < 0.0025            # on the strings' plane (graded action)
-    top_of_covers = max(spec["center"][1] + 0.5 * L.PICKUP_W for spec in L.PICKUPS.values())
-    assert z0 > top_of_covers + 0.005 and z1 < L.Z_HEEL - 0.005                           # clear of the covers and the neck's end
+    covers = min(spec["center"][1] - 0.5 * L.PICKUP_W for spec in L.PICKUPS.values())
+    assert z0 > L.BRIDGE["top"] + 0.03 and z1 <= covers                                  # a heel's width up from the bridge
+    palm = s["palm"]
+    assert L.BRIDGE["bottom"] < palm["center"][2] < L.BRIDGE["top"] and palm["normal"] == [0, -1, 0]
+    assert palm["center"][1] < min(L.string_at(i, palm["center"][2])[1] for i in range(4))   # over the strings
     neck = entry(card, "grip", "neck")
     lo, hi = (FR.string_point(neck, k, c[2])[0] for k in (4, 1))
     assert 0.021 < 0.5 * (hi - lo) < 0.027                                                # sigma: half the four strings' width
@@ -214,7 +239,8 @@ def test_wear_entry_is_the_contract(card):
 def test_every_part_is_a_closed_solid():
     every = P.parts(stripes=True)
     assert set(every) >= {"body", "pickguard", "control_plate", "neck", "fretboard", "frets", "nut", "tuners", "tree", "pickups",
-                          "bridge", "knobs", "plate_parts", "buttons", "back_plates", "strings", "plug", "pick", "decals", "stripes"}
+                          "bridge", "knobs", "plate_parts", "buttons", "back_plates", "string_1", "string_2", "string_3",
+                          "string_4", "plug", "pick", "decals", "stripes"}
     for k, m in every.items():
         assert m.is_closed() and m.volume() > 0, k
 
@@ -345,6 +371,6 @@ def test_form_is_far_from_boxy():
 def test_build_stays_under_four_seconds():
     t0 = time.time()
     for f in (B.body_mesh, B.guard_mesh, B.plate_mesh, B.stripes_mesh, N.neck_mesh, N.board_mesh, N.frets_mesh, N.tuners_mesh,
-              N.strings_mesh, H.pickups_mesh, H.bridge_mesh, H.knobs_mesh, H.plug_mesh, H.buttons_mesh, H.back_mesh, H.pick_mesh):
+              N.string_meshes, H.pickups_mesh, H.bridge_mesh, H.knobs_mesh, H.plug_mesh, H.buttons_mesh, H.back_mesh, H.pick_mesh):
         f()
     assert time.time() - t0 < 4.0

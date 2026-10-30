@@ -52,6 +52,7 @@ class Need:
     def __init__(self):
         self.bones, self.families, self.objects, self.exprs, self.colliders = {}, {}, [], [], []
         self.meshes = []
+        self.skins = []
         self.props = []
         self.camera = False
 
@@ -92,18 +93,28 @@ class Need:
             self.meshes.append(spec)
         return self.meshes.index(spec)
 
+    def skin(self, arm, regions):
+        """A skin request: on every sampled frame, the skinned meshes armature `arm` deforms, as far as their vertices'
+        heaviest bones are in `regions` ({name: {"bones": [...], "stop": [...]}}: those bones and their descendants short of
+        the `stop` bones; '?' names are optional; the chains a sim moves are left out) with every triangle that has such a
+        vertex. Returns its index for Data.skin."""
+        spec = {"armature": arm, "regions": regions}
+        if spec not in self.skins:
+            self.skins.append(spec)
+        return self.skins.index(spec)
+
     def prop_use(self, *names):
         """The use points (the card's `use`, stored on the prop's root when the scene was built) of these props."""
         self.props += [n for n in names if n not in self.props]
 
     def empty(self):
         return not (self.bones or self.families or self.objects or self.exprs or self.colliders or self.meshes
-                    or self.props or self.camera)
+                    or self.skins or self.props or self.camera)
 
     def job(self, frames, out):
         return {"frames": frames, "out": str(out), "bones": self.bones, "families": self.families,
                 "objects": self.objects, "exprs": self.exprs, "camera": self.camera, "colliders": self.colliders,
-                "meshes": self.meshes, "props": self.props}
+                "meshes": self.meshes, "skins": self.skins, "props": self.props}
 
 
 # ---------------------------------------------------------------- sampled data
@@ -197,6 +208,19 @@ class Data:
         return {"vertices": self.z[f"mesh_v_{i}"], "triangles": self.z[f"mesh_t_{i}"], "object": self.z[f"mesh_o_{i}"],
                 "names": meta["objects"], "exempt": meta.get("exempt", []), "frame": meta["frame"],
                 "roots": {p: np.array(M, float) for p, M in meta.get("roots", {}).items()}}
+
+    def skin(self, i, frames=None):
+        """Skin request i (Need.skin): {"rest" (n,3) and "posed" (F,n,3) vertices in the armature's space (metres; posed
+        NaN where a modifier changed a mesh's vertex count), "triangles" (m,3) into them, "region" (n,) into "regions"
+        (-1: a vertex of a kept triangle outside them), "bone" (n,) its heaviest bone, into "bones", "object" (n,) into
+        "objects", "regions", "region_bones" ({region: Blender bone names}), "bones", "objects", "skipped" ({object:
+        why it was left out})}."""
+        meta = self.meta["skins"][i]
+        P = self.z[f"skin_v_{i}"]
+        return {"rest": self.z[f"skin_r_{i}"], "posed": P if frames is None else P[self.rows(frames)],
+                "triangles": self.z[f"skin_t_{i}"], "region": self.z[f"skin_g_{i}"], "bone": self.z[f"skin_b_{i}"],
+                "object": self.z[f"skin_o_{i}"], "regions": meta["regions"], "region_bones": meta["region_bones"],
+                "bones": meta["bones"], "objects": meta["objects"], "skipped": meta["skipped"]}
 
     def camera(self, frames, output=None):
         """The camera on `frames`: the active one (the timeline markers'), or with `output` that output's own camera of the
@@ -339,7 +363,7 @@ def judge(check, value):
 
 def load():
     """Import the metric modules (they register themselves in METRICS)."""
-    from . import camera, form, hands, image, motion, props, ribbons  # noqa: F401
+    from . import camera, form, hands, image, motion, play, props, ribbons, skin  # noqa: F401
 
 
 def run(checks, ctx, frames_override=None, keep_sample=False):

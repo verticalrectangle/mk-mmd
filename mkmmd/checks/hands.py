@@ -11,6 +11,7 @@ mic there, unless the move raises it), and a hand counts while it holds still at
 frame in that frame): one setting off early for its next move is travelling, which the rules do not cover."""
 import numpy as np
 
+from ..core import gags as GG
 from ..core import moves as MV
 from ..solvers import geom
 from . import CheckError, Metric, metric
@@ -47,10 +48,14 @@ def plays(ctx, args):
         if not isinstance(e, dict) or e.get("name") not in MV.MOVES or e.get("name") == "rest":
             continue
         m = MV.MOVES[e["name"]]
-        if m.get("hand") not in ("places", "beats"):
-            continue
         t0 = float(e["t"])
         t1 = t0 + float(e.get("dur", 1.0))
+        if m.get("hand") == "gag":                     # a gag move's hands, at the places it names them by
+            for s, places, both in GG.rows(e, {sd: rest[sd] == "mic" for sd in SIDES}):
+                rows.append((t0, t1, s, e["name"], places, both))
+            continue
+        if m.get("hand") not in ("places", "beats"):
+            continue
         sides = SIDES if m.get("both") else (e.get("hand", "R"),)
         if m.get("both") and not m.get("mic_ok"):
             sides = tuple(s for s in sides if rest[s] != "mic")
@@ -147,8 +152,9 @@ class HandMirror(_Hands):
     name = "hand_mirror"
     doc = ("A two-hand move's hands mirror each other across the body: each hand's wrist and middle knuckle against the "
            "other's turned over the body's middle, in the frame of the upper body they ride, on the frames such a move "
-           "holds both hands at their places. Value: the largest mismatch in mm (the angle between the hands' "
-           "directions, mirrored, in detail).")
+           "holds both hands at their places; a move whose wrists cross (the butterfly) has its right hand the "
+           "library's CROSS in front of the left, which is taken out. Value: the largest mismatch in mm (the angle "
+           "between the hands' directions, mirrored, in detail).")
     args = {"cast": "cast member (its [[move.<cast>]] and rig)"}
     default_max = 5.0
     keep = staticmethod(lambda row: row[5])
@@ -164,7 +170,8 @@ class HandMirror(_Hands):
         _, wl, ml = (_apply(M, p) for p in self.points(data, st["arm"], "L", frames))
         _, wr, mr = (_apply(M, p) for p in self.points(data, st["arm"], "R", frames))
         X = np.array([-1.0, 1.0, 1.0])
-        mm = np.maximum(np.linalg.norm(wl - wr * X, axis=1), np.linalg.norm(ml - mr * X, axis=1)) * 1000.0
+        cross = np.array([[0.0, MV.CROSS.get(held["L"][k], 0.0) if both[k] else 0.0, 0.0] for k in range(len(frames))])
+        mm = np.maximum(np.linalg.norm(wl - wr * X - cross, axis=1), np.linalg.norm(ml - mr * X - cross, axis=1)) * 1000.0
         deg = np.degrees(np.arccos(np.clip(np.sum(_unit(ml - wl) * _unit((mr - wr) * X), 1), -1.0, 1.0)))
         k = int(np.argmax(np.where(both, mm, -1.0)))
         return float(mm[k]), {"at_frame": int(frames[k]), "move": held["L"][k], "deg": round(float(deg[k]), 2),

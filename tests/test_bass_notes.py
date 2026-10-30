@@ -173,6 +173,23 @@ def test_an_open_string_lifts_the_finger_that_played_the_note_before():
     assert first_open[0]["chord"] == {"index": [4, 0, "hover"]}               # nothing before it: the index over it
 
 
+def test_a_change_eases_the_fingers_off_the_strings_and_lands_on_the_note():
+    """A keyed change passes through both shapes eased off the strings: every finger of a shape hovering over its place
+    (`lifted`), the fingers lifting in the first LIFT of the move and landing in the last, never before the settle ends."""
+    assert FR.lifted("power") == {"index": [6, 0, "hover"], "ring": [5, 2, "hover"], "little": [4, 2, "hover"]}
+    assert FR.lifted({"middle": [3, 1, "hover"]}, 4) == {"middle": [3, 1, "hover"]}            # already off its string
+    press, = FR.finger_targets(bass_entry(), {"middle": [3, 1]}, 7)
+    off, = FR.finger_targets(bass_entry(), FR.lifted({"middle": [3, 1]}, 4), 7)
+    assert off["hover"] and not press["hover"] and off["fret"] == press["fret"]
+    assert -(off["point"][1] - press["point"][1]) > FR.HOVER                                   # over the string, not on it
+    change = [(100.0, 4.0, "B", "b", [(FR.LIFT, "A~", "a~"), (1.0 - FR.LIFT, "B~", "b~")])]
+    assert FR.change_keys("A", change, 50, 0) == [(50, "A"), (96.0, "A"), (97.0, "A~"), (99.0, "B~"), (100.0, "B")]
+    assert [v for _f, v in FR.change_keys("a", change, 50, 1)] == ["a", "a", "a~", "b~", "b"]
+    early = FR.change_keys("A", [(52.0, 4.0, "B", "b", [(0.25, "X", "x"), (0.75, "Y", "y")])], 50, 0)
+    assert [f for f, _v in early] == [50, 50.5, 50.875, 51.625, 52.0]                          # the move starts after the settle
+    assert FR.change_keys("A", [(100.0, 3.0, "B", "b", [])], 50, 0) == [(50, "A"), (97.0, "A"), (100.0, "B")]
+
+
 def test_line_places_a_lane_on_the_card_and_the_hand_table_takes_notes():
     hits = {"bass_notes": [{"t": 24.455, "db": -5.4, "midi": 45.0}, {"t": 24.638, "db": -2.3, "midi": 47.1},
                            {"t": 25.518, "db": -4.1, "midi": 48.1}, {"t": 30.0, "db": 0.0, "midi": 28.0}]}
