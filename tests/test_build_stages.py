@@ -1389,6 +1389,53 @@ def test_the_bake_puts_the_mannequin_and_the_camera_where_blender_has_them_movin
         assert dist.max() < 5e-5, (frame, dist.max())
 
 
+POPPED = """[vector]
+colors = { background = "#FFD21F", line = "#1B2A6B" }
+[pose.mq]
+feet = "floor"
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+style = "vector"
+[[ribbon]]
+name = "loop"
+style = "neon"
+swoop = { points = [[0.7, -0.7, 0.8], [0.0, -0.9, 1.2], [-0.7, -0.7, 0.8]] }
+draw = [0.0, 0.6]
+[[key]]
+target = "loop_ribbon"
+prop = "scale"
+index = 0
+keys = [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]]
+[[key]]
+target = "loop_ribbon"
+prop = "scale"
+index = 1
+keys = [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]]
+[[key]]
+target = "loop_ribbon"
+prop = "scale"
+index = 2
+keys = [[0.0, 1.0], [0.9, 1.0], [1.0, 0.0]]
+"""
+
+
+def test_the_bake_holds_a_mesh_scaled_to_nothing_as_no_geometry(make):
+    """A gag prop shown only round its move is popped out by keying its scale to 0, so its world matrix is singular on
+    those frames: the bake holds it there as a geometry of no vertices (it shows nothing), where it used to fail
+    inverting the matrix for the normals."""
+    code, out = make(POPPED)
+    assert code == 0, out.get("error")
+    bake = json.loads((make.root / "build" / "t.bake" / "bake.json").read_text(encoding="utf-8"))
+    entry = next(e for e in bake["by_frame"] if e["name"] == "loop_ribbon")
+    sizes = [entry["geoms"][g][1] if g >= 0 else None for g in entry["frames"]]
+    assert sizes[20] and sizes[-1] == 0, sizes
+
+
 FROZEN_CUT = """[vector]
 colors = { background = "#FFD21F", line = "#1B2A6B" }
 [vector.tones]

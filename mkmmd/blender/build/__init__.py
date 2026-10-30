@@ -9,6 +9,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   pose     sitting / standing base pose, feet and hands on targets (leg IK, arm IK), fingers
   motion   VMD motions on NLA strips, retimed to the song's beats
   perform  gaze, blinks, breathing, sway, beat bob, startles, expressions, lip sync, twitches
+  ribbons  [[ribbon]] 3D paint strokes in the scene (crayon, toothpaste, neon), drawn on, kept clear of the cast
   shots    the cut: baked cameras per shot and output aspect (mounts, aim, lag, shake, framing, focus), markers
   lights   [[light]] rigs in palette colours (mounted, aimed, keyed) and the [look] colour pipeline
   text     [[text]] kinetic type on set and prop surfaces: fitted, palette-coloured, typewriter and keyed numbers
@@ -31,8 +32,8 @@ from ...core import tables as TB
 from ..runtime import CTX, op
 
 TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
-STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
-          "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
+STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
+          "keys", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
 
 
 class BuildError(RuntimeError):

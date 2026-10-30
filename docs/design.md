@@ -168,7 +168,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
 | `[colliders]` | sim, checks | named lists of collision shapes: see [Colliders](#colliders) |
 | `[[check]]` | `mk check` | `name`, `metric`, `args`, `frames`, `min`, `max`: see [Checks](#checks) |
-| `[[set]]`, `[[prop]]`, `[[scatter]]`, `[[vehicle]]`, `[[cast]]`, `[pose.<cast>]`, `[[motion.<cast>]]`, `[perform.<cast>]`, `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[[light]]`, `[[text]]`, `[[key]]`, `[sim.<cast>]`, `[[stepped]]` | `mk build` | one build stage each: see [Building](#building) |
+| `[[set]]`, `[[prop]]`, `[[scatter]]`, `[[vehicle]]`, `[[cast]]`, `[pose.<cast>]`, `[[motion.<cast>]]`, `[perform.<cast>]`, `[[ribbon]]`, `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[[light]]`, `[[text]]`, `[[key]]`, `[sim.<cast>]`, `[[stepped]]` | `mk build` | one build stage each: see [Building](#building) |
 
 ```toml
 [project]
@@ -469,6 +469,7 @@ ways in; `mk check --list` prints every metric's arguments and default limits. M
 | `strum` | largest distance (mm) of the pick tip from the nearest string at the strike of a down stroke | replays the project's `[perform.<cast>] strum` on its timeline and measures the scene: the pick object rides the wrist, so the arm's reach is in the numbers; `detail.timing` has the mean, median, p95 and max of when the tip really crosses the first string against the planned strike time (ms), `detail.missed` the strokes it never reached; default `max` 10 (see [Playing a worn guitar](#playing-a-worn-guitar)) |
 | `prop_body` | deepest vertex (mm) of a prop's geometry inside the character's collision bodies | the torso, hips, legs, neck and head bodies of rig.json (not the arms that hold it), over the frames; the bodies are capsules a little fatter than the skin, so a few millimetres is a prop resting on the body; default `max` 8 |
 | `clearance` | least gap (m) between the world bounds of objects that fly past (`objects`: names or fnmatch patterns, e.g. a [bullets](#lyrics) entry's `bul_l*`) and the character's collision bodies, over the frames each object has geometry | exact for the bodies' spheres, capsules and rounded boxes; negative: into a body (by at least that much: where the cores overlap it is minus the body's radius). The bodies are rig.json's, often ending at the ankles and wrists, so shoes and fingers stand out of them; default `min` 0; detail: `object`, `at_frame`, `body`, `object_frames` |
+| `ribbon_clear` | least gap (m) between the [[ribbon]]s as they show on each frame (the drawn part of the centre line the stage stores on each root, `mk_ribbon`, with the radius that holds its surface, pulses included) and the characters' collision bodies as the scene poses them (after the sim) | exact for a round ribbon, a flat one counted as thick as it is wide; negative: into a body; default `min` 0; detail: `ribbon`, `at_frame`, `body`, `at_m` (how far along the ribbon), `ribbons` (each one's least gap); see [Ribbons](#ribbons) |
 | `wrist_bend` | largest bend (deg) of a hand from its forearm (elbow to wrist against wrist to the middle knuckle) while a move holds it | the moves library's rule (`MV.WRIST`, default `max` 60); detail: `side`, `move` |
 | `hand_mirror` | largest mismatch (mm) between a two-hand move's hands, each wrist and middle knuckle against the other's mirror image | default `max` 5; detail: `move`, `deg` (the hands' directions, mirrored) |
 | `mic_palm` | smallest share of a fist's palm toward the body while it holds a mic or a hammer (the library's aimed places) | default `min` 0.3; detail: `side`, `move` |
@@ -497,6 +498,7 @@ Arguments:
 | `form` | `prop` (a prop root name or a list), `objects`, `exclude`, `exempt`, `exempt_weight`, `frame`, `hard_edge_deg` (65), `worst` (6): see [Form](#form) |
 | `strum` | `cast`, `hand` (`R`), `pick` (the pick object, default `<prop>_pick`), `tip` (metres from the pick object's origin to its tip along x; default the card's `pick.tip`, 0.008), `strokes` (`down`: the worst down stroke, or `all`) |
 | `prop_body` | `cast`, `prop`, `bones` (semantic bones whose bodies count; default `upper_body upper_body2 lower_body neck head leg.L leg.R knee.L knee.R`), `exclude` (a cable, a pick), `samples` (4000 vertices), `frame` |
+| `ribbon_clear` | `ribbons` (names or fnmatch patterns; default every [[ribbon]]), `cast` (a member or a list; default every member with a rig.json) |
 | `wrist_bend`, `mic_palm`, `hand_room` | `cast`, `sides` (`L R`) |
 | `hand_mirror` | `cast` |
 
@@ -615,6 +617,7 @@ member or the camera cannot be used by a stage that runs before them):
 | pose | `[pose.<cast>]`, `[[move.<cast>]]`, `[[prop]] wear / attach / anchor_to` | the base pose: sit on a seat or stand, feet, spine, head, arm IK, finger presets, grips, drape, worn props; named moves on the clock | [Posing](#posing), [Moves](#moves), [Grips](#grips), [Playing a worn guitar](#playing-a-worn-guitar) |
 | motion | `[[motion.<cast>]]` | VMD motions on NLA strips | [Motion](#motion) |
 | perform | `[perform.<cast>]` | gaze, blinks, breathing, sway, nods, beat bob, startles, expressions, lip sync, twitches, strumming | [Perform](#perform) |
+| ribbons | `[[ribbon]]` | 3D paint strokes in the scene (crayon, striped toothpaste, neon marker) round a bone, up a body, through points or out of a prop's nozzle, drawn on, retracted, pulsing on a lane, kept clear of the cast's bodies | [Ribbons](#ribbons) |
 | shots | `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[vector]`, `[[ring]]`, `[[freeze]]`, `[[medium]]` | the cut: a camera per shot and output, markers, render-time looks, cut effects, medium windows | [Shots](#shots) |
 | lights | `[[light]]`, `[look]` | lights in palette colours (mounted, aimed, keyed); view transform, contrast look, exposure | [Lights and the look](#lights-and-the-look) |
 | text | `[[text]]` | type on set and prop surfaces, lyric type, handwriting, screen type | [Text](#text) |
@@ -793,6 +796,8 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `electric_bass` | a 60s-70s short-scale bass of the Mustang Bass kind (30 inch scale, 19 frets, an offset body, a split single coil, a string-through bridge, a control plate with two knobs and the jack, four in-line clover keys), upright like the guitar. Roles in `slots`: the guitar's, `knobs` (the black plastic of the knobs and the pickup covers) and `stripe`: naming it adds the racing stripes. Card: the guitar's contract with four strings and their `tuning` (E1 A1 D2 G2); see [Playing a worn guitar](#playing-a-worn-guitar) |
 | `hearts` | a field of puffy hearts that rise and sway around a point, animated by drivers on the frame (see below) |
 | `heart` | one big puffy heart that pounds on the song's beat (a bump on the beat and a smaller one after it) and bursts into a ring of little hearts every few beats; options `size` (0.2), `bpm`, `start` (a clip second on a beat), `beat` (0.25: the swell), `burst` (8 hearts), `every` (4 beats), `reach` (0.45 m), `burst_size`, `turn`, colour `heart` ("love"), `glow`. Drivers on the frame and the scene's `mk_frame0`; objects `<name>_heart`, `<name>_burst<i>` tagged `mk_heart` (silhouette accents: `accent = ["prop:mk_heart"]`); with `attach` it rides a chest |
+| `butterfly` | one butterfly about 9 cm across, flapping (`mkmmd/core/butterfly.py`: outlines from landmarks read off photographs, the meshes, the flap maths; `butterfly_pattern.py`: the wing patterns): `style` ("monarch"; "swallowtail" with tails, "morpho", "blue": a small blue), `size` (the span, 0.09 m), `way` (a colourway of the style, 0..2), `sheen` (the iridescence at a glancing view: morpho 1, blue 0.6, else 0), `glow` (0.1: the wings' own light, an underside in shade never goes black), `tile` (pattern pixels per wing, 1024). Fore and hind wings are thin membranes with a rolled edge, the hindwing tucked under the forewing; the patterns (veins fanning from a discal cell, borders, edge dots, eyespots, stripes, the sheen) are masks in a packed atlas (cached in `~/.cache/mk/butterfly`) coloured by the roles `ground`, `under` (the underside), `ink`, `spot`, `accent`, `sheen`, `body`, `eye` (palette slots, hexes or blends `"gold:2,light:1"`; `dark` and `light` name the palette's darkest slot at 42 % and its lightest). Live root properties for `[[key]]`: `flap` (3 beats/s; the keys stage integrates it into `beats`, so a keyed rate never jumps the wings), `flap_amp` (100: the full stroke, degrees), `flap_mid` (20: its middle above flat), `phase` (cycles; with `flap = 0` the pose the wings rest in: 0 up, 0.25 mid going down, 0.5 down), `hit` and `hit_time` (0.3 s): `[[key]] prop = "hit", lane = "kick"` gives one wing beat on every kick (and with `flap = 0` none in between). Objects `<name>_body` (the span's scale; it bobs with the beat) and `<name>_wing_L` / `_R` (its children, turning about their hinges): drivers only, so a freeze holds it mid-beat. Front -Y, origin the middle of the thorax; card `use.look` `head`, `body`, `tip_L`, `tip_R`, `use.anchor` `perch` (under the feet: `attach` it to a finger with that offset), `rates` |
+| `butterflies` | a swarm of butterflies round the root (40 to a few hundred), each with its own wing-beat phase and rate, span, style and colourway, flapping (the `butterfly`'s parts and flap), in formations blended by keyable weights: `rings` (a mandala facing -Y), `orbit` (tilted orbits round `orbit_at`: her head with `attach`), `drift` (a wandering flock); `burst` flings them out and away, `bloom` grows the rings in from the centre. One geometry-nodes object `<name>_swarm` (see below) |
 | `traffic_car` | an 80s car or truck for night traffic: `body` "sedan", "wagon" or "semi" (a cab-over tractor and a box trailer whose sides are `use.surface` `left` / `right`), colours `paint`, `trailer`, `glass`, `lamp`, `tail`, `marker`, emissions `lamps` (30), `tails` (9), `markers` (3.5), `beams` (real headlight spots: `beam_power` 900 W, `beam_angle` 55, `beam_tilt` 5). Faces -Y, origin under the middle; the card lists the wheels and beams, so a `[[vehicle]]` drives it |
 | `neon_sign` | a roadside motel / diner sign: a tall pole, a rounded board ringed by a neon tube and a smaller board under it, both `use.surface` (`face`, `sub`) for glowing [[text]]; options `width` (3.2), `tall` (1.5), `height` (6.5), `sub` ([2.0, 0.55], [] none), colours `board`, `neon`, `sub_neon`, `pole`, `glow` (7) |
 | `meteor`, `airplane` | sky events at clip seconds, seen from the root: a shooting star (`t`, `dur`, `from` / `to` [azimuth, elevation] of its head, `length`, `color`, `strength`, `distance` 2500) and an airliner's lights crossing (`t0`, `t1`, `from`, `to`, `lights`, colours `red`, `green`, `white` (a strobe), `strength`, `distance` 3000). Keyed at build from `mk_frame0` |
@@ -814,6 +819,18 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `fuse` | a cartoon fuse: a rope (`<name>_cord`, 14 mm thick) that leaves a socket at the root, up and over in a curl, with a spiky spark (`<name>_spark`) that is lit at its tip and burns it down. Root properties for `[[key]]`, 0..1: `grow` (how much of the rope has sprouted, along its length; default 1), `burn` (how much has burned down from the tip; 0), `lit` (the spark's size, flickering; 0). Leave `grow` at 1 in the slots and key it from 0: the props stage measures the form as built. Options `points` (`[[x, y, z], ...]` from the root, the first `[0, 0, 0]`), `radius`; colour roles `cord` (text), `spark` (gold), `cap` (base); `use.look` `base` and `tip`. The spark has no parent (it rides the rope's end on a Follow Path constraint and copies the root's world scale), so `scale` and `parent` carry it too |
 | `burst` | a blast of pieces flung out from the root at a clip second: puffy hearts, five-point stars, cloud puffs and shards of glass (pillows facing -Y, and thin flat slivers with sharp edges, mirror-bright metal tinted their colour with a glow of their own: `<name>_heart<i>`, `<name>_star<i>`, `<name>_puff<i>`, `<name>_shard<i>`, the hearts tagged `mk_heart`), each easing out to its own reach while it pops in and spins in the picture's plane, then shrinking away; the directions are flattened toward the picture (x-z), so pieces fly across it more than at the lens. Drivers on the frame (the maths: `mkmmd/core/burst.py`), so a [freeze](#freezes) holds them mid-air. Options `count` (24), `seed` (1), `mix` (`{heart = 0.45, star = 0.35, puff = 0.2}`; `{shard = 1}` for broken glass), colours `heart` ("love"), `star` ("gold"), `puff` ("text"), `shard` ("text"), `glow` (0.3); root properties for `[[key]]`: `start` (the clip second it goes off; 0), `reach` (how far the farthest piece flies; 1.2 m), `life` (1.4 s), `spin` (360 degrees over a life), `size` (the largest piece; 0.16 m), `amount` (1; 0 hides every piece). A `[[key]]` on `start` with a `lane` sets it off again on every kick |
 | `squeaky_hammer` | a squeaky toy hammer, 320 mm long: a pleated bellows head (180 mm, its axis along X) with a cap at each end, on a handle standing along +Z from its end at the origin; colour roles `head` ("love"), `caps` ("gold"), `handle` ("gold"); `use.look` `head` and `grip`. Root property `squash` (0..1) for `[[key]]`: the head 40 % shorter and 18 % rounder about its middle (key it up on each hit and back down). Put it in a fist with `attach`, `offset` and `attach_rot`, and play `bonk` with that hand (see [Moves](#moves)) |
+| `toothbrush` | a giant manual toothbrush, 0.74 m (about 3.9 times a 190 mm brush, the handle kept fist-thick: 45 x 32 mm), standing on the end of its handle along +Z, the bristles facing -Y: ONE cage of superellipse rings (handle, neck angled forward, head) and 36 lathed tufts; colour roles `handle` ("iris"), `grip` ("rose": the soft panels), `bristles` ("surface"), `tufts` ("foam": the middle columns). Card: `use.grip` `hold` (type "hold": `center`, `axis` toward the head, `length` of the handle a fist may hold, `radius`), `use.anchor` `brush` (the middle of the bristles' tips, `dir` -Y), `use.look` `head` and `grip` (toothbrush_layout.py) |
+| `toothpaste_tube` | a giant toothpaste tube, 0.60 m (a 100 ml tube at about 3.4 times), standing on its crimp along +Z, the open threaded nozzle at the top: ONE cage from the ridged crimp up the body (each ring an ellipse keeping the tube's perimeter as it flattens toward the seal), over the shoulder, the helical thread and the lip, down the bore; colour roles `body` ("surface"), `shoulder` ("love"), `paste` ("foam", in the mouth), five body bands `stripes` ("love,gold,foam,iris,rose"), `cap` ("gold", with `capped = true`: a ribbed screw cap). Root property `squeeze` (0..1, a card param; a [[ribbon]] `from` its nozzle keys it) drives the shape key "squeeze": the body pressed flat round the hold. Card: `use.anchor` `nozzle` (the mouth, `dir` +Z, `radius` of the paste it lets out, 0.02), `use.grip` `hold`, `use.look` `nozzle` and `body` (toothpaste_tube_layout.py) |
+| `kaleidoscope` | a cardboard kaleidoscope toy, 230 mm long and 49 mm across, lying on its side on its two turned rims (the axis along +Y, 26.8 mm up, the eyepiece toward -Y; origin on the floor under its middle, so `at` on a table top or `place` lays it there). Printed paper with a coated sheen, the step of its seam underneath and wear where the rims rub: `pattern` ("roses": rose and clover motifs, "memphis" or "marbled"), `seed` (1), `wear` (0.6: how far the print is rubbed through there), `print` (`{role = slot}`: the print's own colour roles, `mkmmd/core/kaleidoscope_print.py`). The eyepiece: a turned cap with a painted dish, a brass eyelet round a 7 mm eyehole and a domed lens (its glint), the mirrors' dark tunnel and the view glowing at its end (`glow`, 1.2). The far end: a frosted window with beads and glass bits settled behind it (`beads`: their slots, "love,gold,rose,pine,foam,iris"). Colour roles `rim` ("love"), `face` ("gold"), `ferrule` ("gold"), `frost` ("surface"), `inside` ("text"). Root property `turn` (degrees, for `[[key]]`): the chamber and the view turn about the axis. Card: `use.look` `eyepiece` (the eyehole's centre: aim a camera there), `chamber`, `grip`; `use.anchor` `eyehole` (`radius` 3.6 mm, `object` `<name>_eyehole`: an empty there, so an insert's `anchor` is `'obj("<name>_eyehole").loc'`); `use.rest` `side` (an edge along the top of the tube: a hand rests on it with `grip = "rest"`); `use.grip` `tube` (a cylinder wrap round the paper, as the mug's `body`; to hold it up, `attach` it to a hand as the mic). The maths and the card: `mkmmd/core/kaleidoscope.py` |
+| `pillow_cloud` | a plump pillow (0.56 x 0.17 x 0.38 m: two stuffed panels sewn round a piped seam, the sides pulled in, folds at the ears, a polka-dot cotton case) that puffs into a cartoon cumulus (about 1.27 x 0.61 x 0.53 m, a flat soft underside): `<name>_pillow` and the cord in its seam `<name>_piping`, each with the shape key `cloud` (the same points on the cloud: `pillow_cloud_layout`). Held upright: broad faces +-Y, front -Y, origin at its centre. Root property `puff` for `[[key]]` (0 the pillow, 1 the cloud, up to 1.25 overshoots; its starting value in `slots`): the shape and the materials follow it (the print fades into a softly glowing white fluff, its underside shaded) and the cord sinks into the cloud. Roles in `slots`: `case` ("foam"), `dots` ("surface"), `piping` ("rose"), `cloud`, `shade`. Card: `use.anchor` `hug` (the middle of its back, `dir` [0, -1, 0]: the way its front faces), `use.rest` `hold_L` / `hold_R` (planes on its +X / -X ends, normals out), `use.look` `centre`, `cloud` {size, bounds} |
+| `giant_carrot` | a giant carrot, 0.60 m tip to shoulder (0.10 across it), standing on its TIP at the origin along +Z, a green-tinged domed crown and seven leafy fronds to ~0.33 m above the shoulder, faint rings and root-hair dimples; front -Y. Root properties `bite1` .. `bite4`: the clip second of each bite (default 1e4 = never; key CONSTANT, in order); bite k eats the end up to a scalloped, tooth-notched face centred 0.06 k above the tip (non-additive shape keys `bite<k>` on `<name>_body`, carved in over 0.05 s; the face shows the paler core rings) and throws its own chunks `<name>_chunk<k>_<j>` that fly, tumble and shrink away within 0.6 s, falling toward the world's floor however the carrot is held. `f0`, `fps` set at build. Roles in `slots`: `skin`, `flesh`, `core`, `crown`, `stem`, `leaf` (true colours). Card: `use.grip` `hold` (type "hold": `center`, `axis` [0, 0, -1] toward the tip, `length` of the grippable shaft, `radius` at its shoulder end, `radius_tip`, `profile` [[s, r], ...]), `use.look` `grip`, `tip`, `use.bite` `bite1` .. `bite4` (`point`, `dir` [0, 0, -1], `prop`) |
+| `carrot_plush` | a soft toy carrot, 0.34 m tip to top plus three stuffed felt leaves ~0.12 m above it, five minky gores with seam valleys, an embroidered face on its front (eyes with highlights, a smile, cheeks: graphic layers); origin at the body's middle, +Z tip to leaves, face -Y. Roles in `slots`: `body`, `leaf` (true colours), `face` ("text"), `shine` ("surface"), `cheek` ("love"), `stitch` ("base"). Card: `use.anchor` `hold` (the middle of its back, `dir` [0, -1, 0]: the way its face looks), `use.look` `face` |
+| `dinner_plate` | a glazed ceramic dinner plate 0.27 m across (foot ring, flat well, the rim flaring up to a rolled lip, a coloured band on the rim) with stylised veggies in true colours (two broccoli florets, carrot coins with core rings, a heap of peas, a cherry tomato with its calyx); origin floor_center, front -Y. Options `veggies` (true; false: empty), `seed` (1). Roles in `slots`: `plate` ("surface"), `band` ("foam"), `floret`, `stalk`, `skin`, `flesh`, `core`, `pea`, `tomato`, `calyx`. Card: `use.rest` `well` (plane, `radius` 0.08), `use.look` `centre`, `use.grip` `rim` (type "pinch" at the back edge: `width` the rim's thickness, `span`, `length`, `center`, `axis` along the edge, `normal` out along the rim) |
+| `record_treadmill` | a giant turntable to run in place on: a 1.68 m platter with strobe dots on its bevel on a low rounded-square plinth, a 1.60 m record (grooves and their sheen, a raised bead and label area), an original printed label (sunburst, rings, three beets; no lettering) and the spindle. Origin on the floor under the spindle, front -Y; the record's top at 0.16 m. It turns clockwise seen from above, so at the run spot the top moves +Y (1.57 m/s at 33.3 rpm). Roles in `slots`: `plinth` ("foam"), `deck`, `feet`, `plate`, `rim`, `dots`, `vinyl`, `label` ("gold"), `rays`, `print` ("love"), `leaf`. Root property `rpm` (33.3; also a starting value in `slots`; the keys stage integrates it into `turns`, so a spin-up never jumps; unkeyed it turns at the starting rpm from clip second 0). Card: `use.feet` `run` (L [-0.35, 0], R [-0.55, 0], floor_z 0.16: stand the cast at [-0.45, 0, 0.16] with `feet = "<name>:run"`), `use.rest` `top` (plane, radius 0.78), `use.surface` `label` (rides `<name>_platter`), `use.look` `centre`, `rates`. Objects `<name>_plinth`, `_feet`, `_platter` (turns) carrying `_record` and `_label` |
+| `sandbox_piano` | a children's wooden sandbox (2.2 x 2.4 m, stacked boards 0.30 m tall with rounded edges, triangular corner seats, bumpy sand at 0.22 m) holding a toy grand piano (two octaves of chunky keys between cheek blocks, a rim on a grand's plan with a gold plate and strings inside, the lid propped open 38 degrees on a slanting stick, a music desk, three turned legs and the pedal lyre going into the sand) and its padded bench. Keys 0.70 m and seat 0.45 m above the sand. Origin floor_center, front -Y; the pianist sits facing -Y with the bass at her left (+X), the lid opening to her right. Roles in `slots`: `wood`, `seats`, `sand`, `piano` ("love"), `lid` (= piano), `inside`, `plate` ("gold"), `trim`, `keys_white`, `keys_black`, `bench` ("iris"), `bench_wood`. Card: `use.sit` `bench` and `use.feet` `bench` (as the café chair's: `sit = "<name>:bench"`), `use.rest` `keys` (an edge on the white keys) and `sand` (a plane), `use.look` `keys`. Static |
+| `chalkboard` | a school chalkboard on an A-frame easel (about 1.67 m tall): rounded wooden legs, the back leg hinged at the top under a turned knob, a crossbar, the ledge with a chalk tray (white and pink sticks, a stub, a felt eraser), and a green-black slate (0.90 x 0.65 m) in a rounded wooden frame leaning back 12 degrees, with faint chalk dust. Origin floor_center, front -Y. Option `drawing` ("none"; "noughts": a game of noughts and crosses in chalk, a graphic layer). Roles in `slots`: `slate` ("#26332d"), `wood`, `chalk` ("paper"), `chalk_pink`, `felt`, `eraser` ("pine"). Card: `use.surface` `board` (the slate's face: `[[text]] on = "<name>:board"` writes on it), `use.rest` `tray` (an edge on the tray's lip), `use.look` `board`. Static |
+| `parent_cutout` | a giant picture-book parent cut out of construction paper, standing on its foot line (origin floor_center, faces -Y, +X the figure's left): `figure` "father" (default: narrow-lapel suit, slim tie, side-parted hair, his left forearm raised with the scolding index finger up, 3.29 m) or "mother" (A-line shift, Peter Pan collar, hem band, bouffant with a flip and a bow, hands on hips, 3.16 m); scissor-cut paper with layered details on a thick white die-cut card with rolled edges and a slight bow, a soft drop shadow (`<name>_shadow`, a graphic layer about 6 mm behind: it shows against a backdrop), brass paper-fastener brads. Roles in `slots`: `paper` (pine / rose), `shade`, `hair`, `detail`, `trim`, `accent`, `rim`, `shadow`, `brad`. Father: `<name>_hand` turns in the card's plane about the elbow's brad by angle = wag + wagging sin(2 pi wag_hz t) (drivers); root properties `wag` (degrees, counter-clockwise seen from the front; key it), `wagging` (0), `wag_hz` (2.5). Card: `use.hand` `wag` {object, pivot, axis [0, -1, 0], tip (the index fingertip at angle 0), prop "wag"} (father), `use.look` `head` |
+| `colorbar_card` | a rounded 4:3 TV-screen card printed with colour bars (`mkmmd.core.colorbars`: the face `texture` at 1024 x 768 as an sRGB byte image, the back `back()`), edges rolled, its cut edge cream paper (role `edge`); origin center, the bars face -Y; options `size` ([0.60, 0.45]), `thick` (0.012), `style` ("both", "dawn", "true"); the bars take the palette's slots (rose-pine-dawn without one). No drivers: key the root (the `cards` frame effect tumbles its own). Card: `use.surface` `face` (the printed rectangle), `use.look` `centre` |
 | `bed_single` | a single bed with a Memphis quilt and pillows, head end at +Y (push it against a wall); options `pattern` ("memphis", "zigzag", "triangles", "plain"), `seed` (7), `quilt_colors`, `quilt_ground`, `pillowcase`, `frame` ("wood" or "tube"), `frame_color`, `headboard` ("slats" or "padded"), `headboard_color` |
 | `rug_80s` | a Memphis wool rug, 1.8 x 1.2 m (`flat`: things stand on it); options `seed` (5), `rug_ground`, `rug_colors` |
 | `poster_80s` | a printed paper poster on a wall (origin `wall_center`, five designs); options `style` ("sunset_grid", "memphis", "trio", "car", "sunburst"), `width`, `height` (0.50 x 0.70), `margin`, `mount` ("pins", "tape", "none"), `folds` ("cross", "thirds", "none"), `torn` ("TR", "TL,BR"), `variant` (0..2), `seed`, `accent`; `use.surface` `print` |
@@ -856,6 +873,78 @@ silhouette never merges two of them. A heart is born at the bottom with the pop,
 so nothing jumps but the pop; no part of it enters the column \|x\| < `clear` below `clear_top`, through any sway, turn or pop, so in a front view no heart crosses
 a figure standing in it. The position, turn and scale of every heart are drivers; each is a Blender simple expression of at most 255 characters (checked at
 build; see [AGENTS.md](AGENTS.md#pitfalls)). The maths and the parameter table are `mkmmd/core/hearts.py`.
+
+**`butterflies`**: `card = "library:butterflies"`, `at` the mandala's centre (it faces -Y like a character); with `attach = "<cast>:head"`, `offset`
+and `level = true` a swarm rides her head and stays level while she nods. Build options (the `slots` of the `[[prop]]`; the colour roles of
+`butterfly`, `ground`, `under`, `ink` ..., recolour every style):
+
+| Option | Default | Meaning |
+|---|---|---|
+| `ring_counts` | `[8, 16, 24]` | butterflies per ring, the inner one first; or `count` (1 .. 500): rings made for that many (K rings with 4 K (K + 1) >= count, ring k's share as k + 1: 100 is `[8, 12, 20, 28, 32]`) |
+| `inner`, `ring_gap` | 0.5, 0.28 m | ring k's radius is `inner + k * ring_gap` |
+| `cup` | 0.3 m | the outer ring that much further back (+y) than the inner, a bowl opening toward the camera (seen from below it shows its depth); negative: a dome |
+| `heading` | 0 degrees | where the heads point, from outward (0: petals) toward each ring's direction of motion (90: flying along it) |
+| `formation` | `"rings"` | the starting weights: that formation 1, the others 0 |
+| `styles` | all four, equal | the mix `{style = share}` of `swallowtail`, `monarch`, `morpho`, `blue`. The mandala is n-fold symmetric (n the greatest common divisor of the ring counts): one sector takes the styles in proportion and a seeded colourway each, and repeats round every ring |
+| `seed` | 1 | phases, rates, spans, orbits, drift paths, burst ways |
+| `size_var` | 0.1 | each span within `size_var` of the mean (times its style's: a morpho is the biggest, a blue the smallest) |
+| `phase_spread` | 1 | 0 .. 1: wing beats all over the cycle with rates 1 +- 15 % (times the style's); 0: all flap in unison |
+| `orbit_at`, `orbit_tilt` | the root, 30 degrees | the orbits' centre and the inclinations' range (+-) |
+| `drift_r` | 0.9 m | the drift ellipsoid's radius (half of it in y, 0.8 of it in z) |
+| `level` | false | an empty `<name>_level` carries the swarm with a Limit Rotation (world space, x and y at 0): yaw follows, tilt does not |
+
+Live root properties for `[[key]]` (also starting values in `slots`):
+
+| Property | Default | Meaning |
+|---|---|---|
+| `rings`, `orbit`, `drift` | 1, 0, 0 | the formations' weights: positions, heads and backs blended by them (normalised; all 0 means rings) |
+| `burst` | 0 | 0 .. 1: each flies out along its way o_i = normalize(normalize(p + eps_i) + jitter_i + 0.35 Z) by `burst_reach` v_i s^2 (v_i 0.7 .. 1.3), its head turning to o_i over the first 15 %, beating `burst_flaps` s extra beats, shrinking to nothing from 0.85 to 1. Keyed back down they fly back in on the same paths |
+| `bloom` | 1 | 0 .. 1: ring k grows in over its window (0.4 of the bloom, inner rings first, the last ending at 1) out from the root on a short spiral; orbit and drift butterflies by their ring's window; 0 hides them all |
+| `spin` | 0.05 turns/s | the inner ring's speed (a rate into `turns`); ring k turns `(-1)^k` at `(inner / r_k)^0.5` of it, an orbit at 3 times it (faster when tighter) |
+| `radial` | 0 | 0 .. 1: every butterfly turned about its head axis by `radial` x 90 degrees (1: wings radial, spokes from the front) |
+| `size` | 0.16 m | the mean wingspan |
+| `flap`, `flap_amp`, `flap_mid`, `phase`, `hit`, `hit_time` | 3 beats/s, 100, 20 degrees, 0, -1000, 0.3 s | the `butterfly`'s: `flap` is a rate into `beats`; `hit` the clip second of the last hit (a `lane` keys it), after which every butterfly beats once more over `hit_time` |
+| `ripple` | 0.25 s | a hit's beat starts `ripple * k / (K - 1)` later on ring k: it runs out through the mandala |
+| `orbit_r` | 0.35 m | the orbits' radius (each within 15 %) |
+| `burst_reach`, `burst_flaps` | 3 m, 6 | how far a whole burst carries them and its extra wing beats |
+
+Clocks: the card's `rates` are `flap` into `beats` and `spin` into `turns` ([Keys](#keys)): unkeyed they run at the starting rates from
+clip second 0; keyed, the keys stage writes their integrals, so a speed change never jumps a wing or a ring. The drift wanders on the clip
+clock itself (slow sines, 0.06 .. 0.25 Hz). A butterfly's wing-beat phase is `beats * k_i + phase + offset_i + hit beat + burst_flaps * s`.
+
+One object `<name>_swarm` is a mesh of one point per butterfly holding its seeded constants (and an `id`, so motion blur matches every
+instance from frame to frame) under the geometry-nodes modifier "Swarm": the swarm's maths (`mkmmd/core/butterflies.py`, written once
+against an ops interface: numpy there, one node per op here) runs once per frame on the points, and every butterfly's body and wings are
+instances of hidden sources `<name>_<style><way>_body`, `_wing_L`, `_wing_R`, picked by its style and colourway; drivers carry the root's
+properties onto the modifier's inputs and the scene frame onto its clip second (no Python at render time; a freeze holds them mid-beat). A
+frame of 100 butterflies evaluates in about 5 ms. Card: `size` and `bounds` (the rings, orbits and drift; a burst flies out of them),
+origin `center`, front `-Y`, `blocks` false, `rates`, `params`, `use.look` `centre`, `butterflies` {count, rings, styles, combos, objects,
+sources, level, inputs}.
+
+```toml
+[[prop]]
+name = "swarm"
+card = "library:butterflies"
+at = [0.0, 0.25, 1.3]                     # round her head and shoulders, behind her
+slots = { ring_counts = [8, 16, 24], heading = 20, styles = { monarch = 2, morpho = 1, swallowtail = 1 } }
+
+[[key]]                                   # out on every kick, drifting back in until the next
+target = "swarm"
+prop = "burst"
+lane = "kick"
+pulse = [[0.0, 0.0], [0.8, 1.0]]
+
+[[key]]                                   # one more wing beat on every snare, rippling out ring by ring
+target = "swarm"
+prop = "hit"
+lane = "snare"
+
+[[key]]                                   # the mandala opens into orbits over a bar
+target = "swarm"
+prop = "orbit"
+interp = "LINEAR"
+keys = [[12.0, 0.0], [15.0, 1.0]]
+```
 
 ### Vehicles
 
@@ -1472,6 +1561,65 @@ twitch = [{ bones = ["ear_root.L", "ear_root.R"], t = 3.2, deg = 14 }]
 The report has, per member, `gaze_events`, `glances`, `frames` (the number of frames keyed), `blinks` (how many were scheduled),
 `blink_morph` (the morph keyed; `null`, with a log line, when the model has none), `sing_morphs` (how many of the five vowel
 morphs the model has), `sing_keys` and `strum` (per hand).
+
+### Ribbons
+
+`[[ribbon]]` draws a 3D paint stroke in the world, so the camera moves through it: a crayon line round her, a striped
+toothpaste rope squeezed out of a tube, a neon marker loop the lens flies through. The stage runs after perform (it reads the
+cast as posed and moving) and before shots (`mkmmd/core/ribbon.py` checks the entries and makes the centre lines, numpy,
+tested; `mkmmd/blender/build/ribbons.py` and `ribbon_nodes.py` build them). Each ribbon is an empty `<name>` (its frame:
+the world's or, with `ride`, what it rides, followed without scale) carrying the keyed properties `grow` and `tail` (it
+shows from `tail` to `grow` of its length) and `thick` (its radius scale), and `<name>_ribbon`: a mesh of its centre line
+(a point a centimetre or so apart) under geometry nodes that trim it to that window, give it rounded ends (a dome one
+radius long at each), its profile and its materials on every frame, with no Python at render time, so every look, `mk
+look --map` and the bake see the drawn part only. A neon also gets `<name>_glow`, a round shell of additive light about
+it (left out of the looks, viewport alpha 0). A long ribbon that pulses changes on many frames and may be too big for the
+bake to hold frame by frame: the bake then says so and `mk render --engine mk` draws those shots in Blender.
+
+| Key | Meaning |
+|---|---|
+| `name` | the root's name and its objects' prefix (required, new) |
+| `style` | `"crayon"` (default: wax, matte with a soft sheen, streaked along the stroke and pitted where the paper's tooth took no wax, slightly flat, its path and width wobbling as a hand draws), `"toothpaste"` (round, glossy, `stripes` running its length), `"neon"` (a flat marker ribbon of its own light, hotter across its middle, with a glow) |
+| `orbit` | `{around, radius = 0.45, height = 0, rise = 0, turns = 1, start, tilt = 0}`: round a target (`"cast:<name>.<bone>"`, a bone's head; any [target](#targets)), in its member's frame (angle 0 in front of her, 90 at her left; negative `turns` go clockwise seen from above), `radius` a number or `[from, to]`, `height` above the target, climbing `rise` over the turns, the plane leaning `tilt` degrees (front up, or `[front_up, left_up]`); `start` defaults to 0, or toward the `from` nozzle |
+| `spiral` | `{around, radius = 0.4, bottom = 0.1, top, turns = 2.5, start = 0}`: up her body round the vertical through her root (`"cast:<name>"`) or a bone's head, from `bottom` to `top` metres above her feet (default her eyes + 0.25) |
+| `swoop` | `{points, cast, closed = false}`: a centripetal Catmull-Rom through targets; with `cast` plain `[x, y, z]` points are in her frame (x her left, y behind her, z up) |
+| `fall` | `{reach = 0.25, floor = 0}`: with `from` alone (the default path then): out of the nozzle along its direction, bending down onto the floor `reach` metres on, then a pile |
+| `from` | `"prop:<prop>.<use point>"` (a tube's `nozzle`): the ribbon starts 1.5 widths inside it and leads out along its direction (a use point without one: toward the path) into the path; its `radius` sets the default width; a prop with a `squeeze` param gets it keyed 0 -> 1 over the draw (back over a retract; `squeeze = false` or `[lo, hi]`) |
+| `pile` | `true` or `{turns = 2.5, radius = 1.6 widths, shrink = 0.6, step = 0.8 widths}`: the end coils up on itself, each turn resting on the one below |
+| `draw` | `[from, to]` clip seconds: the front runs from the start to the end (required), eased by `ease` (`linear`, `smooth`, `in`, `out`) |
+| `retract`, `chase` | `[from, to]` after the draw, one of them: `retract` rewinds the front into the start (the paste back into the tube), `chase` runs the tail after the front (it leaves along its path) |
+| `width`, `thickness` | metres (crayon 0.05, toothpaste 0.056 or twice the nozzle's `radius`, neon 0.03); the flat styles' thickness (0.45 and 0.15 of the width); the flat side faces `face`: `"out"` (default round an orbit or a spiral: away from its axis), `"up"` (default for a swoop or a fall), or a direction |
+| `color`, `stripes`, `glow`, `halo`, `wobble`, `seed` | the crayon's and neon's colour (palette slot or `#hex`; `love`, `iris`); a toothpaste's 2 to 8 `stripes` round its profile (`["love", "gold", "foam", "iris", "rose"]`, the first centred on the side it faces); a neon's emission (6) and its glow `{size = 4 half widths, strength = 0.35}` (`false`: none); a crayon's wobble (0.3 widths) and its seed |
+| `pulse` | `{lane or hits, gain = 0.35, attack = 0.04, decay = 0.3, min_db, every, from, to}`: on every hit of a lane of the [audio] hits file (or at the clip seconds `hits`) the radius swells to 1 + `gain`, rising over `attack` up to the hit and back over `decay` (`thick`, keyed linearly) |
+| `ride` | `false` (default: it stays where it was drawn), `true` (what the path goes round, the swoop's `cast`, the `from` prop), `"cast:<name>[.<bone>]"` or `"prop:<name>"` |
+| `clear` | `true` (default: 0.03 m), a margin in metres, `{margin, cast}` or `false`: kept that far clear of the cast's collision bodies (rig.json, every member by default) |
+| `at`, `spacing`, `shadow` | the clip second its targets are read at (default the draw's start); the centre line's point spacing (default min(0.01, width / 4)); casting shadows (not a neon) |
+
+Keeping clear: the stage samples the bodies as posed (before the sim) on the frames the ribbon shows and moves what of it
+would come within `clear` of one, every second frame, the moves smoothed over 0.12 m along it so it bends round a body
+(`push_clear`); a nozzle's lead-in stays put. The report gives per ribbon its `style`, `path`, `width`, `points`,
+`length_m`, the draw frames, `pulses`, `squeeze`, `ride` and `clear` {`margin`, `pushed_points`, `moved_mm`,
+`least_gap_mm` (every frame, pulses in), `at_frame`, `body`}; a WARNING when the least gap is under zero (bodies on both sides
+closer than the ribbon is fat). The `ribbon_clear` check measures the saved scene the same way, hair and skirt as simulated.
+
+```toml
+[[ribbon]]                    # striped paste squeezed out of the tube, wrapping her; it swells on the snares
+name = "paste"
+style = "toothpaste"
+from = "prop:tube.nozzle"
+orbit = { around = "cast:reisen.lower_body", radius = 0.58, turns = 1.6, rise = 0.3, tilt = 5 }
+draw = [0.3, 2.6]
+retract = [6.0, 6.8]
+pulse = { lane = "snare", gain = 0.2 }
+
+[[ribbon]]                    # a neon hoop in front of her for the camera to fly through, leaving along its path
+name = "hoop"
+style = "neon"
+color = "foam"
+swoop = { cast = "reisen", points = [[-1.6, -2.2, 0.6], [0.0, -1.5, 0.65], [0.5, -1.45, 1.05], [0.25, -1.5, 1.55], [-0.5, -1.5, 1.05], [0.8, -2.0, 0.9]] }
+draw = [0.0, 1.2]
+chase = [3.2, 3.9]
+```
 
 ### Lights and the look
 

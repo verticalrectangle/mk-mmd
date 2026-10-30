@@ -339,7 +339,7 @@ def judge(check, value):
 
 def load():
     """Import the metric modules (they register themselves in METRICS)."""
-    from . import camera, form, hands, image, motion, props  # noqa: F401
+    from . import camera, form, hands, image, motion, props, ribbons  # noqa: F401
 
 
 def run(checks, ctx, frames_override=None, keep_sample=False):

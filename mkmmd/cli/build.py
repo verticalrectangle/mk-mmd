@@ -6,8 +6,8 @@ from pathlib import Path
 from .. import bridge
 from .common import add_project_arg, emit, get_project, UsageError
 
-STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "shots", "lights", "text", "keys",
-          "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
+STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
+          "keys", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
 BUILDING = STAGES[:-3]                     # what --until names; clip, save and bake follow
 
 HELP = """Build the project's scene from mk.toml in one Blender session and save it to [project] blend.
@@ -21,6 +21,8 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   pose      [pose.<cast>], [[move.<cast>]]   sitting or standing, feet, arm IK, grips, worn props, named moves
   motion    [[motion.<cast>]]         VMD motions on NLA strips
   perform   [perform.<cast>]          gaze, blinks, breathing, sway, lip sync, strumming
+  ribbons   [[ribbon]]                3D paint strokes (crayon, toothpaste, neon) drawn on in the scene, kept clear of
+                                      the cast's bodies
   shots     [[shot]], [[transition]], [[insert]], [[glitch]], [vector], [[ring]], [[freeze]], [[medium]]   cameras, cut,
                                       looks, medium shifts
   lights    [[light]], [look]         lights in palette colours, colour management

@@ -255,6 +255,30 @@ Checks used: the landmarks on the rectified photograph, the deck beside the phot
 with an LP, three-quarter from the left with a single on it), a straight-down view, and the stylus against the record: the
 arm's lowest point is the stylus tip, on the playing surface at every `arm` past 1 and 10 mm over it with the cue up.
 
+## Worked example: the butterfly
+
+`mkmmd/core/butterfly.py` and `butterfly_pattern.py` (bpy-free, tested in `tests/test_butterfly.py`), `butterfly_parts.py` and
+`butterfly.py` the Blender side (card `library:butterfly`; the swarm `library:butterflies` instances the same parts). It builds
+in 0.5 s once the pattern atlas is cached and passes the form guard.
+
+**What was measured.** Landmarks of the left fore and hind wings read off four top-view photographs (a monarch engraving in
+the public domain, a blue morpho, a tiger swallowtail and a common blue basking, `mk ref photos`), in pixels from the thorax,
+scaled by the half span: never traced. A basking butterfly holds its forewings swept back, so both wings are turned about the
+forewing's root until its hind edge lies `sweep` (12-16) degrees behind square, the hindwing by a share of that turn (a set
+specimen's hindwings come forward less). The hindwing's hidden leading edge is not read off the photograph: it runs a fixed
+overlap ahead of the forewing's hind edge and comes out right behind its corner, so no pose opens a gap between the wings
+(a test checks it). Scalloped edges are notches bitten into the spline between round lobes.
+
+| part | how |
+|---|---|
+| wings | a membrane 0.35 % of the span thick: the outline inset by half the thickness, its faces ONE Delaunay triangulation of the inset ring and a lattice inside it (a tail or a deep scallop is not star-shaped: rings drawn in toward a centre fold there), a rolled edge of three rings, a gentle upward curve toward the tip; the forewing lies 0.6 % of the span over the hindwing. A per-vertex `mk_dorsal` (1 upper side, 0 underside) picks the pattern's half of the atlas |
+| patterns | masks drawn from the wing's own anatomy (`butterfly_pattern.Tile`): a discal cell from near the base toward the outer edge and veins fanning from it to the edge, bands by the distance to the outline, dots and lunules by the arc length along it, eyespots on a curve inside it; four channels (sheen, accent, ink, spot) the material lays over the ground in the roles' colours, painting one clearing those above it |
+| body | head, thorax and a ringed abdomen turned on a lathe, eyes, clubbed antennae, legs (four for the brush-foots) and the coiled tongue, all tubes and lathes |
+| flap | each wing turns about its hinge line on the thorax (an axis along Y): mid + amp / 2 cos(2 pi phase), the body bobbing along its own +Z; drivers on the root's properties (simple expressions, checked at build) |
+
+Checks used: the outlines over the photographs' landmarks, the patterns as flat previews against the photographs, and close-ups
+from above, below and three-quarter in the project's own lighting (the undersides are dark in a scene lit from above: `glow`).
+
 ## Reviewing
 
 * Render the prop alone from named views and set it beside the reference photo at the same angle and lens: front 3/4

@@ -308,6 +308,8 @@ def _mesh_arrays(ob, me):
             nor = cn.reshape(-1, 3)[tl]
         tris = np.arange(nt * 3, dtype=np.int32).reshape(-1, 3)
     M = np.array(ob.matrix_world)
+    if abs(np.linalg.det(M[:3, :3])) < 1e-12:      # scaled to nothing (a prop popped out by its scale keys): it shows nothing
+        return np.zeros((0, 6), np.float32), np.zeros((0, 4), np.float32)
     p = (pos @ M[:3, :3].T + M[:3, 3]) @ AXES[:3, :3].T
     n = nor @ np.linalg.inv(M[:3, :3]) @ AXES[:3, :3].T
     n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)

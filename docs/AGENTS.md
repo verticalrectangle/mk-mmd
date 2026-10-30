@@ -156,6 +156,12 @@ Hands. `grip = "car:wheel"` (or `"rest"` with `rest = "car:sill_R"`) in `[pose.<
 reach; a grip digest past 3 / 1 / 1 mm (gap, penetration, clash) means the prop does not fit that hand. Pin it with a `contact` check between the
 fingertip bone's `.tail` and the prop.
 
+- **Ribbons** ([Ribbons](design.md#ribbons)): `[[ribbon]]` draws 3D paint strokes the camera moves through: a `crayon` `orbit` round a
+  bone, a striped `toothpaste` squeezed `from = "prop:tube.nozzle"` (`library:toothpaste_tube`; it keys the tube's `squeeze`) and
+  wrapped round her, a `neon` `swoop` hoop for the lens to fly through; `draw = [t0, t1]`, `retract` or `chase`, `pulse = { lane =
+  "kick" }`. Each is pushed clear of the cast's bodies; read `clear.least_gap_mm` in the report and add a `ribbon_clear` check (it
+  measures the scene after the sim). `library:toothbrush` is the giant brush (`use.grip` `hold`, `use.anchor` `brush`).
+
 ## 6. Shots, effects and type
 
 - **Shots** ([Shots](design.md#shots)): one `[[shot]]` per cut, a camera per output is made for you. Mount the camera on a car or a set, aim it at a target
