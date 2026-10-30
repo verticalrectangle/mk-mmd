@@ -109,7 +109,7 @@ def shot_look(doc, entry, output, span):
     table = SS.vector_table(mats, spec)
     by_frame = {m for n in sort["subject"] if objs[n]["baked"] == "by_frame" for m in objs[n]["materials"]}
     drawn = False
-    for i, m in enumerate(mats if not spec.get("sketch") else ()):          # a sketch draws its lines alone
+    for i, m in enumerate(mats if SS.draws_fills(spec) else ()):            # a sketch draws its lines alone
         if spec["tones"][table[0][i + 1]]["kind"] not in SS.TEX_KINDS:
             continue
         drawn = True

@@ -613,7 +613,7 @@ def test_the_vector_styles_own_keys_on_another_look_are_refused(spec):
 
 
 @pytest.mark.parametrize("shot, frag", [
-    ({"sketch": {"pen": 1}}, "unknown keys"),
+    ({"sketch": {"nib": 1}}, "unknown keys"),
     ({"sketch": "yes"}, "expected true or a table"),
     ({"sketch": {"strokes": 0}}, "1 .. 4"),
     ({"sketch": {"fps": 0}}, "above 0"),

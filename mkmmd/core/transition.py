@@ -4,7 +4,7 @@ each one needs rendered and the files those frames are stored in. `mk build` (ke
 (renders the missing layers), `mk post` and `mk look` (composite them, mkmmd.cutfx and mkmmd.framefx) all read the one plan,
 `plan()`, made from mk.toml alone.
 
-    [[transition]]  at, kind = "expand" | "collapse" | "slash" | "whip" | "slice" | "spin", dur, ease
+    [[transition]]  at, kind = "expand" | "collapse" | "slash" | "whip" | "slice" | "spin" | "page", dur, ease
         expand / collapse: scale = [1, "fill"], turn = [0, 90], center = "subject" | [x, y] | [x, y, z] | "<expression>",
                            edge = {color, width}
         slash:             angle = -20, width = 0.3, color = "love", second = {color, width, offset}, dir = "right"
@@ -14,11 +14,19 @@ each one needs rendered and the files those frames are stored in. `mk build` (ke
                            two along a line, the halves sliding apart off the frame, the incoming shot in the gap
         spin:              after = dur, turns = 1.5, blur = 1.0, scale = 0.9, center = [0.5, 0.5], back = "mirror" | colour
                            (no `ease`): the outgoing frame spun up to the cut, the incoming one down to rest after it
+        page:              dir = "left", angle = 20, radius = 0.12, back, through = 0.18, shadow = 0.45: a picture-book
+                           page turn onto the incoming shot; at the clip's end the loop's wrap onto its first frame, not
+                           a cut effect: `wrap_of` (mkmmd.core.pageturn, mkmmd.pageturn.wrap)
     [[insert]]      from, to, shot, shape = "thought", anchor, radius, size, offset, ratio, outline = {color, width},
                     pop = {dur, overshoot}, out = "pop" | "expand", expand = {dur, turn, ease}, aspect.<output>
                     shape = "split": shot | clip = "<video>" | {src, in, rate, loop, fit, mirror, back}, side, share,
                     focus = {host, inner}, divider = {color, width}, in, out, swap = [t, ...], aspect.<output> =
                     {side, share, focus}: the frame split in two, the inner half sliding in, trading sides, sliding out
+                    shape = "iris": shot | clip, anchor, radius | size = 0.3, open = {dur, ease}, out = "close" |
+                    "expand", expand = {dur, ease}, rim = {width, dark, color, glint, fringe} | false, edge = {color,
+                    width}, ring = "vinyl" | "plate" | "lens" | {kind, ...}, aspect.<output> = {radius | size}: a round
+                    window opening from the anchor, holding, closing back onto it or growing until its picture is the
+                    frame (mkmmd.core.iris), a record, a plate or chrome rings round it (mkmmd.core.portal)
     [[glitch]]      from, to, objects, seed = 1, shift = 0.06, split = 6, colors = ["love", "foam"]
     [[fx]]          from, to, kind = "lens" | "echo" | "slitscan" | "push" | "scope" | "zoom" | "shock" | "slab" | "tint"
                     | ... | "grid" | "orbit" | "mirror" | "panels" | "stack" (mkmmd.core.framefx); unlike the others
@@ -29,18 +37,21 @@ the other shot inside a window are *plates*,
 rendered next to the cut's frames (`plate/<shot>/<frame>.png`); the silhouette whose figure is the matte of an expand /
 collapse is rendered as `matte/` (its coverage) and `back/` (its frame without the figure); a glitch's shot with its
 objects hidden is `bare/<key>/<frame>.png`; a collage's figure, its objects' coverage through the camera of the shot in
-the cut, is `figure/<key>/<frame>.png`; anchors and centres that need Blender (a bone seen through a camera) are
-`point/<key>/<frame>.json`: {"p": [x, y] frame fractions, "depth", "m": frame heights per metre there}."""
+the cut (or of its own `shot`, whose plates are its picture then), is `figure/<key>/<frame>.png`; anchors and centres that
+need Blender (a bone seen through a camera) are `point/<key>/<frame>.json`: {"p": [x, y] frame fractions, "depth", "m":
+frame heights per metre there}."""
 import json
 import math
 from pathlib import Path
 
 from . import framefx as FX
+from . import iris as IR
+from . import pageturn as PG
 from . import shotstyle as SS
 from . import tween as TW
 
-KINDS = ("expand", "collapse", "slash", "whip", "slice", "spin")
-SHAPES = ("thought", "split")
+KINDS = ("expand", "collapse", "slash", "whip", "slice", "spin", "page")
+SHAPES = ("thought", "split", "iris")
 SLASH_DIRS = ("right", "left")
 WHIP_DIRS = ("left", "right", "up", "down")   # the way the pictures travel: a pan to the right sends them left
 SIDES = ("left", "right", "top", "bottom")    # where a split's inner half sits
@@ -56,9 +67,10 @@ TRANSITION_KEYS = {"expand": _COMMON | {"scale", "turn", "center", "edge"},
                    "slash": _COMMON | {"angle", "width", "color", "second", "dir"},
                    "whip": _COMMON | {"dir", "blur"},
                    "slice": _COMMON | {"center", "angle", "edge"},
-                   "spin": {"at", "kind", "dur", "after", "turns", "blur", "scale", "center", "back"}}
-DEFAULT_DUR = {"slash": 0.18, "whip": 0.15, "slice": 0.3, "spin": 0.3}   # s; an expand or a collapse takes 0.4
-DEFAULT_EASE = {"slash": "inout", "whip": "inout"}                       # the others ease `in`; a spin has no ease
+                   "spin": {"at", "kind", "dur", "after", "turns", "blur", "scale", "center", "back"},
+                   "page": PG.KEYS}
+DEFAULT_DUR = {"slash": 0.18, "whip": 0.15, "slice": 0.3, "spin": 0.3, "page": PG.DUR}   # s; expand / collapse: 0.4
+DEFAULT_EASE = {"slash": "inout", "whip": "inout", "page": PG.EASE}     # the others ease `in`; a spin has no ease
 INSERT_KEYS = {"from", "to", "shot", "shape", "anchor", "radius", "size", "offset", "ratio", "outline", "pop", "out", "expand",
                "aspect"}
 SPLIT_KEYS = {"from", "to", "shot", "clip", "shape", "side", "share", "focus", "divider", "in", "out", "swap", "aspect"}
@@ -195,6 +207,8 @@ def normalize_transition(spec, palette):
         out["center"] = _slice_center(spec.get("center"), what)
         out["edge"] = _ring(spec["edge"], palette, f"{what}: edge") if spec.get("edge") is not None else None
         return out
+    if kind == "page":
+        return PG.normalize(spec, out, palette, what)
     if kind == "spin":
         out["after"] = float(spec.get("after", out["dur"]))
         if out["after"] <= 0:
@@ -228,7 +242,8 @@ def normalize_transition(spec, palette):
 
 
 def normalize_insert(spec, palette):
-    """One `[[insert]]` with its defaults, colours resolved: a thought bubble, or a split screen (normalize_split)."""
+    """One `[[insert]]` with its defaults, colours resolved: a thought bubble, a split screen (normalize_split) or an iris
+    (mkmmd.core.iris.normalize)."""
     if not isinstance(spec, dict):
         raise TransitionError(f"insert {spec!r}: expected a table")
     what = f"insert {spec.get('from')}-{spec.get('to')}"
@@ -237,6 +252,8 @@ def normalize_insert(spec, palette):
         raise TransitionError(f"{what}: shape = {shape!r}, expected one of {SHAPES}")
     if shape == "split":
         return normalize_split(spec, palette, what)
+    if shape == "iris":
+        return IR.normalize(spec, palette, what)
     _unknown(spec, INSERT_KEYS, what)
     for k in ("from", "to", "shot", "anchor"):
         if k not in spec:
@@ -445,8 +462,9 @@ def plan(data, fps, frame0, palette):
     those after it too), the outgoing and incoming shots (`out`, `in`) and which of them gives the figure (`matte`: an
     expand's, a collapse's, a slice's cut through its figure) and which plays inside it (`plate`); every insert its
     `f0`..`f1` (the window is f0 .. f1 - 1), `host` shot and the frame counts of its pop and exit (a split's: its slides in and
-    out, `n_in` and `n_exit`, and `swaps`, the frames its swaps land on); every glitch its `f0`..`f1` and `host` shot; every
-    frame effect what mkmmd.core.framefx.plan gives it. [] entries when the project has none."""
+    out, `n_in` and `n_exit`, and `swaps`, the frames its swaps land on; an iris's: its opening and its close or expand);
+    every glitch its `f0`..`f1` and `host` shot; every frame effect what mkmmd.core.framefx.plan gives it. [] entries when
+    the project has none."""
     shots = data.get("shot") or []
     specs = data.get("transition") or []
     inserts = data.get("insert") or []
@@ -478,12 +496,19 @@ def plan(data, fps, frame0, palette):
         what = f"transition {i} ({tr['kind']} at {tr['at']} s)"
         cut = frame_of(tr["at"], fps, frame0)
         incoming = [c for c in cuts if c["from"] == cut]
+        still = None
+        if tr["kind"] == "page" and not incoming:                # the clip's end: the loop's wrap onto its first frame
+            onto = PG.wrap(data, cut, cuts, fps, frame0)
+            if onto is not None:
+                incoming, still = [onto], int(frame0)
         if len(incoming) != 1:
             starts = ", ".join(f"{(c['from'] - frame0) / fps:.2f}" for c in cuts)
+            wraps = (" or at the clip's end ([project] duration), the loop's wrap onto its first frame"
+                     if tr["kind"] == "page" else "")
             raise TransitionError(f"{what}: {'no shot' if not incoming else 'several shots'} start at that frame "
-                                  f"(cuts at {starts} s)")
+                                  f"(cuts at {starts} s{wraps})")
         before = SS.shot_at(cuts, cut - 1)
-        if before is None or before["name"] == incoming[0]["name"]:
+        if before is None or (before["name"] == incoming[0]["name"] and still is None):
             raise TransitionError(f"{what}: no shot before the cut")
         n = max(MIN_WINDOW, int(round(tr["dur"] * fps)))
         first = cut - n
@@ -500,6 +525,8 @@ def plan(data, fps, frame0, palette):
             last = cut + after - 1
         tr.update(index=i, cut=cut, n=last + 1 - first, first=first, last=last, out=before["name"],
                   **{"in": incoming[0]["name"]})
+        if tr["kind"] == "page":
+            tr["still"] = still                                   # the wrap's: the first frame, held under the page
         if tr["kind"] == "expand":
             tr["matte"], tr["plate"] = tr["out"], tr["in"]
         elif tr["kind"] == "collapse":
@@ -532,6 +559,8 @@ def plan(data, fps, frame0, palette):
             raise TransitionError(f"{what}: the shot inside the shape is the host shot itself")
         if ins["shape"] == "split":
             ins.update(_split_frames(ins, what, f0, f1, fps, frame0))
+        elif ins["shape"] == "iris":
+            ins.update(IR.frames(ins, what, f0, f1, fps, cuts))
         else:
             n_in = max(MIN_WINDOW, int(round(ins["pop"]["dur"] * fps)))
             if ins["out"] == "expand":
@@ -575,6 +604,18 @@ def plan(data, fps, frame0, palette):
         out["fx"] = FX.plan(data, fps, frame0, palette, last)
     except FX.FxError as e:
         raise TransitionError(str(e)) from None
+    for fx in out["fx"]:
+        sh = fx.get("shot")
+        if sh is None:
+            continue
+        what = f"fx {fx['index']} ({fx['kind']})"
+        if sh not in by_name:
+            raise TransitionError(f"{what}: shot = {sh!r}: there is no [[shot]] of that name")
+        inside = [f for f in range(fx["f0"], fx["f1"]) if cut_shot(cuts, f) == sh]
+        if inside:
+            raise TransitionError(f"{what}: shot {sh!r} is the shot in the cut on frames {inside[0]}..{inside[-1]} of its "
+                                  f"span: `shot` takes the figure from another view (a plate); without it the collage "
+                                  f"cuts the figure out of the cut's own frame")
     return out
 
 
@@ -613,6 +654,13 @@ def has_effects(pl):
     return bool(pl and (pl["transitions"] or pl["inserts"] or pl["glitches"] or pl.get("fx")))
 
 
+def wrap_of(pl):
+    """The loop's wrap of a plan: its page turn at the clip's end, onto frame 0 (`still`), or None. Unlike the other
+    effects it is not composited over the cut's frames: mk post and mk look turn each frame of its window as finished,
+    its frame effects and screen type on, over frame 0 as finished, held still (mkmmd.pageturn.wrap)."""
+    return next((tr for tr in (pl or {}).get("transitions") or [] if tr.get("still") is not None), None)
+
+
 def in_force(pl, shot, frame):
     """Whether `shot` is the shot of the cut at `frame` (then the cut's own frame is its plate)."""
     return cut_shot(pl["cuts"], frame) == shot
@@ -645,23 +693,23 @@ def demands(pl, frames=None):
             add(f, {"kind": "plate", "shot": shot})
 
     for tr in pl["transitions"]:
-        if tr["kind"] == "spin":                             # the cut's own frames, turned: nothing to draw
-            continue
+        if tr["kind"] == "spin" or tr.get("still") is not None:     # the cut's own frames turned, or the loop's wrap (the
+            continue                                                # finished frames over frame 0): nothing to draw
         window = range(tr["first"], tr["last"] + 1)
         matte = tr["kind"] in ("expand", "collapse")
         for f in window:
             if matte:
                 add(f, {"kind": "matte", "shot": tr["matte"]})
-            plate(f, tr["plate"])                            # a slash, a whip, a slice: the incoming shot's plates only
+            plate(f, tr["plate"])                            # a slash, a whip, a slice, a page: the incoming shot's plates
             if matte and tr["center"]["mode"] == "point":
                 add(f, {"kind": "point", "key": f"t{tr['index']}", "expr": tr["center"]["expr"], "shot": tr["matte"]})
         if tr["kind"] == "slice" and tr["matte"] and (want is None or any(f in want for f in window)):
             add(tr["first"], {"kind": "matte", "shot": tr["matte"]}, always=True)   # its figure there holds the cut
     for ins in pl["inserts"]:
         for f in range(ins["f0"], ins["f1"]):
-            if ins["shot"] is not None:                      # a split's video comes from its file
+            if ins["shot"] is not None:                      # a split's or an iris's video comes from its file
                 plate(f, ins["shot"])
-            if ins["shape"] == "thought":
+            if ins["shape"] in ("thought", "iris"):          # the anchor through the host's camera
                 add(f, {"kind": "point", "key": f"i{ins['index']}", "expr": ins["anchor"], "shot": ins["host"]})
     for g in pl["glitches"]:
         for f in range(g["f0"], g["f1"]):
@@ -678,15 +726,32 @@ def demands(pl, frames=None):
                     item = figure_item(pl, fx, g)
                     if item is not None:
                         add(g, item)
+                    if fx.get("shot"):                       # a figure from another shot: its picture is that shot's
+                        plate(g, fx["shot"])
     return dict(sorted(out.items()))
 
 
 def figure_item(pl, fx, frame):
-    """The layer item of a collage's figure on `frame` (through the shot in the cut there), None outside the cut."""
-    shot = cut_shot(pl["cuts"], frame)
+    """The layer item of a collage's figure on `frame`: through its own `shot` when it has one, else through the shot in
+    the cut there (None outside the cut)."""
+    shot = fx.get("shot") or cut_shot(pl["cuts"], frame)
     if shot is None:
         return None
     return {"kind": "figure", "key": FX.figure_key(fx), "objects": fx["objects"], "shot": shot}
+
+
+def _figure_reads(pl, fx, frame):
+    """The layers an effect's figure is read from on `frame`: its coverage (a collage, a masked effect), and for a
+    collage's figure from its own `shot` that shot's picture, a plate even where the shot is in the cut (`mk look` has not
+    drawn the cut's frame there)."""
+    out = []
+    if FX.uses_figure(fx):
+        item = figure_item(pl, fx, frame)
+        if item is not None:
+            out.append(item)
+    if fx.get("shot"):
+        out.append({"kind": "plate", "shot": fx["shot"]})
+    return out
 
 
 def fx_frames(pl, frames, hits=None):
@@ -694,25 +759,27 @@ def fx_frames(pl, frames, hits=None):
     ages, a push's inside, a collage's poses before, a film's held frame, a booth's captures: those on a lane only with
     `hits`, the [audio] hits file), as plates of the shot in the cut there, with a collage's figure on them, and on a held
     frame or a capture the points and figures the effects before it in the table read there (they are applied to it
-    again). `mk post` has them all already; `mk look`, which draws only the frames asked for, renders these beside them."""
+    again) and the holder's own points (a paint app paints that frame's fills on the frame its eraser holds). A collage
+    whose figure comes from its own `shot` reads that shot's plates and its figure through it instead.
+    `mk post` has them all already; `mk look`, which draws only the frames asked for, renders these beside them."""
     out = {}
     fxs = pl.get("fx") or []
     for f in sorted(set(int(x) for x in frames)):
         for fx in FX.at(fxs, f):
             for g in FX.sources(fx, f, pl["frame0"], hits):
                 shot = cut_shot(pl["cuts"], g)
-                if shot is not None and g != f:
-                    bucket = out.setdefault(g, [])
-                    items = [{"kind": "plate", "shot": shot}]
-                    if FX.uses_figure(fx):
-                        items.append(figure_item(pl, fx, g))
-                    for e in FX.at(fxs, g) if FX.holds(fx) else []:
-                        if e["index"] >= fx["index"]:
-                            break
-                        items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(e)]
-                        if FX.uses_figure(e):
-                            items.append(figure_item(pl, e, g))
-                    bucket += [it for it in items if it not in bucket]
+                if g == f or (shot is None and not fx.get("shot")):
+                    continue
+                bucket = out.setdefault(g, [])
+                items = ([] if fx.get("shot") else [{"kind": "plate", "shot": shot}]) + _figure_reads(pl, fx, g)
+                for e in FX.at(fxs, g) if FX.holds(fx) else []:
+                    if e["index"] >= fx["index"]:
+                        break
+                    items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(e)]
+                    items += _figure_reads(pl, e, g)
+                if FX.holds(fx):
+                    items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(fx)]
+                bucket += [it for it in items if it not in bucket]
     return out
 
 

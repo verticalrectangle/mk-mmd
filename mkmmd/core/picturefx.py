@@ -4,9 +4,11 @@ as a medium or draw on it, checked, timed and laid out here; mkmmd/picturefx.py 
     pixelsort  runs of pixels whose luma, hue or saturation lies in a band, sorted along the rows (or the columns):
                steady, or firing on hits and dying away
     film       a motion-picture print: the picture held `fps` times a second, a film curve (black and white with
-               `mono`), grain, exposure flicker, gate weave, dust, scratches that persist and drift, a hair in the gate
-    camcorder  a home video tape: a tracking band rolling up the frame, colour bleed, scanlines, line jitter, soft luma
-               and noise, and the date and time stamp drawn crisp over it
+               `mono`; a three-strip dye print's purer colours with `dye`, a red glow round the lights with `halation`),
+               grain, exposure flicker, gate weave, dust, scratches that persist and drift, a hair in the gate
+    camcorder  a home video tape: a tracking band rolling up the frame, colour bleed, scanlines, line jitter, soft luma,
+               noise and the head-switching tear at its foot (`switching`), the date and time stamp drawn crisp over it
+               (`era` picks a preset of either: mkmmd.core.eralook.ERAS)
     doodle     purikura-pen marks (a star, a heart, an X over an eye ...) popping in with a spring, boiling
     booth      a photo-booth strip: on each of the first hits the cut's frame is captured into a cell, with a flash,
                the captures dropping into their cells, doodles round them
@@ -101,6 +103,9 @@ def _film(FX, spec, out, palette, what):
     out["hair"] = FX._num(out["hair"], f"{what} hair", 0.0, 1.0)
     out["vignette"] = FX._num(out["vignette"], f"{what} vignette", 0.0, 1.0)
     out["contrast"] = FX._num(out["contrast"], f"{what} contrast", 0.0, 4.0)
+    out["saturation"] = FX._num(out["saturation"], f"{what} saturation", 0.0, 3.0)
+    out["dye"] = FX._num(out["dye"], f"{what} dye", 0.0, 2.0)
+    out["halation"] = FX._num(out["halation"], f"{what} halation", 0.0, 2.0)
     out["seed"] = FX._num(out["seed"], f"{what} seed", lo=0, integer=True)
 
 
@@ -130,6 +135,7 @@ def _camcorder(FX, spec, out, palette, what):
         out[k] = FX._num(out[k], f"{what} {k}", lo=0.0)
     out["scanlines"] = FX._num(out["scanlines"], f"{what} scanlines", 0.0, 1.0)
     out["saturation"] = FX._num(out["saturation"], f"{what} saturation", 0.0, 2.0)
+    out["switching"] = FX._num(out["switching"], f"{what} switching", 0.0, 1.0)
     out["seed"] = FX._num(out["seed"], f"{what} seed", lo=0, integer=True)
 
 

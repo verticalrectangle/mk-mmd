@@ -392,11 +392,14 @@ see [Sets](#sets)) and `lights`. A project can merge its own entries over any ca
 
 mk never guesses a license. New entries are `unreviewed` and keep the paths of the readme files found next to the
 asset (`mk assets show SLUG --terms` prints the lines that talk about terms of use); someone who has read them fills in
-`license`, `restrictions` and `credit` with `mk assets set` (`source_url` is the field `--url` fills). `mk assets credits`
-builds the credits from the project's cast, the videos its footage frame effects and split inserts show and the photos its
-`photo_world` sets are made of (a slug, or a file the registry has) and `[credits] assets` (one entry per asset, grouped by kind, a
-credit line two of them share printed once) and exits 1 while any of them is unreviewed or has neither an author nor a credit
-line; `[credits] lines` are the project's own lines (a song, a print made for it, the palette, tools), appended as bullets under
+`license`, `restrictions` and `credit` with `mk assets set` (`source_url` is the field `--url` fills; `extra='{...}'` merges a
+JSON object over the entry's `extra`, a `null` removing its key: a sprite's googly-eye anchors, see Googly eyes). `mk assets credits`
+builds the credits from the project's cast, the videos its footage frame effects and split and iris inserts show, the sprites
+its frame effects and inserts show (every `sprites` of an `[[fx]]` or `[[insert]]` entry, at any depth: a mandala ring's, a
+stack's band, a paint app's stamps) and the photos its `photo_world` sets are made of (a slug, or a file the registry has) and
+`[credits] assets` (one entry per asset, grouped by kind, a credit line two of them share printed once) and exits 1 while any
+of them is unreviewed or has neither an author nor a credit line; `[credits] lines` are the project's own lines (a song, a print
+made for it, the palette, tools), appended as bullets under
 `## Also` or under the `## Heading` lines among them. Slugs are how the project refers to registered assets: `[[cast]] asset`,
 `[[motion.<cast>]] vmd`, `[[prop]] card`, `[[text]] font`, `[[fx]] clip`, `[[insert]] clip`, `[[set]] image` (a `photo_world`'s
 photo) (`mk ref footage` registers Pexels videos with their author, pages and licence).
@@ -2668,7 +2671,7 @@ shot starts on the frame `round(frame0 + from * fps)`.
 |---|---|
 | `name` | unique; the cameras are `<name>@<output>`. `[[transition]]` and `[[insert]]` windows, `lyrics.zones` and `mount = "<name>@<output>"` (a plane that rides a camera) refer to it |
 | `from`, `to` | clip seconds, required unless `plate = true`. The markers use `from` only: set `to` to the next shot's `from` (it bounds the frames the camera is keyed over, ±2, and is what `[[transition]]`, `[[insert]]` and `lyrics.zones` read) |
-| `plate` | `true`: the shot is not in the cut (no marker; `from` / `to` optional). It exists for a `[[transition]]` or `[[insert]]` to take frames from, drawn through its own camera and look at the frames wanted; a plate that no effect uses is skipped with a WARNING. A shot in the cut that an effect takes frames from before its `from` is keyed over those frames as well |
+| `plate` | `true`: the shot is not in the cut (no marker; `from` / `to` optional). It exists for a `[[transition]]` or `[[insert]]` to take frames from, or a collage's figure (`[[fx]] shot`), drawn through its own camera and look at the frames wanted; a plate that no effect uses is skipped with a WARNING. A shot in the cut that an effect takes frames from before its `from` is keyed over those frames as well |
 | `mount` | prop, set or object the camera rides: `at` is in its frame and its motion carries the camera. An unknown name is an error (default: the world) |
 | `at` | camera position: `[x, y, z]` in the mount's frame (the world without a mount) or a dict target, `{path = "road:road", s = 640, offset = 7, z = 1.2}` (beside a set's path), `{prop = "car", point = [x, y, z]}`, `{cast = "rin", point = [x, y, z]}`, resolved in the world on every frame (the mount does not apply to it); `keys[].at` takes either form too, and a camera between two keys moves between the world points they give on every frame (default `[0, 0, 0]`) |
 | `look` | what the camera aims at: any [target](#targets), `[x, y, z]` (world), `"cast:rin.head"`, `"cast:rin"` (the eyes), `"car:road"` (a card's use point), `{path = ...}`; read on every frame, so a moving target is followed (default: straight ahead, along the mount's -Y) |
@@ -2901,6 +2904,28 @@ line and broken by the paper's `grain` (0..1). `hatch` (px at 1080 between strok
 reach with diagonal strokes, crossed by the second pass. Defaults: paper `text`, ink `base`, boil 1.2, fps 12, strokes 2, grain
 0.35, hatch 0, seed 1. Rings do not flip a sketch (it needs no `opposite`), and it reads no texture.
 
+`pen = "crayon"` draws it in waxy crayon instead (`mkmmd/core/crayon.py`, numpy only, shared with the [activity
+book](#activity-book-and-labels)): each line pressed hardest along its middle, its edges broken, the paper's tooth (a grain
+fixed to the frame by `seed`) showing through the wax by `grain` (a crayon's default 0.8), drawn again `fps` times a second.
+`inks` colours the lines part by part: a colour or a list of them cycled over the line groups, or `"tones"`, each
+material's lines in its tone's colour pulled 40 % toward `ink` (an outline takes the part inside it, a line where one part
+passes in front of another the nearer part's); without it every line is `ink`. `fill` (0..1, default 0) colours every part
+in first with back-and-forth strokes in its tone's colour, each part's strokes leaning their own way, the paper between
+them (a crayon with a `fill` reads the textures for a drawn or cel tone); `inks` and `fill` are a crayon's only. Her in
+crayon line art on a Dawn page: `sketch = {pen = "crayon", paper = "base", ink = "text", inks = "tones", boil = 1.4}`
+with `lines = {outline = 7, inner = 4}`.
+
+`cutout = true | {rim, shadow, rough, grain, lift, fps, seed}` (a shot's or a medium window's, not with a `sketch`) cuts
+the look's fills out of construction paper (`mkmmd/core/cutout.py`, numpy only): no lines; every line group a piece of
+coloured paper with a mottle and fibres of its own (`grain` 0..1, 0.6), its edge cut by a wandering pair of scissors
+(`rough` px at 1080, 1.6) again `fps` times a second (8; 0: one cut, a stop-motion boil otherwise), grown a little and set
+off its place by up to `lift` px (3), laid far to near (by depth), each casting a soft shadow on the pieces under it. The
+figure stands on a white paper `rim` (`{color, width}`, white, 10 px at 1080; `false`: none) and casts a drop `shadow`
+(`{color, offset, blur, alpha}`: black, `[0.005, 0.008]` frame heights, 5 px, 0.35; `false`: none) on the background,
+the look's `background` colour as paper. Flat or two-tone tones read as paper colours; a drawn or cel tone keeps its
+picture on the piece. Rings flip a cut-out to its `opposite` palette as they flip a vector look. A construction-paper flash:
+`[[medium]] {from, to, style = "vector", colors = { background = "gold" }, cutout = true}`.
+
 The frame is composed with numpy (`compose_vector`) from Workbench passes rendered at twice the frame's size and boxed down, which
 antialiases the fills and the lines:
 
@@ -3002,7 +3027,7 @@ to = 8.30
 two on a hit the picture snaps into another medium and back, reality flickering between universes (her own colours as cel, a
 flat cartoon, a boiling sketch). A window is a shot's look over a span of time: `from`, `to` (clip seconds, required; frames
 `from` .. `to` - 1, inside the clip) and the look keys of a [[shot]] (`style` silhouette or vector, required, `colors`,
-`tones`, `materials`, `lines`, `sketch`, `hide`, `keep`, a silhouette's `accent`, `tint`, `knockout`, `grow`, `samples`;
+`tones`, `materials`, `lines`, `sketch`, `cutout`, `hide`, `keep`, a silhouette's `accent`, `tint`, `knockout`, `grow`, `samples`;
 [Looks](#looks-silhouette-vector-and-reflection)), with `[medium.aspect.<output>]` tables laid over it as over a shot's
 (`style = "none"` leaves an output to its shots). No reflection: a window is a flat look. The cameras, the cut and the cut
 effects go on as they are; `mk render` and `mk look` draw the window's look on the cut's frames and on the plates of the
@@ -3051,14 +3076,15 @@ without Blender). A **window** is the run of frames an effect changes: the `dur`
 the whole `from`..`to` of an insert (its frames `from` .. `to` - 1). **Plates** are the other shot's frames through its own
 camera and look. The layers sit in the output's frame folder, named by Blender frame (`<frame>.png`, five digits):
 
-- `plate/<shot>/<frame>.png`: a shot's frame; a shot that is in the cut at that frame is its own plate: the cut's frame.
+- `plate/<shot>/<frame>.png`: a shot's frame; a shot that is in the cut at that frame is its own plate: the cut's frame. A
+  collage's own `shot` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)) lends its figure's picture so.
 - `matte/<shot>/<frame>.png` and `back/<shot>/<frame>.png`, for an expand or collapse (and a slice through the figure, on its first
   window frame): the flat shot's figure alone as coverage, drawn at twice the frame's size, and its frame without the figure.
 - `point/<key>/<frame>.json`: a projected anchor or centre, `p` (frame fractions from the top left), `depth` and `m` (frame heights
   per metre at that depth, which sizes things given in metres); the key is `t<i>` for transition `i`'s `center`, `i<j>` for insert
   `j`'s `anchor`, `x<k>` for frame effect `k`'s.
-- `figure/<key>/<frame>.png`: a collage's figure, the coverage of its objects alone through the camera of the shot in the cut, as
-  grey ([Frame effects](#frame-effects)).
+- `figure/<key>/<frame>.png`: a collage's figure, the coverage of its objects alone through the camera of the shot in the cut, or
+  of the collage's own `shot`, as grey ([Frame effects](#frame-effects)).
 
 Layers are claimed with an empty file like frames (the finishing file is written last), so a stopped render resumes, `--jobs N`
 shares them and the disk check counts them. `mk build` keys the camera of a shot that lends frames (`keyed` in the shot table).
@@ -3067,10 +3093,10 @@ A transition has these keys; the kind decides the rest, and a key of another kin
 
 | Key | Meaning |
 |---|---|
-| `at` | clip seconds of the cut (required): exactly one shot of the cut must start on that frame (use that shot's `from`); the window is the frames before it, inside the outgoing shot (a spin's goes on past it, inside the incoming shot) |
-| `kind` | `"expand"`, `"collapse"`, `"slash"`, `"whip"`, `"slice"` or `"spin"` (required) |
-| `dur` | window length in seconds, ending at the cut (default 0.4; 0.18 for `slash`, 0.15 for `whip`, 0.3 for `slice` and `spin`) |
-| `ease` | `in` (u², slow start), `out` (1 - (1 - u)²) or `inout` (smoothstep) (default `in`; `inout` for `slash` and `whip`; a spin has none: its turn is set, below) |
+| `at` | clip seconds of the cut (required): exactly one shot of the cut must start on that frame (use that shot's `from`); the window is the frames before it, inside the outgoing shot (a spin's goes on past it, inside the incoming shot). A `page` may also stand at the clip's end, `[project] duration`: the loop's wrap (below) |
+| `kind` | `"expand"`, `"collapse"`, `"slash"`, `"whip"`, `"slice"`, `"spin"` or `"page"` (required) |
+| `dur` | window length in seconds, ending at the cut (default 0.4; 0.18 for `slash`, 0.15 for `whip`, 0.3 for `slice` and `spin`, 0.6 for `page`) |
+| `ease` | `in` (u², slow start), `out` (1 - (1 - u)²) or `inout` (smoothstep) (default `in`; `inout` for `slash`, `whip` and `page`; a spin has none: its turn is set, below) |
 
 `expand`: the figure of the OUTGOING flat shot grows and turns; inside it plays the next shot. `collapse`: the INCOMING flat shot's
 figure starts huge with the outgoing shot inside it and shrinks onto its place, landing on the cut (an expand played backwards).
@@ -3135,14 +3161,47 @@ smoothly to `scale` at the cut and back.
 | `center` | `[x, y]` frame fractions it turns about (default `[0.5, 0.5]`) |
 | `back` | what shows where the turned picture leaves the frame: `"mirror"` (default: the frame reflected at its edges, as editors' spin transitions do) or a colour (palette slot, `#hex`, `"a:b:t"` or `[r, g, b]`) |
 
+`page`: a picture-book page turn. The outgoing frame is the page: it lifts at its edge (a corner first, by `angle`), curls over a
+roll of `radius` that travels across the frame and lies turned over on itself, its paper back showing, until all of it has left
+the frame by the cut; under it is the next shot. Every pixel is worked out from the roll (`mkmmd.core.pageturn`): the page's
+front flat and then up the inside of the roll, dimmer the deeper in; over it the page's back, round the top of the roll and laid
+turned over beyond it: the `back` paper with the picture showing `through` it from behind (the same point of the page seen from
+the other side, so mirrored), a fine paper grain, lit as a cylinder from the upper left (brightest on the roll's top, dim on its
+far side, a soft sheen along it); the lifted page casts a soft `shadow` to the lower right on the next shot and the flat page.
+The roll's line travels from the page's farthest corner (nothing lifted) to past its nearest one by the roll (all of it gone),
+eased, never at either end inside the window: the first window frame lifts the corner, and the page is gone on the cut. Like a
+slash it needs only the next shot's plates. At the clip's end (`at` = `[project] duration`, where no shot starts) it is the
+loop's wrap: the clip's last frames turn over onto its first frame, so the video loops through the turn; the outgoing shot is
+the last shot of the cut (a clip of one shot turns onto itself). The wrap is not one of the cut effects, which work on the
+cut's frames: it turns finished pictures. The page is each frame of its window as finished, its `[[fx]]`, lens streaks and
+screen type on it; under the page is frame 0 as finished by the same steps (its own cut effects, `[[fx]]`, streaks and type),
+made once per output and held still. The grade runs on the result as on any other frame; screen type laid over the graded
+picture (`[post] screen = "over"`) turns with the page instead of lying over it, each frame's own on the page's front and frame
+0's under it, and so do the `[post] keep` masks the grade reads. So where the page has gone the wrap's frames show frame 0
+exactly as the loop starts again on it (but for the page's shadow and the grade's grain, which is each frame's own), whatever
+effects or type either end carries: frame 0 may have `[[fx]]` like any frame. `mk post` keeps frame 0 as it finishes it;
+`mk look` draws it beside the wrap's frames it is asked for and finishes it as it does them. Only a page turn wraps: any other
+kind at the clip's end is the error any cut without a shot gets. `mkmmd/core/pageturn.py` checks it and does the geometry,
+`mkmmd/pageturn.py` draws it.
+
+| Key | Meaning |
+|---|---|
+| `dir` | the way the page turns over: `"left"` (default: lifted at the right edge and turned toward the left, as a book's page), `"right"`, `"up"` or `"down"` |
+| `angle` | degrees the curl's line is turned off square to `dir`, clockwise positive, -60 .. 60: the page lifts at one corner first (default 20: with `left` the bottom right corner, -20 the top right) |
+| `radius` | the roll's radius, a share of the frame's short side, 0.01 .. 0.5 (default 0.12) |
+| `back` | the paper of its back (palette slot, `#hex`, `"a:b:t"` or `[r, g, b]`; default the palette's lightest: Dawn's `surface`) |
+| `through` | how much of the picture shows through the paper from behind, 0..1 (default 0.18) |
+| `shadow` | how dark the shadow the lifted page casts, 0..1 (default 0.45) |
+
 An insert puts another picture over a window of the host shot: a thought bubble holding another shot (picture in picture, the
-keys below) or a split screen (`shape = "split"`, its own keys further down).
+keys below), a split screen (`shape = "split"`, its own keys further down) or an iris (`shape = "iris"`, a round window opening
+from a point of the scene, after the split's).
 
 | Key | Meaning |
 |---|---|
 | `from`, `to` | clip seconds (required, `to` after `from`): the window. It must lie inside one shot of the cut, the host (the shot in force at `from`) |
 | `shot` | the shot inside the bubble (required): any `[[shot]]`, one in the cut or `plate = true`, but not the host |
-| `shape` | `"thought"` (default) or `"split"` (below) |
+| `shape` | `"thought"` (default), `"split"` or `"iris"` (below) |
 | `anchor` | a `mk q` expression (required), projected through the host shot's camera on every frame: the middle of a head for a thought bubble, `'bone("head", "Model_arm").center'` (with a head bone that runs from the neck to the crown `.center` is about the middle of the head; `.head` is the neck's end and puts the trail on the face) |
 | `radius` | metres: the anchor stands for a head of this radius, seen at the anchor's depth; the trail of circles starts at its edge, on the side of the bubble, never over the head (default 0.11; 0 starts them at the anchor) |
 | `size`, `ratio` | the bubble's height as a fraction of the frame height, in (0, 1] (default 0.34), and its width / height (default 1.35) |
@@ -3191,6 +3250,21 @@ turns = 1.5
 blur = 1.0                   # the shutter in frames
 scale = 0.9                  # at the cut
 back = "mirror"              # or a colour
+
+[[transition]]               # a picture-book page turn onto the next shot, its paper back showing
+at = 14.72
+kind = "page"
+dur = 0.6
+dir = "left"                 # lifted at the right, turned toward the left; or "right", "up", "down"
+angle = 20                   # the bottom right corner first (-20: the top right)
+radius = 0.12                # the roll, a share of the frame's short side
+back = "surface"             # the paper (default the palette's lightest)
+through = 0.18               # the picture showing through it from behind
+shadow = 0.45
+
+[[transition]]               # the loop's wrap: at the clip's end the last frames turn over onto frame 0, held
+at = 24.25                   # [project] duration
+kind = "page"
 
 [[insert]]                   # a thought bubble over the host shot, holding another shot (picture in picture)
 from = 12.40
@@ -3246,20 +3320,144 @@ swap = [13.90]               # the halves have traded sides by then
 aspect.9x16 = { side = "bottom", focus = { host = [0.5, 0.42] } }
 ```
 
+`shape = "iris"`: a round window opening from a point of the scene onto another shot or a video, seen as through a lens at the
+end of a tube: no bubble, no trail. Its centre is the `anchor` projected through the host shot's camera on every window frame (the
+`point` layer `i<j>`, as a thought's). From `from` it opens from that point to its rest size over `open.dur` seconds, eased, every
+frame of the opening bigger (the first small, not 0), uncovering the inner picture, which holds still at the scale that just covers
+the rest circle (the inner shot's whole frame, or the video fitted to the frame, scaled about its centre and centred on the circle).
+`out = "close"` closes it back onto its point the same way, a small circle on the window's last frame, gone on `to`. `out =
+"expand"` grows it over `expand.dur` seconds until its picture is the whole frame on the window's last frame: the centre moves to
+the frame's middle, the radius grows geometrically to the one whose vignette has left the frame (the half diagonal / (1 -
+`rim.width`), 2 % to spare), the picture geometrically to the frame's own size (never smaller than what covers the circle's part
+inside the frame, and slid off the circle's centre just enough to cover it: no edge of the picture ever shows in the circle), and
+the glint fades. The last frame is the inner picture itself, so the cut lands on it: with a `shot` that shot must start at `to`;
+with a `clip` the shot after it should show the same video (a footage collage). A rest size in metres (`radius`) stays the size of
+a disc in the scene at the anchor, so a camera pushing in makes the circle grow; `size` is its diameter as a share of the frame's
+short side, alike in every output unless `aspect.<output>` gives one its own. The rim is the lens's: over the outer `width` of the
+radius the picture darkens toward `color` in a smoothstep, `dark` at the edge; there its colour channels are pulled apart along
+the radius (`fringe` px at 1080 on the short side at the edge, red outward, blue inward); and a glint, a thin crescent of the
+palette's lightest colour about 70° long in that band at the upper left, tapering at both ends in a soft bloom, has a fainter,
+shorter twin opposite. Inside the vignette's inner edge the picture is untouched, and outside the circle and its `edge` ring the
+host frame is; the edge is antialiased over a pixel, and a circle under half a pixel draws nothing. It needs the inner shot's
+plates and the anchor's point on its frames (a video: the point alone). `mkmmd/core/iris.py` times it and does the circle's maths,
+`mkmmd/iris.py` draws it on the circle's box, the rim only where it runs (at most about 0.08 s a 1080p frame, late in an expand).
+
+| Key | Meaning |
+|---|---|
+| `from`, `to` | clip seconds (required, `to` after `from`): the window, inside one shot of the cut, the host |
+| `shot` | the shot inside: any `[[shot]]`, one in the cut or `plate = true`, but not the host. Exactly one of `shot` and `clip` |
+| `clip` | a video inside instead, in the split's forms (a file or an asset slug, or `{src, in, rate, loop, fit, mirror, back}`), fitted to the frame |
+| `anchor` | a `mk q` expression (required), projected through the host shot's camera on every window frame: the circle's centre (`'obj("toy_eyehole").loc'`) |
+| `radius` | metres: the rest radius at the anchor's depth (the point layer's `m` turns it into pixels), so the circle stays the size of a disc in the scene |
+| `size` | the rest diameter as a share of the frame's short side, in (0, 1] (default 0.3 when there is no `radius`); `radius` and `size` together are an error |
+| `open` | `{dur, ease}`: it opens from the anchor to its rest radius over `dur` seconds (default 0.25; 0: open on the first frame), eased `ease` (default `out`) |
+| `out` | `"close"` (default): back onto its point over `open.dur`, gone on `to`; `"expand"`: grown until its picture is the whole frame on the window's last frame |
+| `expand` | `{dur, ease}`, only with `out = "expand"`: `dur` seconds (default 0.6), `ease` (default `in`) |
+| `rim` | `{width, dark, color, glint, fringe}`, the inner rim: a vignette over the outer `width` of the radius (default 0.3, in (0, 1)) darkening toward `color` (default the palette's darkest: Dawn's `text`) by `dark` at the edge (0..1, default 0.8); `glint` 0..1 (default 0.85); `fringe` px at 1080 on the short side (default 2; 0 none). `rim = false`: none |
+| `edge` | `{color, width}`: a ring round the outside of the circle, `color` (default `text`), `width` in px at 1080 on the short side (default 4). No ring without the key |
+| `ring` | a ring portal round the window: `"vinyl"`, `"plate"` or `"lens"`, or `{kind, size, ...}` with the kind's keys (below); none by default |
+| `aspect.<output>` | `{radius}` or `{size}`: that output's own rest size (either replaces both); nothing else may be overridden |
+
+```toml
+[[insert]]                   # the toy's eyehole opens onto the next shot and grows into it: the cut lands inside
+from = 3.10
+to = 4.20
+shot = "inside"              # or clip = "pexels_123" / { src = "pexels_123", in = 2.0 }
+shape = "iris"
+anchor = 'obj("toy_eyehole").loc'   # projected through the host shot's camera on every frame
+radius = 0.004               # metres: the eyehole's own size, growing as the camera pushes in (or size = 0.3)
+open = { dur = 0.25, ease = "out" }
+out = "expand"               # "close": back onto the eyehole, gone on `to`
+expand = { dur = 0.6, ease = "in" }
+rim = { width = 0.3, dark = 0.8, glint = 0.85, fringe = 2.0 }   # color: the palette's darkest; rim = false for none
+aspect.9x16 = { size = 0.4 }
+```
+
+**Ring portals.** `ring` puts a thing round the window that opens, holds and closes or grows with it: every part of it is
+sized in window radii (the window's radius is 1, `size` the ring's outer radius), so it scales with the window from the first
+frame of the opening to the last of an expand, where it has left the frame with the vignette and the cut lands on the inner
+picture as before. It is laid over the host frame before the window (`mkmmd/portal.py`, in passes each worked out over the
+annulus it covers, antialiased over a pixel; `mkmmd/core/portal.py` checks and lays it out): nothing past its reach (its size
+and its shadow, glow or sprites) changes, and the window is the iris's own. A ring sets the rim's defaults (`rim` keys given
+are laid over them; `rim = false` still turns it off): `vinyl` a dark lip, the hole's wall (width 0.12, dark 0.6, no glint or
+fringe), `plate` a soft shade in the well (0.16, 0.3, none), `lens` a lens's rim (0.25, 0.6, glint 0.85, fringe 3).
+
+- `vinyl`: a record whose centre hole is the window. Round it the label, an original design (its ground, an arch of the band
+  colour over the top with a dot under it, two lines of small print, a ring at its rim), the dead wax, the grooves (their
+  unevenness in fine rings, smooth gaps between five tracks, faded where finer than a pixel) and the lead-in edge catching the
+  light; label and grooves turn clockwise at `rpm` (33 1/3: 200 degrees a second). The sheen, two bright wedges toward and away
+  from the light at the upper left, stands in the light, swinging a few degrees and shimmering as the grooves turn through it.
+  A soft shadow falls to the lower right.
+- `plate`: a dinner plate whose well is the window: the slope up from the well, the broad glazed rim with two thin lines of
+  `band` colour, the rounded lip, lit from the upper left (a crisp highlight on the lip, a soft sheen, a broad glaze highlight
+  across the rim at the upper left and a fainter one opposite), a soft shadow. `sprites` stand round the rim, `count` of them
+  from the top, dealt shuffled by `seed`, every one before any comes again, each on a soft shadow, `upright` or `radial`,
+  travelling `turn` degrees a second; `eyes` and `mouth` give them googly eyes and a smile ([Googly eyes](#googly-eyes)),
+  swinging as they ride the rim and grow with the window (an iris has no hits of its own: the eyes' own `times` or `lane`
+  kick them). A plate's sprites count for `mk assets credits`; one that finds nothing is an error before anything is encoded.
+- `lens`: concentric chrome rings round the window, `count` of them, the first round its edge, their widths, gaps and breaks
+  (some rings broken into arcs) seeded by `seed`. Each is a glass tube showing the window's picture refracted (across the tube
+  turned over and magnified, swirled with the ring's turn, red and blue pulled `chroma` px apart toward its edges) under a
+  chrome reflection of a two-tone studio (the palette's lightest above a bright horizon line, its darkest below) and a
+  highlight, darker toward its edges; each turns its own way, `turn` degrees a second, every other one the other way and each
+  35 % faster than the one inside it; a glow of `tint` lies round and between them.
+
+| Key | Meaning |
+|---|---|
+| `kind`, `size` | the ring (required in a table); its outer radius in window radii, 1.05 .. 8 (default 2.8 vinyl, 1.46 plate, 2.1 lens) |
+| `rpm`, `color`, `label`, `sheen` | vinyl: turns a minute (33.333; negative the other way, -300 .. 300); the vinyl (default the palette's darkest at 22 % of its value: near black); `[ground, band, print]`, one to three colours (default `["gold", "love", "text"]`); the sheen's strength 0..1 (0.8) |
+| `color`, `band` | plate: the glaze (default the palette's lightest) and its two lines (`pine`; `false` none) |
+| `sprites`, `count`, `scale`, `orient`, `turn`, `seed`, `eyes`, `mouth` | plate: the sprites, a mandala ring's forms (registry slugs, files, globs or `{tag = "veg_green"}`, one or a list); 8 of them (1 .. 64); each `scale` window radii at its longer side (0.3); `"upright"` (default) or `"radial"`; degrees a second they travel round, counter-clockwise (0); the deal (1); googly eyes and a smile. The keys after `sprites` need it |
+| `count`, `chroma`, `turn`, `tint`, `seed` | lens: rings (4, 1 .. 8); the colour split, px at 1080 on the short side (5, 0 .. 64); degrees a second (30); the glow's and the chrome's cast (`iris`); the rings' layout (1) |
+
+```toml
+[[insert]]                   # a record at her chest opens onto the next shot and grows into it
+from = 0.20
+to = 1.60
+shot = "close"
+shape = "iris"
+anchor = 'bone("upper_body").center'
+size = 0.3
+out = "expand"
+ring = "vinyl"               # or { kind = "vinyl", rpm = 45, label = ["pine", "gold", "text"] }
+
+[[insert]]                   # a dinner plate with googly-eyed veggies round its rim
+from = 1.80
+to = 3.20
+shot = "wide"
+shape = "iris"
+anchor = 'obj("table_plate").loc'
+radius = 0.12
+out = "expand"
+ring = { kind = "plate", band = "love", sprites = { tag = "veg_green" }, count = 6, eyes = true, turn = 20 }
+
+[[insert]]                   # chrome lens rings, the TikTok portal
+from = 3.40
+to = 4.80
+shot = "close"
+shape = "iris"
+anchor = '(0.0, -0.15, 1.05)'
+out = "expand"
+ring = { kind = "lens", count = 5, chroma = 8, turn = 40, tint = "foam" }
+```
+
 The plan refuses what cannot be drawn, with a message that names the effect: a transition `at` where no shot (or several) starts;
 a window that starts before the outgoing shot does (`shorten dur`), or a spin that runs past the incoming shot (`shorten after`);
 an expand or collapse whose figure shot is not a silhouette in every output, or a slice through the figure whose outgoing shot is
 not flat in every output; an insert that crosses a cut, whose `shot` is the host or does not exist, whose `out = "expand"` shot is
 not the one that starts at `to`, or whose window is too short for its pop-in and exit (each at least 2 frames); a split with both
 or neither of `shot` and `clip`, too few frames for its slides in and out, or a swap that slides before the inner half is in,
-overlaps the swap before it or lands after the slide out has begun; and any two windows, transitions
+overlaps the swap before it or lands after the slide out has begun; an iris with both or neither of `shot` and `clip`, both
+`radius` and `size`, or too few frames for its opening and its close or expand (an opening of `open.dur` above 0 and an expand
+take at least 2 frames each), or a `ring` of no known kind, a key of another kind, a plate's sprite keys without `sprites`; a
+page turn at the clip's end without `[project] duration`; and any two windows, transitions
 and inserts together, that overlap in frames. `mk build` also refuses a window that needs frames from a shot before `[scene] start`
 (`lower [scene] start`), and keys the cameras of the shots that lend frames: after editing an effect run `mk build` again (`mk render`
 says `run mk build again` when a camera is not keyed over the frames an effect needs). `mk post` reports `matte_scale` per expand or
 collapse (`scale`, whether it was `raised`, and `needed`, the scale that fills the frame): a number far above `needed` spends the
 window with the new shot already full. A figure that is not in the frame at the covering frame, or a `center` that cannot lie inside
 it, is an error that says so (`center = "subject"` always can), and so is a slice's figure missing on its first window frame, or a
-split's video that cannot be read or whose window starts past its end (`mk post` checks them before encoding anything).
+split's or an iris's video that cannot be read or whose window starts past its end (`mk post` checks them before encoding anything).
 
 In an expand the first window frame is the figure turned into a window at its own size (the dark shape fills with the next shot at
 once; the rim, if any, marks it) and the last is the incoming shot at full frame; a collapse ends on the figure landing on its place
@@ -3285,9 +3483,10 @@ scaled overlaps its analytic image by 98.5 %. `cover_scale` bisects the scale th
 Blender draws the layers in `render_frames` and `look` (`mkmmd/blender/transition.py`): the cameras are looked through with the
 timeline markers set aside, `Looks.prepare(frame, output, shot=...)` enters that shot's look, the matte is a Workbench pass of the
 subject objects alone (`Looks.matte`) and `back` the silhouette composed without the subject (`compose_silhouette(...,
-subject=False)`). `mk post` lays the effects over the cut's frames before the screen type and the grade; a missing layer is an error
-unless `--allow-gaps` (the plain cut shows there). `mk look` previews a frame inside a window composited, from layers it draws into
-its own folder (a spin turns the frame it drew and needs none). `--no-transitions` leaves the effects out of `mk render`, `mk post`
+subject=False)`). `mk post` lays the effects over the cut's frames before the screen type and the grade (the loop's wrap turns the
+finished frames, above); a missing layer is an error unless `--allow-gaps` (the plain cut shows there). `mk look` previews a frame
+inside a window composited, from layers it draws into its own folder (a spin turns the frame it drew and needs none; a frame of the
+wrap turns over frame 0, which it draws beside it). `--no-transitions` leaves the effects out of `mk render`, `mk post`
 and `mk look` (`--no-styles` leaves them out of `mk render` and `mk look` too: a figure needs its silhouette look).
 
 ### Glitches
@@ -3329,14 +3528,14 @@ ghost, the picture is never touched. The plan, `mk build`'s shots report (`_cut_
 ### Frame effects
 
 `[[fx]]` entries work on the finished pictures of a span of the cut: `mk post` applies them to each frame after the transitions,
-inserts and glitches and before the lens streaks, the screen type and the grade, and `mk look` previews them the same way
-(`mkmmd/core/framefx.py` checks and times them, `mkmmd/framefx.py`, numpy and OpenCV, does the picture work). Unlike the cut
-effects they may overlap one another and any window, and on a frame inside several they are applied in the order of the table.
+inserts and glitches and before the lens streaks, the screen type, the loop's wrap and the grade, and `mk look` previews them the
+same way (`mkmmd/core/framefx.py` checks and times them, `mkmmd/framefx.py`, numpy and OpenCV, does the picture work). Unlike the
+cut effects they may overlap one another and any window, and on a frame inside several they are applied in the order of the table.
 They read the rendered frames as they are, without their effects: an echo of a frame inside a glitch echoes the unglitched frame.
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)) (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)) (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
 | `aspect` | any entry: `[fx.aspect.<output>]`, its own keys for one output ([Each output its own: aspect](#each-output-its-own-aspect)) |
 | `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears. A push has none |
@@ -3359,14 +3558,14 @@ They read the rendered frames as they are, without their effects: an echo of a f
 | `block` | mosh: a datamosh. The cut's frame before the span is held and carried along the cut's own motion from each frame to the next since the span's first frame (Farneback optical flow on the frames at a quarter size, averaged over `block` px at 1080 squares, 16, so it moves in chunks as a codec's motion vectors do), and mixed over the real frame by `strength`. Started on a cut it is the classic one: the outgoing picture smeared by the incoming shot's motion, as when the key frame of a cut is lost. Frames asked out of order are worked out again from the span's start |
 | `flow` | mosh: a made-up motion instead of the cut's own, so a still moshes too (a clip of one frame has no frames before it): `{kind, amount, steps, jitter, stuck, seed}` and the kind's own key. The span's first frame as it reached the mosh (the effects before it in the table on it; `mk look` renders it beside a later frame asked for, as a film's held frame) is carried `steps` (12) times along the flow on that frame and as many times more on each frame after: a P-frame played again and again. The frame is cut into `block` squares and each moves whole, by whole pixels, so the picture moves in sharp chunks: where a moving block pulls from one that stays, that one's edge is smeared out in a trail, and colours are dragged across the picture. `kind`: `drift` (every block the same way, `angle` degrees counter-clockwise from the right, 0), `zoom` (the picture pushed out from `center`, `[x, y]` frame fractions, default the middle, as a camera pushing in does; drawn in toward it with a negative `amount`), `swirl` (round `center`, counter-clockwise on screen; clockwise with a negative `amount`) or `noise` (a smooth random field whose swirls are `size` frame heights across, 0.3); `amount` (6) px at 1080 the farthest block moves per step (a zoom's and a swirl's at the frame's farthest corner from `center`); each block's move is off by up to `jitter` (0.25) x `amount` at random, and a share `stuck` (0.3) of the blocks, in patches, stays where it was (the frame itself shows there). The same `seed` (1) moves the same blocks: the same picture again; a larger `stuck` holds more of the same patches, and a frame of another size (`mk look`'s) is cut into the same blocks. Trails run about `amount` x `steps` px at 1080: a small amount over many steps stretches them smooth, a large one over a few stamps them in repeats |
 | `mask`, `objects` | mosh: `figure` moshes only inside the coverage of `objects` (the figure layer `mk render` draws beside the frames, as for a collage or a pixel sort), `ground` only outside it; both or neither. The held picture is mixed in by the coverage: the outline stays antialiased as the figure's own, and a figure a ground mask keeps is left exactly as it was (across a `rect`'s feathered edge too). With a `flow`, a block whose source holds anything of the rest on the span's first frame (her outline included) stays put, so her colours never smear into the ground, nor the ground's into her |
-| `objects` | a collage (required): its figure, object patterns as a look's `hide` takes (`"Rin_*"`, `"@collection"`, `"prop:key"`; one or a list). `mk render` draws their coverage alone through the camera of the shot in the cut beside each frame of the span (`figure/<key>/<frame>.png`, the key named from the patterns, so collages of the same figure share it) and the collage cuts the figure out of the picture with it: the figure as the frame shows it, look and lights and all |
-| `back`, `fill` | a collage: the flat colour behind (default `base`) and how the figure is drawn, `"picture"` (default: as the frame shows it), a flat colour (a silhouette) or `"silkscreen"` (printed in flat inks: [Dividing grids and silkscreen prints](#dividing-grids-and-silkscreen-prints)). Either may be a list, read at the step: the number of hits so far (a hit on the span's first frame is where it starts) plus the number of the cell, copy, panel or region drawn, round and round. So `back = ["love", "base"]` is a chessboard in a grid that flips on every hit, and one colour on every hit of an orbit |
+| `objects` | a collage (required): its figure, object patterns as a look's `hide` takes (`"Rin_*"`, `"@collection"`, `"prop:key"`; one or a list). `mk render` draws their coverage alone through the camera of the shot in the cut beside each frame of the span (`figure/<key>/<frame>.png`, the key named from the patterns, so collages of the same figure share it) and the collage cuts the figure out of the picture with it: the figure as the frame shows it, look and lights and all. With `shot` the figure comes from that shot's own render instead ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)) |
+| `back`, `fill` | a collage: the flat colour behind (default `base`), a pattern painted there instead (`{pattern = "spiral", colors = [...], ...}`: [Colour fields](#colour-fields-liquid-light-op-art-floods)) or `"picture"`, the frame as it reached the effect (the effects before it in the table on it: her world behind the collage, as behind a mandala's rings, and the figure in it wherever the frame shows her; a grid's cell shows it shrunk and laid as the cell's figure is, reflected past its edges where the cell is wider or taller than the frame; a mirror folds it with the figure; a contained footage clip sits on it), and how the figure is drawn, `"picture"` (default: as the frame shows it), a flat colour (a silhouette) or `"silkscreen"` (printed in flat inks: [Dividing grids and silkscreen prints](#dividing-grids-and-silkscreen-prints)). Either may be a list, read at the step: the number of hits so far (a hit on the span's first frame is where it starts) plus the number of the cell, copy, panel or region drawn, round and round. So `back = ["love", "base"]` is a chessboard in a grid that flips on every hit, and one colour on every hit of an orbit |
 | `edge` | a collage: `{color, width}`, an outline round every figure and copy, `width` px at 1080 on the short side (default 3); default none. With `shadow` (a drop shadow) a thick white one makes a sticker; `keys` and `pivot` move the figure ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)) |
 | `cells`, `piece`, `seed` | grid: the frame shrunk into cells, `n` x `n` (3) or `[columns, rows]`, or a list of them read at the step (`divide` makes each step cell division: [Dividing grids and silkscreen prints](#dividing-grids-and-silkscreen-prints)), the figure in each on its colour; a `piece` colour draws one cell's figure flat in it, the cell hopping a knight's move on every hit (from the middle of the top row; `seed` 1 picks among the moves, never straight back while another is open) |
 | `count`, `radius`, `tilt`, `scale`, `size`, `turn`, `spin` | orbit: the figure moved to `center`, `scale` times its size (1), and `count` (6) copies of it, `size` times as large again (0.6), on a ring of `radius` (0.36 of the frame's short side) round it tilted `tilt` degrees from face-on (60): an ellipse whose near half is drawn over the figure and a little larger, its far half under it and smaller. The ring turns `spin` degrees a second (0) and `turn` more on every hit (30); copy j is drawn `fill` entry step + j |
 | `axes`, `place` | mirror: the frame folded about the vertical line through `center` (`axes` `"x"`, default), the horizontal one (`"y"`) or both (`"xy"`; a list is read at the step): the side or quarter with the figure's centroid is shown as it is, the others are its reflections, region j (0 that side, 1 across the vertical line, 2 across the horizontal, 3 both) drawn in its own `back` and `fill` entry step + j. `place` `[x, y]` (frame fractions) moves the figure's centroid there first: beside the fold, two of her face each other |
 | `count`, `slant`, `size`, `delay` | panels: the frame cut into `count` panels (3, 2 .. 12) across its long side, columns of a wide or square frame and rows of a tall one, by lines leaning `slant` degrees (12: to the right going up, as italics), panel j its own `back` and `fill` entry step + j with the figure moved onto its middle line, `size` times its size (1; and `count` times smaller in a row, so a figure framed for the whole frame fits one). With a `delay` (frames, default 0) panel j shows the figure j x `delay` frames before |
-| `count`, `step`, `scale`, `bands`, `delay` | stack: a banded echo. The figure in front (`fill`, on `back`) and `count` (5) copies of it behind, copy j `step` `[dx, dy]` further per copy (`[-0.02, -0.006]` of the frame's short side), `scale` ** j as large about `center` (1; under 1 the stack shrinks toward it, a vanishing point) and drawn `bands` entry step + j - 1 (`["text", "base"]`, colours or `"picture"`); with a `delay` (frames, default 0) copy j is the figure j x `delay` frames before, a trail of the poses before |
+| `count`, `step`, `scale`, `bands`, `delay`, `mirror` | stack: a banded echo. The figure in front (`fill`, on `back`) and `count` (5) copies of it behind, copy j `step` `[dx, dy]` further per copy (`[-0.02, -0.006]` of the frame's short side), `scale` ** j as large about `center` (1; under 1 the stack shrinks toward it, a vanishing point) and drawn `bands` entry step + j - 1 (`["text", "base"]`, colours, `"picture"`, `"silkscreen"` or tables of sprites); with a `delay` (frames, default 0; or a list, each copy's own) copy j is the figure j x `delay` frames before, a trail of the poses before. `mirror = true` (default false) draws the stack again over all that, reflected left for right about the vertical line through `center` (put on the nearest half pixel): its figure the same pixels flipped, its copies stepping the mirrored way (both echoes trail outward) and its edges and shadows flipped with it (a shadow falling down and right falls down and left on the reflection). Only the stack is reflected, never the frame: on `back = "picture"` with `center` on her, a figure on one side of her is also on the other. The reflection is drawn over whatever is where it lands, and the figure's layer is drawn alone and stops at the frame's edge: what stands in front of the figure comes along into its reflection, and what the frame cuts off it is missing there too. Keep the figure clear of both, or take it from a `shot` of its own, set beside her with `at` and `height`. Bands of sprites, copies in eras' `looks`, a tunnel that `recede`s forever, busy clones that `peel` off and a `squash` on the hits: [Rainbow stacks](#rainbow-stacks-sprite-bands-era-looks-tunnels-busy-clones-squash) |
 
 ```toml
 [[fx]]                        # the hole bends the stars behind it, its mass pumping with the kicks
@@ -3446,6 +3645,28 @@ lane = "snare"
 back = ["love", "base"]
 cells = [2, 3, 4]
 piece = "text"
+
+[[fx]]                        # her guitarist, alone in her own void, set beside her and mirrored, both echoing outward
+kind = "stack"
+from = 29.72
+to = 35.0
+objects = ["Rin_guitar*", "guitar*"]
+shot = "guitar_plate"         # a [[shot]] with plate = true framing her whole body, by her own lights
+at = [0.2, 0.94]              # her feet (pivot "base") there
+height = 0.55                 # her height: 0.55 of the frame's
+center = { point = "bone('upper_body2', 'Rin_arm').head" }   # projected through the shot in the cut
+back = "picture"
+mirror = true
+count = 5
+step = [-0.03, -0.01]
+delay = 2
+bands = ["love", "gold", "foam", "iris", "rose"]
+edge = { color = "#ffffff", width = 14 }
+shadow = { color = "#575279", alpha = 0.35 }
+
+[fx.aspect.9x16]              # no room beside her in the tall frame: smaller, by her legs
+at = [0.2, 0.97]
+height = 0.3
 ```
 
 `mk render` draws the point layers of a scene centre and the figure layers of a collage with the other layers; `mk post` reads
@@ -3460,8 +3681,9 @@ it was rendered: put it before an effect that moves the picture (a zoom, a lens,
 Any `[[fx]]` entry may be limited to a part of the frame: `rect = [x0, y0, x1, y1]` (frame fractions, 0, 0 the top left;
 `false`, the default, the whole frame) and `feather` (px at 1080 on the short side: a smooth ramp that wide across the rect's
 edges, not along the frame's own; default 0, a hard antialiased edge). Outside the rect the frame is left as the effects before
-it made it. The picture effects `film`, `camcorder`, `pixelsort` and `booth` take the rect as their frame: a film's vignette and
-weave, a camcorder's stamp corner, a booth's strip and its layout are the rect's, and a pixel sort's runs stop at its edge; the
+it made it. The picture effects `film`, `camcorder`, `pixelsort` and `booth` and the era looks `digicam` and `testcard` take
+the rect as their frame: a film's vignette and weave, a camcorder's or a digicam's stamp corner, a booth's strip and its
+layout, a test card's layout are the rect's, and a pixel sort's runs stop at its edge; the
 others draw on the whole frame and are cut to the rect (a mosh drags in what lies outside it). A pixel an effect leaves as it
 was stays so across a feathered edge: a figure a masked mosh keeps. Give each output its own through `[fx.aspect.<output>]`:
 a split screen left / right in 16x9 and 1x1 is top / bottom in 9x16, and the Screen Test covers her half only.
@@ -3491,13 +3713,15 @@ table on it): `mk post` keeps it as it goes through the frames; `mk look` render
 | `by`, `lo`, `hi`, `axis`, `reverse` | pixelsort: every run of pixels whose `by` (`luma`, default, `hue` round the wheel from red, or `sat`, HSV saturation; 0..1) lies in `lo` .. `hi` (0.25 .. 0.8), unbroken along a row (`axis` `x`, default) or a column (`y`), is sorted by it, rising to the right (down), falling with `reverse`. All runs at once in one numpy sort: a 1080 x 1920 frame takes about 0.1 s |
 | `mask`, `objects` | pixelsort: `figure` sorts only inside the coverage of `objects` (a collage's figure layer, drawn by `mk render` beside the frames), `ground` only outside it; both or neither |
 | `times`, `lane`, `min_db`, `every`, `decay` | pixelsort: without them it is steady at `strength` (a mix over the picture); with them it fires: full on the frame of each hit and dying as exp(-age / `decay`) (0.12 s), the strongest hit counting, times `strength` |
+| `era` | film and camcorder: a preset of the other keys for an era of pop, the keys given beside it winning (`mkmmd.core.eralook.ERAS`): a film's `"1967"` is a Technicolor print (24 fps, `dye` 1, `saturation` 1.35, `contrast` 1.3, `halation` 0.35, fine grain, a little weave, dust and a scratch); a camcorder's `"1985"` a VHS tape (its stamp `PM 3:12` ticking over `JUL. 4 1985` with `PLAY`, chroma 9, softness 2, saturation 0.7, noise 0.06, a tracking band and the head-switching tear, `switching` 0.7). A number works (`era = 1967`); an unknown era is an error that lists the known ones |
 | `mono`, `contrast` | film: black and white (`true`) or colour (default) through a print's S curve, a soft toe and shoulder about mid grey, steeper with `contrast` (1; 0 none) |
+| `saturation`, `dye`, `halation` | film in colour: its saturation times `saturation` (1) before the print's curve; `dye` (0..2, 0) a three-strip dye print's purer primaries (each colour pushed off the other two, reds and oranges richest, the shadows a little cool and the lights warm); `halation` (0..2, 0) a red-orange glow round the lights (white in `mono`), light scattered back through the film |
 | `fps` | film: the picture changes `fps` times a second (default every frame): each film frame shows the clip frame at its start, counted from the span's first frame, and the damage below changes with the film frame. 15 is a Warhol Screen Test, 10 hand-made film |
 | `grain`, `flicker`, `weave`, `vignette` | film: grain, its amount in luma (0.06, strongest in the mid tones) or `{amount, size}` (clumps 1.5 px at 1080); exposure flicker 0..1 (0.05); gate weave, px at 1080 (1.5: a slow wander of the whole picture and a little shake); the corners darkened by `vignette` (0.3) |
 | `dust`, `scratches`, `hair` | film: specks per film frame (3, or `{count, size}`, 3 px at 1080), white and dark, a fifth of them bent fibres; `scratches` thin white vertical lines (1, at most 32), each lasting 4 .. 12 film frames, drifting a little sideways, then another elsewhere; `hair` the chance per second (0) of a dark hair in from a side of the gate for 0.4 .. 1.2 s |
 | `date`, `time`, `tick`, `indicator` | camcorder: the stamp's text, `time` over `date` (short texts, either may be left out); `tick = true` shows the time's seconds counting up from `time` at the span's start, in the style it was written (`8:41 PM`, `PM 8:41`, `20:41`); `indicator` `PLAY` (default, with a triangle), `REC` (a red dot blinking once a second) or `none`, at the top left (top right when the stamp is there) |
 | `font`, `corner`, `color`, `size` | camcorder: a font slug of the asset registry or a font file (default: the registry's first font tagged `mono`; a missing font is an error before any frame is drawn); the stamp's corner, `bottom-right` (default), `bottom-left`, `top-left`, `top-right`; its colour (white); its capitals' height in short sides (0.05). It is drawn after the tape's damage, crisp, with a dark rim and shadow. The font is credited through `[credits] assets` |
-| `tracking`, `chroma`, `scanlines`, `jitter`, `soft`, `saturation`, `noise` | camcorder, the tape: a tracking band rolling up the frame, its amount (0.3) or `{amount, speed}` (0.25 frame heights a second: lines torn sideways, snow, washed out); colour bled sideways and to the right, px at 1080 (6); scanlines 0..1 (0.15); each line jittered sideways, px at 1080 (1); luma softness, px at 1080 (1.2); `saturation` (0.8); noise in horizontal streaks (0.04) |
+| `tracking`, `chroma`, `scanlines`, `jitter`, `soft`, `saturation`, `noise`, `switching` | camcorder, the tape: a tracking band rolling up the frame, its amount (0.3) or `{amount, speed}` (0.25 frame heights a second: lines torn sideways, snow, washed out); colour bled sideways and to the right, px at 1080 (6); scanlines 0..1 (0.15); each line jittered sideways, px at 1080 (1); luma softness, px at 1080 (1.2); `saturation` (0.8); noise in horizontal streaks (0.04); `switching` (0..1, 0) the head-switching tear, the last 2 % of the lines pulled sideways, up to 30 px at 1080 at the foot |
 | `marks` | doodle (required): `[{shape, at, size, color, angle, t}]`, purikura-pen marks: `shape` one of `star`, `heart`, `sparkle`, `x` (an X over an eye), `swirl`, `scribble`, `arrow`, `crown`, `cat_ears`; `at` `[x, y]` frame fractions or `{point = "<expression>"}`, projected through the camera of the shot in the cut on every frame as a `center` is (`point/x<i>m<j>/`); `size` frame heights (0.08) or, at a point, `size_m` metres at its depth (an eye's width); `color` (`love`); `angle` degrees counter-clockwise (0); `t` the clip second it pops in (the span's start), with a small spring (a 12 % overshoot, settled in 0.3 s) |
 | `fps`, `width`, `outline`, `wobble` | doodle: the marks are drawn again `fps` times a second (8) by a hand that wobbles up to `wobble` px at 1080 (1.5), so they boil; a pen line `width` px at 1080 (9) in its colour over a white rim `outline` px wide (5) |
 | `count`, `times`, `lane`, `min_db`, `every` | booth (one of `times` or `lane` required): on each of the first `count` (4) hits in the span the frame is captured; a white flash `flash` s long (0.15) over all of it; the capture drops into its cell over `drop` s (0.3), falling from 1.3 times its size with its shadow and a little bounce |
@@ -3546,7 +3770,9 @@ end without `loop`, is an error before `mk post` encodes anything (in `mk look` 
 | `in`, `rate`, `loop` | footage: the clip's second on the span's first frame (0), its speed (1; 0 a still, 0.5 slow motion, at most 16), and `loop = true` to start it over past its end; without it the last frame holds there |
 | `fit`, `focus`, `mirror` | footage: `cover` (default: the frame filled, the clip cropped with its point `focus` `[x, y]` (0..1 of the clip as the file has it; default the middle) as near the frame's middle as the crop allows) or `contain` (all of it, centred on the step's `back`); `mirror = true` flips it left to right (the focus with it). Give a vertical output its own `focus` through `[fx.aspect.9x16]` |
 | `shadow` | every collage: `{color, offset, blur, alpha}`, a drop shadow under the figure and its edge: `color` (black), `offset` `[dx, dy]` frame heights right and down (`[0.008, 0.012]`), `blur` px at 1080 (10, a Gaussian's sigma), `alpha` (0.4); default none. A smaller copy (a grid cell, an orbit's ring) casts a smaller one. With a thick white `edge` (12-18 px at 1080, grown round the figure and rounded where it bends in, as a die cut is) the figure is a sticker |
-| `keys`, `pivot` | every collage: the figure moved before it is laid out, `[{t, turn, dx, dy, scale, ease}, ...]` over clip seconds: `turn` degrees counter-clockwise on screen about `pivot`, `dx`, `dy` frame heights (right, down), `scale` times. From key to key by the `ease` of the key arrived at: `inout` (default), `in`, `out`, `linear` or `back` (a 10 % overshoot that settles); held before the first key and after the last, and what a key leaves out stays as the key before left it (at rest before the first). `pivot` `base` (default: the middle of the bottom of the figure's box on the span's first frame, her feet), `center` (its centroid there) or `[x, y]` frame fractions. A pivot found on the figure reads its layer on the span's first frame, which `mk look` renders beside the frames it is asked for |
+| `keys`, `pivot` | every collage: the figure moved before it is laid out, `[{t, turn, dx, dy, scale, ease}, ...]` over clip seconds: `turn` degrees counter-clockwise on screen about `pivot`, `dx`, `dy` frame heights (right, down), `scale` times. From key to key by the `ease` of the key arrived at: `inout` (default), `in`, `out`, `linear` or `back` (a 10 % overshoot that settles); held before the first key and after the last, and what a key leaves out stays as the key before left it (at rest before the first). `pivot` `base` (default: the middle of the bottom of the figure's box on the span's first frame, her feet), `center` (its centroid there) or `[x, y]` fractions of the figure's own frame. A pivot found on the figure reads its layer on the span's first frame, which `mk look` renders beside the frames it is asked for |
+| `shot` | every collage: the figure taken from another shot's own render instead of the cut's frame, through its camera, look and lights: any `[[shot]]` but the one in the cut over the span, typically one with `plate = true` looking at a cast member who stands alone, far from the set (out of every other shot's view, and nothing in front of her). `mk render` draws that shot's frames (`plate/<shot>/`) and the figure's coverage through its camera (`figure/<key>/`, the key named from the patterns and the shot) on the span's frames and on those it reads (a `delay`'s poses before), claimed, resumable and counted in the disk check like an insert's plates; `mk build` keys its camera there and `mk look` renders them beside the frames asked for. The figure is laid where its own frame shows it unless `at` and `height` set it elsewhere; a `center` at a scene point is still projected through the shot in the cut. The same entry for every output (an `aspect` table may not change it) |
+| `at`, `height` | every collage: the figure set into the frame, its `pivot` (found on the span's first frame) put at `at` `[x, y]` (frame fractions) and its box there scaled to `height` of the frame's height (0.01 .. 10; either left as it is when not given). One map for the whole span, fixed from that first frame: the figure moves in the frame exactly as it moves in its own, and nothing jumps when its box changes (an arm strumming out). `keys` move it on about the pivot where it lands. Each output its own with `[fx.aspect.<output>]`: a tall frame with no room beside her places it smaller, elsewhere |
 
 A cardboard stand-up playing possum: the sticker tips over flat on the downbeat (an ease-in, falling) and pops back up:
 
@@ -3613,6 +3839,570 @@ back = ["gold", "love", "pine", "rose"]
 
 [fx.aspect.9x16]              # a tall frame divides along its length first
 cells = [1, [1, 2], [2, 2], [2, 4], [4, 4]]
+```
+
+#### Rainbow stacks: sprite bands, era looks, tunnels, busy clones, squash
+
+A stack grows into a video's main motif with more keys, all optional, each composing with the others, with `mirror` and with a
+figure from a `shot` of its own (`mkmmd/core/stack.py` checks them and lays the copies out in time, numpy-free and tested;
+`mkmmd/stack.py` draws them). Every figure and copy is laid by an affine map from the figure's frame within the box it covers,
+the same pixels as pasting it over the whole frame: a plain stack draws exactly as it did. The colours of a band, its look and
+its sprites ride with a copy wherever it goes.
+
+| Key | Meaning |
+|---|---|
+| `bands` entry `{color, sprites, ...}` | a band may be a table instead of a colour: that copy is filled with a wallpaper of `sprites` (registry slugs, files, globs or `{tag = ...}`, as a mandala ring's: `{tag = ["veggie", "veg_red"]}` the red veggies) on a ground of `color` (required), each pulled `tint` (0.3) of the way toward it, `size` (0.1 of the frame's short side at the copy's own size) long, in a white die-cut, turned and sized a little at random in a staggered lattice (`seed`, 1), the wallpaper scrolling `scroll` `[dx, dy]` short sides a second (`[0.02, -0.04]`), clipped to the copy's silhouette, a line `line` px at 1080 wide (6) of `color` inside its rim (none where the figure meets the frame's edge). It is laid in the figure's frame, so it shrinks and moves with its copy. `eyes` and `mouth` put googly eyes and a smile on the sprites ([Googly eyes](#googly-eyes)), kicked by the stack's own hits; the whites are not tinted. A list mixes tables, colours, `"picture"` and `"silkscreen"`, read round the copies as ever: eat the rainbow, one family a band |
+| `looks` | the copies drawn in eras' media, a name or a list read as `bands` is (copy j its entry step + j - 1): `"halftone"` (60s print: Ben-Day dots of each colour's own ink on newsprint, as dense as the colour is dark, a screen 10 px at 1080 apart turned 15 degrees), `"flat"` (Peter Max: the colours smoothed into flat shapes in twelve vivid hues at three values, each shape and the rim in a thick ink line), `"vhs"` (80s tape: a camcorder's soft luma, the colour bled to the right and past the copy's edge, washed out, noise in streaks, jittered lines, scanlines), `"pixel"` (00s: blocks 12 px at 1080 in four levels a channel, there or not as each is half covered), `"chrome"` (now: iridescent liquid chrome as `kind = "chrome"` draws it, its bands drifting) or `"none"` (as its band draws it). A look works on the copy where it lands, its dots, lines and blocks sized with the copy (down to 0.3 of its size, no smaller) and fixed to it as it moves (a tape's scanlines and noise are the screen's); the copy's `edge` goes round what it draws (a pixel copy's blocks) |
+| `recede` | `true` or `{count, scale, fade, speed, snap}`: the infinite tunnel. `count` (16, 2 .. 32) copies, each `scale` (0.8, 0.3 .. 0.98) as large as the one in front about `center`, the vanishing point: a copy u places deep is `scale` ** u as large (put `center` off the figure; copies shrinking toward a point inside her hide behind her). It falls inward forever: a place deeper on each of the stack's hits (`times` or `lane`), eased over `snap` s (0.15) with a little overshoot, and `speed` places a second (0; negative rises out). A new copy comes out from behind the figure as the farthest fade out over the last `fade` (0.3) of the tunnel, so nothing jumps, and a tunnel of n bands at a steady speed comes round again every n places. Each copy keeps its band and look as it falls; with a `delay` a copy u places deep shows her u x `delay` frames behind (it ages as it falls). The plain `count`, `scale` and `step` are unused; a tunnel copy's `edge` thins with its size. Not with `peel` |
+| `delay` | frames each copy is behind the one before (the plain key), or a list: copy j's own (entry j - 1, round and round), big ones too: busy clones, each her at a moment of her own. A tunnel reads a list at its depths, between them the share of the way. `mk look` renders the frames a copy shows beside the ones asked for |
+| `peel` | `{at, t, dur, gap, scale, ease}`: busy clones leave the stack. Copy j slides from its place in the stack to its own `at` entry (`[x, y]` frame fractions where its pivot goes, her feet with `pivot = "base"`; one point or a list read round the copies), `scale` (1, or a list) times the figure's size, starting at `t` (clip seconds; default the span's start) + (j - 1) x `gap` (0.12 s) and taking `dur` s (0.45), eased `ease` (`back`, default: it overshoots and settles; `inout`, `in`, `out`, `linear`). With different `delay`s each clone is her doing something else. The pivot is found on the span's first frame |
+| `squash` | `{times or lane (min_db, every), amount, decay, attack}`: on each hit the figure and every copy are pressed down by `amount` (0.2, at most 0.8) of their height over `attack` s (0.03), then spring back up past it and settle, a damped swing whose first stretch comes 0.9 x `decay` s (0.15) after the squash, e^-0.9 as big; hits close together add up. Each is scaled about its own feet (the middle of its box's bottom edge: it stays on the ground) by h down and 1 / h across, its area kept, and a copy behind in time squashes when its moment comes: the squash runs back through the echo. On `back = "picture"` with the figure cut from the frame itself, her own place in the picture is painted over from round it (an inpaint at a quarter of the size) while she squashes, so no second her shows; a figure from a `shot` of its own never needs it |
+
+All of it composes: `mirror` draws everything again reflected about the vertical line through `center` (the clones peel to
+the mirrored places; a tunnel, its vanishing point on that line, falls into it from both sides), a figure from its own `shot`
+set in by `at` and `height` takes every key, and `aspect.<output>` tables may give an output its own places and sizes (`at`,
+`height`, `peel`, `center`) but not what changes the frames it reads (a `delay`, a tunnel's `recede` with a `delay`: the plan
+checks). A 1080p frame of a 20-copy tunnel in looks takes about half a second, bands of sprites a little more.
+
+```toml
+[[fx]]                        # drop 2: the echo eats the rainbow, each copy an era, falling into a tunnel on the kicks
+kind = "stack"
+from = 11.14
+to = 18.1
+objects = "Reisen_mesh*"
+center = [0.8, 0.22]          # the vanishing point, off her
+recede = { count = 20, scale = 0.8, speed = 0.7 }
+lane = "kick"
+bands = [{ color = "love", sprites = { tag = ["veggie", "veg_red"] }, eyes = true },
+         { color = "gold", sprites = { tag = ["veggie", "veg_orange"] } },
+         { color = "#ead27a", sprites = { tag = ["veggie", "veg_yellow"] }, eyes = true, mouth = true },
+         { color = "pine", sprites = { tag = ["veggie", "veg_green"] } },
+         { color = "iris", sprites = { tag = ["veggie", "veg_purple"] }, eyes = { look = "viewer" } }]
+looks = ["halftone", "flat", "vhs", "pixel", "chrome"]
+squash = { lane = "sub", amount = 0.2 }
+back = "picture"
+edge = { color = "#ffffff", width = 12 }
+
+[[fx]]                        # line 2: busy clones peel off, each her a third of a second further back
+kind = "stack"
+from = 6.0
+to = 9.0
+objects = "Reisen_mesh*"
+count = 4
+delay = [10, 20, 30, 40]
+bands = ["picture"]
+peel = { at = [[0.12, 0.96], [0.3, 0.96], [0.7, 0.96], [0.88, 0.96]], t = 6.3, scale = 0.6 }
+back = "picture"
+edge = { color = "#ffffff", width = 10 }
+```
+
+The guitarist trio of the stack example above takes them all as they are: add `bands` of sprites, `looks` and a `squash` to
+it and the plate's guitarist and her mirror image echo in eras and veggies on either side of the dance.
+
+#### Mandalas and trails
+
+`kind = "mandala"` lays concentric rings of copies about a `center` on its `back`: copies of the figure (`objects`, cut out of
+the picture as a collage cuts it and drawn as its `fill`), of sprites (pictures with alpha: photos of real butterflies, clovers
+and flowers from the asset registry) or of stickers drawn in palette colours (a clover, a flower, a heart, a star, a butterfly).
+Every copy is a sticker: with a thick white `edge` (grown round it and rounded where it bends in, as a die cut is) and a drop
+`shadow` it is cut out and laid on the page. Each ring turns its own way (every other ring the other way), steps on the hits
+(`times` or a `lane`, as a collage steps; a list of `back`, `fill` or shape `colors` is read at the step plus the copy), with a
+`bloom` jumps out on each hit and settles, and with a `grow` its copies pop in one by one; its `strength` mixes it over the
+picture, as a collage's does. `kind = "trails"` leaves rainbow after-images behind a moving figure. `mkmmd/core/mandala.py`
+checks, times and lays them out and draws the stickers' shapes as polygons (numpy, tested), `mkmmd/mandala.py` draws them
+(numpy, OpenCV, Pillow): each copy is a tile cut once at its ring's size and laid by an affine map, its shadow cast where it
+lands (about 0.15 s for a 1080p frame of 30 stickers and her copies).
+
+| Key | Meaning |
+|---|---|
+| `rings` | mandala (required): up to 12 tables, ring i `{count, radius, scale, turn, step, phase, mirror, spin, orient, angle, source, fill}`: `count` copies (6 + 4 i, at most 64) on a circle `radius` short sides of the frame (0.15 (i + 1)) round the centre, the first `phase` degrees counter-clockwise from straight up (0), the rest evenly after it, each `scale` short sides large (the figure's height as it stands on the span's first frame, 0.25, so its copies keep their size against the rings in every output; a sprite's or a shape's longer side, 0.12). A ring turns `turn` degrees a second counter-clockwise (12) and `step` more on each hit (0), eased over `snap`; its copies stand `radial` (`orient`, default: each one's top away from the centre) or `upright`, turned `angle` degrees more (0) and spinning `spin` degrees a second about themselves (0); `mirror = true` flips every other copy left to right (a kaleidoscope's reflections). The outer rings are drawn first |
+| `source` | ring: `"figure"` (default: the figure in `fill`, the ring's own `fill` list over the entry's, `inks` as a collage's), `{sprites = [...]}` or `{shape = ...}`. Sprites: registry slugs, files or globs (project-relative, absolute or `~/...`; `.png`, `.webp`, `.tif`, `.jpg`) or `{tag = "butterfly"}` (one tag or a list: every picture of the registry that has them all), one or a list; trimmed to their alpha and dealt round the ring shuffled by `seed`, every one before any comes again, each ring its own deal. A slug, tag, file or glob that finds nothing is an error before anything is drawn. Shapes: `shape` one of `clover` (four heart leaves with their pale chevrons, a stem), `flower`, `heart`, `star` or `butterfly`, or a list of them round the ring, in `colors` (default the shape's own: the clover `pine` and `foam`, the flower `love`, `rose` and `iris`, the heart `love` and `rose`, the star `gold` and `rose`, the butterfly `iris`, `love`, `foam` and `gold`), shaded toward `ink` (`text`) and white, with an `accent` (the flower's middle, the butterfly's spots; `gold`) |
+| `eyes`, `mouth` | a ring's sprite source, `{sprites = [...], eyes = true, mouth = true}`: googly eyes on every sprite's face and a doodled smile under them (see Googly eyes below) |
+| `center`, `back` | mandala: the rings' centre (`[x, y]` frame fractions or `{point}`, default the middle); the ground, a colour, a pattern (as a collage's) or `"picture"` (the frame as it reached the effect: the rings over her world), or a list of them read at the step (default `base`) |
+| `objects`, `center_figure` | mandala: the figure, required with a ring of it or `center_figure = true` and only then; `center_figure` lays the figure itself over the rings where the frame shows it, drawn `fill` entry step, with its edge and shadow. `fill`, `inks`, `offset`, `keys` and `pivot` are a collage's |
+| `edge`, `shadow` | mandala: every copy's, as a collage's: a white `edge` 10-16 px at 1080 and a soft `shadow` make stickers. The shadow's offset and blur are the same under every copy (stickers on one page) |
+| `bloom` | mandala: a number (`amount`) or `{amount, grow, attack, decay, lag}`: on each hit the rings jump out by `amount` of their radius (0.15) and their copies grow by `grow` (0.1) over `attack` s (0.05), dying away as exp(-t / `decay`) (0.3 s), each ring `lag` s (0.04) after the one inside it. It needs the mandala's `times` or `lane` |
+| `grow` | mandala: `{times or lane (min_db, every), dur, gap, order, per}`: the copies pop in one by one, each a spring from nothing that overshoots 12 % and settles over `dur` s (0.35), `gap` s (0.06) after the one before, in `order`: `rings` (default: the inner ring first, round each from its first copy), `inward`, `around` (round the clock from the top across the rings) or `random` (by `seed`). The copies are dealt over the times, `per` a time (default all of them shared evenly; those left over join the last), each group from its time on: a field of clovers sprouting into a mandala on the beats. Before its time a copy is not drawn |
+| `alternate`, `seed`, `snap` | mandala: every other ring turning and stepping the other way (true); the sprites' deal and a `random` grow (1); seconds a hit's step takes, eased out with a 10 % overshoot (0.2; 0 a cut) |
+| `objects`, `count`, `delay`, `fade` | trails: the figure (required) on `count` (6) earlier frames `delay` (2) frames apart, copy j (1 the newest) at opacity `fade` ** j (0.85), laid oldest first behind the figure, which stays over them as the frame shows it. `mk render` draws its figure on those frames, and `mk look` renders them beside the frames asked for |
+| `colors`, `spread`, `cycle`, `times`, `lane`, `snap` | trails: a ramp of colours (default a Rosé Pine rainbow: `love`, `rose`, `gold`, `foam`, `pine`, `iris`), copy j its colour `spread` x (j - 1) entries along it (1), blended between entries; the colours run out along the trail `cycle` entries a second (1), and one more on each hit (`times` or a `lane`) over `snap` s (0.12) |
+| `blend`, `tint`, `step` | trails: `over` (default: for light grounds), `screen` or `add` (light trails on a dark ground); `tint` 1 copies flat in their colour (default), less mixes in the figure's own picture; `step` `[dx, dy]` short sides (`[0, 0]`): copy j moved j x `step` further, a fan of rainbow even while she stands still. `strength` scales the copies' opacity |
+
+A mandala's sprites count for `mk assets credits` and `mk export web` as a footage clip does: a slug or a tag names registry
+entries, and a file or a glob's match counts when the registry has an entry with its path; credit any other in `[credits]
+lines`. A tall output frames the same rings across its width: give `[fx.aspect.9x16]` its own `rings` (an outer ring more) to
+fill its length.
+
+```toml
+[[fx]]                        # a mandala of her: three mirrored rings on rose, turning both ways, blooming on the snares
+kind = "mandala"
+from = 12.0
+to = 15.0
+objects = "Reisen*"
+back = ["rose", "iris"]
+lane = "snare"
+edge = { color = "#ffffff", width = 7 }
+shadow = { color = "#575279", alpha = 0.3, blur = 5 }
+bloom = { amount = 0.12, grow = 0.08 }
+rings = [{ count = 6, radius = 0.15, scale = 0.24, mirror = true, turn = 14 },
+         { count = 10, radius = 0.32, scale = 0.2, mirror = true, step = 18 },
+         { count = 14, radius = 0.49, scale = 0.17, mirror = true, turn = 8 }]
+
+[[fx]]                        # clovers sprouting round her, then butterfly stickers and real butterflies from the registry
+kind = "mandala"
+from = 15.0
+to = 18.0
+objects = "Reisen*"
+center_figure = true
+edge = { color = "#ffffff", width = 14 }
+shadow = { color = "#575279", alpha = 0.3 }
+grow = { times = [15.0], gap = 0.03, order = "around" }
+rings = [{ count = 8, radius = 0.3, source = { shape = "clover" } },
+         { count = 12, radius = 0.42, source = { shape = "butterfly" }, mirror = true },
+         { count = 18, radius = 0.56, scale = 0.1, source = { sprites = { tag = "butterfly" } }, orient = "upright", spin = 20 }]
+
+[[fx]]                        # rainbow after-images while she dances, fanned out a little to her right
+kind = "trails"
+from = 18.0
+to = 21.0
+objects = "Reisen*"
+delay = 3
+cycle = 1.5
+step = [0.006, 0.0]
+```
+
+##### Googly eyes
+
+Every registry sprite source (a mandala ring's `{sprites = ...}`, a stack's band, a paint app's stamps, an iris's plate
+ring) takes `eyes = true` or a table, and `mouth = true`: two white googly eyes with black pupils on each sprite's face, and a
+small doodled smile under them. The whites (a dark rim, a dome shading grey toward its lower right) and the smile are
+painted into the sprite's tile, which grows to hold eyes that stick out of it (the die-cut `edge` goes round them); the
+pupils and the dome's glint over them are drawn on every frame where the tile is laid. The eyes sit where the sprite's
+registry entry says (`extra.eyes`), else on the upper middle of the widest part of its alpha, moved up or down that part to
+where both lie on it. Each pupil is a damped spring inside its eye: it rests where gravity drops it (or looks out, or at a
+point), swings when the sprite moves (a pupil keeps going when its eye starts, stops or turns: a ring's step, a bloom, a
+copy popping in) and is kicked on the hits, every sprite its own way and its two eyes a little apart, bouncing off the
+rim. It is a function of the clip second and the `seed` (the spring runs from rest over four of its decay times before the
+frame, about 1.4 s at the defaults and at most 3 s, on a grid of 60 samples a second aligned to clip second 0), so any frame
+comes out the same in any order, in `mk look` and `mk post`.
+`mkmmd/core/eyes.py` checks the keys, places the eyes and swings the pupils (numpy, tested); `mkmmd/eyes.py` draws them;
+`mkmmd.mandala.sprite_tile(path, size, edge, face=)` and `lay(..., pupils=)` are the shared path every sprite source uses.
+
+| Key | Meaning |
+|---|---|
+| `eyes` | `true` or `{size, wobble, look, seed, times or lane (min_db, every)}`. `size`: the eyes' size times their anchored or found size (1; 0.1 .. 4). `wobble`: a number (`amount`: 0 still pupils, 1 the default swing, 2 a wilder one) or `{amount, hz, damping}`, the spring's frequency (3 Hz) and damping ratio (0.15: about three swings before it settles). `look`: `"down"` (default: the pupils fall to the bottom of their eyes, a googly eye's way), `"viewer"` (straight out of the frame), `"center"` (toward what shows them: a mandala's `center`, her head with `{point}`) or `[x, y]` (frame fractions). `seed` (1): another take of the kicks. `times` (clip seconds) or a `lane` of the [audio] hits file kick the pupils; default the hits of what shows them (a mandala's `times` or `lane`) |
+| `mouth` | `true`: a small doodled smile under the eyes, where the sprite's entry says (`extra.eyes.mouth`; `false` there: no smile on that sprite); with `eyes` or alone |
+| registry `extra.eyes` | a sprite entry's own anchors, `{at = [[x, y], [x, y]], r, mouth = [x, y] or false}`: the eyes' and the smile's middles (fractions of the sprite's box trimmed to its alpha, x across, y down; a little past the box is allowed) and an eye's radius (a share of the box's longer side); what is left out is found from the alpha. `mk assets set SLUG 'extra={"eyes": {...}}'` merges it in |
+
+The registry's veggies, `{tag = "veggie"}` (`mk assets list --tag veggie`), are photos of vegetables cut out, each tagged
+`["sprite", "veggie", <name>, <family>]` with its family by its real colour (`veg_red`, `veg_orange`, `veg_yellow`,
+`veg_green`, `veg_purple`, `veg_white`: `{tag = ["veggie", "veg_green"]}` fills a green band) and anchors in `extra.eyes`.
+
+```toml
+[[fx]]                        # eat the rainbow: a ring of each family round her, their eyes on her, jiggling on the kicks
+kind = "mandala"
+from = 3.0
+to = 6.0
+objects = "Reisen*"
+center = { point = "cast:reisen.head" }
+center_figure = true
+lane = "kick"
+edge = { color = "#ffffff", width = 10 }
+rings = [{ count = 8, radius = 0.24, scale = 0.13, orient = "upright", source = { sprites = { tag = ["veggie", "veg_red"] }, eyes = { look = "center" } } },
+         { count = 16, radius = 0.42, scale = 0.12, orient = "upright", source = { sprites = { tag = ["veggie", "veg_green"] }, eyes = { size = 1.3, wobble = 1.5 }, mouth = true } }]
+```
+
+#### Colour fields: liquid light, op-art, floods
+
+Three kinds paint the picture with a field of colour, kept behind her or on her by a `mask` (`objects`, the figure layer `mk
+render` draws, as a pixel sort's): `liquid`, a 1960s oil-and-water light show; `spiral`, op-art in 2 to 4 colours; `flood`, a
+colour blooming out from a point to fill the frame and drawing back. `mkmmd/core/fields.py` checks and times them (numpy-free),
+`mkmmd/fields.py` paints them (numpy, OpenCV). Lengths are short sides of the frame about the `center`, so every output shows
+the same field there, cropped to its own frame; a field is a function of the clip second and its `seed` (the noise is hashed
+from its lattice point, not drawn from a stream), so any frame comes out the same in any order, in `mk look` and `mk post`.
+Each takes about 0.1 to 0.2 s for a 1080p frame.
+
+| Key | Meaning |
+|---|---|
+| `inks`, `light` | liquid: the inks (1 to 6 colours; default `love`, `gold`, `foam`, `iris`) and the lamp's `light` through the clear glass (`base`). Each ink is in the dish twice: clouds of dye swirled through the water (marbled, each place mostly one ink's) and oil, balls of it (metaballs: they merge and part) wandering, breathing and turning with the ink's own dish, the dishes turning alternate ways and the water's swirl (a curl-noise warp) bending everything. An ink's oil pushes the dyed water aside and shows its own dye, deeper in its middle; clear oil lets the light through. Along an oil edge runs a dark meniscus line with the light it bends lit just inside it, and each blob is lit like a drop from the top left |
+| `scale`, `speed`, `seed` | liquid: the blobs' size (1; 0.2 .. 5, fewer balls when larger), how fast everything flows, turns and morphs (1; 0 holds it), and which light show (1). The inks are a function of the clip second: two entries with one seed are one show going on |
+| `cells`, `bubbles` | liquid: how much of the oil shows oil cells, a foam of droplets each a lens (0.35; 0 none), and bubbles to a square of the frame's short side (6), each a lit rim with a glint, riding the first dish, growing in and shrinking away |
+| `times`, `lane`, `min_db`, `every`, `pulse`, `decay` | liquid (optional): on each hit the inks swell out from `center` by `pulse` (0.15) and their oil grows, the edges flaring, rising over 0.05 s and dying away as exp(-t / `decay`) (0.45 s) |
+| `blend`, `opacity` | liquid and spiral: how the field is laid on the picture, `over` (default: the field itself), `screen`, `multiply` (the scene lit through it) or `soft-light`, mixed in by `opacity` (1) times `strength` (and the mask) |
+| `mask`, `objects` | every colour field: `ground` paints only outside the figure's coverage (her outline as antialiased as the figure layer), `figure` only inside it (a light show projected on her); both or neither. A figure the mask keeps is left exactly as it was |
+| `center` | every colour field: `[x, y]` frame fractions (default the middle) or `{point = "<expression>"}`, a scene point projected on every frame of the span as a doodle's marks are: where the liquid's dishes turn about and its hits push from, a pattern's centre, where a flood falls |
+| `pattern`, `colors` | spiral: `spiral` (default), `rings`, `moire`, `sunburst` or `checker`, in 2 to 4 `colors` (`["rose", "base"]`; pastels mix as `"gold:base:0.5"`). Every edge is antialiased, and where the stripes run finer than a pixel (a spiral's or a sunburst's middle) it shows their colours' mean |
+| `arms`, `twist` | spiral: a spiral of `arms` (5) arms of each colour, each turning `twist` (1; negative the other way) times from the centre out to half the short side; a sunburst's rays, `arms` (12) of each colour |
+| `size` | rings, moire and checker: a stripe's width or a square's side in short sides (rings 0.05, moire 0.018, checker 0.1) |
+| `moire`, `offset`, `angle` | moire: two interfering sets, `rings` (default) about two centres `offset` stripes apart (4) across the `center`, or `lines` crossing at `angle` degrees (6); with 2 colours a pixel in either set's stripe and not both is the second colour, with 3 or 4 each of none, one (the first or the second) and both has its own |
+| `warp`, `angle` | checker: a checkerboard turned `angle` degrees (0) and bulged out about the centre by `warp` (0.6; 0 flat), Vasarely's sphere |
+| `speed`, `step`, `times`, `lane`, `min_db`, `every` | spiral: the stripes flow `speed` stripes a second (0.5; negative the other way): a spiral or a sunburst turns, rings flow out, a moire's second set slides through the first, a checkerboard runs diagonally. On each hit (optional; a hit on the span's first frame is where it starts) it steps on `step` stripes (1: two colours trade places), eased out over 0.12 s |
+| `color`, `times`, `lane`, `min_db`, `every` | flood: the colour (`love`), or a list read drop by drop; a drop falls on each of `times` (clip seconds) or of a `lane`'s hits, one of them required, a later drop blooming over the one before. A time before the span counts: that drop is already on its way on the span's first frame, so a clip that loops can open full of the colour it closed on and draw it back |
+| `grow`, `hold`, `recede`, `fade` | flood: the front runs out from the centre to past the frame's farthest corner in `grow` seconds (0.8; fast, then slowing: the whole frame is the colour at `grow`), the frame stays full for `hold` (0.4), then the front draws back to the centre over `recede` (0.6) and / or the colour fades over `fade` (0); with neither it stays to the span's end |
+| `soft`, `wobble`, `seed` | flood: the front's feather, px at 1080 (24), with a paler wash running ahead of it and a darker line of ink along it, as a drop's edge dries; how blotchy and fingered the front runs and how uneven the colour lies (0.5; 0 a circle); `seed` another drop's shape (1) |
+
+A collage's `back` (grid, orbit, mirror, panels, stack, footage round a contained clip, and a mandala's) may be a pattern
+instead of a flat colour, `{pattern, colors, ...}` with the spiral kind's own keys (not `mask`, `blend`, nor hits: it steps on
+the collage's own hits, and flows from the collage's span start), its `center` `[x, y]` fractions of what it fills. A pattern
+fills each grid cell as the cell's own (centred in it, its lengths the cell's short side: a grid of spirals), and the whole
+frame behind an orbit, a stack or the panels; a mirror folds it with the figure. A list mixes patterns and colours, read at
+the step as colours are.
+
+```toml
+[[fx]]                        # the light show behind her, swelling on the kicks
+kind = "liquid"
+from = 8.0
+to = 14.0
+mask = "ground"
+objects = "Reisen*"
+lane = "kick"
+inks = ["love", "gold", "foam", "iris"]
+
+[[fx]]                        # projected on her too: the scene lit through the inks
+kind = "liquid"
+from = 8.0
+to = 14.0
+mask = "figure"
+objects = "Reisen*"
+blend = "multiply"
+opacity = 0.5
+
+[[fx]]                        # a hypnotic spiral behind her, a step on every snare
+kind = "spiral"
+from = 14.0
+to = 17.0
+pattern = "spiral"
+colors = ["rose", "base"]
+arms = 4
+lane = "snare"
+mask = "ground"
+objects = "Reisen*"
+
+[[fx]]                        # a chessboard of spirals turning both ways, the grid's colours flipping on the hits
+kind = "grid"
+from = 17.0
+to = 19.0
+objects = "Reisen*"
+cells = [[2, 2]]
+lane = "snare"
+back = [{ pattern = "spiral", colors = ["rose", "base"], arms = 4 },
+        { pattern = "spiral", colors = ["foam", "base"], arms = 4, speed = -0.5 }]
+
+[[fx]]                        # ink dropped from her head fills the frame on the downbeat, then draws back
+kind = "flood"
+from = 19.0
+to = 21.0
+times = [19.1]
+color = "love"
+center = { point = "bone('head').head" }
+mask = "ground"
+objects = "Reisen*"
+```
+
+#### Remaps: kaleidoscope, tunnel, melt
+
+Three kinds move the picture's pixels about instead of painting over it: `kaleido`, a kaleidoscope; `tunnel`, an infinite
+Droste tunnel falling inward; `melt`, the picture breathing, rippling, swirling, dripping or wobbling. `mkmmd/core/remap.py`
+checks and times them and works out where each pixel reads the picture (numpy), `mkmmd/remap.py` draws them (numpy, OpenCV):
+bilinear, the frame's edge mirrored where a remap reaches past it, and from a smaller copy of the picture where it shrinks it
+(no shimmer in fine detail as a tunnel falls or a kaleidoscope zooms out). Lengths are shares of the frame's short side about
+the `center` (`[x, y]` frame fractions, default the middle, or `{point = "<expression>"}`, projected on every frame of the span
+as a zoom's is), so every output shows the same remap cropped to its own frame; angles are degrees counter-clockwise on screen.
+Everything is a function of the clip second (and a melt's `seed`): any frame comes out the same in any order, and nothing jumps
+from frame to frame but a hit's step. A 1080p frame takes about 0.05 s (a kaleidoscope, a melt) to 0.12 s (a tunnel), up to
+0.3 s with a mask, an edge and a shadow.
+
+| Key | Meaning |
+|---|---|
+| `segments`, `mirror` | kaleido: the frame folded into `segments` wedges (6; 2 .. 64) about `center`, alternately mirrored as in a two-mirror kaleidoscope (`mirror = true`, the default: seamless, an even number of wedges) or plain turned copies (`false`: any number, their seams antialiased) |
+| `source` | kaleido: `{center, angle, radius}`, the wedge of the picture every wedge shows: its apex (`[x, y]` frame fractions, default the kaleidoscope's `center`), the way its middle points (90: up) and `radius` (short sides; default none), where it ends and folds back on itself ring after ring. At rest with the source at the centre the wedge pointing `angle` is the picture as it is. Aim it at what should feed the mandala: the ink, the petals, the street beside her rather than her |
+| `turn`, `step`, `glide`, `spin` | kaleido: the source wedge turns `turn` degrees a second (8) and `step` more on each hit (30), eased out over `glide` s (0.3): the mirrors stay where they are and the pattern in them blooms and folds; `spin` turns the whole kaleidoscope on screen, degrees a second (0) |
+| `zoom`, `pulse`, `decay` | kaleido: the mandala `zoom` times as large about the centre, a number or `[[t, v], ...]` keys as `strength` takes them (1), `pulse` larger on each hit (0: none; 0.25 a heartbeat), rising over 0.04 s and dying away as exp(-t / `decay`) (0.25 s) |
+| `scale`, `twist`, `depth`, `frame` | tunnel: the frame holds itself `scale` times as large (0.5; 0.05 .. 0.95) about `center`, each level turned `twist` degrees (0; a spiral), `depth` levels in (10; none under a pixel is drawn). `frame = {color, width}` draws a line round each level inside its edge (a colour, or a list read level by level, each colour falling with its level; width px at 1080, 6) that shrinks with it: on busy footage the nesting hardly reads without |
+| `speed`, `step`, `glide` | tunnel: it falls inward `speed` levels a second (0.5; negative rises out of it) and `step` levels more on each hit (1), eased out over `glide` s (0.35). A level fallen through is the picture it started as, the next fading in at the far end: it falls forever without a seam |
+| `mode` | melt (required): `breathe` (the middle swells and shrinks back: a slow scale pulse), `ripple` (rings running out from `center`), `swirl` (a twist that grows toward the centre), `drip` (the picture sags and runs down like melting wax: straight down, most in drips) or `noise` (from heat haze, small and fast, to a liquid wobble, large and slow) |
+| `amount`, `scale`, `speed` | melt, each mode its own defaults. `amount`: breathe, how much larger the middle grows (0.08; negative shrinks it); ripple, how far the rings push, short sides (0.015); swirl, degrees at the centre (90); drip, how far the bottom of the frame sags, short sides (0.25; up to 0.45 of the frame's height it stretches without folding); noise, the most it wobbles, short sides (0.012). `scale`, short sides: the bulge's radius (0.7), the rings' wavelength (0.12), the twist's radius (0.45), a drip's width (0.1), a wobble's size (0.1; 0.02 is haze, 0.3 liquid). `speed`: breaths a second (1/3: one a bar at 80 BPM), rings a second (0.8), twists a second (0: held), how fast the drips run (0.5), how many times a second the wobble changes (1; haze 3) |
+| `times`, `lane`, `min_db`, `every`, `decay`, `seed` | melt (optional): on each hit the amount jumps up (over 0.04 s) and dies away as exp(-t / `decay`) (0.4 s), still between hits; a ripple's swell runs out from the centre at 1.2 short sides a second, a ring of rings on every hit. Without hits the amount holds. `seed` another take of a drip or a noise (1) |
+| `strength` | kaleido and tunnel: a mix over the picture; melt: the amount (half strength is half a melt, not a mix). Key a melt in from 0: it does not fade in by itself |
+| `mask`, `objects` | every remap (both or neither): `ground` remaps the ground and lays the figure back on top as rendered; `figure` remaps the figure alone, its picture and coverage together (a mandala of her, a queue of her copies falling out of the tunnel's vanishing point, the nearest fading as it passes, her melting), over the ground or `back`. Either way her place in the ground is filled from the ground round it first (each row's run mirrored in from both sides, the ground's colours spread in where a mirror cannot reach), so no copy of her is folded, nested or melted into it |
+| `edge`, `shadow`, `back` | with a mask: the figure drawn as a collage's sticker, an `edge = {color, width}` grown round it and a drop `shadow` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)). A sticker a footage collage drew before the remap is part of its ground: give the remap the same `edge` and `shadow` and they stay with her (their place is filled too); `back` (a figure mask) a flat colour under the remapped figure instead of the ground |
+
+```toml
+[[fx]]                        # the ink beside her in eight mirrored wedges, turning, a step on each snare, her on top
+kind = "kaleido"
+from = 4.0
+to = 7.0
+segments = 8
+turn = 15
+source = { center = [0.8, 0.45], angle = 0 }
+lane = "snare"
+mask = "ground"
+objects = "Reisen*"
+edge = { color = "#ffffff", width = 14 }
+shadow = { color = "#1f1d2e", alpha = 0.45 }
+
+[[fx]]                        # a mandala of her alone on rose, turning, pulsing on the kicks
+kind = "kaleido"
+from = 7.0
+to = 9.0
+spin = 12
+lane = "kick"
+pulse = 0.25
+mask = "figure"
+objects = "Reisen*"
+back = "rose"
+edge = { color = "#ffffff", width = 10 }
+
+[[fx]]                        # the clover falling inward behind her, a level a bar and one more on the downbeat
+kind = "tunnel"
+from = 9.0
+to = 12.0
+scale = 0.6
+twist = -12
+speed = 0.33
+times = [9.0]
+frame = { color = ["love", "gold", "pine", "iris"], width = 10 }
+mask = "ground"
+objects = "Reisen*"
+
+[[fx]]                        # she melts away on the stop
+kind = "melt"
+from = 12.0
+to = 13.5
+mode = "drip"
+amount = 0.4
+strength = [[12.0, 0.0], [13.0, 1.0]]
+mask = "figure"
+objects = "Reisen*"
+
+[[fx]]                        # the picture breathes in and out once a bar
+kind = "melt"
+from = 13.5
+to = 19.5
+mode = "breathe"
+amount = 0.1
+```
+
+#### Activity book and labels
+
+`kind = "activity"` makes the frame a page of a children's workbook (`mkmmd/core/activity.py` checks and times it,
+`mkmmd/activity.py` draws it): cream paper with its fibres, faint ruled lines and a red margin, the frame drawn on it
+(multiplied by the page: a [crayon sketch](#looks-silhouette-vector-and-reflection) of her on paper of the colour `key`
+sits on the page as if drawn there), and exercises printed on the page that a crayon does on the hits (`times`, or a
+`lane` of the [audio] hits file, as a zoom's). Printed things (dotted lines, dots, numbers, a colour by number's lines)
+are crisp ink; what the crayon does is wax (`mkmmd/core/crayon.py`), drawn again `fps` times a second by a hand that
+wobbles `boil` px.
+
+| Key | Meaning |
+|---|---|
+| `items` | required: the exercises, `[{kind, ...}]`, drawn in order (below) |
+| `paper`, `grain`, `rule`, `margin` | the page: its colour (`#F6EEDC`, a cream) and fibres (0..1, 0.6); faint rules `{color, pitch, alpha, width}` (`#9DB6D6`, every 0.075 frame heights, 0.35, 1.6 px at 1080) and a margin line `{color, at, alpha, width}` (`#E68A8A` at 0.09 of the width); `false` leaves either out |
+| `picture`, `key` | `multiply` (default: the frame drawn on the page, its colour `key` (default `paper`) the paper) or `none` (a blank page) |
+| `ink`, `crayon`, `font` | the printed ink (`text`), the crayon an item takes by default (`love`), the numbers' font (a registry slug or a file; default the registry's first font tagged `mono`) |
+| `objects` | the figure a `trace` of `shape = "figure"` follows (her figure layer, drawn by `mk render` as a collage's) |
+| `snap`, `fps`, `boil`, `seed` | seconds a step eases in over after its hit (0.22); the crayon drawn again `fps` times a second (12), wobbling `boil` px (1.2); the paper's tooth |
+
+An item (`items[]`) is `{kind, at, size, angle, t, steps, color}` and one source: `shape` (`star`, `heart`, `circle`,
+`clover`, `flower`, `butterfly`; a trace may say `figure`, her silhouette grown `offset` px at 1080), `sprites` (a registry
+slug, a file or `{tag}` as a mandala's, `pick` choosing among a tag's; `eyes` and `mouth` as any sprite source) or `points`
+(`[[x, y], ...]` of the frame, `closed` false). `at` is its middle (frame fractions), `size` its longer side (frame
+heights, 0.3), `t` when it appears (the span's start); it takes a step on each hit from `t` on and is done after `steps`
+(default every hit it has). Outlines start at their top and run clockwise.
+
+| `kind` | What the crayon does |
+|---|---|
+| `trace` | a printed dotted line (`dash` px at 1080 apart, 14) traced in crayon (`width` px, 10), a share of it a step, the crayon itself riding the tip (`tip`, true) |
+| `dots` | `count` numbered dots (16) round the outline, `per` joined a step (default as many as finish in its steps), `dot` px; when the last meets the first the picture appears in the outline (`reveal`, true): its sprite, googly eyes and all, or the shape coloured in; `numbers` (true) |
+| `paint` | colour by number: a sprite cut into regions by its colours (k-means into `colors`, 5; a region's number is its colour's, 1 the commonest) or a shape into `count` wedges (6) in `colors` (a list; the palette's accents), each region's number printed in it, `per` coloured in a step in its colour (a sprite's true colours); `legend` (true) the key of swatches under it |
+
+`kind = "label"` sets tiny editorial type beside the picture (`mkmmd/core/labels.py`, `mkmmd/labels.py`): each label's
+own short text (never words of the song) typed out from its `t`, then a dotted leader drawn from it to the point it names
+and a dot set there. `labels = [{text, at, place | offset, t, align, color, size}]`: `at` is `[x, y]` of the frame or
+`{point = "<expression>"}` projected through the camera of the shot in the cut (as a doodle's marks, `point/x<i>l<j>/`),
+`offset` the text's anchor from the point in frame heights (`[0.07, -0.06]`) or `place` it in the frame, `align` `left`
+(the text runs right from its anchor) or `right` (default: away from the point); the text slides in to stay 0.025 frame
+heights inside the frame in every output. The entry's `font` (a small grotesk or typewriter face of the registry: the
+registry's first `mono` by default, as a camcorder's), `size` (cap height, frame heights, 0.02), `color` (`text`),
+`tracking` (px at 1080 between letters, 1), `leader` (`{color, dot, gap, end}`: 2.2 px dots 6 px apart, a 3.5 px dot at
+the point; `false`: none), `box` (`{color, pad, alpha}`: a paper box behind the text; default none), `type` (s to type a
+label out, 0.25) and `draw` (s to draw its leader, 0.2).
+
+```toml
+[[fx]]                        # the activity page under her crayon drawing: her outline traced, a veggie's dots, a colour by number
+kind = "activity"
+from = 0.0
+to = 6.0
+lane = "notes"
+key = "base"                  # the paper of the shot's crayon sketch
+font = "overpass_bold"
+objects = "Reisen*"
+items = [{ kind = "trace", shape = "figure", offset = 34, color = "iris" },
+         { kind = "trace", shape = "star", at = [0.13, 0.3], size = 0.26, color = "gold" },
+         { kind = "dots", sprites = { tag = "veggie" }, eyes = true, at = [0.86, 0.3], size = 0.3, count = 12, color = "pine" },
+         { kind = "paint", sprites = "butterfly_sulphur_orange", at = [0.85, 0.73], size = 0.28, colors = 4 }]
+
+[[fx]]                        # the era of the shot, beside her head
+kind = "label"
+from = 6.0
+to = 8.2
+font = "overpass_semibold"
+labels = [{ text = "1967", at = { point = 'bone("head").head' }, offset = [0.12, -0.1] },
+          { text = "SIDE A", at = [0.78, 0.8], place = [0.84, 0.92], t = 6.6 }]
+```
+
+#### Toy paint app
+
+`kind = "paintapp"` lays a children's paint program over the frames, "editing" the video live (`mkmmd/core/paintapp.py`
+checks, times and lays it out, `mkmmd/paintapp.py` draws it; all its art is drawn in code from the palette). Its chrome: a
+border round the canvas (the picture, its edges under the border), the ink line along the canvas's edge and the shade it
+casts in, a chunky toolbar of six buttons (pencil, crayon, stamp, bucket, eraser, undo: a face over a lip, thick ink
+outlines, the tool in hand a pastel of its colour, pressed half down) and a palette strip of swatches (the colour picked
+larger and ringed in white), laid out per output: the toolbar on the left of a wide or square frame with the strip along
+the bottom, at the bottom of a tall one with the strip above it. A cursor (a gloved hand or a pencil) glides from stop to
+stop on a gentle arc, eased, arriving on time, and clicks there (pressed down and springing back past rest, a ring
+spreading where it clicked). Its stops are the places its tools act on (where a stamp lands, a fill's point, an eraser's
+centre or strokes, the undo button), its `keys`, and on its way the buttons and swatches it picks: before an action whose
+tool is not in hand it clicks the tool's button, before a fill whose colour is a swatch not picked the swatch, when 0.7 s
+since the click before allow it (else the tool or colour just changes as it acts). Everything is a function of the clip
+second and the `seed`: frames come out the same in any order, in `mk look` and `mk post`.
+
+| Key | Meaning |
+|---|---|
+| `toolbar`, `scale` | the side the toolbar stands on: `auto` (default: the bottom of a frame 1.2 times taller than wide, else the left), `left`, `right`, `top` or `bottom` (a panel too long for its side is shrunk to fit); `scale` the chrome's size (1: px at 1080 on the short side, buttons 104, swatches 58) |
+| `border`, `panel`, `ink`, `swatches` | the chrome's colours: the border round the canvas (`gold:base:0.45`), the panels and the idle buttons (`surface`), the outlines (`text`); the strip's swatches (`love`, `rose`, `gold`, `pine`, `foam`, `iris`, `text`, `base`; at most 12) |
+| `ui` | `false`: no chrome, the cursor and the paint alone (default true) |
+| `cursor` | `{kind, size, keys, travel}` or `false` (none): `hand` (default) or `pencil`, its length `size` short sides (0.1), its hot spot the fingertip or the point; `keys` `[{t, at, click}]` more stops (`at` frame fractions; `click = true` clicks there); `travel` seconds it glides to a stop (0.3, at most 0.8 of the time since the last) |
+| `stamps` | `{sprites, times or lane (min_db, every), size, at, angle, life, fade, scroll, pop, sparkle, edge, shadow, eyes, mouth}`: on each hit a sprite is stamped where the cursor clicks. `sprites` (required): registry slugs, files, globs or `{tag = ...}`, as a mandala ring's, dealt shuffled by `seed`, every one before any comes again; `eyes`, `mouth`: googly eyes and a smile as any sprite source's. `size` its longer side, short sides (0.16); `at` `[x, y]` frame fractions or a list used in turn (default: spread over the canvas, never bunching); `angle` it lands turned within that either way (12 degrees), settling from a little turn; `pop` s it pops in over (0.3, a 15 % overshoot) with a burst of sparkles (`sparkle`, true); it stays, or fades out over `fade` s (0.25) at the end of its `life` s; `scroll` `[dx, dy]` short sides a second it drifts after it lands (`[0, 0]`); a sticker's `edge` (`{color = "#ffffff", width = 8}`) and `shadow` (`{color = "text", alpha = 0.3, blur = 6}`), `false` for none |
+| `bucket` | `{at, times or lane (min_db, every), color, tolerance, grow, life, fade, opacity}`: on each hit the picture's colour region round a point is flooded: every pixel joined to it through pixels within `tolerance` (0.1 on each channel) of its colour, on the canvas as it stands (the stamps and fills before it on it), spreading out from the point over `grow` s (0.3, at least 0.1) with a soft, wandering front. `at` (required): `[x, y]` frame fractions or `{point = "<expression>"}` (projected through the shot in the cut, `point/x<i>b<j>/`), or a list used in turn; `color` one or a list read fill by fill (`gold`, `love`, `foam`, `iris`, `rose`, `pine`); `life`, `fade` as a stamp's; `opacity` (1). The region is found again on every frame from its point, so the paint keeps to it as the picture moves: pin the point to the scene (`{point}` on a wall) where the camera or the figure moves |
+| `eraser` | `{at, dur, mode, center, pieces, width}`, or a list of them: a transition across the cut at `at` (clip seconds; the frame before it in the clip): the outgoing picture on the frame before `at`, as it reached the effect with that frame's stamps and fills on it, is held and taken off the incoming frames over `dur` s (0.5, at least 0.2; inside the span), revealing them. `mode` `confetti` (default): the held picture is cut into about `pieces` (14) cells along the short side, jittered quads and triangles, that lift off and fly out from `center` (`[0.5, 0.5]`) nearest first, kicked up, falling, spinning and fluttering (their backs a flat accent), shrinking away by the end; `wipe`: the cursor rubs it out with an eraser block, back and forth strokes `width` short sides wide (0.3) scrubbing up and down, the strokes' trail revealing the shot. The paint on the canvas before `at` goes with the held picture; erasers may not overlap |
+| `undo` | `{times or lane (min_db, every), back}`: each takes back the last stamp or fill still on the canvas (none: it only clicks), a stamp's pop or a fill's spread played in reverse over `back` s (0.3); the cursor clicks the undo button |
+| `seed` | the stamps' deal, angles and sparkles, the fills' fronts, the confetti (1) |
+
+Flash-safe: no more than three big changes of the picture fall in any second, fills landing or leaving (taken back or
+faded) and erasers starting (WCAG's general flash threshold), else the entry is an error before anything is drawn; a fill
+spreads over at least 0.1 s and an eraser takes at least 0.2. `strength` mixes everything the app draws over the picture.
+The frame an eraser holds is read as a film's held frame is: `mk post` keeps it as it goes through the frames, `mk look`
+renders it beside the frames asked for (with the points of the fills on it). A paint app's stamps count for `mk assets
+credits` and `mk export web` as a mandala's sprites do. A 1080p frame takes about 0.05 s, up to 0.3 s with fills and the
+confetti.
+
+```toml
+[[fx]]                        # the paint app over the drop: veggies stamped on the kicks, the wall filled, undo, an eraser
+kind = "paintapp"
+from = 0.0
+to = 6.0
+stamps = { sprites = { tag = "veggie" }, eyes = true, lane = "kick", min_db = -10, life = 3.0 }
+bucket = { times = [2.44], at = { point = "(-0.5, 1.2, 1.5)" }, color = "gold" }   # a point on the wall behind her
+undo = { times = [4.6] }
+eraser = { at = 5.33, dur = 0.5 }
+
+[[fx]]                        # no chrome: a pencil rubs the shot out across the cut
+kind = "paintapp"
+from = 10.9
+to = 11.6
+ui = false
+cursor = { kind = "pencil" }
+eraser = { at = 11.14, dur = 0.4, mode = "wipe", width = 0.4 }
+```
+
+#### Era looks: digicam, chrome, gradmap, invert, test card, cards
+
+The picture hopping through the eras of pop, and the motifs of a TV station. `mkmmd/core/eralook.py` checks, times and lays
+them out (numpy, tested), `mkmmd/eralook.py` draws them (numpy, OpenCV and Pillow); their randomness is seeded by `seed` and
+the entry, so `mk look` and `mk post` draw the same frames. With the `era` presets of `film` and `camcorder` ([Picture
+effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)) every era is one key: `film` with `era = "1967"` (a
+Technicolor print), `camcorder` with `era = "1985"` (a VHS tape), `digicam` (2005) and `chrome` (now).
+
+- `digicam`: a 2005 point-and-shoot. Its lens (barrel distortion, purple fringes round the clipped lights), its sensor's low
+  resolution and noise, its white balance off and hunting, its hard tone curve and heavy sharpening, a JPEG's 8 x 8 blocks
+  and an orange date stamp in seven-segment digits.
+- `chrome`: now, hyperpop. Iridescent liquid metal (on the figure alone with `mask = "figure"`), a glossy bloom spilling
+  past its outline, sparkle stars twinkling on it and Y2K bubbles floating up.
+- `gradmap`: the picture's luma onto a list of colours, the next map on each cut of the cut list (or each hit): the same
+  shot comes back regraded.
+- `invert`: the picture inverted (its hues turned back toward the palette with `hue`), eased in and out, over a window or
+  on hits, never more than three big flashes a second.
+- `testcard`: an original homage to the layout of 1967's Test Card F: the scene in a circle centred on a point, colour bars,
+  castellations, a grey scale and gratings round it on a ruled grey ground, small labels (`PLEASE STAND BY`).
+- `cards`: TV colour-bar cards flying in on hits, tumbling in 3D.
+
+| Key | Meaning |
+|---|---|
+| `noise`, `sharpen`, `halo`, `jpeg`, `pixel` | digicam: CCD noise (0.05: grainy, strongest in the shadows, its colour blotchy); the camera's unsharp mask `sharpen` (1.2) of radius `halo` px at 1080 (2): bright and dark halos either side of every edge; the JPEG's quality `jpeg` (1..100, 45); the sensor's pixel, `pixel` px at 1080 across (2): the picture is taken to the sensor's size, its noise, white balance, curve, sharpening and JPEG made there, and back (its blocks 8 x `pixel` px at 1080; a smaller preview frame is taken up to it, so it shows the blocks a full frame does) |
+| `fringe`, `barrel`, `wb`, `hunt`, `contrast` | digicam: purple fringes just outside the clipped lights and the red and blue planes apart toward the corners (0..1, 0.6); barrel distortion (0.04; below 0 a pincushion), the picture zoomed so its corners stay filled; the white balance off by `wb` (-1 cool and a little green .. 1 warm amber, -0.3) and hunting about it slowly by up to `hunt` (0.25), as auto white balance does; a hard digital curve `contrast` (1.2), its lights clipping |
+| `date`, `corner`, `color`, `size` | digicam: the date imprint, seven-segment digits drawn by mk (no font): digits, `'`, `/`, `.`, `:`, `-` and spaces (`"'05 10 28"`; `false`: none), in its `corner` (`bottom-right`, `bottom-left`, `top-left`, `top-right`), `color` (`#ff7a1a`, glowing a little), its digits `size` short sides tall (0.045), drawn over the JPEG |
+| `mask`, `objects` | chrome, gradmap, invert: `figure` works only inside the coverage of `objects` (the figure layer `mk render` draws beside the frames, as a pixel sort's), `ground` only outside it; both or neither |
+| `sheen`, `iris`, `bands`, `colors`, `speed` | chrome: liquid metal mixed over the picture by `sheen` (0..1, 1): a sky over a dark horizon and the ground, reflected in `bands` (2.5) that follow the picture's shading (its lights stay bright, its shades run into the bands) and wrap round the figure's outline (a puffy dome in from the mask's outline; without a mask the luma is the relief); tinted round the loop of `colors` (thin-film colours, each at its full brightness; `["rose", "foam", "iris", "gold"]`) by `iris` (0.6), the colours sweeping across it as on a holographic foil; the bands moving on `speed` bands a second (0.1) |
+| `bloom`, `sparkles`, `bubbles` | chrome: a glossy bloom of its lights (0.5), spilling past the outline; `sparkles` (8) four-pointed stars twinkling on it (on the figure, with a mask), each from nothing to nothing over about 0.7 s and back somewhere else; `bubbles` (5) glossy Y2K bubbles floating up over the picture and coming in again at the foot, a clear body, an iridescent rim and white highlights |
+| `times`, `lane`, `min_db`, `every` | chrome: on each hit the sheen swings 0.15 bands forward and back over 0.4 s and every sparkle flashes at once, fading over 0.45 s. gradmap: it steps on the hits instead of on the cuts. invert: an inversion on each hit (below). cards (one of `times` or `lane` required): each hit sends cards in |
+| `maps`, `offset` | gradmap: the maps, each the luma onto 2 to 8 colours, dark to light and evenly spaced, the name of one of mk's maps made from the Dawn palette, its lights going to its cream (`teal_lime`, `pink_purple`, `sepia_orange`, `blue_gold`; the default is the four), or `"none"` (the picture as it is). On each cut of the cut list after the span's first frame (a shot of the cut starting inside the span; plates are not cuts), or on each hit when it has `times` or a `lane`, the next map comes in, round and round, starting on map `offset` (0): the same shot comes back regraded. Two shots ping-ponging with an even number of maps meet only half of them each: give an odd number (add `"none"`) |
+| `hue`, `in`, `hold`, `out`, `rate` | invert: the picture inverted, its hues then turned `hue` degrees (0; 180 turns them back: Dawn's pinks stay pink and its cream goes dark), mixed in by `strength`. Over a window it eases in over `in` s (0.05) from `from` and out over `out` s (0.18) to `to`; with hits each one eases in over `in`, holds `hold` s (0.12) and eases out over `out`. Flash-safe (WCAG's general flash threshold): no more than `rate` hits (0.1..3, 3) start an inversion in any second, a hit while `rate` kept ones began in the second before it being skipped, and a window whose `strength` keys would flash more than 3 times in a second is an error |
+| `center`, `at`, `radius`, `zoom` | testcard: the scene inside a circle `radius` short sides (0.36) about `at` (frame fractions, `[0.5, 0.5]`), moved so that `center` sits in its middle (`[x, y]` of the frame, the middle by default, or `{point = "<expression>"}`, a scene point projected through the camera of the shot in the cut on every frame, as a lens's), `zoom` times its size (1), with a white rim |
+| `grid`, `bars`, `ground`, `line` | testcard: round the circle a grey ground (`ground`, `muted`) ruled in squares, `grid` (9) to the short side, in `line` (`base`); castellation blocks round the edge, half a square long (the palette's accents between white along the top, black and white down the sides, the right's half a block off the left's, and along the foot); colour bars across the top (`bars`: `dawn`, the palette's white and accents brightest first; `true`, 75 % bars; `both`, a row of each); a six-step grey scale and six gratings, coarse to fine, flanking the circle (left and right in a frame as wide as it is tall or wider, above and below in a tall one, as wide as the room there; left out without room); diagonal stripes in its corners and arrowheads in the middle of its edges |
+| `labels`, `font`, `open` | testcard: up to 4 short labels (28 characters each; `["PLEASE STAND BY"]`, `[]` none), the first in a box on the circle's foot, the others small in the lower corners and under the bars, in `font` (as a camcorder's: a registry slug or a file, default the registry's first `mono` font; found before any frame is drawn); `open` seconds (0) at its end over which the circle grows, slowly then fast, until it covers the frame, the labels fading: the card blows open into what is behind it |
+| `count`, `size`, `life`, `spin`, `path` | cards: on each hit `count` (1) cards 0.06 s apart, each flying for `life` s (1) and tumbling `spin` turns a second (1.25) about an axis of its own; `path` `in` (from far behind the middle of the frame at the lens, growing, veering off past an edge) or `across` (from beyond one side to beyond the other at a middle distance, on a gentle arc); a card stands `size` frame heights tall (0.32) at the middle of its depths, through a lens of about 42 degrees down the frame |
+| `style`, `shadow` | cards: a 4:3 card with rounded corners and a little thickness, the colour bars of `style` (`dawn`, `true`, `both`: below) on its front, a card's back on its back, cream edges, lit from the upper left with a glint; a soft drop `shadow` (0..1, 0.3) under each; `strength` is their opacity |
+
+The colour bars are `mkmmd/core/colorbars.py` (numpy only, so a prop builder draws with it inside Blender):
+`texture(width, height, palette, style)` is a card's face, (height, width, 3) display-space RGB, row 0 its top: seven bars over
+two thirds of it, the castellation strip under them and SMPTE's foot (the -I and +Q patches, a white and the pluge), in true 75 %
+colours (`true`), in the palette's (`dawn`: its lightest neutral and its accents by luminance, brightest first, as true bars
+run) or the palette's bars over a row of the true ones (`both`); `back(width, height, palette)` a card's back (the palette's
+white ruled in squares, a ring, its accents along the foot). The `library:colorbar_card` prop lays them on its faces.
+
+```toml
+[[fx]]                        # the same shot comes back regraded on every cut (five maps: each shot meets them all)
+kind = "gradmap"
+from = 0.0
+to = 6.76
+maps = ["teal_lime", "pink_purple", "none", "sepia_orange", "blue_gold"]
+
+[[fx]]                        # 2005: the point-and-shoot, its date stamped orange
+kind = "digicam"
+from = 6.76
+to = 8.24
+
+[[fx]]                        # now: chrome on her, the sheen swinging and the sparkles flashing on the kicks
+kind = "chrome"
+from = 8.24
+to = 9.70
+mask = "figure"
+objects = "Reisen*"
+lane = "kick"
+
+[[fx]]                        # 1967, one key
+kind = "film"
+from = 9.70
+to = 11.14
+era = "1967"
+
+[[fx]]                        # 1985, one key
+kind = "camcorder"
+from = 11.14
+to = 12.52
+era = "1985"
+
+[[fx]]                        # the world inverts on the drop's hits, its hues turned back to Dawn's, three a second at most
+kind = "invert"
+from = 11.14
+to = 12.52
+lane = "kick"
+hue = 180
+
+[[fx]]                        # please stand by: her face in the circle, the card blowing open into what follows
+kind = "testcard"
+from = 15.33
+to = 16.74
+center = { point = "bone('head').head" }
+font = "overpass_semibold"
+open = 0.25
+
+[[fx]]                        # colour-bar cards tumbling through on the kicks
+kind = "cards"
+from = 16.74
+to = 20.5
+lane = "kick"
+count = 2
 ```
 
 #### Each output its own: aspect
@@ -3995,8 +4785,9 @@ plain view transform: a palette colour is that colour), through an orthographic 
 the frame, in a file of its own beside it, `<frames>/screen/<frame>.png` (straight RGBA, written first, so a frame on disk always has
 its layer); `mk post` lays it over the cut's frame AFTER the cut effects and before the grade (`mkmmd.core.screentype.composite`,
 tested without Blender), so a slash, an expanding figure or a growing bubble passes under the words and the grade covers them like the
-rest, and `mk look` does the same for the images it shows. It stays where it is put whichever camera is cutting, whatever stands in
-front of it and however the shot is lit.
+rest, and `mk look` does the same for the images it shows. The loop's wrap turns the frame with its words: they ride the page, and
+frame 0's lie under it ([Transitions and inserts](#transitions-and-inserts), `page`). It stays where it is put whichever camera is
+cutting, whatever stands in front of it and however the shot is lit.
 
 It is a layer rather than a plane that rides the shot cameras because a plane a hand from the lens is hidden by anything nearer,
 blurred by depth of field, tone mapped to dusty colours and, the world being single precision, jitters by about a pixel with a long
@@ -4039,11 +4830,11 @@ aspect.9x16 = { size = 0.05, screen = { side = "center" } }
 ```
 
 Limits. The words are one more layer over the whole frame: a transition or an insert never hides them (a `slash` band passes under
-them). What belongs to a figure is the exception: a silhouette's `knockout` type is part of that shot's picture. `mk render
---no-styles` and `mk look --no-styles` leave screen type out (it is part of the looks). The layer files are small (the type is mostly
-transparent) and a frame with nothing on screen has none. The pass is one more EEVEE render of a frame that has any type on it. A
-stale `screen/` folder of an earlier build stays on disk with the frames it belongs to: delete `renders/<preset>` when the type
-changes, as for any frame.
+them), but for the loop's wrap, whose page carries them. What belongs to a figure is the exception: a silhouette's `knockout` type
+is part of that shot's picture. `mk render --no-styles` and `mk look --no-styles` leave screen type out (it is part of the looks).
+The layer files are small (the type is mostly transparent) and a frame with nothing on screen has none. The pass is one more EEVEE
+render of a frame that has any type on it. A stale `screen/` folder of an earlier build stays on disk with the frames it belongs
+to: delete `renders/<preset>` when the type changes, as for any frame.
 
 ### Cassette type
 
@@ -4326,7 +5117,7 @@ the effects' layers, alongside) against 14 min 7 s in Blender, one job per outpu
 ### Post
 
 `mk post` composites the cut effects over the cut's frames, draws the lens streaks (`streaks`, below) from the result, lays the screen
-type over it, then grades the frames and encodes
+type over it, turns the frames of the loop's wrap over frame 0 as finished, then grades the frames and encodes
 `<project>/out/<name>_<output>[_<preset>].mp4` (the preset is left out of the name for `final`) with `[audio]` (`file`, `start` = song
 seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 320k with a 60 ms fade-out. A clip of one frame
 (`[project] duration` of one frame) is a still: each output's graded frame is written as `<name>_<output>[_<preset>].png`, at
@@ -4377,7 +5168,7 @@ default): its colours exactly as written, no grain or vignette on it, as type se
 |---|---|
 | `halation` | `{strength 0.22, radius 0.012, threshold 0.72, tint "rose"}`: glow around highlights (radius as a fraction of the frame height), tinted like film halation; off unless the table has a key |
 | `saturation` | 1.06 |
-| `keep` | `{cast, materials, saturation 1.0}`: those materials of a cast member (PMX names; her irises: `["瞳"]`) keep their colour where they are seen, at `saturation` of the frame's own instead of the grade's (a black-and-white picture with only her eyes in colour: `saturation = 0.0` beside it). `mk render` draws the mask beside each frame, `keep/<frame>.png`: an EEVEE pass with every material a flat emission, white for the kept ones and black for the rest, so what stands in front hides them as in the picture (MMD materials see-through by their own alpha, texture included; anything else opaque), linear, antialiased. Screen type laid on under the grade is graded as type; inside a cut effect's window the frame is graded whole; a missing mask is an error unless `--allow-gaps`; the report counts `keep_frames`. An unknown member, key or material is an error that lists what there is |
+| `keep` | `{cast, materials, saturation 1.0}`: those materials of a cast member (PMX names; her irises: `["瞳"]`) keep their colour where they are seen, at `saturation` of the frame's own instead of the grade's (a black-and-white picture with only her eyes in colour: `saturation = 0.0` beside it). `mk render` draws the mask beside each frame, `keep/<frame>.png`: an EEVEE pass with every material a flat emission, white for the kept ones and black for the rest, so what stands in front hides them as in the picture (MMD materials see-through by their own alpha, texture included; anything else opaque), linear, antialiased. Screen type laid on under the grade is graded as type; inside a cut effect's window or an `[[fx]]` the frame is graded whole, and at the loop's wrap the masks of the page and of frame 0 under it turn with the page; a missing mask is an error unless `--allow-gaps`; the report counts `keep_frames`. An unknown member, key or material is an error that lists what there is |
 | `contrast`, `pivot` | 1.10 around the pivot 0.60: midtone contrast |
 | `split` | `{shadows "iris", highlights "gold", amount 0.06}`: split toning toward palette slots; off unless the table has a key |
 | `vignette` | 0.12: corner darkening (a fraction) |

@@ -9,8 +9,16 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import activity as ACF
+from . import eralook as ERF
+from . import fields as FL
 from . import footage as FT
+from . import labels as LBF
+from . import mandala as MDF
+from . import paintapp as PAF
 from . import picturefx as PF
+from . import remap as RMF
+from . import stack as SKF
 from .core import framefx as FX
 from .core import lanes as LN
 
@@ -386,7 +394,18 @@ def centroid(m):
     return mo["m10"] / mo["m00"], mo["m01"] / mo["m00"]
 
 
+def _picture(back):
+    """Whether a collage's back is a picture (the frame as it reached the effect), not a colour or a pattern's painter."""
+    return isinstance(back, np.ndarray)
+
+
 def _flat(size, colour):
+    """A picture of `size` (w, h) of a collage's back: a flat colour, what a pattern back (a painter: callable(size) ->
+    picture, mkmmd.fields) paints there, or a copy of a picture back (the frame as it reached the effect, that size)."""
+    if callable(colour):
+        return np.array(colour(size), np.float32)
+    if _picture(colour):
+        return np.array(colour, np.float32)
     w, h = size
     return np.full((h, w, 3), colour, np.float32)
 
@@ -529,13 +548,25 @@ def _part(W, H, x, y, tw, th):
     return (slice(y0, y1), slice(x0, x1)), (slice(y0 - y, y1 - y), slice(x0 - x, x1 - x))
 
 
+def _framed(pic, size, at):
+    """A picture of `size` (w, h) with `pic` in it, its top left at the whole pixel `at` (x, y), and `pic` reflected
+    across its edges past them: a grid cell's picture back (the frame shrunk and laid as the cell's figure is)."""
+    W, H = int(size[0]), int(size[1])
+    ph, pw = pic.shape[:2]
+    x0, y0 = max(-at[0], 0), max(-at[1], 0)                                 # what of `pic` falls inside
+    part = np.ascontiguousarray(pic[y0:min(ph, H - at[1]), x0:min(pw, W - at[0])])
+    left, top = at[0] + x0, at[1] + y0
+    return cv2.copyMakeBorder(part, top, H - top - part.shape[0], left, W - left - part.shape[1], cv2.BORDER_REFLECT)
+
+
 def cells(img, m, boxes, colour_at, fill_at, piece=None, edge=None, shadow=None):
     """Boxes of a frame each showing the whole frame contain-fitted and centred in it, the figure (coverage `m` of `img`)
-    on a flat colour: boxes [((x0, y0, x1, y1) frame fractions, (i, j)), ...] drawn in order, each in colour_at(i, j)
-    with the figure drawn fill_at(i, j) (None: its picture; a colour; a silkscreen {inks, offset px, soft px}) over an
-    `edge` (colour, width px) and its `shadow` (colour, (dx, dy) px, blur px, alpha; scaled with the figure); `piece`
-    ((i, j), colour) draws that cell's figure flat in its colour. The boxes of one call are of one size (a layout, or a
-    step's cells on their way), so the figure is shrunk once."""
+    on its back: boxes [((x0, y0, x1, y1) frame fractions, (i, j)), ...] drawn in order, each on colour_at(i, j) (a
+    colour, a pattern's painter, or a picture: the frame, shrunk and laid as the figure is and reflected past its edges
+    to fill the box) with the figure drawn fill_at(i, j) (None: its picture; a colour; a silkscreen {inks, offset px,
+    soft px}) over an `edge` (colour, width px) and its `shadow` (colour, (dx, dy) px, blur px, alpha; scaled with the
+    figure); `piece` ((i, j), colour) draws that cell's figure flat in its colour. The boxes of one call are of one size
+    (a layout, or a step's cells on their way), so the figure is shrunk once."""
     h, w = m.shape
     out = np.zeros((h, w, 3), np.float32)
     if not boxes:
@@ -570,15 +601,23 @@ def cells(img, m, boxes, colour_at, fill_at, piece=None, edge=None, shadow=None)
             key, steps = silk_bands(img, m, n, f["soft"], f["line"])
             key = tile(key)
             bands[n, off] = (plate_shift(key, *off) if off[0] or off[1] else key, [tile(st) for st in steps])
-    spans = []
+    spans, small = [], {}                            # small: a picture back shrunk as the figure is, by the picture
     for (bx0, by0, bx1, by1), (i, j) in boxes:                      # the grounds first, in order
         X0, Y0, X1, Y1 = int(round(bx0 * w)), int(round(by0 * h)), int(round(bx1 * w)), int(round(by1 * h))
         if X1 > X0 and Y1 > Y0:
-            out[Y0:Y1, X0:X1] = np.asarray(colour_at(i, j), np.float32)
-            spans.append(((X0, Y0, X1, Y1), ((bx0 + bx1) * w / 2.0, (by0 + by1) * h / 2.0), (i, j)))
-    for (X0, Y0, X1, Y1), (cx, cy), (i, j) in spans:              # then each figure inside its box: copies on their
-        part = _part(X1 - X0, Y1 - Y0, int(round(cx - sw / 2.0)) - pad - X0,       # way overlap, none is cut off
-                     int(round(cy - sh / 2.0)) - pad - Y0, tw, th)
+            at = (int(round((bx0 + bx1) * w / 2.0 - sw / 2.0)) - X0,      # the shrunk frame's corner in the box
+                  int(round((by0 + by1) * h / 2.0 - sh / 2.0)) - Y0)
+            back = colour_at(i, j)
+            if _picture(back):
+                if id(back) not in small:
+                    small[id(back)] = cv2.resize(np.ascontiguousarray(back, np.float32), (sw, sh),
+                                                 interpolation=cv2.INTER_AREA)
+                out[Y0:Y1, X0:X1] = _framed(small[id(back)], (X1 - X0, Y1 - Y0), at)
+            else:
+                out[Y0:Y1, X0:X1] = _flat((X1 - X0, Y1 - Y0), back)
+            spans.append(((X0, Y0, X1, Y1), at, (i, j)))
+    for (X0, Y0, X1, Y1), at, (i, j) in spans:                     # then each figure inside its box: copies on their
+        part = _part(X1 - X0, Y1 - Y0, at[0] - pad, at[1] - pad, tw, th)      # way overlap, none is cut off
         if part is None:
             continue
         rs, ts = part
@@ -605,7 +644,7 @@ def cells(img, m, boxes, colour_at, fill_at, piece=None, edge=None, shadow=None)
 
 def grid(img, m, n, colour_at, fill_at, piece=None, edge=None, shadow=None):
     """The frame shrunk into cells, `n` x `n` (or n = (columns, rows)), each the whole frame contain-fitted and centred
-    in its cell, the figure (coverage `m` of `img`) on a flat colour: colour_at(i, j) and fill_at(i, j) (None: the
+    in its cell, the figure (coverage `m` of `img`) on its back: colour_at(i, j) (cells()) and fill_at(i, j) (None: the
     figure's picture; a colour; a silkscreen) of the cell in column i, row j; `piece` ((i, j), colour) draws that cell's
     figure flat in its colour; an `edge` (colour, width px) round each figure and its `shadow`."""
     d = FX.dims(n)
@@ -615,11 +654,12 @@ def grid(img, m, n, colour_at, fill_at, piece=None, edge=None, shadow=None):
 
 
 def orbit(img, m, back, centre, radius, tilt, theta0, count, scale, size, fill_at, edge=None, shadow=None):
-    """The figure (coverage `m` of `img`) moved to pixel `centre` on a flat `back`, `scale` times its size, and `count`
-    copies of it, `size` times as large again, on a ring of `radius` px round it tilted `tilt` degrees from face-on: an
-    ellipse whose near half (the lower on screen) is drawn over the figure and larger, its far half under it and smaller.
-    Copy j (1 .. count) stands at angle theta0 + 2 pi (j - 1) / count, radians clockwise on screen from the right;
-    fill_at(0) is the figure's fill and fill_at(j) copy j's (None: its picture); each with its `edge` and `shadow`."""
+    """The figure (coverage `m` of `img`) moved to pixel `centre` on `back` (a colour, a pattern's painter or a picture),
+    `scale` times its size, and `count` copies of it, `size` times as large again, on a ring of `radius` px round it
+    tilted `tilt` degrees from face-on: an ellipse whose near half (the lower on screen) is drawn over the figure and
+    larger, its far half under it and smaller. Copy j (1 .. count) stands at angle theta0 + 2 pi (j - 1) / count, radians
+    clockwise on screen from the right; fill_at(0) is the figure's fill and fill_at(j) copy j's (None: its picture); each
+    with its `edge` and `shadow`."""
     h, w = m.shape
     out = _flat((w, h), back)
     a = centroid(m)
@@ -638,11 +678,12 @@ def orbit(img, m, back, centre, radius, tilt, theta0, count, scale, size, fill_a
 
 
 def mirror(img, m, centre, axes, colour_at, fill_at, place=None, edge=None, shadow=None):
-    """The figure (coverage `m` of `img`; its centroid moved to pixel `place` when one is given) on flat colour, folded
+    """The figure (coverage `m` of `img`; its centroid moved to pixel `place` when one is given) on its back, folded
     about the vertical line through pixel `centre` (`axes` "x"), the horizontal one ("y") or both ("xy"): the side or
     quarter the figure's centroid is on is shown as it is, the others are its reflections. Region j (0 that side, 1
-    across the vertical line, 2 across the horizontal, 3 across both) is colour_at(j) with the figure drawn fill_at(j)
-    (None: its picture), with its `edge` and `shadow`."""
+    across the vertical line, 2 across the horizontal, 3 across both) is colour_at(j) (a colour, a pattern's painter or a
+    picture, folded with the figure: past the frame's edge it is reflected again) with the figure drawn fill_at(j) (None:
+    its picture), with its `edge` and `shadow`."""
     h, w = m.shape
     a = centroid(m)
     p = (centre[0] - 1.0, centre[1] - 1.0) if a is None else a if place is None else (float(place[0]), float(place[1]))
@@ -658,8 +699,9 @@ def mirror(img, m, centre, axes, colour_at, fill_at, place=None, edge=None, shad
         bg = colour_at(j)
         comp = _flat((w, h), bg) if a is None else _paste(_flat((w, h), bg), img, m, fill_at(j), 1.0, a, p, edge, shadow)
         if j:
-            comp = cv2.remap(comp, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
-                             borderValue=tuple(float(c) for c in bg))
+            border = dict(borderMode=cv2.BORDER_REFLECT) if callable(bg) or _picture(bg) else dict(
+                borderMode=cv2.BORDER_CONSTANT, borderValue=tuple(float(c) for c in bg))
+            comp = cv2.remap(comp, mx, my, cv2.INTER_LINEAR, **border)
         sel = region == j
         out[sel] = comp[sel]
     return out
@@ -668,10 +710,10 @@ def mirror(img, m, centre, axes, colour_at, fill_at, place=None, edge=None, shad
 def panels(size, n, slant, figures, colour_at, fill_at, scale=1.0, edge=None, shadow=None):
     """The frame cut into `n` panels across its long side (columns of a wide or square frame, rows of a tall one) by lines
     leaning `slant` degrees (a column's edges to the right going up, as italics do; a row's rising to the right): panel j
-    is a flat colour_at(j) with figures[j] = (picture, coverage) on it, moved so its centroid sits on the panel's middle
-    line and `scale` times its size (and n times smaller in the rows of a tall frame, so a figure framed for the whole
-    frame fits one), drawn fill_at(j) (None: its picture) with its `edge` and `shadow`; a figure None leaves its panel
-    plain."""
+    is colour_at(j) (a colour, a pattern's painter or a picture) with figures[j] = (picture, coverage) on it, moved so its
+    centroid sits on the panel's middle line and `scale` times its size (and n times smaller in the rows of a tall frame,
+    so a figure framed for the whole frame fits one), drawn fill_at(j) (None: its picture) with its `edge` and `shadow`;
+    a figure None leaves its panel plain."""
     w, h = size
     tall = h > w
     span, tn = (h if tall else w), math.tan(math.radians(slant))
@@ -695,20 +737,6 @@ def panels(size, n, slant, figures, colour_at, fill_at, scale=1.0, edge=None, sh
             tile = _paste(tile, fig[0], fig[1], fill_at(j), s, a, p, edge, shadow)
         out += tile * cov[..., None]
     return out
-
-
-def stack(img, m, back, copies, step, scale, centre, fill, edge=None, shadow=None):
-    """The figure (coverage `m` of `img`, drawn `fill`: None its picture) on a flat `back`, in front of a stack of copies,
-    the farthest drawn first: copies[j - 1] = (picture, coverage, fill) is copy j, `scale` ** j times as large about pixel
-    `centre` and j x `step` (dx, dy) px further; a copy without coverage is left out. Each with its `edge` and `shadow`."""
-    h, w = m.shape
-    out = _flat((w, h), back)
-    c = (float(centre[0]), float(centre[1]))
-    for j in range(len(copies), 0, -1):
-        pic, cov, f = copies[j - 1]
-        if cov is not None:
-            out = _paste(out, pic, cov, f, scale ** j, c, (c[0] + j * step[0], c[1] + j * step[1]), edge, shadow)
-    return _paste(out, img, m, fill, edge=edge, shadow=shadow)
 
 
 def stem_source(root, cache_dir):
@@ -777,7 +805,8 @@ def check_footage(fxs, footage_of):
 
 
 # ================================================================================================= over a cut
-class FrameFx(PF.PictureFx):
+class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
+              SKF.StackFx, PAF.PaintAppFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
@@ -793,14 +822,21 @@ class FrameFx(PF.PictureFx):
     output      the output's name: entries draw as their `aspect.<output>` tables say (FX.for_output)
     footage_of  callable(clip) -> mkmmd.footage.Clip, for footage (mkmmd.footage.source(root); None: footage is an
                 error)
-    font_of     callable(font or None) -> a font file, for camcorders and booth captions (mkmmd.picturefx.font_source;
-                None: the asset registry's, and files as they are given)"""
+    font_of     callable(font or None) -> a font file, for camcorders, booth captions, labels, an activity page's
+                numbers and a test card's labels (mkmmd.picturefx.font_source; None: the asset registry's, and files as
+                they are given)
+    sprite_of   callable(refs) -> picture files, a mandala ring's sprites, a stack's bands', an activity page's and a
+                paint app's stamps (mkmmd.mandala.sprite_source(root); None: the asset registry's, and files as they are
+                given)
+    plate_of    callable(shot, frame) -> picture or None: what `shot` shows at `frame` through its own camera and look
+                (its plate, or the cut's frame where it is the shot in the cut), for a collage whose figure comes from
+                its own `shot` (None: such a collage is an error)"""
 
     def __init__(self, fxs, size, *, fps, frame0, frame_of, point_of, figure_of=None, stem_of=None, hits=None,
-                 output=None, footage_of=None, font_of=None):
+                 output=None, footage_of=None, font_of=None, sprite_of=None, plate_of=None):
         self.fxs = [FX.for_output(fx, output) for fx in fxs]
         self.size, self.fps, self.frame0, self.output = (int(size[0]), int(size[1])), float(fps), int(frame0), output
-        self._frame_of, self._point_of, self._figure_of = frame_of, point_of, figure_of
+        self._frame_of, self._point_of, self._figure_of, self._plate_of = frame_of, point_of, figure_of, plate_of
         self._stem_of, self._hits, self._footage_of = stem_of, hits, footage_of
         self.px = min(self.size) / 1080.0
         self._cache = OrderedDict()
@@ -808,7 +844,15 @@ class FrameFx(PF.PictureFx):
         self._held = {}                  # a mosh's index -> (frame, the picture it holds there)
         self._flows = {}                 # a mosh's index -> (its made-up flow's block moves, block px)
         self._pivots = {}                # a collage's index -> the pixel its figure's moves turn about
+        self._places = {}                # a collage's index -> (the map that sets its figure in the frame, its pivot)
         self._picture_init(font_of)
+        self._mandala_init(sprite_of)
+        self._stack_init()
+        self._field_init()
+        self._activity_init()
+        self._label_init()
+        self._era_init()
+        self._paintapp_init()
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))
@@ -1024,35 +1068,83 @@ class FrameFx(PF.PictureFx):
     # ---------------------------------------------------------------- collages
     def _figure(self, fx, frame):
         """The coverage of a collage's figure on `frame` (a FileNotFoundError when its layer is missing), None before the
-        clip."""
+        clip: through the shot in the cut, or through its own `shot`."""
         if frame < self.frame0:
             return None
         if self._figure_of is None:
             raise FileNotFoundError(f"fx {fx['index']} ({fx['kind']}): no figure layers to read")
         return self._figure_of(FX.figure_key(fx), frame)
 
+    def _shot_frame(self, fx, g):
+        """What a collage's own `shot` shows at frame `g`, the picture its figure is cut from (a FileNotFoundError when it
+        is not there)."""
+        if self._plate_of is None:
+            raise FileNotFoundError(f"fx {fx['index']} ({fx['kind']}): no plates to read (its figure comes from shot "
+                                    f"{fx['shot']!r})")
+        pic = self._plate_of(fx["shot"], g)
+        if pic is None:
+            raise FileNotFoundError(f"fx {fx['index']} ({fx['kind']}): shot {fx['shot']!r} at frame {g}: its plate is "
+                                    f"missing (mk render draws it)")
+        return pic
+
     def _collage(self, fx, frame, img, draw):
         """`img` with the collage `draw(k, pic, m)` makes (k the hits so far; the figure's picture and coverage on
-        `frame`, moved by its `keys`) mixed in by the strength."""
-        pic, m = self._posed(fx, frame, img, self._figure(fx, frame))
+        `frame`, cut from the frame or from what its own `shot` shows, set into the frame and moved by its `keys`) mixed
+        in by the strength."""
+        pic, m = self._posed(fx, frame, self._shot_frame(fx, frame) if fx.get("shot") else img,
+                             self._figure(fx, frame))
         out = draw(FX.step(fx, frame, self._hit_times(fx), self.fps, self.frame0), pic, m)
         s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
         return out if s >= 1.0 else (img * (1.0 - s) + out * s).astype(np.float32)
 
     def _posed(self, fx, g, pic, m):
-        """A collage's figure (picture or None, coverage) on frame `g` moved by its `keys` at that frame: turned, scaled
-        and shifted about its pivot (as it is at rest)."""
-        if not fx["keys"] or m is None:
+        """A collage's figure (picture or None, coverage) on frame `g` set into the frame by `at` and `height` (the same
+        map on every frame: _placing) and moved by its `keys` at that frame: turned, scaled and shifted about its pivot
+        (as it is at rest)."""
+        if m is None:
             return pic, m
-        mv = FX.move_at(fx["keys"], self._t(g))
-        if mv == FX.MOVE:
+        M, pivot = self._placing(fx)
+        if fx["keys"]:
+            mv = FX.move_at(fx["keys"], self._t(g))
+            if mv != FX.MOVE:
+                K = FX.move_matrix(mv, self._pivot(fx) if pivot is None else pivot, self.size[1])
+                M = K if M is None else FX.compose(K, M)
+        if M is None:
             return pic, m
-        M = FX.move_matrix(mv, self._pivot(fx), self.size[1])
         return (None if pic is None else _warp(pic, M, self.size)), _warp(m, M, self.size)
 
+    def _placing(self, fx):
+        """(map, pivot) of a collage whose `at` or `height` sets its figure into the frame: the 2 x 3 map from the
+        figure's own frame that scales it about its pivot (found on the span's first frame) so that its box there is
+        `height` of the frame's height tall, and moves the pivot to `at` (either left as it is when not given), and where
+        the pivot lands. One map for the whole span: the figure moves in the frame as it moves in its own, nothing jumps
+        when its box changes (an arm strumming). (None, None) for a figure left where its frame shows it."""
+        got = self._places.get(fx["index"])
+        if got is None:
+            got = (None, None)
+            if FX.placed(fx):
+                a = self._pivot(fx)
+                w, h = self.size
+                s = 1.0 if fx["height"] is None else fx["height"] * h / self._tall(fx)
+                to = a if fx["at"] is None else (fx["at"][0] * w - 0.5, fx["at"][1] * h - 0.5)
+                got = (FX.placement(a, to, s), to)
+            self._places[fx["index"]] = got
+        return got
+
+    def _tall(self, fx):
+        """The height in px of a collage's figure, its box where it covers half a pixel or more, on the span's first
+        frame."""
+        m = self._figure(fx, fx["f0"])
+        rows = np.nonzero((m >= 0.5).any(1))[0] if m is not None else np.zeros(0, int)
+        if not rows.size:
+            raise FX.FxError(f"fx {fx['index']} ({fx['kind']}): height: the figure is not in the frame on the span's "
+                             f"first frame ({fx['f0']}), which sizes it")
+        return float(rows[-1] - rows[0] + 1)
+
     def _pivot(self, fx):
-        """The pixel a collage's figure turns and scales about: `pivot` [x, y] (frame fractions), or found on the figure
-        on the span's first frame, the middle of its box's bottom edge (`base`) or its centroid (`center`)."""
+        """The pixel a collage's figure turns and scales about: `pivot` [x, y] (fractions of the figure's own frame), or
+        found on the figure on the span's first frame, the middle of its box's bottom edge (`base`) or its centroid
+        (`center`)."""
         got = self._pivots.get(fx["index"])
         if got is None:
             w, h = self.size
@@ -1100,21 +1192,21 @@ class FrameFx(PF.PictureFx):
             return None, None
         if fill is not None and fill != FX.SILK:
             return self._posed(fx, g, None, m)
-        pic = self._get(g)
+        pic = self._shot_frame(fx, g) if fx.get("shot") else self._get(g)
         return self._posed(fx, g, pic, m) if pic is not None else (None, None)
 
     def _grid(self, fx, frame, img):
         def draw(k, pic, m):
             piece = None if fx["piece"] is None else (FX.piece_cell(fx, k), fx["piece"])
             boxes = FX.grid_cells(fx, frame, self._hit_times(fx), self.fps, self.frame0)
-            return cells(pic, m, boxes, lambda i, j: FX.pick(fx["back"], k + i + j),
+            return cells(pic, m, boxes, lambda i, j: self._back(fx, frame, k + i + j, img),
                          lambda i, j: self._fill(fx, k + i + j), piece, self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
 
     def _orbit(self, fx, frame, img):
         def draw(k, pic, m):
             theta0 = math.radians(fx["spin"] * (self._t(frame) - fx["from"]) + fx["turn"] * k)
-            return orbit(pic, m, FX.pick(fx["back"], k), self._at(fx, frame)[0], fx["radius"] * min(self.size),
+            return orbit(pic, m, self._back(fx, frame, k, img), self._at(fx, frame)[0], fx["radius"] * min(self.size),
                          fx["tilt"], theta0, fx["count"], fx["scale"], fx["size"], lambda j: self._fill(fx, k + j),
                          self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
@@ -1123,7 +1215,8 @@ class FrameFx(PF.PictureFx):
         def draw(k, pic, m):
             w, h = self.size
             place = None if fx["place"] is None else (fx["place"][0] * w - 0.5, fx["place"][1] * h - 0.5)
-            return mirror(pic, m, self._at(fx, frame)[0], FX.pick(fx["axes"], k), lambda j: FX.pick(fx["back"], k + j),
+            return mirror(pic, m, self._at(fx, frame)[0], FX.pick(fx["axes"], k),
+                          lambda j: self._back(fx, frame, k + j, img),
                           lambda j: self._fill(fx, k + j), place, self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
 
@@ -1133,29 +1226,18 @@ class FrameFx(PF.PictureFx):
             for j in range(1, fx["count"]):
                 p, cov = (pic, m) if fx["delay"] == 0 else self._before(fx, frame, j, FX.pick(fx["fill"], k + j))
                 figures.append(None if cov is None else (p, cov))
-            return panels(self.size, fx["count"], fx["slant"], figures, lambda j: FX.pick(fx["back"], k + j),
+            return panels(self.size, fx["count"], fx["slant"], figures, lambda j: self._back(fx, frame, k + j, img),
                           lambda j: self._fill(fx, k + j), fx["size"], self._edge(fx), self._shadow(fx))
         return self._collage(fx, frame, img, draw)
 
-    def _stack(self, fx, frame, img):
-        def draw(k, pic, m):
-            copies = []
-            for j in range(1, fx["count"] + 1):
-                p, cov = (pic, m) if fx["delay"] == 0 else self._before(fx, frame, j, FX.pick(fx["bands"], k + j - 1))
-                copies.append((p, cov, self._fill(fx, k + j - 1, fx["bands"])))
-            unit = min(self.size)
-            return stack(pic, m, FX.pick(fx["back"], k), copies, (fx["step"][0] * unit, fx["step"][1] * unit),
-                         fx["scale"], self._at(fx, frame)[0], self._fill(fx, k), self._edge(fx), self._shadow(fx))
-        return self._collage(fx, frame, img, draw)
-
     def _footage(self, fx, frame, img):
-        """The figure laid over the clip's picture at this frame (fitted to the output, `back` round a contained one)."""
+        """The figure laid over the clip's picture at this frame (fitted to the output, `back` round a contained one: a
+        colour, a pattern or the picture as it reached the effect)."""
         if self._footage_of is None:
             raise FileNotFoundError(f"fx {fx['index']} (footage): no footage to read")
         clip = clip_of(fx, self._footage_of)
 
         def draw(k, pic, m):
-            plate = clip.picture((frame - fx["f0"]) / self.fps, self.size, fx["in"], fx["rate"], fx["loop"], fx["fit"],
-                                 fx["focus"], fx["mirror"], FX.pick(fx["back"], k))
+            plate = FL.plate(clip, (frame - fx["f0"]) / self.fps, self.size, fx, self._back(fx, frame, k, img))
             return _paste(plate, pic, m, self._fill(fx, k), edge=self._edge(fx), shadow=self._shadow(fx))
         return self._collage(fx, frame, img, draw)

@@ -5,7 +5,8 @@ as a shot camera does (mkmmd.blender.depth). A view through a fisheye camera is 
 (EEVEE and Workbench draw a fisheye as a perspective camera), with the same samples; its image reports `engine`.
 
 args: frames; views [{name, kind: shot|camera|orbit, camera, target (expr), facing (armature or null), yaw, elev,
-dist, lens}]; sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out (folder); hide [object names];
+dist, lens, frames (that view's own frames instead of `frames`: the cut's also draws frame 0 for under the loop's wrap)}];
+sizes [{name, w, h}]; engine eevee|workbench|cycles; samples; out (folder); hide [object names];
 only [object names: hide every other mesh]; styles (default true: shots with a render-time look, `style = "silhouette"`,
 `"vector"` or `reflection`, are rendered in it, see mkmmd.blender.styles); layers {dir, demands} (the layers transitions
 and inserts need for the cut's frames, drawn per size into <dir>/<size name>/ before the views: mkmmd.blender.transition;
@@ -180,7 +181,7 @@ def look(args):
                 cd.lens = float(v.get("lens", 50.0))
                 facing = _facing(v.get("facing"))
                 code = compile(v["target"], "<mk look target>", "eval")
-        for f in args["frames"]:
+        for f in v.get("frames") or args["frames"]:
             if v["kind"] == "shot":
                 FRZ.frame_set(sc, int(f), freezes)
             else:

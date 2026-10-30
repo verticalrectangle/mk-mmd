@@ -11,6 +11,8 @@ from .. import config as CFG
 from .. import cutfx as CF
 from .. import footage as FT
 from .. import framefx as FF
+from .. import mandala as MDF
+from .. import pageturn as PAGE
 from .. import picturefx as PFX
 from .. import pixmap as PX
 from .. import post as P
@@ -35,7 +37,8 @@ Views:
   Shots of the cut with a render-time look (`style = "silhouette"` or `"vector"`, `reflection = {...}` in [[shot]]) are
   drawn in it, as `mk render` draws them; --no-styles draws every shot as it is lit. Frames inside a [[transition]] /
   [[insert]] / [[glitch]] or an [[fx]], and frames with screen type are previewed composited, as `mk post` makes them (the
-  frames an echo, a slitscan or a push reads are rendered beside them).
+  frames an echo, a slitscan or a push reads are rendered beside them); a frame of the loop's wrap (a page turn at the
+  clip's end) turns over frame 0 as finished, which the cut draws beside it.
 
 Layout: one image per frame, view and output, written to --out as <view>_<output>_<frame>.jpg (the cut is view `cut`,
 orbit views are named after their preset or yaw_elev, orbits without --output are the square output `sq`); --sheet adds
@@ -226,12 +229,16 @@ def write_maps(shots):
 
 def _frame_fx(plan, proj, size, layers_dir, stems, output):
     """The plan's frame effects over one output of a look: the cut's other frames come from the plates rendered beside
-    the images (TR.fx_frames), the projected points and the collages' figures from the layers, footage from its clips."""
+    the images (TR.fx_frames), the projected points and the collages' figures from the layers, a collage's own `shot`
+    from its plates there, footage from its clips."""
     def frame_of(g):
         shot = TR.cut_shot(plan["cuts"], g)
         if layers_dir is None or shot is None:
             return None
         return P.read(layers_dir / TR.plate_rel(shot, g), size)
+
+    def plate_of(shot, g):
+        return None if layers_dir is None else P.read(layers_dir / TR.plate_rel(shot, g), size)
 
     def point_of(key, g):
         if layers_dir is None:
@@ -245,9 +252,15 @@ def _frame_fx(plan, proj, size, layers_dir, stems, output):
     try:
         return FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, frame_of=frame_of, point_of=point_of,
                           figure_of=figure_of, stem_of=stems, hits=FF.project_hits(proj.root, proj.data), output=output,
-                          footage_of=FT.source(proj.root), font_of=PFX.font_source(proj.root))
+                          footage_of=FT.source(proj.root), font_of=PFX.font_source(proj.root),
+                          sprite_of=MDF.sprite_source(proj.root), plate_of=plate_of)
     except FX.FxError as e:
         raise UsageError(str(e)) from None
+
+
+def _rgb(path):
+    """A rendered image as float RGB, as the effects take it."""
+    return np.asarray(Image.open(path).convert("RGB"), np.float32) / 255.0
 
 
 def run(args):
@@ -282,14 +295,17 @@ def run(args):
     layers = None                                   # what the cut's transitions, inserts and glitches need for these frames
     plan = cut_plan(proj) if proj and not args.no_styles and not args.no_transitions and any(
         v["kind"] == "shot" for v in views) else None
+    wrap = TR.wrap_of(plan)                         # the loop's wrap: its frames turn over frame 0 as finished, which the
+    held = [wrap["still"]] if wrap is not None and wrap["still"] not in frames and any(   # cut draws beside them when
+        wrap["first"] <= f <= wrap["last"] for f in frames) else []                       # it is not asked for
     if TR.has_effects(plan):
-        want = {int(f) for f in frames}
+        want = {int(f) for f in frames} | set(held)
         for tr in plan["transitions"]:               # an expand / collapse also needs the frame where it fills the frame
             if tr["kind"] in ("expand", "collapse") and any(f in want for f in range(tr["first"], tr["last"] + 1)):
                 want.add(TR.covering_frame(tr))
         dem = TR.demands(plan, want)
         hits = FF.project_hits(proj.root, proj.data) if plan.get("fx") else None   # a booth's captures on a lane
-        for g, items in TR.fx_frames(plan, frames, hits).items():  # the cut's frames an echo, a film, a booth reads
+        for g, items in TR.fx_frames(plan, list(frames) + held, hits).items():  # the cut's frames an echo, a film reads
             bucket = dem.setdefault(g, [])
             bucket += [it for it in items if it not in bucket]
         if dem:
@@ -301,49 +317,72 @@ def run(args):
     shots = {}
     for tag, sc in scenes:
         extra = {"layers": layers} if layers and tag == "a" else {}
+        if held and tag == "a":                      # the cut draws frame 0 too, for under the wrap's page
+            extra["views"] = [dict(v, frames=list(frames) + held) if v["kind"] == "shot" else v for v in views]
         shots[tag] = bridge.run("look", {**job, **extra, "out": str(out / tag if args.ab else out)}, blend=sc, project=proj,
                                 timeout=3600)
-    effects, fxs, ffxs, typed = [], {}, {}, 0
+    fxs, ffxs, done = {}, {}, {}
     stems = FF.stem_source(proj.root, proj.mk_dir / "cache" / "timeline") if plan and plan.get("fx") else None
+
+    def finish(tag, s):
+        """The cut's image `s` as mk post finishes a frame before its grade, (picture, effects laid on, type laid on):
+        scene a's cut effects and frame effects, then the screen type; the picture None when nothing was laid on it."""
+        if s["path"] in done:
+            return done[s["path"]]
+        size, f = Image.open(s["path"]).size, int(s["frame"])
+        fx = ffx = None
+        if tag == "a" and TR.has_effects(plan):      # a spin draws no layers: the cut's own frames
+            fx = fxs.get(s["size"])
+            if fx is None:
+                fx = fxs[s["size"]] = CF.CutFx(plan, out / "layers" / s["size"], size, s["size"],
+                                               footage_of=FT.source(proj.root), sprite_of=MDF.sprite_source(proj.root),
+                                               hits_of=lambda: FF.project_hits(proj.root, proj.data))
+        if stems is not None and tag == "a":
+            ffx = ffxs.get(s["size"])
+            if ffx is None:
+                ffx = ffxs[s["size"]] = _frame_fx(plan, proj, size, Path(layers["dir"]) / s["size"] if layers else None,
+                                                  stems, s["size"])
+        has_fx = fx is not None and fx.active(f)
+        has_ffx = ffx is not None and ffx.active(f)
+        layer = P.read_rgba(s["screen"], size) if s.get("screen") else None
+        im = None
+        if has_fx or has_ffx or layer is not None:
+            im = _rgb(s["path"])
+        if has_fx:
+            try:
+                fx.check([f])
+                im = fx.frame(f, im)
+            except (TR.TransitionError, FileNotFoundError) as e:
+                raise UsageError(str(e)) from None
+        if has_ffx:
+            try:
+                im = ffx.frame(f, im)
+            except (FileNotFoundError, FX.FxError) as e:
+                raise UsageError(str(e)) from None
+        if layer is not None:
+            im = SRT.composite(im, layer)
+        done[s["path"]] = (im, has_fx or has_ffx, layer is not None)
+        return done[s["path"]]
+
+    under = {s["size"]: s for s in shots["a"]       # frame 0 of the cut in each size, for under the wrap's page
+             if wrap is not None and s["view"] == "cut" and int(s["frame"]) == wrap["still"]}
+    effects, typed = [], 0
     for tag in shots:
         for s in shots[tag]:                         # composite the effects, then the screen type, over the cut's frames
-            if s["view"] != "cut":
+            f = int(s["frame"])
+            if s["view"] != "cut" or (tag == "a" and f in held):
                 continue
-            size, f = Image.open(s["path"]).size, int(s["frame"])
-            fx = ffx = None
-            if tag == "a" and TR.has_effects(plan):  # a spin draws no layers: the cut's own frames
-                fx = fxs.get(s["size"])
-                if fx is None:
-                    fx = fxs[s["size"]] = CF.CutFx(plan, out / "layers" / s["size"], size, s["size"],
-                                                   footage_of=FT.source(proj.root))
-            if stems is not None and tag == "a":
-                ffx = ffxs.get(s["size"])
-                if ffx is None:
-                    ffx = ffxs[s["size"]] = _frame_fx(plan, proj, size, Path(layers["dir"]) / s["size"] if layers else None,
-                                                      stems, s["size"])
-            has_fx = fx is not None and fx.active(f)
-            has_ffx = ffx is not None and ffx.active(f)
-            layer = P.read_rgba(s["screen"], size) if s.get("screen") else None
-            if not has_fx and not has_ffx and layer is None:
-                continue
-            im = np.asarray(Image.open(s["path"]).convert("RGB"), np.float32) / 255.0
-            if has_fx:
-                try:
-                    fx.check([f])
-                    im = fx.frame(f, im)
-                except (TR.TransitionError, FileNotFoundError) as e:
-                    raise UsageError(str(e)) from None
-            if has_ffx:
-                try:
-                    im = ffx.frame(f, im)
-                except (FileNotFoundError, FX.FxError) as e:
-                    raise UsageError(str(e)) from None
-            if has_fx or has_ffx:
+            im, drew, has_type = finish(tag, s)
+            if tag == "a" and wrap is not None and wrap["first"] <= f <= wrap["last"]:
+                below = finish(tag, under[s["size"]])[0]   # the loop's wrap: this frame turned over frame 0, both finished
+                im = PAGE.frame(wrap, f, _rgb(s["path"]) if im is None else im,
+                                _rgb(under[s["size"]]["path"]) if below is None else below)
+                drew = True
+            if drew:
                 effects.append({"frame": s["frame"], "size": s["size"]})
-            if layer is not None:
-                im = SRT.composite(im, layer)
-                typed += 1
-            Image.fromarray(P.to_u8(im)).save(s["path"], quality=90)
+            typed += has_type
+            if im is not None:
+                Image.fromarray(P.to_u8(im)).save(s["path"], quality=90)
     for tag in shots:                                # the layers were for the composite: no files left beside the images
         for s in shots[tag]:
             if s.get("screen"):
@@ -354,6 +393,13 @@ def run(args):
                         d.rmdir()
                     except OSError:
                         pass
+    if held:                                         # frame 0 lay under the wrap's page: it is not an image asked for
+        for s in shots["a"]:
+            if s["view"] == "cut" and int(s["frame"]) in held:
+                Path(s["path"]).unlink(missing_ok=True)
+                if s.get("map_geo"):
+                    Path(s["map_geo"]).unlink(missing_ok=True)
+        shots["a"] = [s for s in shots["a"] if not (s["view"] == "cut" and int(s["frame"]) in held)]
     if args.guides:                                  # last, so the thirds and the safe area sit over effects and type
         for lst in shots.values():
             for s in lst:

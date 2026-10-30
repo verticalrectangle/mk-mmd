@@ -284,11 +284,12 @@ def paint(base, over, cov):
     return base + (over - base) * cov[..., None].astype(np.float32)
 
 
-def warp_scaled(img, dest, k):
+def warp_scaled(img, dest, k, box=None):
     """The picture `img` (h, w, 3) scaled by `k` about its own centre, which lands at `dest` (index coordinates), on a frame
-    of the same size (the border repeats). Pictures shrunk below half size go through a pyramid first, so the reduction is
-    smooth."""
+    of the same size (the border repeats), or on its part `box` = (x0, y0, x1, y1) alone. Pictures shrunk below half size
+    go through a pyramid first, so the reduction is smooth."""
     h, w = img.shape[:2]
+    x0, y0, x1, y1 = (0, 0, w, h) if box is None else box
     src, kk = img, float(k)
     while kk < 0.5 and min(src.shape[:2]) > 2:
         src = cv2.pyrDown(src)
@@ -296,5 +297,5 @@ def warp_scaled(img, dest, k):
     sh, sw = src.shape[:2]
     sx, sy = (sw - 1) / 2.0, (sh - 1) / 2.0
     # the pyramid's pixels are 2^n apart: its centre is the picture's centre, its scale kk lands it at k overall
-    m = np.array([[kk, 0.0, dest[0] - kk * sx], [0.0, kk, dest[1] - kk * sy]], np.float64)
-    return cv2.warpAffine(src, m, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    m = np.array([[kk, 0.0, dest[0] - kk * sx - x0], [0.0, kk, dest[1] - kk * sy - y0]], np.float64)
+    return cv2.warpAffine(src, m, (x1 - x0, y1 - y0), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)

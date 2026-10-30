@@ -11,7 +11,9 @@ from PIL import Image
 from .. import cutfx as CF
 from .. import footage as FT
 from .. import framefx as FF
+from .. import mandala as MDF
 from .. import master as MS
+from .. import pageturn as PAGE
 from .. import picturefx as PFX
 from .. import post as P
 from ..core import framefx as FX
@@ -43,7 +45,10 @@ whole frame. A missing layer is an error unless --allow-gaps (then the plain cut
 effects out. [[fx]] frame effects (lens, echo, slitscan, push, scope; docs/design.md: Shots: Frame effects) follow, in
 the order of the table, reading the rendered frames around each one. Lens streaks ([post] streaks) are drawn from the
 result's brightest lights; then screen type ([[text]] with
-`screen`, docs/design.md: Text) is laid over it: <frames>/screen/<frame>.png, drawn by mk render.
+`screen`, docs/design.md: Text) is laid over it: <frames>/screen/<frame>.png, drawn by mk render. A page turn at the
+clip's end, the loop's wrap, comes after all that: each frame of its window as finished turns over frame 0 as finished
+(its own effects and screen type on), held still, and the grade covers the result; screen type laid over the graded
+picture and the keep masks turn with the page.
 
 Examples:
   mk post --preset draft
@@ -99,6 +104,16 @@ def mastered(proj, au, f, start, duration):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "f32le", "-ar", str(MS.SR), "-ac", "2", "-i", "-", "-c:a",
                     "pcm_f32le", str(out)], input=y.astype(np.float32).tobytes(), check=True)
     return out, rep
+
+
+def _plates(plan, src, files, size):
+    """callable(shot, frame) -> what `shot` shows at `frame` (a collage's own `shot`): the cut's frame where it is the
+    shot in the cut, else its plate beside the frames in `src`; None when that is not there."""
+    def get(shot, g):
+        if TR.in_force(plan, shot, g):
+            return P.read(files[g], size) if g in files else None
+        return P.read(src / TR.plate_rel(shot, g), size)
+    return get
 
 
 def run(args):
@@ -164,7 +179,8 @@ def run(args):
             streaks = P.Streaks({} if st_spec is True else dict(st_spec), pal, size) if st_spec else None
         except (ValueError, KeyError) as e:
             raise UsageError(str(e).strip('"')) from None
-        fx = CF.CutFx(plan, src, size, o.name, footage_of=footage) if TR.has_effects(plan) else None
+        fx = CF.CutFx(plan, src, size, o.name, footage_of=footage, sprite_of=MDF.sprite_source(proj.root),
+                      hits_of=lambda: FF.project_hits(proj.root, proj.data)) if TR.has_effects(plan) else None
         if fx:
             lacking = fx.missing(frames)
             if lacking and not args.allow_gaps:
@@ -180,16 +196,18 @@ def run(args):
             try:
                 ffx = FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, stem_of=stems,
                                  hits=FF.project_hits(proj.root, proj.data), output=o.name, footage_of=footage,
-                                 font_of=PFX.font_source(proj.root),
+                                 font_of=PFX.font_source(proj.root), sprite_of=MDF.sprite_source(proj.root),
                                  frame_of=lambda g, files=files, size=size: P.read(files[g], size) if g in files else None,
                                  point_of=lambda key, g, src=src, size=size: CF.read_point(src, key, g, size),
-                                 figure_of=lambda key, g, src=src, size=size: CF.read_figure(src, key, g, size))
+                                 figure_of=lambda key, g, src=src, size=size: CF.read_figure(src, key, g, size),
+                                 plate_of=_plates(plan, src, files, size))
             except FX.FxError as e:
                 raise UsageError(str(e)) from None
         suffix = "" if args.preset == "final" else f"_{args.preset}"
         out = od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"
         ff = None if still else encode(frames, size, proj.fps, out, audio, args.crf)
         lead = P.read(files[min(files)], size)                  # stands in for frames before the first one rendered
+        wrap, held = TR.wrap_of(plan), None                     # the loop's wrap; frame 0 as finished, under its page
         prev, prev_layer, prev_keep, lmin, bare, typed, kept = lead, None, None, 1.0, 0, 0, 0
         for k, f in enumerate(frames):
             raw = P.read(files[f], size) if f in files else prev
@@ -216,10 +234,16 @@ def run(args):
                 typed += 1
                 if mask is not None:                              # the type over a kept eye is graded as type
                     mask = mask * (1.0 - layer[..., 3])
+            over = layer if screen == "over" else None            # or over the finished picture, the grade under it
+            if wrap is not None:                                  # the loop's wrap: this frame as finished turned over
+                if f == wrap["still"]:                            # frame 0 as finished, held still
+                    held = (img, over, mask)
+                if wrap["first"] <= f <= wrap["last"]:
+                    img, over, mask = PAGE.wrap(wrap, f, (img, over, mask), held)
             g = grade(img, k, keep=mask)
             kept += mask is not None
-            if layer is not None and screen == "over":           # or over the finished picture, the grade under it
-                g = SRT.composite(g, layer)
+            if over is not None:
+                g = SRT.composite(g, over)
                 typed += 1
             lmin = min(lmin, P.luma_min(g))
             if ff is None:

@@ -14,23 +14,32 @@ frames outside every window come back untouched. The layers an effect needs were
                         the cut, the incoming shot in the widening gap, an `edge` along each half's cut side.
     spin                the cut's own frame (the outgoing shot, from the cut the incoming one) turned about a point faster
                         and faster up to the cut and slowing to rest after it, smeared along its turn by the shutter.
+    page                the outgoing frame turned over as a picture book's page onto the incoming shot, its paper back
+                        showing (mkmmd.pageturn). The loop's wrap, a page turn at the clip's end, is not one of these:
+                        mk post and mk look turn the finished frames over frame 0 (mkmmd.pageturn.wrap).
     insert              a thought bubble over the host frame holds the other shot at reduced size (picture in picture),
                         popping in and out, or growing until its picture is the whole frame; or a split screen, the host
-                        and the other shot (or a video, mkmmd.footage) side by side, sliding in, trading sides, sliding out.
+                        and the other shot (or a video, mkmmd.footage) side by side, sliding in, trading sides, sliding out;
+                        or an iris, a round window from a scene point onto the other shot or a video (mkmmd.iris), with
+                        a record, a plate or chrome rings round it (mkmmd.portal).
     glitch              the figure (the frame against its `bare/` layer, the same frame without the glitch's objects)
                         breaks up in jumping slices and colour ghosts and drops out until the bare frame is left
                         (mkmmd.core.glitch)."""
 import json
 import math
+from collections import OrderedDict
 from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image
 
+from . import iris as IRIS
 from . import matte as M
+from . import pageturn as PAGE
 from . import post as P
 from .core import glitch as GL
+from .core import iris as IR
 from .core import transition as TR
 from .core import tween as TW
 
@@ -78,14 +87,18 @@ def _along(pic, at, length, across):
 class CutFx:
     """The effects of a plan over one output's frames. `frames_dir` holds the cut's frames and the layers, `size` is
     (width, height) of the frames being graded, `output` the aspect's name (for an insert's per-aspect geometry),
-    `footage_of` a clip -> mkmmd.footage.Clip opener (mkmmd.footage.source) for a split's video half."""
+    `footage_of` a clip -> mkmmd.footage.Clip opener (mkmmd.footage.source) for a split's video half or an iris's video,
+    `sprite_of` a sprite finder (mkmmd.mandala.sprite_source) for a plate portal's sprites and `hits_of` a callable
+    giving the [audio] hits file ({lane: [...]}, or None) for their googly eyes' lanes."""
 
-    def __init__(self, plan, frames_dir, size, output=None, footage_of=None):
+    def __init__(self, plan, frames_dir, size, output=None, footage_of=None, sprite_of=None, hits_of=None):
         self.plan, self.dir, self.size, self.output = plan, Path(frames_dir), (int(size[0]), int(size[1])), output
-        self.footage_of = footage_of
+        self.footage_of, self.sprite_of, self.hits_of = footage_of, sprite_of, hits_of
         self.px = min(self.size) / 1080.0                                  # widths are given at 1080 on the short side
         self.at = {}
         for tr in plan["transitions"]:
+            if tr.get("still") is not None:                               # the loop's wrap turns the finished frames
+                continue
             for f in range(tr["first"], tr["last"] + 1):
                 self.at[f] = ("transition", tr)
         for ins in plan["inserts"]:
@@ -95,6 +108,7 @@ class CutFx:
             for f in range(g["f0"], g["f1"]):
                 self.at[f] = ("glitch", g)
         self._top, self._grown, self._centre, self._clips = {}, {}, {}, {}
+        self._sprites, self._tiles, self._hits = {}, {}, {}
         self.notes = []
 
     # ---------------------------------------------------------------- what is there
@@ -115,7 +129,8 @@ class CutFx:
     def check(self, frames):
         """Settle what depends on the pictures before anything is encoded (a TransitionError when one cannot be): the scale
         at which each expand / collapse that touches `frames` fills the frame, the point a slice through the figure cuts
-        through, and that a split's video can be read over its window."""
+        through, that a split's or an iris's video can be read over its window and that a plate portal's sprites are
+        there."""
         want = set(frames)
         for tr in self.plan["transitions"]:
             if not any(f in want for f in range(tr["first"], tr["last"] + 1)):
@@ -125,8 +140,13 @@ class CutFx:
             elif tr["kind"] == "slice":
                 self._slice_centre(tr)
         for ins in self.plan["inserts"]:
-            if ins.get("clip") and any(f in want for f in range(ins["f0"], ins["f1"])):
+            if not any(f in want for f in range(ins["f0"], ins["f1"])):
+                continue
+            if ins.get("clip"):
                 self._video(ins)
+            if _plate_sprites(ins):
+                self._sprite_files(ins)
+                self._eye_hits(ins)
 
     def frame(self, frame, main):
         """The cut's frame `main` (float RGB) with the effect of `frame`'s window composited on it."""
@@ -135,7 +155,8 @@ class CutFx:
             return main
         kind, spec = hit
         if kind == "insert":
-            return self._split(spec, frame, main) if spec["shape"] == "split" else self._insert(spec, frame, main)
+            draw = {"split": self._split, "iris": self._iris}.get(spec["shape"], self._insert)
+            return draw(spec, frame, main)
         if kind == "glitch":
             return GL.frame(main, self._rgb(TR.bare_rel(f"g{spec['index']}", frame)), frame - spec["f0"],
                             spec["f1"] - spec["f0"], seed=spec["seed"], shift=spec["shift"], split=spec["split"] * self.px,
@@ -148,6 +169,8 @@ class CutFx:
             return self._slice(spec, frame, main)
         if spec["kind"] == "spin":
             return self._spin(spec, frame, main)
+        if spec["kind"] == "page":
+            return self._page(spec, frame, main)
         return self._matte(spec, frame, main)
 
     # ---------------------------------------------------------------- layers
@@ -343,6 +366,11 @@ class CutFx:
             taps //= 2
         return np.ascontiguousarray(acc[pt:pt + h, pl:pl + w])
 
+    # ---------------------------------------------------------------- page
+    def _page(self, tr, frame, main):
+        """The outgoing frame turned over as a page (mkmmd.pageturn) onto the incoming shot's plate."""
+        return PAGE.frame(tr, frame, main, self._plate(tr["plate"], frame, main))
+
     # ---------------------------------------------------------------- insert
     def _dots(self, start, centre, a, b):
         """[(x, y, radius)] of the three circles of the trail between `start` (the edge of the head, where the trail begins)
@@ -416,11 +444,11 @@ class CutFx:
 
     # ---------------------------------------------------------------- split
     def _video(self, ins):
-        """The mkmmd.footage.Clip of a split's video, opened once; a TransitionError when it cannot be read or its span
-        starts past its end without `loop`."""
+        """The mkmmd.footage.Clip of an insert's video (a split's or an iris's), opened once; a TransitionError when it
+        cannot be read or its span starts past its end without `loop`."""
         if ins["index"] not in self._clips:
             c = ins["clip"]
-            what = f"insert {ins['index']} (split {ins['from']}-{ins['to']} s): clip {c['src']!r}"
+            what = f"insert {ins['index']} ({ins['shape']} {ins['from']}-{ins['to']} s): clip {c['src']!r}"
             if self.footage_of is None:
                 raise TR.TransitionError(f"{what}: no video source was given to the cut effects (footage_of)")
             try:
@@ -471,3 +499,80 @@ class CutFx:
                 band = np.clip(np.minimum(edges + 1.0, s + half) - np.maximum(edges, s - half), 0.0, 1.0)
                 out = M.paint(out, div["color"], np.broadcast_to(band[None, :] if across else band[:, None], (h, w)))
         return out
+
+    # ---------------------------------------------------------------- iris
+    def _iris(self, ins, frame, main):
+        """A round window from the projected anchor onto the inner shot's plate or the video, fitted to the frame
+        (mkmmd.iris draws it, mkmmd.core.iris says where)."""
+        anchor, per_metre = self._point(f"i{ins['index']}", frame)
+        c = ins["clip"]
+        if c is None:
+            inner = self._plate(ins["shot"], frame, main)
+        else:
+            try:
+                inner = self._video(ins).picture((frame - ins["f0"]) / self.plan["fps"], self.size, start=c["in"],
+                                                 rate=c["rate"], loop=c["loop"], fit=c["fit"], focus=(0.5, 0.5),
+                                                 mirror=c["mirror"], back=tuple(c["back"]))
+            except FileNotFoundError as e:
+                raise TR.TransitionError(f"insert {ins['index']} (iris): clip {c['src']!r}: {e}") from None
+        if ins["ring"] is None:
+            return IRIS.frame(ins, frame, main, inner, anchor, per_metre, self.output)
+        fps = self.plan["fps"]
+        extra = {}
+        if _plate_sprites(ins):
+            extra = {"sprites": self._sprite_files(ins), "tiles": self._tiles.setdefault(ins["index"], OrderedDict()),
+                     "eyes": self._eyes(ins, frame, anchor, per_metre)}
+        return IRIS.frame(ins, frame, main, inner, anchor, per_metre, self.output, t=(frame - ins["f0"]) / fps, **extra)
+
+    def _sprite_files(self, ins):
+        """The files of a plate portal's sprites, found once; a TransitionError naming the insert when one finds nothing."""
+        if ins["index"] not in self._sprites:
+            from . import mandala as MDF
+            from .core import framefx as FX
+            find = self.sprite_of or MDF.sprite_source()
+            try:
+                files = find(ins["ring"]["sprites"])
+            except FX.FxError as e:
+                raise TR.TransitionError(f"insert {ins['index']} (iris {ins['from']}-{ins['to']} s): ring: {e}") from None
+            self._sprites[ins["index"]] = [str(f) for f in files]
+        return self._sprites[ins["index"]]
+
+    def _eye_hits(self, ins):
+        """The clip seconds that kick a plate portal's sprites' googly eyes (mkmmd.eyes.hit_times: their own `times` or
+        `lane`; an iris has no hits of its own); [] without eyes."""
+        face = ins["ring"]["face"]
+        if face is None:
+            return []
+        if ins["index"] not in self._hits:
+            from . import eyes as EYD
+            from .core import framefx as FX
+            try:
+                hits = self.hits_of() if self.hits_of is not None and face.get("lane") is not None else None
+                self._hits[ins["index"]] = EYD.hit_times(face, None, hits)
+            except (FX.FxError, FileNotFoundError) as e:
+                raise TR.TransitionError(f"insert {ins['index']} (iris {ins['from']}-{ins['to']} s): ring: {e}") from None
+        return self._hits[ins["index"]]
+
+    def _eyes(self, ins, frame, anchor, per_metre):
+        """What a plate portal's googly eyes swing by at `frame`: the clip second, the hits and where the window was at
+        other clip seconds (its centre held at this frame's anchor), with the seconds into the window then; None
+        without eyes."""
+        if ins["ring"]["face"] is None:
+            return None
+        fps, f0 = self.plan["fps"], self.plan["frame0"]
+        size, output = self.size, self.output
+
+        def circle_at(ts):
+            out = []
+            for s in np.atleast_1d(ts):
+                f = f0 + float(s) * fps
+                c = IR.circle(ins, IR.state(ins, f), output, size, anchor, per_metre)
+                out.append((c["centre"], c["radius"], (f - ins["f0"]) / fps))
+            return out
+        return {"t": (frame - f0) / fps, "hits": self._eye_hits(ins), "circle_at": circle_at}
+
+
+def _plate_sprites(ins):
+    """Whether an insert is an iris whose plate ring has sprites round it."""
+    ring = ins.get("ring")
+    return ring is not None and ring["kind"] == "plate" and ring["sprites"] is not None

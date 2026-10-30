@@ -177,7 +177,7 @@ def music(root, cache_dir):
             for w in MD.normalize(data.get("medium") or [], outs, palette, data.get("vector"), fps, frame0):
                 look = next((s for s in w["styles"].values() if s), {})
                 kind = next(iter(look), "none")
-                label = "sketch" if kind == "vector" and look[kind].get("sketch") else kind
+                label = next((k for k in ("sketch", "cutout") if kind == "vector" and look[kind].get(k)), kind)
                 effects.append({"kind": "medium", "label": label, "from": secs(w["from"]), "to": secs(w["to"])})
         except MD.MediumError as e:
             problems.append(f"medium shifts: {e}")

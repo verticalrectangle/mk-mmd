@@ -194,7 +194,8 @@ fingertip bone's `.tail` and the prop.
   the name a `[vector] materials` rule matches, and the build warns about a rule that names none. `[[ring]]` entries flip a vector shot to the look's
   `opposite` palette inside discs and bands that sweep out from a point on a beat. A vector tone `{texture = true, shade}` is cel (the model's own
   colours in two tones); a shot's own `materials = [{match = "*", tone = "cel"}]` and `lines` restyle everything in it; `sketch = {...}` draws the
-  look as boiling ink or pencil line art.
+  look as boiling ink or pencil line art, `sketch = {pen = "crayon", inks = "tones", fill}` as waxy crayon on paper (each part's lines in its
+  own crayon, coloured in with `fill`), and `cutout = true` cuts the look out of construction paper (rough edges, a white rim, layered shadows).
 - **Medium shifts** ([Medium shifts](design.md#medium-shifts)): `[[medium]] {from, to, style, ...}` draws the whole picture in another look for a
   window, whatever shot is in the cut: a beat or two of cel, a flat cartoon (the vector close-ups' tones on a wide shot) or a sketch, cut on a snare,
   a stop or a big hit, and back. Pair a cartoon or a sketch with a `[[stepped]]` window over the same span (she moves on twos, the camera on
@@ -206,8 +207,12 @@ fingertip bone's `.tail` and the prop.
 - **Transitions and inserts**: composited by `mk post` from layers `mk render` draws next to the frames. Windows may not overlap and must lie inside one shot of the
   cut (a `spin` straddles its cut: the frame spun up into it, the next one down to rest after it); the build refuses a window that starts before `[scene] start`.
   A `slice` cuts the frame through the figure (`center = "figure"`) and parts it onto the next shot, white `edge`s like a sticker's; a split screen is
-  `[[insert]] shape = "split"` (another shot or a video beside the host, sliding in, trading sides on a hit, `aspect.9x16` top and bottom). Preview a frame
-  inside one with `mk look`.
+  `[[insert]] shape = "split"` (another shot or a video beside the host, sliding in, trading sides on a hit, `aspect.9x16` top and bottom); an
+  iris is `shape = "iris"` (a round window opening from a scene point, a toy's eyehole, onto another shot or a video, growing into it on the cut
+  with `out = "expand"`); `ring = "vinyl" | "plate" | "lens"` makes it a portal (a spinning record round it, a dinner plate with googly-eyed veggie
+  `sprites` on its rim, TikTok chrome lens rings). `kind = "page"` turns the frame over like a picture book's page onto the next shot; put one at
+  the clip's end (`at = [project] duration`) and it is the loop's wrap onto frame 0 as it finally looks, its `[[fx]]` and type on (nothing needs
+  keeping off frame 0). Preview a frame inside one with `mk look`.
 - **Glitches** ([Glitches](design.md#glitches)): `[[glitch]] {from, to, objects}` makes a character (its meshes, `"Rin_*"`, and what it holds) break up in
   jumping slices and colour ghosts and vanish by `to`; the build keeps it hidden after that. Start it on a hit; `seed` gives another take.
 - **Frame effects** ([Frame effects](design.md#frame-effects)): `[[fx]]` bends, smears and draws over the finished pictures: `lens` (a black hole's
@@ -219,15 +224,57 @@ fingertip bone's `.tail` and the prop.
   a still's own picture dragged in blocks, and `mask = "ground"` keeps her clean). The collages cut a figure (`objects = "Rin_*"`) out
   onto flat colour and step on the hits: `grid` (a chessboard of clones, a knight hopping across it), `orbit` (clones on a ring round
   her), `mirror` (folded about a line: with `place` beside it, two of her face each other), `panels` (slanted split screen), `stack`
-  (a banded echo) and `footage` (her as a sticker, a white `edge` and a drop `shadow`, over a video `mk ref footage` fetches from
-  Pexels); a list of `back` or `fill` colours flips on every hit, `cells = [1, [2, 1], [2, 2], [4, 2], [4, 4]]` with `divide` makes
-  the grid divide like cells on the hits, `fill = "silkscreen"` prints her as a Warhol, `keys` move her (a stand-up tipping over
-  flat) and `[fx.aspect.<output>]` gives an output its own keys. Give a collage a medium or close framing (a far one leaves
-  tiny clones; an orbit's `scale` brings her near) and put it first in the table, before a zoom or a shock that should move it.
+  (a banded echo; `mirror = true` adds its mirror image about `center`, so one figure flanks her on both sides; its bands may be
+  wallpapers of googly-eyed sprites, `{color, sprites = {tag = [...]}, eyes}`, its copies drawn in eras' `looks` (halftone, flat,
+  vhs, pixel, chrome), falling into an endless `recede` tunnel, `delay = [...]` busy clones that `peel` off to places of their
+  own, and a `squash` on a lane about their feet: design.md Rainbow stacks) and `footage` (her as
+  a sticker, a white `edge` and a drop `shadow`, over a video `mk ref footage` fetches from Pexels); `back = "picture"` lays any of
+  them over the frame as it is instead of flat colour, a list of `back` or `fill` colours flips on every hit, `cells = [1, [2, 1],
+  [2, 2], [4, 2], [4, 4]]` with `divide` makes the grid divide like cells on the hits, `fill = "silkscreen"` prints her as a Warhol,
+  `keys` move her (a stand-up tipping over flat) and `[fx.aspect.<output>]` gives an output its own keys. A figure that should not
+  share her set (a guitarist beside a dancer, nobody in front of anybody) comes from a `plate = true` shot of its own: `shot = "..."`
+  takes the collage's figure from that shot's render, `at` and `height` set it into the frame. Give a collage a medium or close
+  framing (a far one leaves tiny clones; an orbit's `scale` brings her near) and put it first in the table, before a zoom or a
+  shock that should move it.
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
   transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round
-  a `hole`) build a world in deep space; a `burst` of `shard`s on a `[[key]] lane = "kick"` bursts glass on every kick.
+  a `hole`) build a world in deep space; a `burst` of `shard`s on a `[[key]] lane = "kick"` bursts glass on every kick. Real 3D
+  butterflies: `library:butterfly` (a swallowtail, monarch, morpho or small blue, 9 cm across, patterned in palette roles,
+  flapping at `flap` beats a second, or one beat on every hit with `flap = 0` and `[[key]] prop = "hit", lane = "kick"`) and
+  `library:butterflies` (a swarm of them in rings, an orbit, a drift or a burst; see their rows in design.md). A `mandala`
+  ([Mandalas and trails](design.md#mandalas-and-trails)) rings her with sticker copies of herself, of registry sprites (`{tag =
+  "butterfly"}`) or of drawn clovers, flowers, hearts, stars and butterflies, the rings turning both ways, blooming on the hits and
+  popping in one by one (`grow`); any sprite source takes `eyes = true` (googly eyes whose pupils jiggle on the hits and when
+  the sprite moves, `{size, wobble, look, seed}`) and `mouth = true` (a doodled smile; design.md: Googly eyes), and the
+  registry's cut-out vegetables are `{tag = "veggie"}`, one colour family with `{tag = ["veggie", "veg_green"]}` (`veg_red`,
+  `veg_orange`, `veg_yellow`, `veg_green`, `veg_purple`, `veg_white`); `trails` leaves rainbow after-images behind her while
+  she moves. The colour fields
+  ([Colour fields](design.md#colour-fields-liquid-light-op-art-floods)) paint the picture, `mask = "ground"` behind her: `liquid` (a
+  60s oil-and-water light show in the palette's `inks`, swelling on a `lane`; `mask = "figure"` with `blend = "multiply"` projects it
+  on her), `spiral` (op-art: a spiral, rings, a moire, a sunburst or a bulging checkerboard, turning and stepping on the hits) and
+  `flood` (ink dropped from a point, her head's `{point}`, filling the frame on a downbeat and drawing back); any collage's `back` may
+  be such a pattern (`{pattern = "spiral", colors = [...]}`: a grid of hypnotic spirals). The remaps
+  ([Remaps](design.md#remaps-kaleidoscope-tunnel-melt)) move the picture itself: `kaleido` (a kaleidoscope of `segments` mirrored
+  wedges, its `source` aimed at the ink or the petals, turning, stepping on the hits; `mask = "ground"` keeps her clean on top,
+  `"figure"` makes a mandala of her alone), `tunnel` (a Droste tunnel falling inward a level a bar, `frame` lines in the palette
+  so the nesting reads) and `melt` (`breathe`, `ripple`, `swirl`, `drip`, `noise`, swelling on a `lane`); with a footage sticker
+  under them give them its `edge` and `shadow`. The paper world ([Activity book and labels](design.md#activity-book-and-labels)):
+  `activity` lays the frame on a workbook page (a crayon sketch of her drawn on it) and does its exercises on the hits, a dotted outline
+  traced (her own silhouette with `shape = "figure"`), numbered dots joined until a sprite appears, a colour by number filled a region a
+  hit; `label` sets tiny editorial type ("1967", "SIDE A") with a dotted leader to a scene point. The toy paint app
+  ([Toy paint app](design.md#toy-paint-app)): `paintapp` lays a kids' paint program's chrome over the frames (its toolbar on the left,
+  at the bottom of a 9:16 frame) and a cursor that picks its tools: `stamps` pop googly-eyed sprites on the hits, `bucket` floods a
+  colour region round a point (pin it with `{point}` on the set when the camera moves), `undo` takes the last one back, and an `eraser`
+  rubs out (`wipe`) or blows into confetti the outgoing picture across a cut. It is flash-safe by itself (at most three fills or
+  erasers a second); keep `ui = false` for the paint alone. The era looks ([Era looks](design.md#era-looks-digicam-chrome-gradmap-invert-test-card-cards))
+  hop the picture through pop's eras, one key each: `film` with `era = "1967"` (a Technicolor print), `camcorder` with `era = "1985"`
+  (VHS), `digicam` (2005: noise, oversharpening, JPEG blocks, purple fringes, an orange date stamp) and `chrome` (now: iridescent chrome on
+  her with `mask = "figure"`, sparkles, bubbles); `gradmap` regrades through a list of maps, the next on every cut (give an odd number when
+  two shots ping-pong), `invert` flips the world for a window or on hits (eased, three flashes a second at most; `hue = 180` keeps Dawn's
+  hues), `testcard` frames the scene in a 1967 test card's circle (`center = {point}` on her face, `open` to blow it open into the next
+  shot) and `cards` tumbles TV colour-bar cards through the frame on a lane. Look at each on a light and a dark shot: a gradmap's lights go
+  to its cream, so a bright set reads as its light colour.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
   nib, and screen type laid over the picture. Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
   Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
@@ -330,7 +377,7 @@ booms of a hits lane overtones a phone can play, and the report's `boom_phone_db
 
 ## 10. Credits
 
-`mk assets credits --out CREDITS.md` builds the credits from the cast, the footage and split-insert videos, the photos of `photo_world` sets and `[credits] assets`; put what only the project knows (the song, a print made for it, the palette, tools) in
+`mk assets credits --out CREDITS.md` builds the credits from the cast, the footage and split- and iris-insert videos, the photos of `photo_world` sets, the sprites of mandalas and `[credits] assets`; put what only the project knows (the song, a print made for it, the palette, tools) in
 `[credits] lines`. It exits 1 while any asset is unreviewed or has no author or credit line.
 
 To publish the result, `mk export web` writes `out/web/`: the scene and its timeline as a static page, with

@@ -30,7 +30,8 @@ Examples:
 """
 
 FIELD_HELP = ("field=value, one or more: name author author_url source_url license restrictions credit tags (a,b) rig "
-              "path; an empty value removes the field")
+              "path extra (a JSON object merged over the entry's extra, a null removing its key: a sprite's googly-eye "
+              "anchors, extra={\"eyes\": {...}}); an empty value removes the field")
 
 
 def add(sub):
@@ -166,7 +167,10 @@ def _run(args, reg):
             k, sep, v = kv.partition("=")
             if not sep:
                 raise UsageError(f"{kv!r}: use field=value")
-            fields[k] = (_tags(v) if k == "tags" else v) if v != "" else None
+            if k == "extra" and v != "":
+                fields[k] = _extra(reg.get(args.slug).get("extra"), v)
+            else:
+                fields[k] = (_tags(v) if k == "tags" else v) if v != "" else None
         e = reg.update(args.slug, **fields)
         reg.save()
         emit(e)
@@ -189,13 +193,31 @@ def _run(args, reg):
     return 0
 
 
+def _extra(old, text):
+    """`extra=JSON`: the object's keys merged over an entry's `extra` (a null removes its key); None when nothing is left."""
+    try:
+        new = json.loads(text)
+    except ValueError as e:
+        raise UsageError(f"extra={text!r}: not JSON ({e})") from None
+    if not isinstance(new, dict):
+        raise UsageError(f"extra={text!r}: a JSON object, its keys merged over the entry's extra")
+    out = dict(old or {})
+    for k, v in new.items():
+        if v is None:
+            out.pop(k, None)
+        else:
+            out[k] = v
+    return out or None
+
+
 def project_credits(proj, reg=None):
     """The assets a project credits (its cast's, the videos its footage frame effects and split inserts show, the photos
-    its photo_world sets are made of, then its [credits] assets, each once) and its own [credits] lines. A clip or a
-    photo given as a file counts when the registry (`reg`, default the configured one) has an entry with its path;
-    credit any other in [credits] lines."""
+    its photo_world sets are made of, the sprites its mandalas show, then its [credits] assets, each once) and its own
+    [credits] lines. A clip, a photo or a sprite given as a file (or a glob) counts when the registry (`reg`, default the
+    configured one) has an entry with its path; credit any other in [credits] lines."""
     from ..core.photoworld import is_file as is_image
     from ..footage import is_file
+    from ..mandala import sprite_slugs
     slugs = list(dict.fromkeys(c["asset"] for c in proj.cast if c.get("asset")))
     refs = [(c, is_file(c)) for c in footage_clips(proj.data)] + [(p, is_image(p)) for p in world_images(proj.data)]
     for ref, as_file in refs:
@@ -206,6 +228,7 @@ def project_credits(proj, reg=None):
             ref = e["slug"] if e else None
         if ref and ref not in slugs:
             slugs.append(ref)
+    slugs += [s for s in sprite_slugs(proj.data, proj.root, reg) if s not in slugs]
     slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
     return slugs, proj.data.get("credits", {}).get("lines", [])
 

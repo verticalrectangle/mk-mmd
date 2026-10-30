@@ -28,7 +28,7 @@ COLOR_ROLES = ("background", "subject", "accent")
 DEFAULT_COLORS = {"background": "base", "subject": "text", "accent": "surface"}
 SILHOUETTE_ONLY = ("accent", "tint", "knockout", "grow", "samples")     # shot keys no other style reads
 VECTOR_KEYS = ("colors", "tones", "materials", "lines", "shadow", "light", "opposite")
-VECTOR_ONLY = ("tones", "materials", "lines", "sketch")                 # shot keys only the vector style reads
+VECTOR_ONLY = ("tones", "materials", "lines", "sketch", "cutout")       # shot keys only the vector style reads
 VECTOR_ROLES = ("background", "line", "inner")
 VECTOR_COLORS = {"background": "base", "line": "text"}                  # `inner` defaults to `line`
 VECTOR_TONES = {"fill": {"lit": "text", "shade": "subtle"}}             # a project without [vector] tones
@@ -38,6 +38,11 @@ TEX_KINDS = ("drawn", "cel")                                            # tones 
 SKETCH = {"paper": "text", "ink": "base", "boil": 1.2, "fps": 12.0, "strokes": 2, "grain": 0.35, "hatch": 0.0,
           "seed": 1}                                                    # a vector look drawn as line art (`sketch`)
 SKETCH_CELL = 48.0                                                      # px at 1080 between two bends of a sketch's wobble
+SKETCH_PEN = {"pen": "pencil", "inks": None, "fill": 0.0}               # a sketch's pen, a crayon's inks and colouring-in
+SKETCH_PENS = ("pencil", "crayon")
+CRAYON_ALPHA = 0.93                                                     # how opaque a crayon's wax is where it lies
+CRAYON_GRAIN = 0.8                                                      # a crayon's `grain` by default: waxy, the tooth shows
+CRAYON_TONE = 0.4                                                       # inks = "tones": a tone's colour this far to the ink
 _SUFFIX = re.compile(r"\.\d{3}$")                                       # Blender's name-clash suffix: `face.001`
 
 
@@ -338,19 +343,20 @@ def _lines(given, where, lines):
 
 
 def _sketch_spec(s, palette):
-    """`sketch = true | {paper, ink, boil, fps, strokes, grain, hatch, seed}`: the vector look drawn as line art
-    (`_sketch`), with SKETCH's defaults; None without one."""
+    """`sketch = true | {paper, ink, boil, fps, strokes, grain, hatch, seed, pen, inks, fill}`: the vector look drawn as
+    line art (`_sketch`, or `_crayon` with `pen = "crayon"`), with SKETCH's and SKETCH_PEN's defaults; None without one."""
     if s is None or s is False:
         return None
     s = {} if s is True else s
+    known = {**SKETCH, **SKETCH_PEN}
     if not isinstance(s, dict):
-        raise StyleError(f"sketch = {s!r}: expected true or a table {{{', '.join(SKETCH)}}}")
-    unknown = sorted(set(s) - set(SKETCH))
+        raise StyleError(f"sketch = {s!r}: expected true or a table {{{', '.join(known)}}}")
+    unknown = sorted(set(s) - set(known))
     if unknown:
-        raise StyleError(f"sketch: unknown keys {unknown} (known: {', '.join(SKETCH)})")
-    o = {**SKETCH, **s}
+        raise StyleError(f"sketch: unknown keys {unknown} (known: {', '.join(known)})")
+    o = {**known, **({"grain": CRAYON_GRAIN} if s.get("pen") == "crayon" else {}), **s}
     num = {}
-    for k in ("boil", "fps", "grain", "hatch"):
+    for k in ("boil", "fps", "grain", "hatch", "fill"):
         if isinstance(o[k], bool) or not isinstance(o[k], (int, float)):
             raise StyleError(f"sketch: {k} = {o[k]!r} is not a number")
         num[k] = float(o[k])
@@ -358,21 +364,35 @@ def _sketch_spec(s, palette):
         raise StyleError("sketch: boil and hatch are px at 1080, 0 or more")
     if num["fps"] <= 0:
         raise StyleError(f"sketch: fps = {num['fps']}: how many times a second the lines are drawn again, above 0")
-    if not 0.0 <= num["grain"] <= 1.0:
-        raise StyleError(f"sketch: grain = {num['grain']}: a share in 0..1")
+    for k in ("grain", "fill"):
+        if not 0.0 <= num[k] <= 1.0:
+            raise StyleError(f"sketch: {k} = {num[k]}: a share in 0..1")
     strokes, seed = o["strokes"], o["seed"]
     if isinstance(strokes, bool) or not isinstance(strokes, int) or not 1 <= strokes <= 4:
         raise StyleError(f"sketch: strokes = {strokes!r}: how many times each line is drawn, 1 .. 4")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise StyleError(f"sketch: seed = {seed!r}: a whole number, 0 or more")
+    if o["pen"] not in SKETCH_PENS:
+        raise StyleError(f"sketch: pen = {o['pen']!r} (known: {', '.join(SKETCH_PENS)})")
+    if o["pen"] != "crayon" and (o["inks"] is not None or num["fill"] > 0):
+        raise StyleError("sketch: inks and fill are a crayon's (pen = \"crayon\")")
+    inks = o["inks"]
+    if inks == "tones":                    # each part's lines in a darker crayon of its own tone's colour
+        pass
+    elif inks is not None:
+        inks = [inks] if isinstance(inks, str) else inks
+        if not isinstance(inks, list) or not inks:
+            raise StyleError(f"sketch: inks = {o['inks']!r}: \"tones\", a colour or a list of them (one per line "
+                             f"group in turn)")
+        inks = [_rgb(resolve_colour(c, palette)) for c in inks]
     return {"paper": _rgb(resolve_colour(o["paper"], palette)), "ink": _rgb(resolve_colour(o["ink"], palette)), **num,
-            "strokes": strokes, "seed": seed}
+            "strokes": strokes, "seed": seed, "pen": o["pen"], "inks": inks}
 
 
 def normalize_vector(spec, palette, project=None):
     """The flat-vector look of a shot: the project's `[vector]` table (`project`) with the shot's own `colors`, `tones`,
-    `lines`, `hide` and `keep` laid over it, its own `materials` rules checked before the project's, and its `sketch`
-    (docs/design.md: Looks: vector)."""
+    `lines`, `hide` and `keep` laid over it, its own `materials` rules checked before the project's, and its `sketch` or
+    its `cutout` (docs/design.md: Looks: vector)."""
     project = {} if project is None else project
     if not isinstance(project, dict):
         raise StyleError("[vector] must be a table")
@@ -413,11 +433,19 @@ def normalize_vector(spec, palette, project=None):
     if len(light) != 3 or not any(light):
         raise StyleError(f"[vector] light = {project.get('light')!r}: expected [x, y, z] toward the light")
     cols = {k: _rgb(resolve_colour(colors[k], palette)) for k in VECTOR_ROLES}
+    sketch = _sketch_spec(spec.get("sketch"), palette)
+    from . import cutout as CU                     # numpy, which this module only imports where it draws
+    try:
+        cutout = CU.normalize(spec.get("cutout"), lambda v, what: _rgb(resolve_colour(v, palette)))
+    except CU.CutoutError as e:
+        raise StyleError(str(e)) from None
+    if sketch and cutout:
+        raise StyleError("sketch and cutout: a look is drawn in lines or cut out of paper, not both")
     return {"colors": cols, "tones": tones, "opposite": _opposite(project.get("opposite"), colors, tones, palette),
             "materials": [_material_rule(f"materials[{i}]", r, tones) for i, r in enumerate(own)]
                          + [_material_rule(f"[vector] materials[{i}]", r, tones) for i, r in enumerate(rules)],
             "default": "fill" if "fill" in tones else next(iter(tones)), "lines": lines, "shadow": shadow,
-            "light": light, "sketch": _sketch_spec(spec.get("sketch"), palette), "hide": _patterns(spec, "hide"),
+            "light": light, "sketch": sketch, "cutout": cutout, "hide": _patterns(spec, "hide"),
             "keep": _patterns(spec, "keep")}
 
 
@@ -688,6 +716,13 @@ def _lit(p, spec, scale):
     return ~dilate_round(~dilate_round(lit, r), r)                           # closed: no shadow pinholes
 
 
+def draws_fills(spec):
+    """Whether a vector look paints its tones' fills (and so reads the textures for a drawn or cel tone): not a sketch's
+    lines alone, but a crayon's colouring-in (`fill`) and a cut-out's paper do."""
+    sk = spec.get("sketch")
+    return not sk or (sk.get("pen") == "crayon" and sk.get("fill", 0.0) > 0.0)
+
+
 def _vector_slots(p, spec, table, scale, subject):
     """(slots, keys, lit): every pass pixel's colour as an index into `keys`, the colour roles of the look: "background",
     "line", "inner" and (tone, "lit" | "shade") or (tone, "band", i). A palette (`_vector_palette`) turns them into colours,
@@ -707,7 +742,7 @@ def _vector_slots(p, spec, table, scale, subject):
     r = max(1, int(round(scale)))
     lit = _lit(p, spec, scale)
     tex = p.get("tex")
-    for k, name in enumerate(names if not spec.get("sketch") else ()):          # a sketch draws its lines alone
+    for k, name in enumerate(names if draws_fills(spec) else ()):              # a sketch draws its lines alone
         m = cover & (T == k)
         if not m.any():
             continue
@@ -729,6 +764,8 @@ def _vector_slots(p, spec, table, scale, subject):
             slots[m] = len(keys) + band
             keys += [(name, "band", i) for i in range(last + 1)]
     px = min(H, W) / 1080.0                                                # pass pixels per px at 1080 on the short side
+    if spec.get("cutout"):                                                 # paper pieces: their cut edges are the lines
+        return slots, keys, lit
     groups = np.asarray(groups_of, np.int32)[mid]
     inner = (edges(groups) | depth_breaks(p["depth"], cover)) & cover
     slots[dilate_round(inner, spec["lines"]["inner"] * px / 2.0) & dilate_round(cover, r)] = 2
@@ -763,28 +800,44 @@ def compose_vector(p, spec, table, scale=VECTOR_SCALE, subject=True, flip=None, 
     on the short side. `subject = False` leaves the figures out. `flip` (H, W) bool paints those pixels in the look's
     `opposite` palette (the inside of the rings); `edges_on` is [(mask (H, W) bool, rgb)] painted last (the rings'
     wavefronts). A look with a `sketch` is line art instead (`_sketch`: the lines alone, in ink on paper, boiling with
-    the clip second `t`; no flip)."""
+    the clip second `t`; no flip; `_crayon` with a crayon's `pen`: waxy lines, coloured in with its `fill`), and one with
+    a `cutout` its fills cut out of paper (mkmmd.core.cutout: no lines, rough edges, a rim and shadows)."""
     import numpy as np
     slots, keys, lit = _vector_slots(p, spec, table, scale, subject)
-    if spec.get("sketch"):
+    sk = spec.get("sketch")
+    if sk and sk.get("pen", "pencil") != "crayon":
         out = _sketch(slots, lit, p, spec, t)
+    elif sk:
+        out = _crayon(slots, lit, p, spec, table, t, _flat(slots, keys, p, spec, None) if sk["fill"] > 0 else None)
     else:
-        out = _vector_palette(spec, keys)[slots]
-        if flip is not None and flip.any():
-            if spec.get("opposite") is None:
-                raise ValueError("rings flip the picture to the [vector] opposite palette, and the look has none")
-            out[flip] = _vector_palette(spec["opposite"], keys)[slots[flip]]
-        cel = [i for i, k in enumerate(keys) if not isinstance(k, str) and spec["tones"][k[0]]["kind"] == "cel"]
-        if cel:
-            if p.get("tex") is None:
-                raise ValueError("a cel tone takes the model's own colours from the textures: the passes need `tex`")
-            m = np.isin(slots, cel)
-            out[m] *= p["tex"][..., :3][m]
+        out = _flat(slots, keys, p, spec, flip)
+        if spec.get("cutout"):
+            from . import cutout as CU
+            pieces = np.asarray(table[1], np.int32)[p["id"]] if subject else np.zeros(slots.shape, np.int32)
+            out = CU.compose(out, pieces, p["depth"], spec["colors"]["background"], spec["cutout"], t, dilate_round)
     for mask, rgb in edges_on:
         out[mask] = rgb
     H, W = slots.shape
     s = int(scale)
     return out.reshape(H // s, s, W // s, s, 3).mean((1, 3)).astype(np.float32)
+
+
+def _flat(slots, keys, p, spec, flip):
+    """Every pass pixel in its colour (`_vector_slots`' slots in the look's palette, `flip` in its `opposite`), a cel
+    tone's pixels times the texture."""
+    import numpy as np
+    out = _vector_palette(spec, keys)[slots]
+    if flip is not None and flip.any():
+        if spec.get("opposite") is None:
+            raise ValueError("rings flip the picture to the [vector] opposite palette, and the look has none")
+        out[flip] = _vector_palette(spec["opposite"], keys)[slots[flip]]
+    cel = [i for i, k in enumerate(keys) if not isinstance(k, str) and spec["tones"][k[0]]["kind"] == "cel"]
+    if cel:
+        if p.get("tex") is None:
+            raise ValueError("a cel tone takes the model's own colours from the textures: the passes need `tex`")
+        m = np.isin(slots, cel)
+        out[m] *= p["tex"][..., :3][m]
+    return out
 
 
 def _smooth_noise(rng, shape, cell):
@@ -847,3 +900,101 @@ def _sketch(slots, lit, p, spec, t):
         ink = np.float32(1.0) - (np.float32(1.0) - ink) * (np.float32(1.0) - a)
     paper, pen = np.asarray(sk["paper"], np.float32), np.asarray(sk["ink"], np.float32)
     return paper + (pen - paper) * ink[..., None]
+
+
+def _owners(groups, depth, cover, r):
+    """The line group each pixel takes its crayon from, (H, W) int32: its own where a figure covers it, carried up to
+    `r` px out from the nearest surface, so an outline takes the part inside it and a line where one part passes in
+    front of another the nearer part's (0 where no figure is that near)."""
+    import numpy as np
+    g = np.where(cover, groups, 0).astype(np.int32)
+    z = np.where(cover, depth, np.inf).astype(np.float32)
+    for _ in range(int(np.ceil(r))):
+        for ax, d in ((0, 1), (0, -1), (1, 1), (1, -1)):
+            zs, gs = np.roll(z, d, axis=ax), np.roll(g, d, axis=ax)
+            edge = [slice(None), slice(None)]
+            edge[ax] = slice(0, 1) if d > 0 else slice(-1, None)
+            zs[tuple(edge)] = np.inf                             # nothing comes round from the other side
+            take = zs < z
+            z, g = np.where(take, zs, z), np.where(take, gs, g)
+    return g
+
+
+def _bbox(mask, margin, shape):
+    """(rows, columns) slices of `mask`'s box grown by `margin` px, inside `shape`; None for an empty mask."""
+    import numpy as np
+    ys, xs = np.nonzero(mask)
+    if not len(ys):
+        return None
+    return (slice(max(int(ys.min()) - margin, 0), min(int(ys.max()) + margin + 1, shape[0])),
+            slice(max(int(xs.min()) - margin, 0), min(int(xs.max()) + margin + 1, shape[1])))
+
+
+def _crayon(slots, lit, p, spec, table, t, flat=None):
+    """The vector look drawn in crayon on paper, float32 (H, W, 3) at the passes' size: the outline and inner lines in
+    waxy crayon (mkmmd.core.crayon: pressed hardest along their middle, the paper's tooth showing through, the edges
+    broken), each line group's in its own colour of `inks` in turn (an outline in the part's inside it, a line where one
+    part passes in front of another in the nearer's; all in `ink` without them), drawn `strokes` times by a hand that
+    wobbles up to `boil` px and draws again `fps` times a second; `hatch` shades what the light does not reach. With a
+    `fill` every part is first coloured in with back-and-forth strokes in its tone's colour (`flat`, the look's fills),
+    each part's strokes leaning their own way, as a child colours a page."""
+    import numpy as np
+    from . import crayon as CR
+    sk = spec["sketch"]
+    H, W = slots.shape
+    px = min(H, W) / 1080.0
+    out = np.empty((H, W, 3), np.float32)
+    out[:] = np.asarray(sk["paper"], np.float32)
+    lines = (slots == 1) | (slots == 2)
+    cover = (p["id"] > 0) if lit is not None else np.zeros((H, W), bool)
+    width = max(spec["lines"]["outline"], spec["lines"]["inner"]) * px
+    box = _bbox(lines | cover, int(np.ceil(width + 3.0 * sk["boil"] * px + 2.0 * sk["hatch"] * px)) + 4, (H, W))
+    if box is None:
+        return out
+    step = 0 if t is None else int(np.floor(float(t) * sk["fps"] + 1e-6))
+    grain = CR.tooth((H, W), px, sk["seed"])[box]
+    pic = out[box].copy()
+    cov, ln = cover[box], lines[box]
+    h, w = cov.shape
+    groups = np.where(cov, np.asarray(table[1], np.int32)[p["id"][box]], 0)
+    if flat is not None:
+        fill, tone = np.zeros((h, w), np.float32), slots[box] >= 3
+        for g in np.unique(groups[cov]):
+            part = _bbox(cov & (groups == g), 2, (h, w))
+            rng = np.random.default_rng([sk["seed"], int(g), step % (1 << 32), 3])
+            region = (groups[part] == g) & tone[part]
+            a = CR.scribble(region, px, rng, grain[part], 25.0 + 130.0 * rng.random(), sk["fill"])
+            fill[part] = np.maximum(fill[part], a)
+        a = (fill * np.float32(CRAYON_ALPHA))[..., None]
+        pic = pic * (1.0 - a) + flat[box] * a
+    pen = np.asarray(sk["ink"], np.float32)
+    if sk["inks"] == "tones":                  # each material's lines in its tone's colour, toward the ink
+        tones = [spec["tones"][n] for n in table[0][1:]]
+        inks = np.asarray([pen] + [pen if tn["kind"] == "cel" else
+                                   np.asarray(tn["colors"][len(tn["colors"]) // 2] if tn["kind"] == "drawn"
+                                              else tn["lit"], np.float32) * (1.0 - CRAYON_TONE) + pen * CRAYON_TONE
+                                   for tn in tones], np.float32)
+        which = _owners(np.where(cov, p["id"][box], 0), p["depth"][box], cov, 0.6 * width + sk["boil"] * px + 1.0)
+    elif sk["inks"]:
+        inks = np.concatenate([pen[None], np.asarray(sk["inks"], np.float32).reshape(-1, 3)])
+        owner = _owners(groups, p["depth"][box], cov, 0.6 * width + sk["boil"] * px + 1.0)
+        which = np.where(owner > 0, (owner - 1) % len(sk["inks"]) + 1, 0)
+    else:
+        inks, which = pen[None], np.zeros((h, w), np.int32)
+    shadow = (cov & ~lit[box]) if sk["hatch"] > 0 and lit is not None else None
+    alpha = np.float32(CRAYON_ALPHA if sk["strokes"] == 1 else 0.75)
+    ys, xs = np.arange(h, dtype=np.float32)[:, None], np.arange(w, dtype=np.float32)[None, :]
+    for s in range(sk["strokes"]):
+        rng = np.random.default_rng([sk["seed"], s, step % (1 << 32)])
+        dy = _smooth_noise(rng, (h, w), SKETCH_CELL * px) * np.float32(sk["boil"] * px)
+        dx = _smooth_noise(rng, (h, w), SKETCH_CELL * px) * np.float32(sk["boil"] * px)
+        m = _warp(ln, dy, dx)
+        if shadow is not None:
+            per = sk["hatch"] * px
+            u = ((xs + dx) + (ys + dy) if s % 2 == 0 else (xs + dx) - (ys + dy)) / np.float32(per * np.sqrt(2.0))
+            m = m | ((np.abs(u - np.rint(u)) < 0.2) & _warp(shadow, dy, dx))      # wax strokes 0.4 of the pitch wide
+        a = (CR.stroke(m, width, px, rng, grain, sk["grain"]) * alpha)[..., None]
+        col = inks[_warp(which, dy, dx)]
+        pic = pic * (1.0 - a) + col * a
+    out[box] = pic
+    return out

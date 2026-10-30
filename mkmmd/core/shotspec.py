@@ -4,8 +4,8 @@ checks the shots stage makes before it builds a camera. The stage reads the keys
 from . import fisheye as FE
 from .screentype import deep_merge
 
-LOOK = ("style", "colors", "tones", "materials", "lines", "sketch", "hide", "keep", "accent", "tint", "knockout", "grow",
-        "samples", "reflection")
+LOOK = ("style", "colors", "tones", "materials", "lines", "sketch", "cutout", "hide", "keep", "accent", "tint", "knockout",
+        "grow", "samples", "reflection")
 OWN = ("name", "from", "to", "plate", "aspect")                     # a shot's own: no per-output table changes them
 SHOT = OWN + ("mount", "at", "look", "lens", "roll", "lag", "shake", "keys", "frame", "shift", "dof", "follow",
               "fisheye") + LOOK
@@ -15,7 +15,7 @@ SOLVES = ("lens", "distance", "dolly")
 DOF = ("focus", "fstop", "offset")
 FOLLOW = ("target", "axes", "lag", "from")
 KEYS = ("t", "at", "look", "lens", "roll", "shift")
-TABLES = ("frame", "dof", "follow", "fisheye", "colors", "tones", "lines", "sketch", "knockout",
+TABLES = ("frame", "dof", "follow", "fisheye", "colors", "tones", "lines", "sketch", "cutout", "knockout",
           "reflection")                                    # laid over the shot's own key by key
 NOT_FISHEYE = {                                            # what a fisheye camera refuses, and why
     "lens": "a fisheye's focal length comes from its `fov` and `fill`, for each output's picture",

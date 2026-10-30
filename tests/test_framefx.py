@@ -1,10 +1,12 @@
 """Frame effects (mkmmd.core.framefx: the [[fx]] entries checked and timed; mkmmd.framefx: the picture work) on synthetic
 pictures: their errors, that they may overlap anything and stack in table order, which layers they ask for (points through
 the shot in the cut, the frames an echo reads), their strength keys, and what each effect does to a picture."""
+import cv2
 import numpy as np
 import pytest
 
 from mkmmd import framefx as FF
+from mkmmd import stack as ST
 from mkmmd.core import framefx as FX
 from mkmmd.core import palette as PAL
 from mkmmd.core import transition as TR
@@ -65,6 +67,9 @@ def runner(pl, frames=None, points=None):
     ({"kind": "panels", "from": 0, "to": 1, "objects": "a", "count": 1}, "count = 1: expected 2..12"),
     ({"kind": "stack", "from": 0, "to": 1, "objects": "a", "min_db": -3}, "give the `lane`"),
     ({"kind": "orbit", "from": 0, "to": 1, "objects": "a", "edge": {"width": 2}}, "expected {color, width}"),
+    ({"kind": "orbit", "from": 0, "to": 1, "objects": "a", "back": ["picture", "nope"]}, "colour 'nope'"),
+    ({"kind": "stack", "from": 0, "to": 1, "objects": "a", "mirror": 1}, "mirror is true or false"),
+    ({"kind": "grid", "from": 0, "to": 1, "objects": "a", "mirror": True}, "unknown keys ['mirror']"),
 ])
 def test_bad_fx_say_what_is_wrong(spec, frag):
     with pytest.raises(TR.TransitionError, match=frag.replace("[", r"\[").replace("]", r"\]")):
@@ -371,7 +376,7 @@ def test_panels_cut_the_long_side_and_put_the_figure_on_the_middle_line_of_each(
 
 def test_a_stack_lays_its_banded_copies_behind_the_figure_each_a_step_further_and_its_delay_reads_poses_before():
     img, m = ramp(), square(20, 24, 10, 20)
-    out = FF.stack(img, m, BLACK, [(None, m, BLUE), (None, m, WHITE)], (6.0, 0.0), 1.0, (31.5, 17.5), RED)
+    out = ST.stack(img, m, BLACK, [(None, m, BLUE), (None, m, WHITE)], (6.0, 0.0), 1.0, (31.5, 17.5), RED)
     assert out[15, 18:38].tolist() == [BLACK] * 2 + [RED] * 4 + [BLACK] * 2 + [BLUE] * 4 + [BLACK] * 2 + [WHITE] * 4 + [
         BLACK] * 2
     pl = plan([{"kind": "stack", "from": 1.0, "to": 2.0, "objects": "Fig*", "count": 2, "delay": 2, "back": "#000000",
@@ -381,3 +386,117 @@ def test_a_stack_lays_its_banded_copies_behind_the_figure_each_a_step_further_an
                      figure_of=lambda key, g: figs[g])
     got = run.frame(F0 + 35, ramp())[15, 9:21].tolist()
     assert got == [BLACK] * 2 + [GREEN] * 2 + [BLUE] * 2 + [RED] * 4 + [BLACK] * 2   # 4 and 2 frames before, nearer over
+
+
+# ---------------------------------------------------------------- picture backs and a stack's mirror image
+@pytest.mark.parametrize("kind", FX.FIGURES)
+def test_every_collage_takes_the_picture_for_its_back_alone_or_in_a_list(kind):
+    own = {"clip": "clip.mp4"} if kind == "footage" else {}
+    one = FX.normalize({"kind": kind, "from": 0, "to": 1, "objects": "a", "back": "picture", **own}, MOON)
+    mixed = FX.normalize({"kind": kind, "from": 0, "to": 1, "objects": "a", "back": ["love", "picture"], **own}, MOON)
+    assert one["back"] == [None] and mixed["back"][1] is None and len(mixed["back"][0]) == 3
+
+
+def grey_clip(path):
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (32, 32))
+    for _ in range(30):
+        vw.write(np.full((32, 32, 3), 128, np.uint8))
+    vw.release()
+    return str(path)
+
+
+@pytest.mark.parametrize("kind, own", [
+    ("stack", {"count": 2, "step": [0.2, 0.0], "bands": ["#FFFFFF"]}),
+    ("orbit", {"count": 3, "radius": 0.4, "tilt": 0.0}),
+    ("panels", {"count": 2, "slant": 0.0}),
+    ("footage", {"fit": "contain"}),
+])
+def test_a_picture_back_is_the_frame_as_it_reached_the_collage_wherever_the_collage_draws_nothing(kind, own, tmp_path):
+    if kind == "footage":
+        own = {**own, "clip": grey_clip(tmp_path / "clip.mp4")}
+
+    def draw(back):
+        pl = plan([{"kind": kind, "from": 1.0, "to": 2.0, "objects": "Fig*", "back": back, "fill": "#FFFFFF", **own}])
+        run = FF.FrameFx(pl["fx"], (W, H), fps=FPS, frame0=F0, frame_of=lambda g: None, point_of=None,
+                         figure_of=lambda key, g: square(8, 14, 10, 24), footage_of=lambda c: FF.FT.Clip(c))
+        return run.frame(F0 + 35, ramp())
+    black = draw("#000000")                                      # what the collage draws, seen on black
+    drawn = black.max(-1) > 0
+    out = draw("picture")
+    assert drawn.any() and not drawn.all()
+    assert np.abs(out - ramp())[~drawn].max() < 1e-6            # round it the frame as it was, the figure there too
+    assert np.allclose(out[black.min(-1) > 0.99], 1.0)          # and over it what it draws
+
+
+def test_a_grid_s_picture_back_is_the_frame_shrunk_as_its_figure_is_and_reflected_out_to_the_cell():
+    img, m = ramp(), square(20, 24, 10, 20)                     # 2 x 2 blocks: shrunk by half it stays whole
+    out = FF.grid(img, m, (2, 1), lambda i, j: img, lambda i, j: None)
+    small = cv2.resize(img, (32, 18), interpolation=cv2.INTER_AREA)
+    for x in (0, 32):                                           # each cell 32 x 36: the frame 32 x 18 in its middle
+        cell = out[:, x:x + 32]
+        assert np.allclose(cell[9:27], small, atol=1e-6)        # the figure over its own picture: seamless
+        assert np.allclose(cell[:9], small[8::-1], atol=1e-6) and np.allclose(cell[27:], small[17:8:-1], atol=1e-6)
+    board = FF.grid(img, m, (2, 1), lambda i, j: [img, BLUE][i], lambda i, j: RED)
+    ground = cv2.resize(m, (32, 18), interpolation=cv2.INTER_AREA) == 0
+    assert np.allclose(board[9:27, :32][ground], small[ground], atol=1e-6)    # the picture round her silhouette
+    assert board[16, 10].tolist() == RED and board[0, 63].tolist() == BLUE and board[16, 42].tolist() == RED
+
+
+def test_a_mirror_on_the_picture_folds_the_frame_itself():
+    img, m = ramp(), square(10, 16, 10, 20)                     # her side: the left
+    out = FF.mirror(img, m, (31.5, 17.5), "x", lambda j: img, lambda j: None)
+    assert np.array_equal(out[:, :32], img[:, :32])             # her side as it is
+    assert np.array_equal(out[:, 32:], img[:, 31::-1])          # and its reflection
+
+
+def test_a_mirrored_stack_is_drawn_again_reflected_its_figure_the_same_pixels_its_edge_and_shadow_flipped():
+    img, m = ramp(), square(14, 18, 10, 20)
+    grey = [0.5, 0.5, 0.5]
+    copies = [(None, square(14, 18, 10, 20), BLUE), (None, square(14, 18, 10, 20), GREEN)]
+    edge, shadow = (WHITE, 2.0), (BLACK, (2.5, 3.0), 1.5, 0.5)
+    out = ST.stack(img, m, grey, copies, (-4.0, -2.0), 1.0, (31.5, 17.5), None, edge, shadow, mirror=True)
+    assert np.allclose(out, out[:, ::-1], atol=1e-5)            # a mirror image, its shadow falling the other way
+    assert np.array_equal(out[10:20, 46:50], img[10:20, 14:18][:, ::-1])     # the figure: its own pixels, flipped
+    assert np.array_equal(out[10:20, 14:18], img[10:20, 14:18])
+    assert out[18:25, 20:26, 0].min() < 0.45 and out[18:25, 38:44, 0].min() < 0.45     # down and right, down and left
+    plain = ST.stack(img, m, grey, copies, (-4.0, -2.0), 1.0, (31.5, 17.5), None, edge, shadow)
+    assert np.array_equal(plain[:, :32], out[:, :32]) and np.allclose(plain[:, 32:], grey)   # without: nothing else
+
+
+def test_a_mirrored_stack_s_echo_steps_the_mirrored_way_about_a_centre_anywhere():
+    img, m = ramp(), square(14, 18, 10, 20)
+    copies = [(None, m, BLUE), (None, m, WHITE)]
+    out = ST.stack(img, m, BLACK, copies, (-4.0, 0.0), 1.0, (25.1, 17.5), RED, mirror=True)   # about x = 25
+    row = [BLACK] * 6 + [WHITE] * 4 + [BLUE] * 4 + [RED] * 4 + [BLACK] * 15 + [RED] * 4 + [BLUE] * 4 + [WHITE] * 4
+    assert out[15, :45].tolist() == row and out[15, 45:].tolist() == [BLACK] * 19
+
+
+def test_a_mirrored_stack_over_the_picture_flanks_its_centre_both_echoes_trailing_outward():
+    pl = plan([{"kind": "stack", "from": 1.0, "to": 2.0, "objects": "Fig*", "back": "picture", "mirror": True,
+                "center": {"point": "bone('upper_body2').head"}, "count": 2, "delay": 2, "step": [-4 / 36, -2 / 36],
+                "bands": ["#0000FF", "#00FF00"], "fill": "#FF0000"}])
+    figs = {F0 + 30 + k: square(14 + k, 18 + k, 10, 20) for k in range(-4, 10)}      # she walks right, a pixel a frame
+    run = FF.FrameFx(pl["fx"], (W, H), fps=FPS, frame0=F0, frame_of=lambda g: None,
+                     point_of=lambda key, g: ((33.0, 17.5), None), figure_of=lambda key, g: figs[g])
+    img = ramp()
+    out = run.frame(F0 + 35, img)                               # the line x = 33; 2 and 4 frames before, 4 and 8 px on
+    drawn = np.zeros((H, W), bool)
+    for x0, x1, y0, y1, colour in ((19, 23, 10, 20, RED), (13, 17, 8, 18, BLUE), (7, 11, 6, 16, GREEN),
+                                   (44, 48, 10, 20, RED), (50, 54, 8, 18, BLUE), (56, 60, 6, 16, GREEN)):
+        assert out[y0:y1, x0:x1].reshape(-1, 3).tolist() == [colour] * ((x1 - x0) * (y1 - y0))
+        drawn[y0:y1, x0:x1] = True
+    assert out[12, 7:24].tolist() == [GREEN] * 4 + img[12, 11:13].tolist() + [BLUE] * 4 + img[12, 17:19].tolist() + [
+        RED] * 4 + img[12, 23:24].tolist()
+    assert out[12, 44:60].tolist() == [RED] * 4 + img[12, 48:50].tolist() + [BLUE] * 4 + img[12, 54:56].tolist() + [
+        GREEN] * 4
+    assert np.array_equal(out[~drawn], img[~drawn])            # the picture everywhere else
+
+
+def test_a_contained_clip_sits_on_the_picture(tmp_path):
+    pl = plan([{"kind": "footage", "from": 0.0, "to": 1.0, "objects": "Fig*", "clip": grey_clip(tmp_path / "c.mp4"),
+                "fit": "contain", "back": "picture"}])
+    r = FF.FrameFx(pl["fx"], (W, H), fps=FPS, frame0=F0, frame_of=lambda g: None, point_of=None,
+                   figure_of=lambda key, g: np.zeros((H, W), np.float32), footage_of=lambda c: FF.FT.Clip(c))
+    out = r.frame(F0 + 3, ramp())
+    assert np.allclose(out[:, 16:48], 128 / 255, atol=0.03)    # the square clip in the middle
+    assert np.array_equal(out[:, :14], ramp()[:, :14]) and np.array_equal(out[:, 50:], ramp()[:, 50:])

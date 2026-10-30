@@ -172,7 +172,8 @@ def run(ctx):
         name = spec["name"]
         need, plate = needs.get(name), bool(spec.get("plate"))
         if plate and need is None:
-            ctx.log(f"WARNING shot {name!r}: plate = true but no [[transition]] or [[insert]] takes frames from it; skipped")
+            ctx.log(f"WARNING shot {name!r}: plate = true but no [[transition]], [[insert]] or [[fx]] collage takes "
+                    f"frames from it; skipped")
             continue
         if "from" in spec:
             f_from, f_to = int(round(ctx.frame(float(spec["from"])))), int(round(ctx.frame(float(spec["to"]))))

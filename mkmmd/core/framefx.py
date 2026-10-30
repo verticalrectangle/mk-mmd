@@ -26,7 +26,9 @@ The collages cut a figure (`objects`, drawn as its coverage beside the frame by 
 on flat colour, its picture, a flat silhouette or a silkscreen print of it (`fill`); on each hit (`times`, or a `lane`, as
 a zoom's) they step on: a list of colours, fills or sizes is read at the number of hits so far, plus the number of the
 cell, copy, panel or region it paints, so a list of two colours is a chessboard that flips on every hit. Their figure may
-move (`keys`: turned, moved and scaled about a `pivot`), wear an `edge` and cast a drop `shadow`.
+come from another shot's own render (`shot`, a plate: its camera, look and lights) instead of the cut's frame, be set
+into the frame (`at` and `height`, about its `pivot`), move (`keys`: turned, moved and scaled about the pivot), wear an
+`edge` and cast a drop `shadow`.
 
     grid      the frame shrunk into cells (`cells`: n x n, or [columns, rows]), the figure in each on a chessboard of
               `back`; with `divide` each step's new cells grow out of the old ones (cell division, and back); a `piece`
@@ -37,8 +39,22 @@ move (`keys`: turned, moved and scaled about a `pivot`), wear an `edge` and cast
               half with the figure in it (moved to `place` first) and its reflections, each region its own colours
     panels    the frame cut into slanted panels across its long side, the figure in each, `delay` frames apart
     stack     the figure in front of a stack of flat copies of it (`bands`), each `step` further and `scale` as large: a
-              banded echo, or with a `delay` the poses before
+              banded echo, or with a `delay` the poses before; with `mirror` the stack again, reflected left for right
+              about the vertical line through `center`, its echo stepping the mirrored way. Its bands may be wallpapers
+              of sprites, its copies drawn in eras' `looks`, a tunnel that `recede`s forever, busy clones that `peel`
+              off to places of their own, all of it squashing on the hits (`squash`): mkmmd.core.stack
     footage   the figure laid over the frames of a video (`clip`, mkmmd.footage), cut out like a sticker
+
+A collage's `back` may be a pattern instead of a flat colour (mkmmd.core.fields.backs), or "picture": the frame as it
+reached the effect, her world behind the figure. The colour fields `liquid`, `spiral` and `flood` (mkmmd.core.fields)
+paint the picture with a light show, op-art or a colour blooming from a point. A `mandala` (rings of copies of the
+figure, sprites or stickers) and `trails` (rainbow after-images of the figure) are mkmmd.core.mandala's. The remaps
+`kaleido` (a kaleidoscope), `tunnel` (a Droste tunnel falling inward) and `melt` (the picture breathing, rippling,
+swirling, dripping, wobbling) move the picture's pixels about (mkmmd.core.remap). The era looks `digicam`, `chrome`,
+`gradmap`, `invert`, `testcard` and `cards` are mkmmd.core.eralook's, and so are the `era` presets of a film and a
+camcorder. The toy paint app `paintapp` (its chrome, a cursor, stamps, bucket fills, an eraser across a cut, undo) is
+mkmmd.core.paintapp's. The paper world's `activity` (a workbook page and its exercises done on the hits) and `label`
+(tiny editorial type with dotted leaders) are mkmmd.core.activity's and mkmmd.core.labels'.
 
 Any entry may give `aspect.<output>` tables: its own keys for one output (the span, the figure and the frames it reads
 stay the entry's).
@@ -48,14 +64,22 @@ import math
 
 import numpy as np
 
+from . import activity as AC
+from . import eralook as ER
+from . import fields as FL
+from . import labels as LB
 from . import lanes as LN
+from . import mandala as MD
+from . import paintapp as PA
 from . import picturefx as PF
+from . import remap as RM
 from . import shotstyle as SS
+from . import stack as SK
 from . import tween as TW
 
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
-         "mosh") + FIGURES + PF.KINDS
+         "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 SILK = "silkscreen"                                     # a collage's fill: the figure printed in flat inks, Warhol's
 BLENDS = ("lighten", "darken")
@@ -64,8 +88,9 @@ EASES = ("log", "smooth", "linear")
 STEMS = ("drums", "bass", "other", "vocals", "mix")
 _COMMON = {"kind", "from", "to", "strength", "aspect", "rect", "feather"}
 _HITS = {"times", "lane", "min_db", "every"}            # zoom and shock fire on these, a collage steps on them
-_FIGURE = {"objects", "back", "fill", "edge", "shadow", "keys", "pivot", "inks", "offset"} | _HITS   # a collage's
-#                                                         figure, its colours, prints and moves, the hits it steps on
+_FIGURE = {"objects", "back", "fill", "edge", "shadow", "keys", "pivot", "inks", "offset", "shot", "at",
+           "height"} | _HITS      # a collage's figure, the shot it comes from and where it stands in the frame, its
+#                                  colours, prints and moves, the hits it steps on
 _FOOTAGE = {"clip", "in", "rate", "loop", "fit", "focus", "mirror"}
 KEYS = {"lens": _COMMON | {"center", "radius", "radius_m", "shadow"},
         "echo": _COMMON | {"count", "every", "fade", "blend", "tint"},
@@ -83,18 +108,20 @@ KEYS = {"lens": _COMMON | {"center", "radius", "radius_m", "shadow"},
         "orbit": _COMMON | _FIGURE | {"center", "count", "radius", "tilt", "scale", "size", "turn", "spin"},
         "mirror": _COMMON | _FIGURE | {"center", "axes", "place"},
         "panels": _COMMON | _FIGURE | {"count", "slant", "size", "delay"},
-        "stack": _COMMON | _FIGURE | {"count", "step", "scale", "center", "bands", "delay"},
+        "stack": _COMMON | _FIGURE | set(SK.KEYS),
         "footage": _COMMON | _FIGURE | _FOOTAGE}
 KEYS.update({"pixelsort": _COMMON | _HITS | {"by", "lo", "hi", "axis", "reverse", "mask", "objects", "decay"},
              "film": _COMMON | {"mono", "fps", "grain", "flicker", "weave", "dust", "scratches", "hair", "vignette",
-                                "contrast", "seed"},
+                                "contrast", "saturation", "dye", "halation", "era", "seed"},
              "camcorder": _COMMON | {"date", "time", "tick", "font", "corner", "indicator", "color", "size", "tracking",
-                                     "chroma", "scanlines", "jitter", "soft", "saturation", "noise", "seed"},
+                                     "chroma", "scanlines", "jitter", "soft", "saturation", "noise", "switching", "era",
+                                     "seed"},
              "doodle": _COMMON | {"marks", "fps", "width", "outline", "wobble", "seed"},
              "booth": _COMMON | _HITS | {"count", "flash", "drop", "border", "paper", "back", "tilt", "layout", "ratio",
                                          "focus", "size", "doodles", "caption", "font", "color", "seed"}})
 _FIGURE_DEFAULTS = {"back": "base", "fill": PICTURE, "edge": None, "shadow": None, "keys": None, "pivot": "base",
-                    "inks": None, "offset": [4.0, -3.0], "min_db": None, "every": 1}
+                    "inks": None, "offset": [4.0, -3.0], "min_db": None, "every": 1, "shot": None, "at": None,
+                    "height": None}
 DEFAULTS = {"lens": {"radius": 0.1, "shadow": 0.0},
             "echo": {"count": 4, "every": 3, "fade": 0.55, "blend": "lighten", "tint": None},
             "slitscan": {"depth": 24, "now": "right"},
@@ -115,27 +142,39 @@ DEFAULTS = {"lens": {"radius": 0.1, "shadow": 0.0},
                       "size": 0.6, "turn": 30.0, "spin": 0.0},
             "mirror": {**_FIGURE_DEFAULTS, "center": [0.5, 0.5], "axes": "x", "place": None},
             "panels": {**_FIGURE_DEFAULTS, "count": 3, "slant": 12.0, "size": 1.0, "delay": 0},
-            "stack": {**_FIGURE_DEFAULTS, "count": 5, "step": [-0.02, -0.006], "scale": 1.0, "center": [0.5, 0.5],
-                      "bands": ["text", "base"], "delay": 0},
+            "stack": {**_FIGURE_DEFAULTS, **SK.DEFAULTS},
             "footage": {**_FIGURE_DEFAULTS, "in": 0.0, "rate": 1.0, "loop": False, "fit": "cover", "focus": [0.5, 0.5],
                         "mirror": False}}
 DEFAULTS.update({"pixelsort": {"by": "luma", "lo": 0.25, "hi": 0.8, "axis": "x", "reverse": False, "mask": None,
                                "decay": 0.12, "min_db": None, "every": 1},
                  "film": {"mono": False, "fps": None, "grain": 0.06, "flicker": 0.05, "weave": 1.5, "dust": 3,
-                          "scratches": 1, "hair": 0.0, "vignette": 0.3, "contrast": 1.0, "seed": 1},
+                          "scratches": 1, "hair": 0.0, "vignette": 0.3, "contrast": 1.0, "saturation": 1.0, "dye": 0.0,
+                          "halation": 0.0, "era": None, "seed": 1},
                  "camcorder": {"date": None, "time": None, "tick": False, "font": None, "corner": "bottom-right",
                                "indicator": "PLAY", "color": "#FFFFFF", "size": 0.05, "tracking": 0.3, "chroma": 6.0,
                                "scanlines": 0.15, "jitter": 1.0, "soft": 1.2, "saturation": 0.8, "noise": 0.04,
-                               "seed": 1},
+                               "switching": 0.0, "era": None, "seed": 1},
                  "doodle": {"fps": 8.0, "width": 9.0, "outline": 5.0, "wobble": 1.5, "seed": 1},
                  "booth": {"count": 4, "flash": 0.15, "drop": 0.3, "border": 16.0, "paper": "#FFFFFF", "back": "rose",
                            "tilt": -4.0, "layout": None, "ratio": 0.8, "focus": [0.5, 0.42], "size": 0.86,
                            "doodles": 2, "caption": None, "font": None, "color": "text", "seed": 1, "min_db": None,
                            "every": 1}})
+KEYS.update({k: _COMMON | own for k, own in FL.KEYS.items()})
+DEFAULTS.update(FL.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in MD.KEYS.items()})
+DEFAULTS.update(MD.DEFAULTS)
+KEYS.update({k: _COMMON | _HITS | own for k, own in RM.KEYS.items()})
+DEFAULTS.update(RM.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in {**AC.KEYS, **LB.KEYS}.items()})
+DEFAULTS.update({**AC.DEFAULTS, **LB.DEFAULTS})
+KEYS.update({k: _COMMON | own for k, own in ER.KEYS.items()})
+DEFAULTS.update(ER.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in PA.KEYS.items()})
+DEFAULTS.update(PA.DEFAULTS)
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
 AXES = ("x", "y", "xy")                                 # a mirror's fold: about a vertical line, a horizontal one, both
 FITS = ("cover", "contain")                             # how footage meets the frame: filled and cropped, or whole
-FIXED = ("kind", "from", "to", "objects", "aspect")     # what an aspect.<output> table may not set
+FIXED = ("kind", "from", "to", "objects", "shot", "aspect")   # what an aspect.<output> table may not set
 MOVE = {"turn": 0.0, "dx": 0.0, "dy": 0.0, "scale": 1.0}             # a figure's move at rest: degrees, heights, times
 MOVE_EASES = ("inout", "in", "out", "linear", "back")
 BACK = 0.1                                              # how far a `back` ease overshoots its key: 10 % of the way
@@ -233,7 +272,7 @@ def normalize(spec, palette, what="fx"):
     for k in ("from", "to"):
         if k not in spec:
             raise FxError(f"{what}: `{k}` (clip seconds) is required")
-    out = {**DEFAULTS[kind], **spec}
+    out = {**DEFAULTS[kind], **ER.era(kind, spec, what), **spec}
     out["from"], out["to"] = _num(spec["from"], f"{what} from"), _num(spec["to"], f"{what} to")
     if out["to"] <= out["from"]:
         raise FxError(f"{what}: `to` ({out['to']:g}) must come after `from` ({out['from']:g})")
@@ -332,6 +371,20 @@ def normalize(spec, palette, what="fx"):
         _figure(spec, out, palette, what)
     elif kind in PF.KINDS:
         PF.normalize(spec, out, palette, what)
+    elif kind in FL.KINDS:
+        FL.normalize(spec, out, palette, what)
+    elif kind in MD.KINDS:
+        MD.normalize(spec, out, palette, what)
+    elif kind in RM.KINDS:
+        RM.normalize(spec, out, palette, what)
+    elif kind in AC.KINDS:
+        AC.normalize(spec, out, palette, what)
+    elif kind in LB.KINDS:
+        LB.normalize(spec, out, palette, what)
+    elif kind in ER.KINDS:
+        ER.normalize(spec, out, palette, what)
+    elif kind in PA.KINDS:
+        PA.normalize(spec, out, palette, what)
     out["aspect"] = _aspects(spec, palette, label, what)
     return out
 
@@ -445,6 +498,12 @@ def _colours(v, palette, what, picture=False):
             else _colour(c, palette, what) for c in items]
 
 
+def _backs(v, palette, what):
+    """A collage's `back`: a colour, a pattern (`{pattern = "spiral", colors = [...], ...}`, mkmmd.core.fields), "picture"
+    (the frame as it reached the effect) or a list of them -> [rgb, pattern or None (the picture), ...]."""
+    return FL.backs(v, palette, what)
+
+
 def _shadow(v, palette, what):
     """A collage's drop `shadow`: {color, offset, blur, alpha} with SHADOW's defaults (offset [dx, dy] in frame heights,
     blur px at 1080 on the short side); None: none."""
@@ -524,7 +583,7 @@ def _figure(spec, out, palette, what):
         raise FxError(f"{what}: objects = {spec['objects']!r}: expected object patterns (`name*`, `@collection`, "
                       f"`prop:key`), a list or one")
     out["objects"] = list(objs)
-    out["back"] = _colours(out["back"], palette, f"{what} back")
+    out["back"] = _backs(out["back"], palette, f"{what} back")
     out["fill"] = _colours(out["fill"], palette, f"{what} fill", picture=True)
     e = out["edge"]
     if e is not None:
@@ -538,6 +597,12 @@ def _figure(spec, out, palette, what):
     if isinstance(pv, str) and pv not in PIVOTS:
         raise FxError(f"{what}: pivot {pv!r}: \"base\", \"center\" or [x, y] (frame fractions)")
     out["pivot"] = pv if isinstance(pv, str) else _pair(pv, f"{what} pivot")
+    sh = out["shot"]
+    if sh is not None and (not isinstance(sh, str) or not sh.strip()):
+        raise FxError(f"{what}: shot = {sh!r}: expected the name of a [[shot]] (typically one with plate = true) whose "
+                      f"own render the figure is taken from")
+    out["at"] = None if out["at"] is None else _pair(out["at"], f"{what} at")
+    out["height"] = None if out["height"] is None else _num(out["height"], f"{what} height", 0.01, 10.0)
     out["inks"] = _inks(out["inks"], palette, what)
     out["offset"] = _pair(out["offset"], f"{what} offset")
     _hits(spec, out, what, required=False)
@@ -572,12 +637,7 @@ def _figure(spec, out, palette, what):
         out["size"] = _num(out["size"], f"{what} size", lo=1e-3)
         out["delay"] = _num(out["delay"], f"{what} delay", lo=0, integer=True)
     elif kind == "stack":
-        out["count"] = _num(out["count"], f"{what} count", 1, 32, integer=True)
-        out["step"] = _pair(out["step"], f"{what} step")
-        out["scale"] = _num(out["scale"], f"{what} scale", 0.25, 2.0)
-        out["center"] = _center(out["center"], f"{what} center")
-        out["bands"] = _colours(out["bands"], palette, f"{what} bands", picture=True)
-        out["delay"] = _num(out["delay"], f"{what} delay", lo=0, integer=True)
+        SK.normalize(spec, out, palette, what)
     else:
         if not isinstance(out.get("clip"), str) or not out["clip"].strip():
             raise FxError(f"{what}: `clip` is required: a video file (project-relative or absolute) or an asset slug")
@@ -653,8 +713,12 @@ def plan(data, fps, frame0, palette, last_frame=None):
             e.update(index=i, f0=f0, f1=f1)
             if e["kind"] == "push":
                 e["inside_frame"] = frame_of(e["inside"], fps, frame0)
-            if e["kind"] in PF.HOLDS:
+            if e["kind"] in PF.HOLDS or e["kind"] == "stack":
                 e["frame_rate"] = float(fps)
+            if e["kind"] in ER.KINDS:
+                ER.timed(e, data, fps, frame0)
+            if e["kind"] in PA.KINDS:
+                PA.timed(e, fps, frame0)
         if fx["kind"] == "push":
             last_inside = fx["inside_frame"] + (f1 - 1 - f0 if fx["play"] else 0)
             if last_frame is not None and last_inside > last_frame:
@@ -684,7 +748,8 @@ def point_key(fx):
 
 def points(fx):
     """[(key, expression)]: the scene points an effect needs projected through the camera of the shot in the cut on
-    the frames of its span (point/<key>/): its `center` (key x<i>) and a doodle's marks at a {point} (x<i>m<j>)."""
+    the frames of its span (point/<key>/): its `center` (key x<i>), a doodle's marks at a {point} (x<i>m<j>), the
+    points a label's leaders run to (x<i>l<j>) and a paint app's bucket fills' {point} seeds (x<i>b<j>)."""
     out = []
     c = fx.get("center")
     if isinstance(c, dict) and c["mode"] == "point":
@@ -692,20 +757,27 @@ def points(fx):
     if fx["kind"] == "doodle":
         out += [(f"{point_key(fx)}m{j}", m["at"]["expr"]) for j, m in enumerate(fx["marks"])
                 if m["at"]["mode"] == "point"]
+    if fx["kind"] in LB.KINDS:
+        out += LB.points(fx)
+    if fx["kind"] in PA.KINDS:
+        out += PA.points(fx, point_key(fx))
     return out
 
 
 def uses_figure(fx):
-    """Whether an effect reads the layer of its figure (figure/<key>/): a collage, a pixel sort or a mosh masked by the
-    figure."""
-    return fx["kind"] in FIGURES or (fx["kind"] in ("pixelsort", "mosh") and fx["mask"] is not None)
+    """Whether an effect reads the layer of its figure (figure/<key>/): a collage, or an effect with a `mask` (a pixel
+    sort, a mosh, a colour field) kept inside or outside the figure, a mandala of it, its trails, an activity page
+    tracing her silhouette."""
+    return fx["kind"] in FIGURES or fx.get("mask") is not None or (fx["kind"] in MD.KINDS and MD.uses_figure(fx)) or \
+        (fx["kind"] in AC.KINDS and AC.uses_figure(fx))
 
 
 def holds(fx):
     """Whether an effect shows frames of the cut from before as they reached it (a film's held frame, a booth's
-    captures, the first frame a mosh with a `flow` holds): the effects before it in the table are applied to such a
-    frame again when it was not kept."""
-    return fx["kind"] in PF.HOLDS or (fx["kind"] == "mosh" and fx["flow"] is not None)
+    captures, the first frame a mosh with a `flow` holds, the frame a paint app's eraser rubs out): the effects before it
+    in the table are applied to such a frame again when it was not kept."""
+    return fx["kind"] in PF.HOLDS or (fx["kind"] == "mosh" and fx["flow"] is not None) or (
+        fx["kind"] in PA.KINDS and PA.holds(fx))
 
 
 def at(fxs, frame):
@@ -728,10 +800,13 @@ def sources(fx, frame, frame0, hits=None):
     """The other frames of the cut that the effect reads at `frame` (Blender frames, the clip's own only): an echo's
     copies, a slitscan's ages, a push's inside frame, a mosh's frame before its span and every frame since (the motion
     it carries the held picture along, worked out again from its start when the frames come out of order) or, with a
-    `flow`, its first frame alone (its figure too, with a `mask`), the poses before of the panels and the stack of a
-    collage with a `delay` (their figures too), the first frame of a collage whose `keys` turn its figure about a pivot
-    found on it (`base`, `center`), a film's held frame (the first of the film frame it shows) and a booth's captures so
-    far (those of a lane only with `hits`, the [audio] hits file)."""
+    `flow`, its first frame alone (its figure too, with a `mask`), the poses before of the panels with a `delay` and of
+    a stack's copies (their figures too: mkmmd.core.stack.sources, a tunnel's from its lane in `hits`) and of a trail,
+    the first frame of a collage or a mandala whose `keys` turn its figure, or whose `at` or `height` set it into the
+    frame, or a stack whose copies `peel` off, about a pivot found on it (`base`, `center`), a film's held frame (the
+    first of the film frame it shows), a booth's captures so far (those of a lane only with `hits`, the [audio] hits
+    file) and the frame before a paint app's eraser, while it rubs that out. A collage with its own `shot` reads those
+    frames of that shot (its plates)."""
     k = fx["kind"]
     if k == "echo":
         out = [frame - j * fx["every"] for j in range(1, fx["count"] + 1)]
@@ -741,16 +816,22 @@ def sources(fx, frame, frame0, hits=None):
         out = [fx["inside_frame"] + (frame - fx["f0"] if fx["play"] else 0)]
     elif k == "mosh":
         out = [fx["f0"]] if fx["flow"] is not None else list(range(fx["f0"] - 1, frame + 1))
-    elif k in ("panels", "stack") and fx["delay"] > 0:
-        out = [frame - j * fx["delay"] for j in range(1, fx["count"] + (k == "stack"))]
+    elif k == "panels" and fx["delay"] > 0:
+        out = [frame - j * fx["delay"] for j in range(1, fx["count"])]
+    elif k == "stack":
+        out = SK.sources(fx, frame, frame0, hits)
+    elif k in MD.KINDS:
+        out = MD.sources(fx, frame)
     elif k == "film":
         out = [PF.film_step(fx, frame)[1]]
     elif k == "booth":
         times = fx["times"] if fx.get("times") is not None else [] if hits is None else hit_times(fx, hits)
         out = [g for _, g in PF.captures(fx, times, fx["frame_rate"], frame0) if g <= frame]
+    elif k in PA.KINDS:
+        out = PA.sources(fx, frame)
     else:
         out = []
-    if k in FIGURES and fx["keys"] and isinstance(fx["pivot"], str) and frame != fx["f0"] and fx["f0"] not in out:
+    if k in FIGURES and _found_pivot(fx) and frame != fx["f0"] and fx["f0"] not in out:
         out.append(fx["f0"])
     return [f for f in out if f >= frame0]
 
@@ -762,9 +843,35 @@ def progress(fx, frame):
 
 
 def figure_key(fx):
-    """The folder of a collage's figure layer (figure/<key>/<frame>.png), named from its object patterns: collages of the
-    same figure share it."""
-    return "f" + hashlib.sha1("\n".join(sorted(fx["objects"])).encode("utf-8")).hexdigest()[:10]
+    """The folder of a collage's figure layer (figure/<key>/<frame>.png), named from its object patterns and the shot it
+    is seen through when it has its own `shot`: collages of the same figure share it."""
+    name = "\n".join(sorted(fx["objects"])) + (f"\n@{fx['shot']}" if fx.get("shot") else "")
+    return "f" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:10]
+
+
+def placed(fx):
+    """Whether a collage sets its figure into the frame (`at`, `height`) instead of leaving it where its frame shows it."""
+    return fx.get("at") is not None or fx.get("height") is not None
+
+
+def _found_pivot(fx):
+    """Whether a collage moves (`keys`) or sets (`at`, `height`) its figure, or peels a stack's copies off to places of
+    their own (`peel`), about a pivot found on it on the span's first frame (`base`, `center`), in any output: an `aspect`
+    table's own placement reads that frame too."""
+    return any((e["keys"] or placed(e) or e.get("peel")) and isinstance(e["pivot"], str)
+               for e in [fx, *(fx.get("aspect") or {}).values()])
+
+
+def placement(anchor, to, s):
+    """The 2 x 3 affine map (pixels to pixels) that scales a figure `s` times about its pixel `anchor` and puts that at
+    pixel `to`."""
+    return [[float(s), 0.0, float(to[0]) - s * float(anchor[0])], [0.0, float(s), float(to[1]) - s * float(anchor[1])]]
+
+
+def compose(a, b):
+    """The 2 x 3 affine map `a` after `b`."""
+    return [[a[r][0] * b[0][0] + a[r][1] * b[1][0], a[r][0] * b[0][1] + a[r][1] * b[1][1],
+             a[r][0] * b[0][2] + a[r][1] * b[1][2] + a[r][2]] for r in (0, 1)]
 
 
 def pick(values, i):

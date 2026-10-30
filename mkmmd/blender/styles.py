@@ -856,7 +856,7 @@ class Looks:
             rs.attr(r, "resolution_y", r.resolution_y * s)
             self._visibility(rs, show=self.cl["subject"])
             out["id"], out["depth"] = self._vector_ids()
-            if any(t["kind"] in SS.TEX_KINDS for t in self.spec["tones"].values()) and not self.spec.get("sketch"):
+            if any(t["kind"] in SS.TEX_KINDS for t in self.spec["tones"].values()) and SS.draws_fills(self.spec):
                 out["tex"] = self._vector_pass("tex")[..., :3]
             out["shade"] = self._vector_pass("shade")[..., 0]
         finally:

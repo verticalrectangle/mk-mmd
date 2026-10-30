@@ -21,6 +21,9 @@ STAMP_MARGIN = 0.065                     # a camcorder's stamp from the frame's 
 SCANLINE = 4.0                           # px at 1080: the period of a camcorder's scanlines
 CHROMA_SHIFT = 0.6                       # a camcorder's colour runs this share of its `chroma` to the right
 TEAR = 22.0                              # px at 1080: how far a tracking band tears a line sideways at full amount
+SWITCH_BAND = 0.022                      # a camcorder's head-switching tear: its share of the frame's height at the foot
+SWITCH_TEAR = 30.0                       # px at 1080: how far it tears the last line sideways at `switching` 1
+HALATION = (1.0, 0.42, 0.28)             # the red-orange of a print's halation round its lights
 
 
 # ================================================================================================= the region
@@ -166,16 +169,45 @@ def damage(fx, k, size, px):
     return done(light, drawn[0]), done(dark, drawn[1])
 
 
+def dye_print(x, dye, saturation):
+    """`x` as a three-strip dye print shows it: its saturation times `saturation`, and with `dye` (0..2; 1 a
+    Technicolor print's) each primary purer than the others let it be, reds and oranges richest (lipstick and skin),
+    the shadows a little cool and the lights warm."""
+    L = (x @ LUMA)[..., None]
+    out = L + (x - L) * np.float32(saturation)
+    if dye > 0:
+        mean = out.mean(axis=2, keepdims=True)
+        out = out + np.float32(0.45 * dye) * (out - mean)
+        red = np.clip(2.0 * (out[..., :1] - np.maximum(out[..., 1:2], out[..., 2:3])), 0.0, 1.0)
+        L = (out @ LUMA)[..., None]
+        out = out + np.float32(0.3 * dye) * red * (out - L)
+        out = out + np.float32(dye) * (np.float32([-0.02, 0.0, 0.035]) * (1.0 - L) ** 2 +
+                                       np.float32([0.03, 0.01, -0.03]) * L ** 2)
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def halation(x, amount, px, colour=HALATION):
+    """`x` with a glow round its lights as a print's halation (light scattered back through the film): their light
+    blurred near and far in `colour`, screened over it by `amount`."""
+    hi = np.clip((x @ LUMA - 0.72) / 0.28, 0.0, 1.0)
+    g = cv2.GaussianBlur(hi, (0, 0), max(5.0 * px, 0.5)) + 0.5 * cv2.GaussianBlur(hi, (0, 0), max(16.0 * px, 0.5))
+    add = np.clip(np.float32(amount) * g, 0.0, 1.0)[..., None] * np.asarray(colour, np.float32)
+    return (1.0 - (1.0 - x) * (1.0 - add)).astype(np.float32)
+
+
 def film(img, fx, k, px):
     """The film print of `img` (a frame, or a rect's part of one) as film frame k shows it: through the print's curve
-    (in black and white with `mono`), weaving in the gate, its dust, scratches and hairs, its exposure flickering, its
-    grain (strongest in the mid tones) and a vignette."""
+    (in black and white with `mono`, else its colours through a dye print: `saturation`, `dye`), weaving in the gate,
+    its dust, scratches and hairs, its exposure flickering, a halation round its lights, its grain (strongest in the mid
+    tones) and a vignette."""
     h, w = img.shape[:2]
     gain, dx, dy = PC.film_jolt(fx, k)
     x = np.clip(np.asarray(img, np.float32), 0.0, 1.0)
     if fx["mono"]:
         out = np.repeat(film_curve(np.ascontiguousarray(x @ LUMA), fx["contrast"])[..., None], 3, axis=2)
     else:
+        if fx["dye"] > 0 or fx["saturation"] != 1.0:
+            x = dye_print(x, fx["dye"], fx["saturation"])
         out = film_curve(x, fx["contrast"])
     if abs(dx) + abs(dy) > 1e-3:
         out = cv2.warpAffine(out, np.float32([[1, 0, dx * px], [0, 1, dy * px]]), (w, h), flags=cv2.INTER_LINEAR,
@@ -186,6 +218,8 @@ def film(img, fx, k, px):
     if light is not None:
         out = out + (1.0 - out) * light[..., None]
     out = out * np.float32(gain)
+    if fx["halation"] > 0:
+        out = halation(np.clip(out, 0.0, 1.0), fx["halation"], px, (0.8, 0.8, 0.8) if fx["mono"] else HALATION)
     g = fx["grain"]
     if g["amount"] > 0:
         n = grain_field(np.random.default_rng([fx["seed"], fx["index"], 6, k]), (h, w), g["size"] * px)
@@ -211,7 +245,8 @@ def _grid(w, h):
 def tape(img, fx, frame, t, px):
     """`img` (a frame, or a rect's part of one) as a home video tape plays it on clip frame `frame` (second `t`): soft
     luma, colour bled sideways and to the right, `saturation`, noise in streaks, lines jittered sideways, a tracking
-    band rolling up the picture (lines torn sideways, snow, washed out), scanlines."""
+    band rolling up the picture (lines torn sideways, snow, washed out), the head-switching tear along its foot
+    (`switching`), scanlines."""
     h, w = img.shape[:2]
     rng = np.random.default_rng([fx["seed"], fx["index"], 21, frame])
     ycc = cv2.cvtColor(np.ascontiguousarray(np.clip(img, 0.0, 1.0), np.float32), cv2.COLOR_RGB2YCrCb)
@@ -245,6 +280,11 @@ def tape(img, fx, frame, t, px):
         band = (fx["tracking"]["amount"] * np.exp(-((np.arange(h) - yc) / hb) ** 2)).astype(np.float32)
         tear = np.convolve(rng.standard_normal(h), np.ones(2) / 2.0, "same") + 0.6
         off += band * np.float32(TEAR * px) * tear.astype(np.float32)
+    if fx["switching"] > 0:                                     # the heads switch a few lines before the field ends
+        foot = max(int(round(SWITCH_BAND * h)), 2)
+        u = np.linspace(0.0, 1.0, foot).astype(np.float32)
+        off[h - foot:] += np.float32(fx["switching"] * SWITCH_TEAR * px) * u ** 1.5 * \
+            (1.0 + 0.35 * rng.standard_normal(foot)).astype(np.float32)
     if np.abs(off).max() > 0.01:
         xs, ys = _grid(w, h)
         out = cv2.remap(out, xs + off[:, None], ys, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
