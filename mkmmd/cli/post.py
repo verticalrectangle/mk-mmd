@@ -1,27 +1,36 @@
 """mk post: grade rendered frames and encode each output to MP4 with the song."""
 import argparse
+import contextlib
+import functools
 import json
+import os
 import subprocess
+import tempfile
+import threading
 import time
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from .. import cutfx as CF
+from .. import config as CFG
 from .. import footage as FT
 from .. import framefx as FF
-from .. import mandala as MDF
+from .. import gpulock as GL
 from .. import master as MS
-from .. import pageturn as PAGE
-from .. import picturefx as PFX
-from .. import post as P
+from .. import memory as MEM
+from .. import postframes as PF
+from .. import postgpu as PG
 from ..core import framefx as FX
 from ..core import keep as KP
-from ..core import palette as PAL
-from ..core import screentype as SRT
-from ..core import transition as TR
+from ..core import progress as PR
+from ..gpufx import footage as GFT
 from .common import add_project_arg, cut_plan, emit, get_project, UsageError
+
+ENCODERS = ("x264", "vaapi")
+X264_PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo")
+SHM = "/dev/shm"            # mkr-post's hand-over folder, in memory where the system has it
 
 HELP = """Grade the rendered frames of each output ([post] in mk.toml: contrast, split tone, the palette floor that keeps
 shadows off black, halation, vignette, grain) and encode them to <project>/out/<name>_<output>[_<preset>].mp4 (the
@@ -50,9 +59,26 @@ clip's end, the loop's wrap, comes after all that: each frame of its window as f
 (its own effects and screen type on), held still, and the grade covers the result; screen type laid over the graded
 picture and the keep masks turn with the page.
 
+The frames are finished by worker processes over chunks of consecutive frames and handed to the encoder in order: the
+same frames whatever their number, --jobs or [post] jobs (default: up to 4, fewer when half the memory available would
+not hold them at a worker's peak, about 1.7 GB at 1920 x 1080; one process for a little work). With --gpu (or [post]
+gpu) mkr-post finishes what it can of each frame and writes it into the encoder itself, the workers (default up to 3)
+only planning the frames ahead of it. The outputs are finished one after another, sharing the workers; a run that uses
+the GPU (--gpu, or the vaapi encoder) holds the GPU lock (mkmmd.gpulock) while it runs. The encoder is [post] encoder
+(or --encoder): "x264" (the default: libx264 at [post] x264_preset or --x264-preset, "slow" by default, --crf 15) or
+"vaapi" (the GPU's H.264 encoder through VAAPI on the config's vaapi_device, constant QP --crf: many times faster,
+larger files).
+
+--follow takes the frames as a running `mk render` writes them: each frame once every file the render promised for it
+(its manifest, render.json in the output's folder) is there. The render holds the GPU while it draws, so run them as
+one job: `mk render --post` starts this itself, inside its own hold. A render that stops without a promised file is an
+error.
+
 Examples:
   mk post --preset draft
   mk post --preset final --to ~/share
+  mk post --preset final --encoder vaapi --jobs 3
+  mk post --preset final --gpu --encoder vaapi --follow
 """
 
 
@@ -68,20 +94,37 @@ def add(sub):
                    "the plain cut where an effect's layer is missing")
     p.add_argument("--no-transitions", action="store_true",
                    help="composite no [[transition]] / [[insert]] / [[glitch]]: plain cuts")
-    p.add_argument("--crf", type=int, default=15, help="x264 quality, lower is better (default 15)")
+    p.add_argument("--crf", type=int, default=15, help="quality, lower is better: x264's CRF, VAAPI's constant QP "
+                   "(default 15)")
+    p.add_argument("--encoder", choices=ENCODERS, help="x264 (default, or [post] encoder) or vaapi (the GPU's H.264)")
+    p.add_argument("--x264-preset", choices=X264_PRESETS, help="x264's preset (default [post] x264_preset, else slow)")
+    p.add_argument("--jobs", type=int, metavar="N", help="processes that finish the frames of an output (default [post] "
+                   "jobs, else up to 4 as the memory available allows; up to 3 with --gpu, which only plan them)")
+    p.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=None,
+                   help="finish what mkr-post can of each frame on the GPU, within a level of the CPU's (default "
+                   "[post] gpu, else off)")
+    p.add_argument("--follow", action="store_true", help="take the frames as a running mk render writes them (its "
+                   "manifest in each output's folder)")
     add_project_arg(p)
     p.set_defaults(func=run)
 
 
-def encode(frames, size, fps, out, audio=None, crf=15):
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size[0]}x{size[1]}",
-           "-r", str(fps), "-i", "-"]
+def encode(frames, size, fps, out, audio=None, crf=15, encoder="x264", preset="slow"):
+    """ffmpeg reading rgb24 frames of `size` on its stdin and writing `out`: H.264 (yuv420p) by libx264 at `preset` and
+    CRF `crf`, or by the GPU through VAAPI at constant QP `crf`, with the song's span `audio` (AAC, faded out)."""
+    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+    if encoder == "vaapi":
+        cmd += ["-vaapi_device", CFG.load()["vaapi_device"]]
+    cmd += ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-"]
     if audio:
         cmd += ["-ss", f"{audio['start']:.6f}", "-t", f"{audio['duration']:.6f}", "-i", audio["file"], "-map", "0:v",
                 "-map", "1:a", "-af", f"afade=t=out:st={max(0.0, audio['duration'] - 0.06):.4f}:d=0.06",
                 "-c:a", "aac", "-b:a", "320k"]
-    cmd += ["-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-pix_fmt", "yuv420p", "-tune", "film",
-            "-movflags", "+faststart", str(out)]
+    if encoder == "vaapi":
+        cmd += ["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", str(crf)]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-tune", "film"]
+    cmd += ["-movflags", "+faststart", str(out)]
     return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
 
@@ -106,21 +149,24 @@ def mastered(proj, au, f, start, duration):
     return out, rep
 
 
-def _plates(plan, src, files, size):
-    """callable(shot, frame) -> what `shot` shows at `frame` (a collage's own `shot`): the cut's frame where it is the
-    shot in the cut, else its plate beside the frames in `src`; None when that is not there."""
-    def get(shot, g):
-        if TR.in_force(plan, shot, g):
-            return P.read(files[g], size) if g in files else None
-        return P.read(src / TR.plate_rel(shot, g), size)
-    return get
+def encoding(args, post):
+    """(encoder, x264 preset) from the flags, else [post] encoder and x264_preset; a UsageError for an unknown one."""
+    enc = args.encoder or post.get("encoder", "x264")
+    if enc not in ENCODERS:
+        raise UsageError(f"[post] encoder = {enc!r}: one of {', '.join(map(repr, ENCODERS))}")
+    preset = args.x264_preset or post.get("x264_preset", "slow")
+    if preset not in X264_PRESETS:
+        raise UsageError(f"[post] x264_preset = {preset!r}: one of {', '.join(X264_PRESETS)}")
+    device = CFG.load()["vaapi_device"]
+    if enc == "vaapi" and not os.path.exists(device):
+        raise UsageError(f"encoder vaapi: no device {device} (the config's vaapi_device, MK_VAAPI_DEVICE)")
+    return enc, preset
 
 
 def run(args):
     proj = get_project(args, required=True)
     outs = [proj.output(n) for n in args.output] if args.output else proj.outputs
-    look = proj.data.get("look", {})
-    pal = PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots"))
+    post = proj.data.get("post", {})
     au = proj.data.get("audio", {})
     audio, mastering = None, None
     still = proj.last_frame == proj.frame0                 # a picture: one PNG per output, no sound
@@ -128,6 +174,11 @@ def run(args):
         keep = KP.spec(proj.data.get("post"), proj.cast)
     except ValueError as e:
         raise UsageError(str(e)) from None
+    jobs = args.jobs if args.jobs is not None else post.get("jobs")
+    if jobs is not None and (isinstance(jobs, bool) or not isinstance(jobs, int) or jobs < 1):
+        raise UsageError(f"[post] jobs / --jobs = {jobs!r}: a whole number of processes, 1 or more")
+    encoder, x264_preset = encoding(args, post)
+    gpu = bool(args.gpu if args.gpu is not None else post.get("gpu", False))
     if not args.no_audio and au.get("file") and not still:
         f = Path(au["file"]).expanduser()
         if not f.exists():
@@ -141,7 +192,6 @@ def run(args):
     od = proj.root / "out"
     od.mkdir(exist_ok=True)
     t0 = time.time()
-    report = {}
     stems = FF.stem_source(proj.root, proj.mk_dir / "cache" / "timeline")
     for spec in (plan or {}).get("fx") or []:                  # a scope's stems are there before anything is encoded
         if spec["kind"] == "scope":
@@ -149,124 +199,234 @@ def run(args):
                 stems(spec["timeline"], spec["stem"])
             except FileNotFoundError as e:
                 raise UsageError(f"fx {spec['index']}: {e}") from None
-    footage = FT.source(proj.root)
     try:                                                       # and every footage clip opens and plays where it starts
-        FF.check_footage((plan or {}).get("fx") or [], footage)
+        FF.check_footage((plan or {}).get("fx") or [], FT.source(proj.root))
     except FT.FootageError as e:
         raise UsageError(str(e)) from None
-    for o in outs:
-        src = proj.root / "renders" / args.preset / o.name
-        files = {int(p.stem): p for p in src.glob("*.png") if p.stat().st_size > 0} if src.exists() else {}
-        missing = [f for f in frames if f not in files]
-        if missing and not args.allow_gaps:
-            raise UsageError(f"{o.name}: {len(missing)} frames missing in {src} (first {missing[:5]}); render them or "
-                             f"pass --allow-gaps")
-        if keep:
-            masks = [f for f in frames if f in files and not (src / KP.rel(f)).exists()]
-            if masks and not args.allow_gaps:
-                raise UsageError(f"{o.name}: {len(masks)} keep masks missing in {src / KP.LAYER_DIR} (first {masks[:5]}): "
-                                 f"mk render draws them for [post] keep; or pass --allow-gaps")
-        first = P.read(files[min(files)]) if files else None
-        if first is None:
-            raise UsageError(f"{o.name}: no frames in {src}")
-        size = (first.shape[1], first.shape[0]) if still else (first.shape[1] // 2 * 2, first.shape[0] // 2 * 2)
-        screen = proj.data.get("post", {}).get("screen", "graded")
-        if screen not in ("graded", "over"):
-            raise UsageError(f"[post] screen = {screen!r}: \"graded\" (the grade covers the screen type) or \"over\"")
-        grade = P.Grade(proj.data.get("post", {}), pal, size)
-        st_spec = proj.data.get("post", {}).get("streaks")
-        try:
-            streaks = P.Streaks({} if st_spec is True else dict(st_spec), pal, size) if st_spec else None
-        except (ValueError, KeyError) as e:
-            raise UsageError(str(e).strip('"')) from None
-        fx = CF.CutFx(plan, src, size, o.name, footage_of=footage, sprite_of=MDF.sprite_source(proj.root),
-                      hits_of=lambda: FF.project_hits(proj.root, proj.data)) if TR.has_effects(plan) else None
-        if fx:
-            lacking = fx.missing(frames)
-            if lacking and not args.allow_gaps:
-                raise UsageError(f"{o.name}: {len(lacking)} layer files of transitions / inserts / fx missing in {src} "
-                                 f"(first {lacking[:3]}); mk render draws them, or pass --no-transitions or --allow-gaps")
-            if not lacking:
-                try:
-                    fx.check(frames)
-                except TR.TransitionError as e:
-                    raise UsageError(str(e)) from None
-        ffx = None
-        if (plan or {}).get("fx"):
-            try:
-                ffx = FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, stem_of=stems,
-                                 hits=FF.project_hits(proj.root, proj.data), output=o.name, footage_of=footage,
-                                 font_of=PFX.font_source(proj.root), sprite_of=MDF.sprite_source(proj.root),
-                                 frame_of=lambda g, files=files, size=size: P.read(files[g], size) if g in files else None,
-                                 point_of=lambda key, g, src=src, size=size: CF.read_point(src, key, g, size),
-                                 figure_of=lambda key, g, src=src, size=size: CF.read_figure(src, key, g, size),
-                                 plate_of=_plates(plan, src, files, size))
-            except FX.FxError as e:
-                raise UsageError(str(e)) from None
-        suffix = "" if args.preset == "final" else f"_{args.preset}"
-        out = od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"
-        ff = None if still else encode(frames, size, proj.fps, out, audio, args.crf)
-        lead = P.read(files[min(files)], size)                  # stands in for frames before the first one rendered
-        wrap, held = TR.wrap_of(plan), None                     # the loop's wrap; frame 0 as finished, under its page
-        prev, prev_layer, prev_keep, lmin, bare, typed, kept = lead, None, None, 1.0, 0, 0, 0
-        for k, f in enumerate(frames):
-            raw = P.read(files[f], size) if f in files else prev
-            layer = P.read_rgba(src / SRT.layer_rel(f), size) if f in files else prev_layer
-            km = (P.read(src / KP.rel(f), size) if f in files else prev_keep) if keep else None
-            mask = None if km is None or (fx and fx.active(f)) or (ffx and ffx.active(f)) else km[..., 0]
-            img = raw
-            if fx and fx.active(f):
-                try:
-                    img = fx.frame(f, raw)
-                except FileNotFoundError:                         # layers missing (allowed): the plain cut shows
-                    bare += 1
-            if ffx and ffx.active(f):
-                try:
-                    img = ffx.frame(f, img)
-                except (FT.FootageError, FX.FxError) as e:           # a clip that fails, a pivot with no figure
-                    raise UsageError(str(e)) from None
-                except FileNotFoundError:                         # a point or a frame missing (allowed): left out there
-                    bare += 1
-            if streaks is not None:                               # lens streaks: from the picture's lights, not the type
-                img = streaks(img)
-            if layer is not None and screen == "graded":         # screen type: over the cut and what its effects made of it
-                img = SRT.composite(img, layer)
-                typed += 1
-                if mask is not None:                              # the type over a kept eye is graded as type
-                    mask = mask * (1.0 - layer[..., 3])
-            over = layer if screen == "over" else None            # or over the finished picture, the grade under it
-            if wrap is not None:                                  # the loop's wrap: this frame as finished turned over
-                if f == wrap["still"]:                            # frame 0 as finished, held still
-                    held = (img, over, mask)
-                if wrap["first"] <= f <= wrap["last"]:
-                    img, over, mask = PAGE.wrap(wrap, f, (img, over, mask), held)
-            g = grade(img, k, keep=mask)
-            kept += mask is not None
-            if over is not None:
-                g = SRT.composite(g, over)
-                typed += 1
-            lmin = min(lmin, P.luma_min(g))
-            if ff is None:
-                Image.fromarray(P.to_u8(g)).save(out)
-            else:
-                ff.stdin.write(P.to_u8(g).tobytes())
-            prev, prev_layer, prev_keep = raw, layer, km
-        if ff is not None:
-            ff.stdin.close()
-            if ff.wait() != 0:
-                raise UsageError(f"ffmpeg failed for {out}")
-        report[o.name] = {"image" if still else "video": str(out), "frames": len(frames), "missing": len(missing),
-                          "size": list(size), "min_luma": round(lmin, 4), "screen_type_frames": typed}
-        if keep:
-            report[o.name]["keep_frames"] = kept               # graded with the colour kept (not inside a cut effect)
-        if fx:
-            report[o.name]["effects"] = {"transitions": len(plan["transitions"]), "inserts": len(plan["inserts"]),
-                                         "glitches": len(plan["glitches"]), "fx": len(plan.get("fx") or []),
-                                         "frames_without_layers": bare, "matte_scale": fx.notes}
-        if args.to:
-            dest = Path(args.to).expanduser() / out.name
-            dest.write_bytes(out.read_bytes())
-            report[o.name]["copied"] = str(dest)
+    todo = [frames_of(proj, o, args, frames, keep, still, od) for o in outs]
+    s = {"plan": plan, "keep": keep, "frames": frames, "audio": audio, "crf": args.crf, "encoder": encoder,
+         "x264_preset": x264_preset, "gpu": gpu, "jobs": jobs, "allow_gaps": args.allow_gaps, "still": still}
+    post_cache = proj.mk_dir / "cache" / "post"
+    MEM.sweep("mkpost", [SHM, tempfile.gettempdir(), post_cache])   # what runs killed outright left in memory, on disk
+    pools = {}                                                 # worker processes, shared by the outputs in turn
+    on_gpu = (gpu or encoder == "vaapi") and not still
+    kept = clip_frames(post_cache, plan, todo) if gpu and not still else None
+    encoders = []                                              # (encoder, video) still writing their last frames
+    ready = Ahead(prepare, proj, todo[0], s)                   # the first output's setup while the GPU is waited for
+    try:
+        with GL.held(f"mk post --preset {args.preset}") if on_gpu else contextlib.nullcontext():
+            report = {}
+            for i, t in enumerate(todo):
+                got = ready.result()
+                ready = Ahead(prepare, proj, todo[i + 1], s) if i + 1 < len(todo) else None   # the next one's meanwhile
+                report[t["name"]], ff = finish(proj, t, s, pools, kept, got)
+                if ff is not None:
+                    encoders.append((ff, t["out"]))
+            while encoders:
+                ff, video = encoders.pop(0)
+                if ff.wait() != 0:
+                    raise UsageError(f"ffmpeg failed for {video}")
+    finally:
+        for ff, _ in encoders:                                 # an error: the videos before it end as they are
+            ff.wait()
+        for pool in pools.values():
+            pool.close()
+        if kept is not None:
+            kept.close()
+    if args.to:
+        for t in todo:
+            dest = Path(args.to).expanduser() / t["out"].name
+            dest.write_bytes(t["out"].read_bytes())
+            report[t["name"]]["copied"] = str(dest)
     emit({"preset": args.preset, "seconds": round(time.time() - t0, 1), "audio": bool(audio), "audio_master": mastering,
           "outputs": report})
     return 0
+
+
+def frames_of(proj, o, args, frames, keep, still, od):
+    """What output `o` is made from, checked: {name, src (its frame folder), files {frame: PNG}, missing (frames not
+    there), out (the video or still), follow (a mkmmd.core.progress.Follow with --follow)}. With --follow the frames a
+    running render promised count as there."""
+    src = proj.root / "renders" / args.preset / o.name
+    files = {int(p.stem): p for p in src.glob("*.png") if p.stat().st_size > 0} if src.exists() else {}
+    follow = None
+    if args.follow:
+        follow = PR.Follow(src, frames)
+        if follow.promised is not None:
+            files.update({f: src / f"{f:05d}.png" for f in frames if f in follow.promised})
+    missing = [f for f in frames if f not in files]
+    if missing and not args.allow_gaps:
+        raise UsageError(f"{o.name}: {len(missing)} frames missing in {src} (first {missing[:5]}); render them or "
+                         f"pass --allow-gaps")
+    if keep and follow is None:
+        masks = [f for f in frames if f in files and not (src / KP.rel(f)).exists()]
+        if masks and not args.allow_gaps:
+            raise UsageError(f"{o.name}: {len(masks)} keep masks missing in {src / KP.LAYER_DIR} (first {masks[:5]}): "
+                             f"mk render draws them for [post] keep; or pass --allow-gaps")
+    if not files:
+        raise UsageError(f"{o.name}: no frames in {src}")
+    suffix = "" if args.preset == "final" else f"_{args.preset}"
+    return {"name": o.name, "src": src, "files": files, "missing": len(missing), "follow": follow,
+            "out": od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"}
+
+
+def size_of(t, still):
+    """The size (w, h) output `t` (frames_of) is graded at: its first frame's, even for a video; following a render,
+    once the render has that frame."""
+    first = min(t["files"])
+    if t["follow"] is not None:
+        try:
+            t["follow"].wait(first)
+        except FileNotFoundError as e:
+            raise UsageError(f"{t['name']}: {e}") from None
+    with Image.open(t["files"][first]) as im:
+        w, h = im.size
+    return (w, h) if still else (w // 2 * 2, h // 2 * 2)
+
+
+def size_now(t):
+    """The size output `t` (frames_of) of a video is graded at when its first frame is on disk now (size_of without
+    waiting), else None (a followed render that has not drawn it yet)."""
+    try:
+        with Image.open(t["files"][min(t["files"])]) as im:
+            w, h = im.size
+    except (OSError, ValueError):
+        return None
+    return w // 2 * 2, h // 2 * 2
+
+
+def clip_frames(folder, plan, todo):
+    """The footage clips' frames the outputs `todo` share on the GPU way (mkmmd.gpufx.footage.Kept: each decoded once a
+    run and fitted for every output that shows it), kept in a folder of their own under `folder` (the project's cache,
+    on disk) until the run ends; None for a single output or no footage."""
+    fxs = (plan or {}).get("fx") or []
+    if len(todo) < 2 or not any(e["kind"] == "footage" for fx in fxs for e in [fx, *(fx.get("aspect") or {}).values()]):
+        return None
+    folder.mkdir(parents=True, exist_ok=True)
+    outputs = [(t["name"], functools.partial(size_now, t),
+                {e["index"]: e for e in (FX.for_output(fx, t["name"]) for fx in fxs) if e["kind"] == "footage"})
+               for t in todo]
+    return GFT.Kept(tempfile.mkdtemp(prefix=MEM.scratch_prefix("mkpost"), dir=folder), outputs)
+
+
+class Ahead:
+    """`fn(*args)` run on a thread of its own; `result()` waits for it and gives what it returned, or raises what it
+    raised."""
+
+    def __init__(self, fn, *args):
+        self.value, self.error = None, None
+        self.thread = threading.Thread(target=self._run, args=(fn, args), name="mkpost-ahead", daemon=True)
+        self.thread.start()
+
+    def _run(self, fn, args):
+        try:
+            self.value = fn(*args)
+        except BaseException as e:                              # noqa: BLE001 (raised by result)
+            self.error = e
+
+    def result(self):
+        self.thread.join()
+        if self.error is not None:
+            raise self.error
+        return self.value
+
+
+def prepare(proj, t, s):
+    """What output `t` (frames_of) is finished with, worked out before its turn (while the output before it is
+    finished): {size, job (its PF.Output), why_cpu (why mkr-post does not finish it, None when it does), jobs}."""
+    plan, frames, follow, still = s["plan"], s["frames"], t["follow"], s["still"]
+    size = size_of(t, still)
+    try:
+        job = PF.Output(proj, plan, t["name"], t["src"], t["files"], frames, size, s["keep"], verify=True,
+                        allow_gaps=s["allow_gaps"], follow=follow)
+    except PF.SetupError as e:
+        raise UsageError(str(e)) from None
+    why_cpu = None if s["gpu"] else "not asked (--gpu, [post] gpu)"
+    if s["gpu"] and not still:
+        why_cpu = PG.unusable(job, files=follow is None)
+    n_jobs = s["jobs"] or PF.jobs(len(frames), size)
+    if not s["jobs"] and why_cpu is None:                     # mkr-post finishes them: the workers only plan
+        n_jobs = min(n_jobs, PF.GPU_JOBS)
+    return {"size": size, "job": job, "why_cpu": why_cpu, "jobs": n_jobs}
+
+
+def finish(proj, t, s, pools, clips, ready):
+    """Output `t` (frames_of) finished and encoded, or its still written, with the settings `s` and what `prepare`
+    worked out for it (`ready`): (its report, its encoder still writing its last frames, None for a still). Worker
+    processes come from `pools` ({count: PF.Planners}, shared by the outputs), made there the first time; the footage
+    clips' frames from `clips` (clip_frames, or None) where an output before this one decoded them."""
+    t0 = time.time()
+    if clips is not None:
+        clips.begin(t["name"])
+    plan, frames, out, follow, still = s["plan"], s["frames"], t["out"], t["follow"], s["still"]
+    waited = follow.waited if follow is not None else 0.0  # what its setup waited, the output before it running
+    size, job, why_cpu, n_jobs = ready["size"], ready["job"], ready["why_cpu"], ready["jobs"]
+    pool = None
+    if n_jobs > 1 and len(frames) > PF.CHUNK:
+        pool = pools.get(n_jobs) or pools.setdefault(n_jobs, PF.Planners(n_jobs))
+    ff = None if still else encode(frames, size, proj.fps, out, s["audio"], s["crf"], s["encoder"], s["x264_preset"])
+    server = None
+    if why_cpu is None and not still:
+        scratch = tempfile.mkdtemp(prefix=MEM.scratch_prefix("mkpost"), dir=SHM if os.path.isdir(SHM) else None)
+        job.gpu, job.args["gpu"] = Path(scratch), scratch
+        try:
+            server = PG.Server(job, scratch, sink=ff.stdin)      # mkr-post writes the frames into the encoder
+        except BaseException:
+            ff.kill()
+            raise
+    lmin, bare, typed, kept = 1.0, 0, 0, 0
+    done = PF.finished(job, n_jobs, server=server, pool=pool, kept=clips)
+    try:
+        for _k, data, (luma, n_typed, n_kept, n_bare) in done:
+            lmin, typed, kept, bare = min(lmin, luma), typed + n_typed, kept + n_kept, bare + n_bare
+            if ff is None:
+                Image.frombytes("RGB", size, data).save(out)
+            elif data is not None:
+                ff.stdin.write(data)
+    except (FT.FootageError, FX.FxError) as e:              # a clip that fails, a pivot with no figure
+        if ff is not None:
+            ff.kill()
+        raise UsageError(str(e)) from None
+    except BrokenPipeError:                                 # the encoder stopped: its own error is above
+        raise UsageError(f"ffmpeg failed for {out}") from None
+    except BrokenProcessPool:                               # a worker died under it (the memory ran out?)
+        if ff is not None:
+            ff.kill()
+        raise UsageError(f"{t['name']}: a worker process died (out of memory?): fewer --jobs (this run: {n_jobs})") \
+            from None
+    except FileNotFoundError as e:                          # --follow: the render stopped without a file it promised
+        if ff is not None:
+            ff.kill()
+        raise UsageError(f"{t['name']}: {e}") from None
+    except RuntimeError as e:                               # mkr-post stopped (or the encoder under it)
+        if ff is not None:
+            try:
+                failed = ff.wait(timeout=2) != 0
+            except subprocess.TimeoutExpired:
+                failed = False
+            ff.kill()
+            if failed:
+                raise UsageError(f"ffmpeg failed for {out}") from None
+        raise UsageError(f"{t['name']}: {e}") from None
+    finally:
+        done.close()                                        # the workers stop here, whatever happened
+        if server is not None:
+            server.close()
+    if ff is not None:
+        ff.stdin.close()                                    # its last frames encoded while the next output starts
+    rep = {"image" if still else "video": str(out), "frames": len(frames), "missing": t["missing"], "size": list(size),
+           "min_luma": round(lmin, 4), "screen_type_frames": typed}
+    if not still:
+        rep["encoder"] = s["encoder"] if s["encoder"] == "vaapi" else f"x264 {s['x264_preset']}"
+        rep["jobs"] = n_jobs
+        rep["gpu"] = True if why_cpu is None else why_cpu
+        rep["seconds"] = round(time.time() - t0, 1)
+        if follow is not None:
+            rep["waited_for_render"] = round(follow.waited - waited, 1)
+    if s["keep"]:
+        rep["keep_frames"] = kept                          # graded with the colour kept (not inside a cut effect)
+    if job.fx:
+        rep["effects"] = {"transitions": len(plan["transitions"]), "inserts": len(plan["inserts"]),
+                          "glitches": len(plan["glitches"]), "fx": len(plan.get("fx") or []),
+                          "frames_without_layers": bare, "matte_scale": job.notes}
+    return rep, ff

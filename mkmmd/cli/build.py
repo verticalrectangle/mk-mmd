@@ -35,8 +35,9 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   clip                                every shot camera starts at half the depth of the nearest geometry it sees, on
                                       every frame (fine depth: what a model hides behind the skin stays hidden)
   save                                the .blend
-  bake                                <blend>.bake/: the clip for the site's scene viewer (docs/design.md: The site),
-                                      every frame's bones, morphs, objects, visibility and shot cameras, and the meshes
+  bake                                <blend>.bake/: the clip for the site's scene viewer and mk's renderers
+                                      (docs/design.md: The bake), every frame's bones, morphs, objects, visibility and
+                                      shot cameras, the meshes, and the lit scene mkr draws (lights, materials, view LUT)
 Solvers (secondary motion, grips) run outside Blender and are cached in <project>/.mk/cache by a hash of their
 inputs, so a rebuild after a small change is quick. Prints the per-stage report and the build log as JSON; WARNING
 lines in the log are worth reading (a hand short of its goal, a prop over its form limit, a pattern matching nothing).

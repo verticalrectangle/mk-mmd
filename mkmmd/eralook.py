@@ -705,18 +705,22 @@ class EraFx:
         return (img + (gradient_map(img, self._era_luts[key]) - img) * a).astype(np.float32)
 
     def _invert(self, fx, frame, img):
+        v = self._invert_level(fx, frame)
+        if v <= 1e-4:
+            return img
+        region = self._masked(fx, frame)
+        a = np.float32(v) if region is None else (region * np.float32(v))[..., None]
+        return (img + (invert(img, fx["hue"]) - img) * a).astype(np.float32)
+
+    def _invert_level(self, fx, frame):
+        """How far an invert is on at `frame`: its level (eased in and out, on its thinned hits) times its strength."""
         t = self._t(frame)
         kept = None
         if fx.get("times") or fx.get("lane"):
             if fx["index"] not in self._era_kept:
                 self._era_kept[fx["index"]] = EC.thin(self._on_frames(fx), fx["rate"])
             kept = self._era_kept[fx["index"]]
-        v = EC.level(fx, t, kept) * float(np.clip(FX.strength(fx, t), 0.0, 1.0))
-        if v <= 1e-4:
-            return img
-        region = self._masked(fx, frame)
-        a = np.float32(v) if region is None else (region * np.float32(v))[..., None]
-        return (img + (invert(img, fx["hue"]) - img) * a).astype(np.float32)
+        return EC.level(fx, t, kept) * float(np.clip(FX.strength(fx, t), 0.0, 1.0))
 
     def _testcard(self, fx, frame, img):
         c, _ = self._at(fx, frame)

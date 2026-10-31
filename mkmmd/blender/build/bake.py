@@ -1,5 +1,6 @@
-"""bake: the built scene for the site's scene viewer and mk's own renderer (docs/design.md: The site, Rendering), written
-beside the .blend as <name>.bake/ (`mk build --bake` bakes a saved scene again without building it):
+"""bake: the built scene for the site's scene viewer and mk's own renderers (docs/design.md: The site, Rendering, The
+bake), written beside the .blend as <name>.bake/ (`mk build --bake` bakes a saved scene again without building it).
+Version 5: what versions 4 had, and the `lit` section the GPU renderer mkr draws the lit frames from (bake_lit.py):
 
   scene.glb   every mesh the clip shows as Blender's glTF exporter writes it, with its skin (its armature's bones are the
               joints) and its shape keys as morph targets, MMD materials as their base texture and alpha; no animation.
@@ -9,15 +10,16 @@ beside the .blend as <name>.bake/ (`mk build --bake` bakes a saved scene again w
               mkmmd.core.fisheye: mk's renderer leaves its shots to Blender, the site draws no shot through it), and
               what the vector look needs to be drawn without Blender:
               objects    every object a look sorts (mkmmd.blender.styles.look_objects), in the scene's order: its pattern
-                         record (collections, truthy properties), whether it is type (the text stage's), its materials as
+                         record (collections, truthy properties), whether it is type (the text stage's), whether it is
+                         soft (a Transparent shader in one of its materials: a silhouette's soft accent), its materials as
                          a look numbers them, whether it casts Workbench's shadow, and `baked`: "glb", "by_frame" or null
                          (`why`), with the frame ranges [k0, k1) it renders in
               blocks     what Workbench draws that no look hides and the bake cannot hold (collection instances, volumes,
                          grease pencil, particle instances), with their frame ranges
               materials  per material of the objects: its viewport alpha and colour (linear) and the texture Workbench's
                          Texture colour draws for it: "glb" (the glb's base texture), "none" (the viewport colour) or
-                         "other", with that image's alpha cutoff, premultiplied alpha and colour space and the node's
-                         filtering
+                         "other", with that image's name, alpha cutoff, premultiplied alpha and colour space and the
+                         node's filtering
               by_frame   the objects the glb cannot carry (curves, meshes with modifiers besides the armature) as Blender
                          evaluates them: geometries [vertices offset, count, triangles offset, count], and the geometry
                          on each frame (-1: hidden); an unchanged geometry is not stored again
@@ -26,6 +28,13 @@ beside the .blend as <name>.bake/ (`mk build --bake` bakes a saved scene again w
               workbench  the studio light of the scene's shading (four lights as stored: use, direction, diffuse colour,
                          wrap), its ambient and rotation, and whether back faces are culled
               screen     how many screen type objects the scene has (their layers are Blender's to draw)
+              looks      what the looks read: `tints`, per (object, prop) pair a silhouette's background layer follows,
+                         that custom property on each frame (offset; 0 for a missing object or property, as styles.Looks
+                         reads it), and `lut`, the Standard view their passes are saved through, captured as `lit.view`'s
+                         (looks_lut.bin: file, n, lo, hi, zero, floor)
+              lit        the lit scene (version 5; mkmmd/blender/build/bake_lit.py has the records): the view transform,
+                         film and EEVEE settings, world, lights, material node graphs, images, cameras' depth of field and
+                         every mesh the clip shows as Blender renders it, checked against Blender's own evaluation
   bake.bin    float32: the clip on each of its frames (in a freeze the world on the frame it holds and the cameras on
               their own keys, as mk render draws it), in glTF's axes (+Y up: Blender's (x, y, z) is glTF's (x, z, -y)):
               joints   per armature, frame and bone, the 3x4 matrix (12 floats, column by column) that takes a point of
@@ -41,6 +50,13 @@ beside the .blend as <name>.bake/ (`mk build --bake` bakes a saved scene again w
               by_frame per geometry its vertices in the world (position x y z, normal x y z) and its triangles (three
                        vertex indices and a material slot each)
               rings    per point ring, x y z on each frame
+              looks    per tint pair, its value on each frame
+              lit      the lit section's per-frame values (lights, depth of field, animated node values, the meshes'
+                       matrices, visibility and shape-key values)
+  lit.bin     the lit meshes' vertex attributes, triangles and shape-key deltas, little-endian (bake_lit.py)
+  view_lut.bin  Blender's display transform for the scene's view settings, captured (bake_lit.py)
+  looks_lut.bin  the Standard view the looks' passes go through, captured the same way
+  images/     the packed and generated images the lit materials use, as files
 
 A vertex v of a mesh (its glTF positions, morph targets added) is at N v on a frame, N the mesh's node matrix; a skinned
 one at sum_i w_i J_i N v, J_i its joints' matrices on that frame."""
@@ -59,6 +75,7 @@ from .. import fisheye as FEB
 from .. import freeze as FRZ
 from .. import styles as ST
 from . import BuildError
+from . import bake_lit as BL
 
 AXES = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, -1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
 FLEX_TYPES = ("CURVE", "SURFACE", "FONT", "META")           # evaluated into a mesh on every frame
@@ -173,7 +190,7 @@ def _material(m, node):
            "texture": "none"}
     if node is not None:
         img = node.image
-        out.update(texture="glb" if _glb_image(m) == img else "other",
+        out.update(texture="glb" if _glb_image(m) == img else "other", image=img.name,
                    cutoff=img.alpha_mode not in ("NONE", "CHANNEL_PACKED"), premul=img.alpha_mode == "PREMUL",
                    srgb=img.colorspace_settings.name == "sRGB", closest=getattr(node, "interpolation", "Linear") == "Closest",
                    extension=getattr(node, "extension", "REPEAT"))
@@ -234,6 +251,50 @@ def _workbench(sc):
     return {"studio": sh.studio_light, "lights": lights,
             "ambient": [round(float(v), 6) for v in sl.light_ambient] if sl is not None else [1.0, 1.0, 1.0],
             "rotate_z": round(float(sh.studiolight_rotate_z), 6), "cull": bool(sh.show_backface_culling)}
+
+
+def tint_holders(sc):
+    """The (object, custom property) pairs the silhouette looks' background layers follow (styles.Looks._update_silhouette):
+    every `tint` layer of the shots' looks and of the [[medium]] windows' looks, each pair once, in the order met."""
+    looks = [lk for e in _table(sc) for lk in (e.get("styles") or {}).values()]
+    try:
+        media = json.loads(sc.get("mk_medium") or "[]")
+    except ValueError:
+        media = []
+    looks += [lk for w in media for lk in (w.get("styles") or {}).values()]
+    out = []
+    for lk in looks:
+        for layer in ((lk or {}).get("silhouette") or {}).get("tint") or []:
+            pair = (layer["object"], layer["prop"])
+            if pair not in out:
+                out.append(pair)
+    return out
+
+
+def tint_value(holder, prop):
+    """A tint holder's property on the frame the scene stands on, as the silhouette reads it: 0 for a missing object or
+    property."""
+    ob = bpy.data.objects.get(holder)
+    return float(ob[prop]) if ob is not None and prop in ob.keys() else 0.0
+
+
+def standard_view(sc, part):
+    """The Standard view (no look, exposure 0, gamma 1, no curve) the looks' passes are saved through
+    (styles.Looks._film), captured into part/looks_lut.bin as bake_lit captures the scene's own view: its record
+    {file, n, lo, hi, zero, floor}."""
+    vs = sc.view_settings
+    keys = ("look", "view_transform", "exposure", "gamma", "use_curve_mapping")
+    saved = [(k, getattr(vs, k)) for k in keys]
+    try:
+        for k, v in zip(keys, ("None", "Standard", 0.0, 1.0, False)):
+            setattr(vs, k, v)
+        lut, zero, floor = BL._capture(sc, part)
+    finally:
+        for k, v in reversed(saved):                       # the look last: setting the transform resets it
+            setattr(vs, k, v)
+    lut.astype("<f4").tofile(os.path.join(part, "looks_lut.bin"))
+    return {"file": "looks_lut.bin", "n": BL.LUT_N, "lo": BL.LUT_LO, "hi": BL.LUT_HI, "zero": zero.tolist(),
+            "floor": floor.tolist()}
 
 
 class Flex:
@@ -327,7 +388,7 @@ def bake(ctx, out_dir):
     outputs = [{"name": o["name"], "size": list(o["size"])} for o in ctx.data.get("output", [])] or \
               [{"name": "main", "size": [sc.render.resolution_x, sc.render.resolution_y]}]
     cut = _cut(sc, ctx, outputs)
-    cams = sorted({c["camera"] for shots in cut.values() for c in shots if c["camera"] in bpy.data.objects})
+    cams = sorted({c for e in _table(sc) for c in (e.get("cameras") or {}).values() if c in bpy.data.objects})
     looks = ST.look_objects(sc)
     how = {o.name: _baked(o) for o in looks}
     blocks = _blocks(sc)
@@ -360,6 +421,12 @@ def bake(ctx, out_dir):
     vis = {o.name: np.zeros(n, bool) for o in looks + [b for b, _ in blocks]}
     centres = {r["index"]: np.full((n, 3), np.nan, np.float32) for r in point_rings}
     ring_errors = {}
+    tints = tint_holders(sc)
+    tint_vals = np.zeros((len(tints), n), np.float32)
+    part = out_dir + ".part"
+    shutil.rmtree(part, ignore_errors=True)
+    os.makedirs(part)
+    lit = BL.Lit(sc, n, cams, part, ctx.log, ctx=ctx, outputs=outputs)
     try:
         for k, f in enumerate(frames):
             FRZ.frame_set(sc, f, wins)
@@ -380,10 +447,10 @@ def bake(ctx, out_dir):
                 cam_clip[c][k] = (ob.data.clip_start, ob.data.clip_end)
             for name in vis:
                 vis[name][k] = not bpy.data.objects[name].hide_render
-            if flex:
-                dg = bpy.context.evaluated_depsgraph_get()
-                for fx in flex:
-                    fx.add(k, dg)
+            dg = bpy.context.evaluated_depsgraph_get()
+            for fx in flex:
+                fx.add(k, dg)
+            lit.sample(k, dg)
             if point_rings:
                 live = {r["index"] for r in RG.live(rings, (f - ring_tab["frame0"]) / ring_tab["fps"])}
                 for r in point_rings:
@@ -392,18 +459,20 @@ def bake(ctx, out_dir):
                             centres[r["index"]][k] = AXES[:3, :3] @ np.array(ST.ring_point(r, f))
                         except RuntimeError as e:
                             ring_errors[r["index"]] = str(e)
+            for i, (holder, prop) in enumerate(tints):
+                tint_vals[i, k] = tint_value(holder, prop)
     finally:
         FRZ.release()
+        lit.restore()                              # the render settings and screen type it changed for the loop
 
     keep = [o for o in meshes if shown[o.name].any()]
-    if not keep and not any(fx.geoms for fx in flex):    # a scene built only so far (`--until scene`): nothing to look at
-        shutil.rmtree(out_dir, ignore_errors=True)
+    if not keep and not any(fx.geoms for fx in flex) and not lit.shows_any():   # a scene built only so far (`--until
+        shutil.rmtree(out_dir, ignore_errors=True)                               # scene`): nothing to look at
+        shutil.rmtree(part, ignore_errors=True)
         ctx.log("bake: no mesh shows on any frame of the clip, nothing baked")
         return {"out": None, "skipped": "no mesh shows on any frame of the clip"}
-    part = out_dir + ".part"
-    shutil.rmtree(part, ignore_errors=True)
-    os.makedirs(part)
-    used_arms = sorted({o.find_armature().name for o in keep if o.find_armature() is not None})
+    used_arms = sorted({o.find_armature().name for o in keep if o.find_armature() is not None} |
+                       {a for a in lit.armatures() if a in joints})
     mat_names = []
     for o in looks:
         for m in ST.look_materials(o):
@@ -412,6 +481,7 @@ def bake(ctx, out_dir):
     wb_nodes = {m: _workbench_texture(bpy.data.materials[m]) for m in mat_names}   # before plain_materials relinks
 
     sc.frame_set(ctx.frame0)                       # the export frame: each node's matrix on it is nodes[...][0]
+    lit.capture()                                  # the node graphs as they are, before plain_materials relinks them
     plain_materials(keep)
     bpy.ops.object.select_all(action="DESELECT")
     chain = {o.name: o for o in keep + [bpy.data.objects[a] for a in used_arms]}
@@ -496,18 +566,23 @@ def bake(ctx, out_dir):
             kind, why = None, flex_why.get(o.name) or ("never shows in the clip" if not ranges else "not exported")
         rec = ST.record(o)
         objects.append({"name": o.name, "type": o.type, "collections": list(rec.collections), "props": sorted(rec.props),
-                        "text": ST.is_type(o), "materials": ST.look_materials(o), "shadow": bool(o.display.show_shadows),
+                        "text": ST.is_type(o), "soft": ST.is_soft(o), "materials": ST.look_materials(o),
+                        "shadow": bool(o.display.show_shadows),
                         "baked": kind, **({"why": why} if why else {}), "shows": ranges})
     ring_doc = {"table": ring_tab or None, "points": {}, "errors": {str(i): e for i, e in ring_errors.items()}}
     for i, c in centres.items():
         ring_doc["points"][str(i)] = put(c)
+    look_doc = {"tints": [{"object": holder, "prop": prop, "offset": put(tint_vals[i])}
+                          for i, (holder, prop) in enumerate(tints)], "lut": standard_view(sc, part)}
+    lit_doc = lit.finish(put, index["armatures"], looks={o["name"] for o in objects})
     np.concatenate(blob).astype("<f4").tofile(os.path.join(part, "bake.bin"))
-    doc = {"version": 4, "fps": ctx.fps, "frame0": ctx.frame0, "frames": n, "duration": ctx.duration, "glb": "scene.glb",
+    lit_doc["check"] = lit.check(index["armatures"])
+    doc = {"version": 5, "fps": ctx.fps, "frame0": ctx.frame0, "frames": n, "duration": ctx.duration, "glb": "scene.glb",
            "outputs": outputs, "cut": cut, "shots": _table(sc), "freezes": wins, **index, "objects": objects,
            "blocks": [{"name": b.name, "why": why, "shows": _ranges(vis[b.name])} for b, why in blocks],
            "materials": {m: _material(bpy.data.materials[m], wb_nodes[m]) for m in mat_names},
            "rings": ring_doc, "workbench": _workbench(sc), "screen": sum(1 for o in sc.objects if "mk_screen" in o.keys()),
-           "medium": json.loads(sc.get("mk_medium") or "[]")}
+           "medium": json.loads(sc.get("mk_medium") or "[]"), "looks": look_doc, "lit": lit_doc}
     with open(os.path.join(part, "bake.json"), "w", encoding="utf-8") as fh:
         json.dump(doc, fh, ensure_ascii=False)
     shutil.rmtree(out_dir, ignore_errors=True)
@@ -515,9 +590,13 @@ def bake(ctx, out_dir):
     report = {"out": out_dir, "frames": n, "meshes": len(index["nodes"]), "by_frame": len(index["by_frame"]),
               "armatures": len(index["armatures"]), "cameras": len(cams),
               "glb_mb": round(os.path.getsize(os.path.join(out_dir, "scene.glb")) / 1e6, 1),
-              "bin_mb": round(size * 4 / 1e6, 1), "export_seconds": round(t_glb, 1), "seconds": round(time.time() - t0, 1)}
+              "bin_mb": round(size * 4 / 1e6, 1), "export_seconds": round(t_glb, 1), "lit": lit.report(out_dir),
+              "seconds": round(time.time() - t0, 1)}
     if flex_why:
         report["not_by_frame"] = flex_why
+    worst = {k: v for k, v in report["lit"]["check_mm"].items() if v > BL.CHECK_MM}
+    if worst:
+        ctx.log(f"WARNING bake: lit meshes rebuilt from the bake miss Blender's by more than {BL.CHECK_MM} mm: {worst}")
     ctx.log("bake", report)
     return report
 

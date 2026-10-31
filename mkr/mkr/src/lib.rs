@@ -1,0 +1,30 @@
+//! mkr: the scene bake `mk build` writes, drawn on the GPU as Blender's EEVEE Next draws it.
+
+pub mod bake;
+pub mod bend;
+pub mod camera;
+pub mod dither;
+pub mod dof;
+pub mod film;
+pub mod frames;
+pub mod gpu;
+pub mod images;
+pub mod info;
+pub mod ltc;
+pub mod layers;
+pub mod layers_gpu;
+pub mod looks;
+pub mod looks_gpu;
+mod looks_soft;
+pub mod lut;
+pub mod materials;
+pub mod motion_blur;
+pub mod output;
+pub mod params;
+pub mod pipelines;
+pub mod raytrace;
+pub mod render;
+pub mod scene;
+pub mod screen_geo;
+pub mod shadows;
+pub mod world;

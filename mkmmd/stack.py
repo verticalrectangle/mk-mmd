@@ -467,8 +467,8 @@ class StackFx:
     MandalaFx's _sprite_of). `_stack_init` is called once its effects and the sprite finder are known."""
 
     def _stack_init(self):
-        """The bands' sprites found and read now: a missing or unreadable one is an FX.FxError before any frame is
-        drawn."""
+        """The bands' sprites found now and read (FrameFx `preload`): a missing or unreadable one is an FX.FxError
+        before any frame is drawn."""
         self._sk_files, self._sk_walls, self._sk_squashes = {}, OrderedDict(), {}
         for fx in self.fxs:
             if fx["kind"] != "stack":
@@ -476,7 +476,7 @@ class StackFx:
             for i, b in enumerate(fx["bands"]):
                 if SK.is_sprites(b):
                     files = [str(f) for f in self._sprite_of(b["sprites"])]
-                    for f in files:
+                    for f in files if self._preload else ():
                         MDF._sprite(f)
                     self._sk_files[fx["index"], i] = files
 

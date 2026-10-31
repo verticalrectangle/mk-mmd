@@ -21,6 +21,7 @@ from . import remap as RMF
 from . import stack as SKF
 from .core import framefx as FX
 from .core import lanes as LN
+from .core import picturefx as PC
 
 GLOW_SIGMA = 6.0                 # px at 1080 on the short side: the scope trace's glow
 LINE_SHIFT = 4                   # fixed-point bits of the trace's points (sub-pixel lines)
@@ -40,12 +41,20 @@ SILK_LINE = 4.0                  # px at 1080: the reach of a silkscreen's lines
 SILK_DEPTH = 0.06                # how far under its mean over SILK_LINE the luma of a line lies
 
 
+def scale_map(c, z):
+    """The 2 x 3 float32 map (each pixel of the result -> the picture's) of a zoom `z` times about pixel `c`, or None for
+    no zoom (`z` within 1e-6 of 1)."""
+    if abs(z - 1.0) < 1e-6:
+        return None
+    return np.array([[1.0 / z, 0.0, c[0] * (1.0 - 1.0 / z)], [0.0, 1.0 / z, c[1] * (1.0 - 1.0 / z)]], np.float32)
+
+
 def scale_about(img, c, z):
     """The picture zoomed `z` times about pixel `c` (x, y; z > 1 is in), the frame's edge reflected where it runs out."""
-    if abs(z - 1.0) < 1e-6:
+    M = scale_map(c, z)
+    if M is None:
         return img
     h, w = img.shape[:2]
-    M = np.array([[1.0 / z, 0.0, c[0] * (1.0 - 1.0 / z)], [0.0, 1.0 / z, c[1] * (1.0 - 1.0 / z)]], np.float32)
     return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REFLECT)
 
 
@@ -70,18 +79,30 @@ def shock(img, c, waves, width, amount, colour, glow):
     return out
 
 
+def slab_frame(size, centres, w, h, slant, angle):
+    """What slab_cover sums with: ((ca, sa, cs) float32, the turn's cosine and sine and the slant's cosine, and t the
+    slant's tangent) and [(cx, cy, (x0, x1, y0, y1))], each place with the box of pixels its coverage is summed over
+    (clipped to the frame of `size`; empty off it)."""
+    W, H = int(size[0]), int(size[1])
+    a, t = np.radians(angle), np.tan(np.radians(slant))
+    ca, sa, cs = np.float32(np.cos(a)), np.float32(np.sin(a)), np.float32(np.cos(np.radians(slant)))
+    reach = 0.5 * (w + abs(h * t)) + 0.5 * h + 2.0                       # the slab's half-extent, any way, plus the edge
+    places = []
+    for cx, cy in centres:
+        x0, x1 = max(int(np.floor(cx - reach)), 0), min(int(np.ceil(cx + reach)) + 1, W)
+        y0, y1 = max(int(np.floor(cy - reach)), 0), min(int(np.ceil(cy + reach)) + 1, H)
+        places.append((cx, cy, (x0, x1, y0, y1)))
+    return (ca, sa, cs, t), places
+
+
 def slab_cover(size, centres, w, h, slant, angle):
     """Coverage (rows, cols) 0..1 of a parallelogram `w` x `h` px whose sides lean `slant` degrees (to the right going up,
     as italics do) and which is turned `angle` degrees counter-clockwise on screen, averaged over the pixel `centres`
     [(x, y), ...] it stands at in turn (one: still; several along its way: blurred by its motion)."""
     W, H = int(size[0]), int(size[1])
     out = np.zeros((H, W), np.float32)
-    a, t = np.radians(angle), np.tan(np.radians(slant))
-    ca, sa, cs = np.float32(np.cos(a)), np.float32(np.sin(a)), np.float32(np.cos(np.radians(slant)))
-    reach = 0.5 * (w + abs(h * t)) + 0.5 * h + 2.0                       # the slab's half-extent, any way, plus the edge
-    for cx, cy in centres:
-        x0, x1 = max(int(np.floor(cx - reach)), 0), min(int(np.ceil(cx + reach)) + 1, W)
-        y0, y1 = max(int(np.floor(cy - reach)), 0), min(int(np.ceil(cy + reach)) + 1, H)
+    (ca, sa, cs, t), places = slab_frame(size, centres, w, h, slant, angle)
+    for cx, cy, (x0, x1, y0, y1) in places:
         if x1 <= x0 or y1 <= y0:
             continue
         X, Y = np.meshgrid(np.arange(x0, x1, dtype=np.float32) - np.float32(cx),
@@ -171,16 +192,23 @@ def zoom(log_zmax, u, ease):
     return float(np.exp(log_zmax * g)), g
 
 
-def push(img, inner, c, r0, u, ease="log"):
-    """The picture zooming into a disc of radius r0 (px) about `c` that shows `inner`: at u = 0 the picture as it is, at
-    u = 1 the disc, its centre glided to the frame's middle, covers the frame and `inner` is shown at its own size."""
-    h, w = img.shape[:2]
+def push_terms(size, c, r0, u, ease="log"):
+    """(z, p, m, r, s) of a push into a disc of radius r0 (px) about `c` at progress u on a frame of `size` (w, h): the
+    zoom, the disc's centre on screen (gliding to the frame's middle `m`), its radius and the inner frame's scale."""
+    w, h = size
     m = np.array([(w - 1) / 2.0, (h - 1) / 2.0])
     R = float(np.hypot(w, h)) / 2.0 + 1.0
     z, g = zoom(np.log(max(R / max(r0, 1e-6), 1.0)), float(u), ease)
     p = np.asarray(c, float) + (m - np.asarray(c, float)) * g                       # the disc's centre on screen
     r = r0 * z
-    s = r / R                                                                        # the inner frame's scale
+    return z, p, m, r, r / R                                                         # s: the inner frame's scale
+
+
+def push(img, inner, c, r0, u, ease="log"):
+    """The picture zooming into a disc of radius r0 (px) about `c` that shows `inner`: at u = 0 the picture as it is, at
+    u = 1 the disc, its centre glided to the frame's middle, covers the frame and `inner` is shown at its own size."""
+    h, w = img.shape[:2]
+    z, p, m, r, s = push_terms((w, h), c, r0, u, ease)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     dx, dy = xx - np.float32(p[0]), yy - np.float32(p[1])
     outer = cv2.remap(np.ascontiguousarray(img, np.float32), np.float32(c[0]) + dx / np.float32(z),
@@ -202,17 +230,24 @@ def scope_points(x, i, n, lag, gain):
         np.clip(np.stack([np.linspace(-1, 1, len(seg)), seg], 1) * [1.0, gain], -1.0, 1.0)
 
 
+def trace_mask(size, pts, centre, radius, width):
+    """The trace `pts` (n, 2, -1..1; y up) drawn as an antialiased line of `width` px about `centre` (px) at `radius` px:
+    a uint8 mask of a frame of `size` (w, h)."""
+    w, h = size
+    q = np.stack([centre[0] + pts[:, 0] * radius, centre[1] - pts[:, 1] * radius], 1)
+    mask = np.zeros((h, w), np.uint8)
+    cv2.polylines(mask, [np.rint(q * (1 << LINE_SHIFT)).astype(np.int32)], False, 255, max(1, int(round(width))),
+                  cv2.LINE_AA, shift=LINE_SHIFT)
+    return mask
+
+
 def draw_trace(img, pts, centre, radius, colour, width, glow, opacity=1.0, px=1.0):
     """`img` with the trace `pts` (n, 2, -1..1; y up) drawn as a line of `width` px about `centre` (px) at `radius` px,
     added in `colour` with a glow of share `glow`."""
     h, w = img.shape[:2]
     if len(pts) < 2 or opacity <= 0:
         return img
-    q = np.stack([centre[0] + pts[:, 0] * radius, centre[1] - pts[:, 1] * radius], 1)
-    mask = np.zeros((h, w), np.uint8)
-    cv2.polylines(mask, [np.rint(q * (1 << LINE_SHIFT)).astype(np.int32)], False, 255, max(1, int(round(width))),
-                  cv2.LINE_AA, shift=LINE_SHIFT)
-    a = mask.astype(np.float32) / 255.0
+    a = trace_mask((w, h), pts, centre, radius, width).astype(np.float32) / 255.0
     if glow > 0:
         a = a + glow * cv2.GaussianBlur(a, (0, 0), GLOW_SIGMA * px) * 3.0
     return np.clip(img + opacity * a[..., None] * np.asarray(colour, np.float32), 0.0, 1.0)
@@ -252,26 +287,37 @@ def halftone(img, cell, angle, level, ink, lift, offset):
     return out
 
 
-def split(img, rng, bands, shift, share, rgb):
-    """A broken digital signal (`shift` and `rgb` in px, `rng` a numpy Generator): the frame cut into `bands` bands of
-    random heights, `share` of them torn sideways by up to `shift` px (what leaves one side comes in at the other), the
-    red and blue planes pulled `rgb` px apart in a torn band and a third of that everywhere else."""
-    h = img.shape[0]
+def split_shifts(h, rng, bands, shift, share, rgb):
+    """How a broken digital signal tears a frame of `h` rows (split's randomness, drawn in its order): [(first row, past
+    the last, (red, green, blue) px that band's planes roll sideways)], the bands covering the rows in order."""
     n = min(int(bands), h)
     cuts = np.sort(rng.choice(np.arange(1, h), size=n - 1, replace=False)) if n > 1 else np.zeros(0, int)
     edges = np.concatenate([[0], cuts, [h]]).astype(int)
     base = int(round(rgb / 3.0))
-    out = np.empty_like(img)
-    out[..., 0], out[..., 1], out[..., 2] = np.roll(img[..., 0], base, 1), img[..., 1], np.roll(img[..., 2], -base, 1)
+    out = []
     for a, b in zip(edges[:-1], edges[1:]):
         if rng.random() >= share:
+            out.append((int(a), int(b), (base, 0, -base)))
             continue
         dx, s = int(round(rng.uniform(-1.0, 1.0) * shift)), int(round(rgb))
-        band = img[a:b]
-        out[a:b, :, 0] = np.roll(band[..., 0], dx + s, 1)
-        out[a:b, :, 1] = np.roll(band[..., 1], dx, 1)
-        out[a:b, :, 2] = np.roll(band[..., 2], dx - s, 1)
+        out.append((int(a), int(b), (dx + s, dx, dx - s)))
     return out
+
+
+def split_rolled(img, bands):
+    """`img` with each band of split_shifts' rolled sideways, its planes each by their own px."""
+    out = np.empty_like(img)
+    for a, b, shifts in bands:
+        for ch, s in enumerate(shifts):
+            out[a:b, :, ch] = np.roll(img[a:b, :, ch], s, 1)
+    return out
+
+
+def split(img, rng, bands, shift, share, rgb):
+    """A broken digital signal (`shift` and `rgb` in px, `rng` a numpy Generator): the frame cut into `bands` bands of
+    random heights, `share` of them torn sideways by up to `shift` px (what leaves one side comes in at the other), the
+    red and blue planes pulled `rgb` px apart in a torn band and a third of that everywhere else."""
+    return split_rolled(img, split_shifts(img.shape[0], rng, bands, shift, share, rgb))
 
 
 def _grey8(img, size):
@@ -279,19 +325,32 @@ def _grey8(img, size):
     return (np.clip(small @ LUMA, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
 
 
-def mosh_step(held, prev, cur, block):
-    """`held` carried one frame along the motion from `prev` to `cur` (the cut's own pictures): Farneback optical flow on
-    grey pictures at MOSH_SCALE of the frame, averaged over `block` px squares so the picture moves in chunks as a
-    codec's motion vectors move it, each pixel taking what stood `flow` behind it."""
+def mosh_blocks(prev, cur, block):
+    """The cut's own motion from `prev` to `cur` as mosh_step carries a picture along it: Farneback optical flow on grey
+    pictures at MOSH_SCALE of the frame, averaged over `block` px squares: (blocks (gh, gw, 2) float32, their side b
+    px at that scale, the flow's size (sw, sh))."""
     h, w = cur.shape[:2]
     sw, sh = max(8, int(round(w * MOSH_SCALE))), max(8, int(round(h * MOSH_SCALE)))
     flow = cv2.calcOpticalFlowFarneback(_grey8(prev, (sw, sh)), _grey8(cur, (sw, sh)), None, 0.5, 3, 15, 3, 5, 1.2, 0)
     b = max(1, int(round(block * MOSH_SCALE)))
     gh, gw = -(-sh // b), -(-sw // b)
     pad = np.pad(flow, ((0, gh * b - sh), (0, gw * b - sw), (0, 0)), mode="edge")
-    blocks = np.ascontiguousarray(pad.reshape(gh, b, gw, b, 2).mean((1, 3)), np.float32)
+    return np.ascontiguousarray(pad.reshape(gh, b, gw, b, 2).mean((1, 3)), np.float32), b, (sw, sh)
+
+
+def mosh_field(blocks, b, small, size):
+    """(h, w, 2) float32: each pixel's move in a frame of `size` (w, h) from mosh_blocks' (blocks, b, small): its block's,
+    nearest, as a codec's motion vectors move whole blocks."""
+    (sw, sh), (w, h), (gh, gw) = small, size, blocks.shape[:2]
     full = cv2.resize(blocks, (gw * b, gh * b), interpolation=cv2.INTER_NEAREST)[:sh, :sw]
-    full = cv2.resize(full, (w, h), interpolation=cv2.INTER_NEAREST) / np.float32(MOSH_SCALE)
+    return cv2.resize(full, (int(w), int(h)), interpolation=cv2.INTER_NEAREST) / np.float32(MOSH_SCALE)
+
+
+def mosh_step(held, prev, cur, block):
+    """`held` carried one frame along the motion from `prev` to `cur` (the cut's own pictures, mosh_blocks), each pixel
+    taking what stood its block's move behind it."""
+    h, w = cur.shape[:2]
+    full = mosh_field(*mosh_blocks(prev, cur, block), (w, h))
     xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
     return cv2.remap(np.ascontiguousarray(held, np.float32), xs - full[..., 0], ys - full[..., 1], cv2.INTER_LINEAR,
                      borderMode=cv2.BORDER_REPLICATE)
@@ -425,18 +484,27 @@ def _grow(a, width):
     return np.maximum(g, a)
 
 
-def _warp(src, M, size):
-    """`src` ((h, w) or (h, w, 3)) carried by the affine map `M` (2 x 3, its pixels to the picture's) into a picture of
-    `size` (nothing outside it), shrunk by area first when M shrinks it under SHRINK_BY_AREA."""
+def warp_spec(M, shape):
+    """How `_warp` carries a picture of `shape` ((h, w, ...)) by the affine map `M` (2 x 3, its pixels to the result's):
+    (the float32 map it warps by, from the picture as it warps it; the size (w, h) the picture is first shrunk to by
+    area when M shrinks it under SHRINK_BY_AREA, else None)."""
     M = np.asarray(M, np.float64)
     s = math.sqrt(abs(M[0, 0] * M[1, 1] - M[0, 1] * M[1, 0]))
+    if s >= SHRINK_BY_AREA:
+        return M.astype(np.float32), None
+    sw, sh = max(int(round(shape[1] * s)), 1), max(int(round(shape[0] * s)), 1)
+    k = np.array([sw / shape[1], sh / shape[0]])
+    return np.hstack([M[:, :2] / k, (M[:, 2] + M[:, :2] @ (0.5 / k - 0.5))[:, None]]).astype(np.float32), (sw, sh)
+
+
+def _warp(src, M, size):
+    """`src` ((h, w) or (h, w, 3)) carried by the affine map `M` (2 x 3, its pixels to the picture's) into a picture of
+    `size` (nothing outside it), shrunk by area first when M shrinks it under SHRINK_BY_AREA (warp_spec)."""
     src = np.ascontiguousarray(src, np.float32)
-    if s < SHRINK_BY_AREA:
-        sw, sh = max(int(round(src.shape[1] * s)), 1), max(int(round(src.shape[0] * s)), 1)
-        k = np.array([sw / src.shape[1], sh / src.shape[0]])
-        src = cv2.resize(src, (sw, sh), interpolation=cv2.INTER_AREA)
-        M = np.hstack([M[:, :2] / k, (M[:, 2] + M[:, :2] @ (0.5 / k - 0.5))[:, None]])
-    return cv2.warpAffine(src, M.astype(np.float32), (int(size[0]), int(size[1])), flags=cv2.INTER_LINEAR,
+    Mf, shrink = warp_spec(M, src.shape)
+    if shrink is not None:
+        src = cv2.resize(src, shrink, interpolation=cv2.INTER_AREA)
+    return cv2.warpAffine(src, Mf, (int(size[0]), int(size[1])), flags=cv2.INTER_LINEAR,
                           borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
@@ -739,22 +807,29 @@ def panels(size, n, slant, figures, colour_at, fill_at, scale=1.0, edge=None, sh
     return out
 
 
+_STEMS = {}                 # (root, stem cache, timeline, its mtime) -> its stems as stem_source gives them
+
+
 def stem_source(root, cache_dir):
     """callable(timeline, stem) -> (mono float32 samples, sample rate, pre) for a project at `root`: the stems of the
     window `timeline` (project-relative) was analysed on, from the stem cache `cache_dir` only (mkmmd.timeline.hits
-    .cached_stems), each loaded once; the timeline's audio file, like every path of a project, is project-relative.
-    A FileNotFoundError says what to run when they are not there."""
+    .cached_stems), each loaded once a process while its timeline stays as it is (an output's FrameFx and the next
+    one's share them); the timeline's audio file, like every path of a project, is project-relative. A
+    FileNotFoundError says what to run when they are not there."""
     import json
     import subprocess
     from pathlib import Path
 
     from .timeline import hits as H
     from .timeline import signal as S
-    loaded = {}
 
     def get(timeline, stem):
-        if timeline not in loaded:
-            p = Path(root) / Path(timeline).expanduser()
+        p = Path(root) / Path(timeline).expanduser()
+        try:
+            key = (str(root), str(cache_dir), timeline, p.stat().st_mtime_ns)
+        except OSError as e:
+            raise FileNotFoundError(f"scope: {p}: {e}") from None
+        if key not in _STEMS:
             try:
                 tl = json.loads(p.read_text(encoding="utf-8"))
                 au = dict(tl.get("audio") or {})
@@ -764,8 +839,8 @@ def stem_source(root, cache_dir):
                 st, pre = H.cached_stems({**tl, "audio": au}, str(cache_dir))
             except (OSError, ValueError, subprocess.CalledProcessError) as e:     # HitsError is a ValueError
                 raise FileNotFoundError(f"scope: {p}: {e}") from None
-            loaded[timeline] = ({k: np.asarray(v, np.float32).mean(0) for k, v in st.items()}, pre)
-        st, pre = loaded[timeline]
+            _STEMS[key] = ({k: np.asarray(v, np.float32).mean(0) for k, v in st.items()}, pre)
+        st, pre = _STEMS[key]
         return st[stem], S.SR, pre
     return get
 
@@ -830,14 +905,20 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
                 given)
     plate_of    callable(shot, frame) -> picture or None: what `shot` shows at `frame` through its own camera and look
                 (its plate, or the cut's frame where it is the shot in the cut), for a collage whose figure comes from
-                its own `shot` (None: such a collage is an error)"""
+                its own `shot` (None: such a collage is an error)
+    preload     read every sprite the effects use now, so a missing or unreadable one is an error before any frame is
+                drawn (False: found now, read when drawn: mk post's workers, after the parent checked them)
+    paths       where the pictures `frame_of` and `figure_of` read are on disk, for mkr-post (mkmmd.gpufx.Paths; None:
+                the effects are drawn here only)"""
 
     def __init__(self, fxs, size, *, fps, frame0, frame_of, point_of, figure_of=None, stem_of=None, hits=None,
-                 output=None, footage_of=None, font_of=None, sprite_of=None, plate_of=None):
+                 output=None, footage_of=None, font_of=None, sprite_of=None, plate_of=None, preload=True, paths=None):
+        self._preload = preload
         self.fxs = [FX.for_output(fx, output) for fx in fxs]
         self.size, self.fps, self.frame0, self.output = (int(size[0]), int(size[1])), float(fps), int(frame0), output
         self._frame_of, self._point_of, self._figure_of, self._plate_of = frame_of, point_of, figure_of, plate_of
         self._stem_of, self._hits, self._footage_of = stem_of, hits, footage_of
+        self.paths = paths
         self.px = min(self.size) / 1080.0
         self._cache = OrderedDict()
         self._gain, self._times = {}, {}
@@ -856,6 +937,26 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))
+
+    def safe(self, frame, rendered):
+        """Whether this object draws `frame` exactly as a pass through every frame before it does, wherever it starts
+        (fresh, or after other frames): no effect on `frame` holds a picture that only the frames before would have
+        kept (a film's frame over its step, a booth's earlier captures, the frame an eraser holds, the picture a mosh
+        with a flow carries; a mosh without one works its picture out again from the cut's frames, which `rendered`,
+        the frames on disk, must all hold). mk post starts a worker's chunk of frames on such a frame."""
+        for fx in FX.at(self.fxs, frame):
+            kind = fx["kind"]
+            if kind == "film" and PC.film_step(fx, frame)[1] != frame:
+                return False
+            if kind == "booth" and any(g < frame for _, g in PC.captures(fx, self._hit_times(fx), self.fps,
+                                                                          self.frame0)):
+                return False
+            if kind == "paintapp" and any(e["frame"] <= frame < e["frame"] + e["frames"] for e in fx["eraser"]):
+                return False
+            if kind == "mosh" and (frame != fx["f0"] if fx["flow"] is not None else
+                                   any(g not in rendered for g in range(max(fx["f0"] - 1, self.frame0), frame + 1))):
+                return False
+        return True
 
     def frame(self, frame, img):
         """`img` (the cut's frame `frame`, its cut effects composited) with every effect on that frame, in table order."""
@@ -908,33 +1009,51 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         return (frame - self.frame0) / self.fps
 
     # ---------------------------------------------------------------- kinds
-    def _lens(self, fx, frame, img):
+    def lens_at(self, fx, frame):
+        """(centre px, Einstein radius px) of a lens on `frame`: its mass goes as the strength."""
         c, theta = self._centre(fx, frame)
-        return lens(img, c, theta * np.sqrt(max(FX.strength(fx, self._t(frame)), 0.0)), fx["shadow"])
+        return c, theta * np.sqrt(max(FX.strength(fx, self._t(frame)), 0.0))
+
+    def _lens(self, fx, frame, img):
+        return lens(img, *self.lens_at(fx, frame), fx["shadow"])
+
+    def echo_at(self, fx, frame):
+        """[(frame, opacity)] of an echo's copies on `frame`, nearest first, whether the cut has those frames or not."""
+        a0 = fx["fade"] * FX.strength(fx, self._t(frame))
+        return [(f, a0 * fx["fade"] ** j) for j, f in enumerate(FX.sources(fx, frame, self.frame0))]
 
     def _echo(self, fx, frame, img):
-        a0 = fx["fade"] * FX.strength(fx, self._t(frame))
         copies = []
-        for j, f in enumerate(FX.sources(fx, frame, self.frame0)):
+        for f, a in self.echo_at(fx, frame):
             pic = self._get(f)
             if pic is not None:
-                copies.append((pic, a0 * fx["fade"] ** j))
+                copies.append((pic, a))
         return echo(img, copies, fx["blend"], fx["tint"])
 
+    def slit_depth(self, fx, frame):
+        """How many frames back a slitscan reaches on `frame` (under 1: none)."""
+        return int(round(fx["depth"] * max(FX.strength(fx, self._t(frame)), 0.0)))
+
     def _slitscan(self, fx, frame, img):
-        depth = int(round(fx["depth"] * max(FX.strength(fx, self._t(frame)), 0.0)))
+        depth = self.slit_depth(fx, frame)
         if depth < 1:
             return img
         return slitscan(img, lambda k: self._get(frame - k), fx["now"], depth)
 
-    def _push(self, fx, frame, img):
+    def push_at(self, fx, frame):
+        """(centre px, disc radius px, the frame inside, progress 0..1) of a push on `frame`."""
         c, r0 = self._centre(fx, frame)
-        inner = self._get(FX.sources(fx, frame, self.frame0)[0])
+        return c, r0, FX.sources(fx, frame, self.frame0)[0], FX.progress(fx, frame)
+
+    def _push(self, fx, frame, img):
+        c, r0, g, u = self.push_at(fx, frame)
+        inner = self._get(g)
         if inner is None:
             raise FileNotFoundError(f"fx {fx['index']} (push): the frame inside, {fx['inside_frame']}, is not there")
-        return push(img, inner, c, r0, FX.progress(fx, frame), fx["ease"])
+        return push(img, inner, c, r0, u, fx["ease"])
 
-    def _scope(self, fx, frame, img):
+    def scope_at(self, fx, frame):
+        """(trace points, centre px, radius px, line width px, opacity) of a scope on `frame` (draw_trace's)."""
         if self._stem_of is None:
             raise FileNotFoundError(f"fx {fx['index']} (scope): no audio to draw")
         x, sr, pre = self._stem_of(fx["timeline"], fx["stem"])
@@ -945,22 +1064,35 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         i = int(round((pre + self._t(frame)) * sr))
         pts = scope_points(x, i, int(fx["window"] * sr), int(round(fx["lag"] * sr)), self._gain[fx["index"]])
         w, h = self.size
-        return draw_trace(img, pts, (fx["at"][0] * w - 0.5, fx["at"][1] * h - 0.5), fx["size"] * h, fx["color"],
-                          fx["width"] * self.px, fx["glow"], FX.strength(fx, self._t(frame)), self.px)
+        return (pts, (fx["at"][0] * w - 0.5, fx["at"][1] * h - 0.5), fx["size"] * h, fx["width"] * self.px,
+                FX.strength(fx, self._t(frame)))
 
-    def _zoom(self, fx, frame, img):
+    def _scope(self, fx, frame, img):
+        pts, centre, radius, width, opacity = self.scope_at(fx, frame)
+        return draw_trace(img, pts, centre, radius, fx["color"], width, fx["glow"], opacity, self.px)
+
+    def zoom_at(self, fx, frame):
+        """(centre px, zoom factor) of a zoom on `frame`: punched in on each hit, eased back."""
         t = self._t(frame)
         k = float(FX.punch(t, self._hit_times(fx), fx["attack"], fx["decay"])) * FX.strength(fx, t)
-        return scale_about(img, self._at(fx, frame)[0], 1.0 + fx["amount"] * k)
+        return self._at(fx, frame)[0], 1.0 + fx["amount"] * k
 
-    def _shock(self, fx, frame, img):
+    def _zoom(self, fx, frame, img):
+        return scale_about(img, *self.zoom_at(fx, frame))
+
+    def shock_at(self, fx, frame):
+        """(centre px, waves [(radius px, weight)], front width px, amount px) of a shock on `frame`."""
         t, h = self._t(frame), self.size[1]
         s = FX.strength(fx, t)
         waves = [(fx["speed"] * (t - th) * h, s * (1.0 - (t - th) / fx["life"]) ** 2)
                  for th in self._hit_times(fx) if 0.0 <= t - th < fx["life"]]
-        return shock(img, self._at(fx, frame)[0], waves, fx["width"] * h, fx["amount"] * h, fx["color"], fx["glow"])
+        return self._at(fx, frame)[0], waves, fx["width"] * h, fx["amount"] * h
 
-    def _slab(self, fx, frame, img):
+    def _shock(self, fx, frame, img):
+        return shock(img, *self.shock_at(fx, frame), fx["color"], fx["glow"])
+
+    def slab_at(self, fx, frame):
+        """(centres px, width px, height px, opacity) of a slab on `frame`: where it stands at its shutter's samples."""
         w, h = self.size
         sw, sh = fx["size"][0] * h, fx["size"][1] * h
         C = np.array([fx["at"][0] * w - 0.5, fx["at"][1] * h - 0.5])
@@ -976,8 +1108,12 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
             u = FX.slab_offset(fx, tj)
             d = u * ((behind + rb) if u < 0 else (ahead + rb))
             centres.append((C[0] + v[0] * d, C[1] + v[1] * d))
+        return centres, sw, sh, fx["alpha"] * FX.strength(fx, t)
+
+    def _slab(self, fx, frame, img):
+        centres, sw, sh, alpha = self.slab_at(fx, frame)
         cov = slab_cover(self.size, centres, sw, sh, fx["slant"], fx["angle"])
-        a = (fx["alpha"] * FX.strength(fx, t) * cov)[..., None]
+        a = (alpha * cov)[..., None]
         return (img * (1.0 - a) + np.asarray(fx["color"], np.float32) * a).astype(np.float32)
 
     def _tint(self, fx, frame, img):
@@ -994,16 +1130,22 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
                        (fx["offset"][0] * self.px, fx["offset"][1] * self.px))
         return out if s >= 1.0 else (img * (1.0 - s) + out * s).astype(np.float32)
 
-    def _split(self, fx, frame, img):
-        """The tear holds `hold` seconds, then the signal breaks another way (seeded: the same frames again break the
-        same); the strength scales how far it tears."""
+    def split_at(self, fx, frame):
+        """The bands a split tears `frame` into (split_shifts), None when its strength is 0 there. The tear holds `hold`
+        seconds, then the signal breaks another way (seeded: the same frames again break the same); the strength
+        scales how far it tears."""
         t = self._t(frame)
         s = max(FX.strength(fx, t), 0.0)
         if s <= 0.0:
-            return img
+            return None
         step = max(int(np.floor((t - fx["from"]) / fx["hold"] + 1e-6)), 0)
         rng = np.random.default_rng([fx["seed"], fx["index"], step])
-        return split(img, rng, fx["bands"], fx["shift"] * self.size[0] * s, fx["share"], fx["rgb"] * self.px * s)
+        return split_shifts(self.size[1], rng, fx["bands"], fx["shift"] * self.size[0] * s, fx["share"],
+                            fx["rgb"] * self.px * s)
+
+    def _split(self, fx, frame, img):
+        bands = self.split_at(fx, frame)
+        return img if bands is None else split_rolled(img, bands)
 
     def _mosh(self, fx, frame, img):
         """The held picture mixed over the frame by the strength, and with a `mask` by the figure's coverage too: the
@@ -1098,20 +1240,26 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         return out if s >= 1.0 else (img * (1.0 - s) + out * s).astype(np.float32)
 
     def _posed(self, fx, g, pic, m):
-        """A collage's figure (picture or None, coverage) on frame `g` set into the frame by `at` and `height` (the same
-        map on every frame: _placing) and moved by its `keys` at that frame: turned, scaled and shifted about its pivot
-        (as it is at rest)."""
+        """A collage's figure (picture or None, coverage) on frame `g` set into the frame and moved by its keys there
+        (_pose_map)."""
         if m is None:
             return pic, m
+        M = self._pose_map(fx, g)
+        if M is None:
+            return pic, m
+        return (None if pic is None else _warp(pic, M, self.size)), _warp(m, M, self.size)
+
+    def _pose_map(self, fx, g):
+        """The 2 x 3 map that sets a collage's figure into the frame on frame `g`, by `at` and `height` (the same map on
+        every frame: _placing), and moves it by its `keys` at that frame: turned, scaled and shifted about its pivot (as
+        it is at rest); None for a figure left where its frame shows it."""
         M, pivot = self._placing(fx)
         if fx["keys"]:
             mv = FX.move_at(fx["keys"], self._t(g))
             if mv != FX.MOVE:
                 K = FX.move_matrix(mv, self._pivot(fx) if pivot is None else pivot, self.size[1])
                 M = K if M is None else FX.compose(K, M)
-        if M is None:
-            return pic, m
-        return (None if pic is None else _warp(pic, M, self.size)), _warp(m, M, self.size)
+        return M
 
     def _placing(self, fx):
         """(map, pivot) of a collage whose `at` or `height` sets its figure into the frame: the 2 x 3 map from the

@@ -227,18 +227,30 @@ def _pupil_layers(shape, centre, s, geo, off):
             (ellipse(shape, cx + gx * R, cy + gy * R, max(rx * R, 0.6), max(ry * R, 0.45), ang), WHITE, alpha)]
 
 
-def draw_pupils(out, geo, M, offsets=None):
-    """`out` (an opaque picture, in place, and returned) with the pupils and glints of a tile with face `geo` laid by
-    the affine map `M` (mkmmd.mandala.placed): `offsets` (2, 2) free radii, screen axes (`pupils`; None: at rest)."""
+def pupil_inks(shape, geo, M, offsets=None):
+    """The pupils and glints of a tile with face `geo` laid by the affine map `M` (mkmmd.mandala.placed) over a picture
+    of `shape` (h, w), as coverages laid in order ([(coverage, colour, x0, y0, alpha)]: each coverage's top left at
+    pixel (x0, y0)): `offsets` (2, 2) free radii, screen axes (`pupils`; None: at rest)."""
     if geo is None or geo["eyes"] is None:
-        return out
+        return []
     M = np.asarray(M, np.float64)
     s = math.sqrt(abs(float(np.linalg.det(M[:, :2]))))
     offs = np.tile(geo["rest"], (2, 1)) if offsets is None else np.asarray(offsets, np.float64)
+    out = []
     for e, (x, y) in enumerate(geo["eyes"]):
         c = M[:, :2] @ np.array([x, y]) + M[:, 2]
-        for got, colour, alpha in _pupil_layers(out.shape[:2], c, s, geo, offs[e]):
-            _over(out, None, got, colour, alpha)
+        for got, colour, alpha in _pupil_layers(shape, c, s, geo, offs[e]):
+            if got is not None:
+                (x0, y0, _, _), cov = got
+                out.append((cov, colour, x0, y0, alpha))
+    return out
+
+
+def draw_pupils(out, geo, M, offsets=None):
+    """`out` (an opaque picture, in place, and returned) with the pupils and glints of a tile with face `geo` laid by
+    the affine map `M` (mkmmd.mandala.placed): `offsets` (2, 2) free radii, screen axes (`pupils`; None: at rest)."""
+    for cov, colour, x0, y0, alpha in pupil_inks(out.shape[:2], geo, M, offsets):
+        _over(out, None, ((x0, y0, x0 + cov.shape[1], y0 + cov.shape[0]), cov), colour, alpha)
     return out
 
 

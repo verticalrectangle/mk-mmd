@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["mkr", "mkr-shade", "mkr-post", "mkr-gpulock"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-Proprietary"
+publish = false
+
+[workspace.dependencies]
+mkr-shade = { path = "mkr-shade" }
+mkr-gpulock = { path = "mkr-gpulock" }
+glam = { version = "0.34", features = ["serde", "bytemuck"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+wgpu = "30"
+naga = { version = "30", features = ["wgsl-in"] }
+pollster = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tga"] }
+png = "0.17"
+clap = { version = "4", features = ["derive"] }
+rayon = "1"
+memmap2 = "0.9"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+debug = 1

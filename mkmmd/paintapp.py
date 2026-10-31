@@ -472,7 +472,7 @@ def fill_cover(img, seed, tolerance, u, px, phase):
 # ================================================================================================= over a cut
 class PaintAppFx:
     """The paint app's part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, px, fps, frame0, fxs, _t, _mix,
-    _reached, _memo, _point_of, _hits and _sprite_of, which `_mandala_init` sets). `_paintapp_init` is called once its
+    _reached, _seen, _point_of, _hits and _sprite_of, which `_mandala_init` sets). `_paintapp_init` is called once its
     effects are known: their hits are picked, their history worked out and checked flash-safe, their sprites read."""
 
     def _paintapp_init(self):
@@ -492,7 +492,7 @@ class PaintAppFx:
                   "files": [], "eye_hits": ()}
             if fx["stamps"] is not None:
                 st["files"] = self._sprite_of(fx["stamps"]["refs"])
-                for f in st["files"]:
+                for f in st["files"] if self._preload else ():
                     MDF._sprite(str(f))
                 face = fx["stamps"]["face"]
                 if face is not None:
@@ -526,7 +526,7 @@ class PaintAppFx:
             g = e["frame"] - 1
             pic = self._reached(fx, g, frame, img)
             pic = img if pic is None else pic
-            self._memo.get(fx["index"], {}).pop(g, None)
+            self._seen.get(fx["index"], {}).pop(g, None)
             self._pa_held[key] = self._pa_paint(fx, st, g, (g - self.frame0) / self.fps,
                                                 np.array(pic, np.float32, copy=True))
         return self._pa_held[key]

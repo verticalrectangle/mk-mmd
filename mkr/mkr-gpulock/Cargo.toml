@@ -1,0 +1,9 @@
+[package]
+name = "mkr-gpulock"
+description = "One GPU job at a time: the lock mk-mmd's GPU jobs share (mkmmd/gpulock.py is the Python side)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

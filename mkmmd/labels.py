@@ -56,10 +56,19 @@ class LabelFx:
         self._lb_fonts = {fx["index"]: self._font_of(fx["font"]) for fx in self.fxs if fx["kind"] == "label"}
 
     def _label(self, fx, frame, img):
+        out = np.array(img, np.float32, copy=True)
+        for cov, colour, x0, y0, alpha in self._label_inks(fx, frame):
+            _ink(out, cov, colour, x0, y0, alpha)
+        s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
+        return out if s >= 1.0 else (img * (1.0 - s) + out * s).astype(np.float32)
+
+    def _label_inks(self, fx, frame):
+        """What a label entry lays on `frame`, in order: [(coverage (h, w) float32 0..1, colour, x0, y0 (its top left,
+        px), alpha)]: each label's box, its text typed so far, its leader."""
         t = self._t(frame)
         w, h = self.size
-        out = np.array(img, np.float32, copy=True)
         font = self._lb_fonts[fx["index"]]
+        inks = []
         for j, lb in enumerate(fx["labels"]):
             n = LB.shown(lb, t, fx["type"])
             if n == 0:
@@ -85,19 +94,19 @@ class LabelFx:
                 bx0, by0 = int(round(left - pad)), int(round(q[1] - cap - pad))
                 bx1, by1 = int(round(left + width + pad)), int(round(q[1] + pad + 0.25 * cap))
                 if bx1 > bx0 and by1 > by0:
-                    _ink(out, np.ones((by1 - by0, bx1 - bx0), np.float32), b["color"], bx0, by0, b["alpha"])
-            _ink(out, cov, lb["color"], x0, y0)
+                    inks.append((np.ones((by1 - by0, bx1 - bx0), np.float32), b["color"], bx0, by0, b["alpha"]))
+            inks.append((cov, lb["color"], x0, y0, 1.0))
             if fx["leader"]:
-                self._leader(fx, lb, out, p, q, side, cap, t)
-        s = float(np.clip(FX.strength(fx, t), 0.0, 1.0))
-        return out if s >= 1.0 else (img * (1.0 - s) + out * s).astype(np.float32)
+                inks += self._leader(fx, lb, p, q, side, cap, t)
+        return inks
 
-    def _leader(self, fx, lb, out, p, q, side, cap, t):
+    def _leader(self, fx, lb, p, q, side, cap, t):
         """The dotted leader from the label's side (`q` is where its text starts, or ends with side "right") to its
-        point `p`, drawn out as far as `LB.drawn` says, the dot at the point once it gets there."""
+        point `p`, drawn out as far as `LB.drawn` says, the dot at the point once it gets there: [(coverage, colour, x0,
+        y0, alpha)], none before it starts."""
         u = LB.drawn(lb, t, fx["type"], fx["draw"])
         if u <= 0:
-            return
+            return []
         ld = fx["leader"]
         gap0 = 0.6 * cap
         a = np.array([q[0] - gap0 if side == "left" else q[0] + gap0, q[1] - 0.45 * cap])
@@ -112,7 +121,7 @@ class LabelFx:
         pts = [a + d / max(L, 1e-9) * (k * pitch) for k in range(n)]
         pts_end = [b] if u >= 1.0 and end > 0 else []
         if not pts + pts_end:
-            return
+            return []
         P = np.asarray(pts + pts_end)
         x0, y0 = np.floor(P.min(0) - max(r, end) - 3).astype(int)
         x1, y1 = np.ceil(P.max(0) + max(r, end) + 3).astype(int)
@@ -123,4 +132,4 @@ class LabelFx:
         for c in pts_end:
             cv2.circle(cov, (int(round((c[0] - x0) * 16)), int(round((c[1] - y0) * 16))), max(int(round(end * 16)), 1),
                        255, -1, cv2.LINE_AA, 4)
-        _ink(out, cov.astype(np.float32) / 255.0, ld["color"], int(x0), int(y0))
+        return [(cov.astype(np.float32) / 255.0, ld["color"], int(x0), int(y0), 1.0)]

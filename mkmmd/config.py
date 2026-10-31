@@ -8,8 +8,10 @@ DEFAULTS = {
     "mmd_addon": "bl_ext.user_default.mmd_tools",
     "assets": "~/mk-assets",
     "player": "",                      # mk play's command line; empty: the system's opener
+    "vaapi_device": "/dev/dri/renderD128",   # the GPU mk post's VAAPI encoder runs on
 }
-ENV = {"blender": "MK_BLENDER", "mmd_addon": "MK_MMD_ADDON", "assets": "MK_ASSETS", "player": "MK_PLAYER"}
+ENV = {"blender": "MK_BLENDER", "mmd_addon": "MK_MMD_ADDON", "assets": "MK_ASSETS", "player": "MK_PLAYER",
+       "vaapi_device": "MK_VAAPI_DEVICE"}
 
 
 def config_path() -> Path:

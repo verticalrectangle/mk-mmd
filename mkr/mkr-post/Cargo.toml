@@ -1,0 +1,30 @@
+[package]
+name = "mkr-post"
+description = "mk post on the GPU: frame effects, lens streaks, screen type, keep masks and the grade as wgpu compute"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mkr-post"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+mkr-gpulock.workspace = true
+bytemuck.workspace = true
+clap.workspace = true
+memmap2.workspace = true
+png.workspace = true
+pollster.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+naga.workspace = true

@@ -276,10 +276,10 @@ def shape_tile(name, main, accent, ink, size, edge):
     return tile(rgb, a, anchor, edge)
 
 
-def figure_tile(pic, m, s, fill, edge, centre=None):
-    """The figure (picture `pic`, coverage `m` of a frame) as a sticker tile `s` times its size, drawn `fill` (None: its
-    picture; a colour; a silkscreen {inks, offset px, soft px, line px}), anchored at `centre` (px of the frame; default
-    its centroid); None when nothing is covered."""
+def figure_geometry(m, s, grow=0, centre=None):
+    """Where figure_tile cuts the figure (coverage `m` of a frame) out and how large it makes it: ((X0, Y0, X1, Y1) the
+    part cut, its box with `grow` px more round it, (nw, nh) that part `s` times as large, (sx, sy) the scale it took,
+    the anchor's pixel of the frame: `centre`, or the centroid); None when nothing is covered."""
     FF = _ff()
     x, y, w, h = cv2.boundingRect((np.asarray(m) > 1.0 / 512.0).astype(np.uint8))
     if w == 0 or h == 0:
@@ -288,9 +288,23 @@ def figure_tile(pic, m, s, fill, edge, centre=None):
     if c is None:
         return None
     H, W = m.shape
+    X0, Y0, X1, Y1 = max(x - grow, 0), max(y - grow, 0), min(x + w + grow, W), min(y + h + grow, H)
+    cw, ch = X1 - X0, Y1 - Y0
+    nw, nh = max(int(round(cw * s)), 1), max(int(round(ch * s)), 1)
+    return (X0, Y0, X1, Y1), (nw, nh), (nw / float(cw), nh / float(ch)), c
+
+
+def figure_tile(pic, m, s, fill, edge, centre=None):
+    """The figure (picture `pic`, coverage `m` of a frame) as a sticker tile `s` times its size, drawn `fill` (None: its
+    picture; a colour; a silkscreen {inks, offset px, soft px, line px}), anchored at `centre` (px of the frame; default
+    its centroid); None when nothing is covered."""
+    FF = _ff()
     silk = isinstance(fill, dict)
     grow = 0 if not silk else int(math.ceil(3.0 * (fill["soft"] + fill["line"]))) + 1   # their blurs reach this far
-    X0, Y0, X1, Y1 = max(x - grow, 0), max(y - grow, 0), min(x + w + grow, W), min(y + h + grow, H)
+    geo = figure_geometry(m, s, grow, centre)
+    if geo is None:
+        return None
+    (X0, Y0, X1, Y1), (nw, nh), (sx, sy), c = geo
     mc = np.ascontiguousarray(m[Y0:Y1, X0:X1], np.float32)
     if silk:
         key, steps = FF.silk_bands(pic[Y0:Y1, X0:X1], mc, len(fill["inks"]), fill["soft"], fill["line"])
@@ -299,11 +313,8 @@ def figure_tile(pic, m, s, fill, edge, centre=None):
         planes = [mc, np.ascontiguousarray(pic[Y0:Y1, X0:X1] * mc[..., None], np.float32)]
     else:
         planes = [mc]
-    cw, ch = X1 - X0, Y1 - Y0
-    nw, nh = max(int(round(cw * s)), 1), max(int(round(ch * s)), 1)
-    if (nw, nh) != (cw, ch):
+    if (nw, nh) != (X1 - X0, Y1 - Y0):
         planes = [_resized(p, (nw, nh), s < 1.0) for p in planes]
-    sx, sy = nw / float(cw), nh / float(ch)
     cov = np.clip(planes[0], 0.0, 1.0)
     if silk:
         off = fill["offset"]
@@ -332,13 +343,10 @@ def placed(t, at, angle, scale, mirror=False):
     return np.hstack([A, (np.asarray(at, float) - A @ np.asarray(t.anchor, float))[:, None]])
 
 
-def lay(out, t, M, edge=None, shadow=None, pupils=None):
-    """`out` (in place, and returned) with sticker tile `t` laid by the affine map `M` (placed()): its drop `shadow`
-    (colour, (dx, dy) px, blur px, alpha) cast first where it lands, then its `edge` (colour, or None) and its picture,
-    all within the box it covers; then, for a tile with googly eyes, its pupils at the offsets `pupils`
-    (mkmmd.eyes.pupils; None: at rest) and the glints over them (mkmmd.eyes.draw_pupils)."""
-    FF = _ff()
-    h, w = t.a.shape
+def lay_box(shape, M, shadow, size):
+    """Where `lay` draws a tile of `shape` ((h, w)) laid by the affine map `M` in a picture of `size` (w, h): ((x0, y0,
+    x1, y1) the box it covers, its drop `shadow` too; the map from the tile's px to the box's), None for nothing."""
+    h, w = shape
     M = np.asarray(M, np.float64)
     corners = np.array([[-0.5, -0.5], [w - 0.5, -0.5], [-0.5, h - 0.5], [w - 0.5, h - 0.5]])
     pts = corners @ M[:, :2].T + M[:, 2]
@@ -347,13 +355,26 @@ def lay(out, t, M, edge=None, shadow=None, pupils=None):
         reach = 3.0 * shadow[2]
         lo = np.minimum(lo, lo + shadow[1]) - reach
         hi = np.maximum(hi, hi + shadow[1]) + reach
-    H, W = out.shape[:2]
+    W, H = size
     x0, y0 = max(int(math.floor(lo[0])), 0), max(int(math.floor(lo[1])), 0)
     x1, y1 = min(int(math.ceil(hi[0])) + 1, W), min(int(math.ceil(hi[1])) + 1, H)
     if x1 <= x0 or y1 <= y0:
-        return out
+        return None
     Mt = M.copy()
     Mt[:, 2] -= (x0, y0)
+    return (x0, y0, x1, y1), Mt
+
+
+def lay(out, t, M, edge=None, shadow=None, pupils=None):
+    """`out` (in place, and returned) with sticker tile `t` laid by the affine map `M` (placed()): its drop `shadow`
+    (colour, (dx, dy) px, blur px, alpha) cast first where it lands, then its `edge` (colour, or None) and its picture,
+    all within the box it covers (lay_box); then, for a tile with googly eyes, its pupils at the offsets `pupils`
+    (mkmmd.eyes.pupils; None: at rest) and the glints over them (mkmmd.eyes.draw_pupils)."""
+    FF = _ff()
+    got = lay_box(t.a.shape, M, shadow, (out.shape[1], out.shape[0]))
+    if got is None:
+        return out
+    (x0, y0, x1, y1), Mt = got
     edged = t.ring is not None and edge is not None
     size = (x1 - x0, y1 - y0)
     got = FF._warp(np.dstack([t.rgb, t.a]), Mt, size)              # OpenCV shrinks by area up to 4 channels at once
@@ -421,8 +442,8 @@ class MandalaFx:
     `_mandala_init` is called once its effects are known."""
 
     def _mandala_init(self, sprite_of):
-        """The mandalas' sprites found and read now: a missing or unreadable one is an FX.FxError before any frame is
-        drawn."""
+        """The mandalas' sprites found now and read (FrameFx `preload`): a missing or unreadable one is an FX.FxError
+        before any frame is drawn."""
         self._sprite_of = sprite_of or sprite_source()
         self._md_sprites, self._md_tiles, self._md_heights, self._md_grows = {}, OrderedDict(), {}, {}
         self._md_layouts = OrderedDict()                     # (entry, clip second) -> its copies there, for the eyes
@@ -432,7 +453,7 @@ class MandalaFx:
             for i, r in enumerate(fx["rings"]):
                 if r["source"]["kind"] == "sprites":
                     files = self._sprite_of(r["source"]["refs"])
-                    for f in files:
+                    for f in files if self._preload else ():
                         _sprite(str(f))
                     self._md_sprites[fx["index"], i] = files
 
@@ -573,21 +594,28 @@ class MandalaFx:
         return got
 
     # ---------------------------------------------------------------- trails
+    def trails_at(self, fx, frame):
+        """(strength, [(frame g it shows, opacity times the strength, ramp colour float32, (dx, dy) px)]) of a trail's
+        copies on `frame`, the oldest first."""
+        t = self._t(frame)
+        s = float(np.clip(FX.strength(fx, t), 0.0, 1.0))
+        unit = float(min(self.size))
+        return s, [(g, alpha * s, np.asarray(MD.ramp(fx["colors"], u), np.float32),
+                    (fx["step"][0] * unit * j, fx["step"][1] * unit * j))
+                   for j, g, alpha, u in MD.trail_copies(fx, frame, t, self._hit_times(fx), self.fps, self.frame0)]
+
     def _trails(self, fx, frame, img):
         """The copies laid oldest first, each in its ramp colour (mixed with its own picture by 1 - `tint`) at its
         opacity times the strength, then the figure of this frame back over them as it is."""
-        t = self._t(frame)
-        s = float(np.clip(FX.strength(fx, t), 0.0, 1.0))
+        s, copies = self.trails_at(fx, frame)
         if s <= 0.0:
             return img
         out = np.array(img, np.float32, copy=True)
-        unit = float(min(self.size))
-        for j, g, alpha, u in MD.trail_copies(fx, frame, t, self._hit_times(fx), self.fps, self.frame0):
+        for g, opacity, colour, (dx, dy) in copies:
             mg = self._figure(fx, g)
             if mg is None:
                 continue
             pg = self._get(g) if fx["tint"] < 1.0 else None
-            dx, dy = fx["step"][0] * unit * j, fx["step"][1] * unit * j
             if dx or dy:
                 mg = _shifted(mg, dx, dy, cv2.BORDER_CONSTANT)
                 pg = None if pg is None else _shifted(pg, dx, dy, cv2.BORDER_REPLICATE)
@@ -595,10 +623,9 @@ class MandalaFx:
             if box is None:
                 continue
             x0, y0, x1, y1 = box
-            colour = np.asarray(MD.ramp(fx["colors"], u), np.float32)
             if pg is not None:
                 colour = pg[y0:y1, x0:x1] + (colour - pg[y0:y1, x0:x1]) * np.float32(fx["tint"])
-            a = (np.float32(alpha * s) * mg[y0:y1, x0:x1])[..., None]
+            a = (np.float32(opacity) * mg[y0:y1, x0:x1])[..., None]
             out[y0:y1, x0:x1] = blend(out[y0:y1, x0:x1], colour, a, fx["blend"])
         m = self._figure(fx, frame)
         box = None if m is None else _box(m)
@@ -607,5 +634,3 @@ class MandalaFx:
             k = m[y0:y1, x0:x1, None]
             out[y0:y1, x0:x1] = out[y0:y1, x0:x1] * (1.0 - k) + img[y0:y1, x0:x1] * k
         return out
-
-

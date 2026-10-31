@@ -1,4 +1,5 @@
 """Run Blender jobs from the CLI (see docs/design.md: The bridge)."""
+import contextlib
 import hashlib
 import json
 import os
@@ -11,10 +12,13 @@ import uuid
 from pathlib import Path
 
 from . import config as CFG
+from . import gpulock as GL
 
 ROOT = Path(__file__).resolve().parent.parent          # the folder that contains the mkmmd package
 # ops that leave the scene as they found it: safe on `mk serve`
 READONLY_OPS = {"ping", "list", "q", "sample", "visibility", "hand_model"}
+# ops that render with EEVEE, Cycles or Workbench: they hold the GPU lock (mkmmd.gpulock) while Blender runs
+GPU_OPS = {"render_frames", "look", "lab_build", "lab_variant"}
 
 BOOT = ("import sys; sys.path.insert(0, {root!r}); "
         "from mkmmd.blender import runtime; runtime.main()")
@@ -112,8 +116,9 @@ def run(op, args=None, blend=None, project=None, timeout=None, use_serve=True):
     job_path, result_path, log_path = jobdir / "job.json", jobdir / "result.json", jobdir / "blender.log"
     job_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
     cmd = blender_command(job_path, result_path, blend, cfg)
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    with open(log_path, "w", encoding="utf-8") as log:
+    with open(log_path, "w", encoding="utf-8") as log, \
+            (GL.held(f"Blender {op}") if op in GPU_OPS else contextlib.nullcontext()):
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         try:
             proc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:

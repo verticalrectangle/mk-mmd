@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 
 from mkmmd import framefx as FF
-from mkmmd.cli import post as POST
+from mkmmd import postframes as PF
 from mkmmd.core import framefx as FX
 from mkmmd.core import palette as PAL
 from mkmmd.core import transition as TR
@@ -187,6 +187,6 @@ def test_mk_post_reads_a_shot_from_its_plates_and_from_the_cut_s_own_frames_wher
     Image.new("RGB", (W, H), (255, 0, 0)).save(tmp_path / "00080.png")                  # the cut's frame 80: shot b
     (tmp_path / "plate" / "far").mkdir(parents=True)
     Image.new("RGB", (W, H), (0, 0, 255)).save(tmp_path / TR.plate_rel("far", 40))
-    get = POST._plates(pl, tmp_path, {80: tmp_path / "00080.png"}, (W, H))
+    get = PF.plates(pl, tmp_path, {80: tmp_path / "00080.png"}, (W, H))
     assert get("far", 40)[0, 0].tolist() == [0.0, 0.0, 1.0] and get("b", 80)[0, 0].tolist() == [1.0, 0.0, 0.0]
     assert get("far", 41) is None

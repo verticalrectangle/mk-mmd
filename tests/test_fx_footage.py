@@ -2,6 +2,7 @@
 figure over it as a sticker), figure moves for collages (`keys` about a `pivot`), per-output `aspect.<output>` tables of
 [[fx]], `mk ref footage` (Pexels videos into a project and the asset registry) and the credits a footage clip earns."""
 import json
+import types
 
 import cv2
 import numpy as np
@@ -16,6 +17,7 @@ from mkmmd.cli.export import NO_REDISTRIBUTION
 from mkmmd.core import framefx as FX
 from mkmmd.core import palette as PAL
 from mkmmd.core import transition as TR
+from mkmmd.gpufx import footage as GFT
 from mkmmd.ref import footage as RF
 from mkmmd.ref import pexels as PX
 
@@ -138,6 +140,38 @@ def test_a_clip_reads_any_frame_in_any_order_and_maps_span_seconds_to_its_frames
     pic = clip.picture(0.25, (24, 16), start=0.5)
     assert pic.dtype == np.float32 and pic.shape == (16, 24, 3) and which(pic) == 18
     assert clip.picture(0.25, (24, 16), start=0.5) is pic             # the same frame at the same size: kept
+
+
+def test_a_later_output_shows_the_clip_frames_an_earlier_one_decoded_as_its_own_fit_makes_them(tmp_path):
+    path = tmp_path / "clip.mp4"
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (48, 32))
+    for i in range(12):                                               # a ramp across that moves on each frame
+        vw.write(np.broadcast_to(((np.arange(48) * 5 + i * 9) % 256).astype(np.uint8)[None, :, None], (32, 48, 3)).copy())
+    vw.release()
+    span = {"clip": "clip.mp4", "in": 0.0, "rate": 1.0, "loop": False, "f0": 10, "f1": 20, "fit": "cover",
+            "focus": [0.5, 0.5], "mirror": False}
+    first, later, other = span, {**span, "focus": [0.0, 0.5], "mirror": True}, {**span, "in": 0.2}
+    (tmp_path / "kept").mkdir()
+    kept = GFT.Kept(tmp_path / "kept", [("a", lambda: (48, 32), {0: first}), ("b", lambda: (16, 32), {0: later}),
+                                        ("c", lambda: (16, 32), {0: other})])
+    src = FT.source(tmp_path)
+
+    def hand(name, size, e, i):
+        op = {"op": "footage", "clip": {"name": "clip.mp4", "index": i, "fit": e["fit"], "focus": e["focus"],
+                                        "mirror": e["mirror"], "entry": 0}}
+        kept.begin(name)
+        GFT.hand(types.SimpleNamespace(size=size, _footage_of=src), op, tmp_path, kept=kept)
+        got = np.fromfile(op["clip"]["path"], np.uint8).reshape(size[1], size[0], 3)
+        want, _ = FT.fitted(FT.Clip(path).frame(i), size, e["fit"], e["focus"], e["mirror"])
+        assert np.array_equal(got, want), (name, i)                   # as the output's own decode and fit make it
+        return op["clip"].get("keep", False)
+    try:
+        assert [hand("a", (48, 32), first, i) for i in (3, 4)] == [False, False]
+        assert [hand("b", (16, 32), later, i) for i in (3, 4, 5)] == [True, True, False]   # 5: decoded for b itself
+        assert not hand("c", (16, 32), other, 3)                      # another span: not taken from a's frames
+    finally:
+        kept.close()
+    assert not (tmp_path / "kept").exists()
 
 
 def test_a_missing_or_broken_clip_and_a_span_past_its_end_are_errors_that_name_the_entry(tmp_path):

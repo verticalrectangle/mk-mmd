@@ -307,13 +307,10 @@ class RemapFx:
         both = remap(four)
         return sticker(ground, both[..., :3], np.clip(both[..., 3], 0.0, 1.0), edge, shadow)
 
-    def _kaleido(self, fx, frame, img):
-        """The frame folded into wedges about the centre, each the source wedge of the picture (mirrored in turn),
-        turned, stepped, spun and zoomed as the entry says, mixed in by the strength."""
+    def kaleido_at(self, fx, frame):
+        """(centre px, source centre px, zoom, turn, spin degrees, source radius px or None) of a kaleidoscope on
+        `frame`."""
         t = self._t(frame)
-        s = float(np.clip(FX.strength(fx, t), 0.0, 1.0))
-        if s <= 0.0:
-            return img
         w, h = self.size
         times = self._hit_times(fx)
         c = self._at(fx, frame)[0]
@@ -321,6 +318,16 @@ class RemapFx:
         sc = c if src["center"] is None else (src["center"][0] * w - 0.5, src["center"][1] * h - 0.5)
         zoom, turn, spin = RM.kaleido_zoom(fx, t, times), RM.kaleido_turn(fx, t, times), RM.kaleido_spin(fx, t)
         radius = None if src["radius"] is None else src["radius"] * min(w, h)
+        return c, sc, zoom, turn, spin, radius
+
+    def _kaleido(self, fx, frame, img):
+        """The frame folded into wedges about the centre, each the source wedge of the picture (mirrored in turn),
+        turned, stepped, spun and zoomed as the entry says, mixed in by the strength."""
+        s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
+        if s <= 0.0:
+            return img
+        c, sc, zoom, turn, spin, radius = self.kaleido_at(fx, frame)
+        src = fx["source"]
 
         def coords_of(xs, ys):
             return RM.kaleido_coords(xs, ys, c, fx["segments"], fx["mirror"], src["angle"], turn, spin, sc, zoom,
@@ -333,19 +340,23 @@ class RemapFx:
         out = self._remapped(fx, frame, img, lambda pic: kaleido(pic, coords, 1.0 / zoom, seams))
         return self._mix(fx, frame, img, out)
 
-    def _tunnel(self, fx, frame, img):
-        """The frame nested in itself level after level about the centre, falling inward (a figure mask: copies of
-        the figure running out of the vanishing point), mixed in by the strength."""
-        t = self._t(frame)
-        s = float(np.clip(FX.strength(fx, t), 0.0, 1.0))
-        if s <= 0.0:
-            return img
-        phase = RM.tunnel_phase(fx, t, self._hit_times(fx))
+    def tunnel_at(self, fx, frame):
+        """(centre px, the arguments of tunnel_levels and tunnel_queue, a level's frame line colour (callable(k), None
+        without lines), the lines' width px) of a tunnel on `frame`."""
+        phase = RM.tunnel_phase(fx, self._t(frame), self._hit_times(fx))
         c = self._at(fx, frame)[0]
         args = (self.size, c, fx["scale"], fx["twist"], phase, fx["depth"])
         line = fx["frame"]
         colour_of = None if line is None else (lambda k: RM.frame_colour(line["color"], k, phase))
-        width = 0.0 if line is None else line["width"] * self.px
+        return c, args, colour_of, 0.0 if line is None else line["width"] * self.px
+
+    def _tunnel(self, fx, frame, img):
+        """The frame nested in itself level after level about the centre, falling inward (a figure mask: copies of
+        the figure running out of the vanishing point), mixed in by the strength."""
+        s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
+        if s <= 0.0:
+            return img
+        c, args, colour_of, width = self.tunnel_at(fx, frame)
 
         def remap(pic):
             if pic.shape[2] == 4:              # the figure alone: a queue of whole copies
@@ -353,18 +364,22 @@ class RemapFx:
             return tunnel(pic, RM.tunnel_levels(*args), c, colour_of, width)
         return self._mix(fx, frame, img, self._remapped(fx, frame, img, remap))
 
-    def _melt(self, fx, frame, img):
-        """The picture displaced by the mode's field at this frame; the strength scales the amount (a melt at half
-        strength is half a melt, not a mix). A ripple's swell on a hit runs out from the centre."""
-        t = self._t(frame)
+    def melt_at(self, fx, frame):
+        """melt_field's arguments for a melt on `frame` (all but the frame's size): {mode, centre, level, scale, speed,
+        age, unit, seed, front}."""
         times = self._hit_times(fx)
         unit = min(self.size)
 
         def level(age):
             return RM.melt_level(fx, fx["from"] + age, times, lambda u: FX.strength(fx, u))
-        dx, dy = RM.melt_field(fx["mode"], self.size, self._at(fx, frame)[0], level, fx["scale"], fx["speed"],
-                               t - fx["from"], unit, (fx["seed"], fx["index"]),
-                               front=RM.FRONT * unit if RM.fires(fx) else None)
+        return {"mode": fx["mode"], "centre": self._at(fx, frame)[0], "level": level, "scale": fx["scale"],
+                "speed": fx["speed"], "age": self._t(frame) - fx["from"], "unit": unit,
+                "seed": (fx["seed"], fx["index"]), "front": RM.FRONT * unit if RM.fires(fx) else None}
+
+    def _melt(self, fx, frame, img):
+        """The picture displaced by the mode's field at this frame; the strength scales the amount (a melt at half
+        strength is half a melt, not a mix). A ripple's swell on a hit runs out from the centre."""
+        dx, dy = RM.melt_field(size=self.size, **self.melt_at(fx, frame))
         if max(float(np.abs(dx).max()), float(np.abs(dy).max())) < 0.01:
             return img
         xs, ys = RM.grid(self.size)

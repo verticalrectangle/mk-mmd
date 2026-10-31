@@ -28,10 +28,9 @@ HALATION = (1.0, 0.42, 0.28)             # the red-orange of a print's halation 
 
 # ================================================================================================= the region
 @lru_cache(maxsize=16)
-def rect_mask(size, rect, feather):
-    """(h, w) float32 0..1: where an effect limited to `rect` ((x0, y0, x1, y1) frame fractions) applies in a frame of
-    `size` (w, h): each pixel's share inside it (a hard edge, antialiased), or with `feather` px a smooth ramp that wide
-    across the edge (not along the frame's own edges)."""
+def rect_ramps(size, rect, feather):
+    """(rows (h,), columns (w,)) float32 0..1, the ramps rect_mask multiplies: each row's and each column's share inside
+    `rect` ((x0, y0, x1, y1) frame fractions) of a frame of `size` (w, h)."""
     w, h = size
 
     def ramp(n, a, b):
@@ -42,7 +41,16 @@ def rect_mask(size, rect, feather):
         hi = b * n - x - 0.5 if b < 1 else np.full(n, np.inf, np.float32)
         u = np.clip(np.minimum(lo, hi) / feather + 0.5, 0.0, 1.0)
         return u * u * (3.0 - 2.0 * u)
-    return (ramp(h, rect[1], rect[3])[:, None] * ramp(w, rect[0], rect[2])[None, :]).astype(np.float32)
+    return ramp(h, rect[1], rect[3]), ramp(w, rect[0], rect[2])
+
+
+@lru_cache(maxsize=16)
+def rect_mask(size, rect, feather):
+    """(h, w) float32 0..1: where an effect limited to `rect` ((x0, y0, x1, y1) frame fractions) applies in a frame of
+    `size` (w, h): each pixel's share inside it (a hard edge, antialiased), or with `feather` px a smooth ramp that wide
+    across the edge (not along the frame's own edges)."""
+    rows, cols = rect_ramps(size, rect, feather)
+    return (rows[:, None] * cols[None, :]).astype(np.float32)
 
 
 def rect_box(size, rect, feather):
@@ -128,9 +136,10 @@ def _q(p):
     return np.rint(np.asarray(p, np.float64) * 16.0).astype(np.int32)
 
 
-def damage(fx, k, size, px):
-    """(light, dark): (h, w) float32 0..1 masks of what film frame k carries, or None for none: its dust (white specks
-    and dark ones, some of them fibres), its scratches (white) and a hair in the gate (dark)."""
+def damage_marks(fx, k, size, px):
+    """(light, dark): (h, w) uint8 masks of what film frame k carries as drawn (before `damage` blurs them), None for
+    one with nothing on it: its dust (white specks and dark ones, some of them fibres), its scratches (white) and a hair
+    in the gate (dark)."""
     w, h = size
     light, dark = np.zeros((h, w), np.uint8), np.zeros((h, w), np.uint8)
     drawn = [False, False]
@@ -159,14 +168,20 @@ def damage(fx, k, size, px):
         cv2.polylines(dark, [_q(np.asarray(anchor) + hr["points"] * h)], False, 235, max(int(round(1.7 * px)), 1),
                       cv2.LINE_AA, 4)
         drawn[1] = True
+    return light if drawn[0] else None, dark if drawn[1] else None
+
+
+def damage(fx, k, size, px):
+    """(light, dark): (h, w) float32 0..1 masks of what film frame k carries (damage_marks), blurred a little, or None
+    for none."""
     soft = 0.5 * px
 
-    def done(m, on):
-        if not on:
+    def done(m):
+        if m is None:
             return None
         m = m.astype(np.float32) / 255.0
         return cv2.GaussianBlur(m, (0, 0), soft) if soft >= 0.3 else m
-    return done(light, drawn[0]), done(dark, drawn[1])
+    return tuple(done(m) for m in damage_marks(fx, k, size, px))
 
 
 def dye_print(x, dye, saturation):
@@ -242,34 +257,17 @@ def _grid(w, h):
     return np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
 
 
-def tape(img, fx, frame, t, px):
-    """`img` (a frame, or a rect's part of one) as a home video tape plays it on clip frame `frame` (second `t`): soft
-    luma, colour bled sideways and to the right, `saturation`, noise in streaks, lines jittered sideways, a tracking
-    band rolling up the picture (lines torn sideways, snow, washed out), the head-switching tear along its foot
-    (`switching`), scanlines."""
-    h, w = img.shape[:2]
+def tape_draws(fx, frame, t, px, w, h):
+    """The random parts of a tape's picture `w` x `h` on clip frame `frame` (second `t`), drawn in order from the
+    frame's generator: {ny, nc: the luma and colour noise before they are stretched over the picture (None without
+    `noise`), off: how far each line is torn sideways (px), band: the tracking band's strength by line (None without
+    one), snow: which streaks across the band are snow, before they are stretched (None: no band)}."""
     rng = np.random.default_rng([fx["seed"], fx["index"], 21, frame])
-    ycc = cv2.cvtColor(np.ascontiguousarray(np.clip(img, 0.0, 1.0), np.float32), cv2.COLOR_RGB2YCrCb)
-    y, c = ycc[..., 0], ycc[..., 1:] - np.float32(0.5)
-    if fx["soft"] > 0:
-        s = fx["soft"] * px
-        y = cv2.GaussianBlur(y, (0, 0), sigmaX=s, sigmaY=max(0.35 * s, 0.3))
-    if fx["chroma"] > 0:
-        r = fx["chroma"] * px
-        c = cv2.blur(c, (max(int(round(2.0 * r)), 1), 1))
-        c = cv2.GaussianBlur(c, (0, 0), sigmaX=max(0.5 * r, 0.3), sigmaY=max(0.6 * px, 0.3))
-        c = cv2.warpAffine(c, np.float32([[1, 0, CHROMA_SHIFT * r], [0, 1, 0]]), (w, h), flags=cv2.INTER_LINEAR,
-                           borderMode=cv2.BORDER_REPLICATE)
-    c = c * np.float32(fx["saturation"])
+    out = {"ny": None, "nc": None, "band": None, "snow": None}
     if fx["noise"] > 0:
         streak = max(int(round(3.0 * px)), 1)
-        ny = cv2.resize(rng.standard_normal((h, max(w // streak, 2)), dtype=np.float32), (w, h),
-                        interpolation=cv2.INTER_LINEAR)
-        y = y + np.float32(fx["noise"]) * ny
-        nc = cv2.resize(rng.standard_normal((max(h // 2, 2), max(w // (4 * streak), 2), 2), dtype=np.float32), (w, h),
-                        interpolation=cv2.INTER_LINEAR)
-        c = c + np.float32(0.5 * fx["noise"]) * nc
-    out = cv2.cvtColor(np.dstack([y, c + np.float32(0.5)]).astype(np.float32), cv2.COLOR_YCrCb2RGB)
+        out["ny"] = rng.standard_normal((h, max(w // streak, 2)), dtype=np.float32)
+        out["nc"] = rng.standard_normal((max(h // 2, 2), max(w // (4 * streak), 2), 2), dtype=np.float32)
     off = np.zeros(h, np.float32)
     if fx["jitter"] > 0:
         off += np.float32(fx["jitter"] * px) * np.convolve(rng.standard_normal(h), np.ones(3) / 3.0, "same").astype(
@@ -285,13 +283,44 @@ def tape(img, fx, frame, t, px):
         u = np.linspace(0.0, 1.0, foot).astype(np.float32)
         off[h - foot:] += np.float32(fx["switching"] * SWITCH_TEAR * px) * u ** 1.5 * \
             (1.0 + 0.35 * rng.standard_normal(foot)).astype(np.float32)
+    out["off"] = off
+    if band is not None and band.max() > 0.01:
+        streak = max(int(round(9.0 * px)), 1)
+        out["band"] = band
+        out["snow"] = (rng.random((h, max(w // streak, 2))) < 0.45 * band[:, None]).astype(np.float32)
+    return out
+
+
+def tape(img, fx, frame, t, px):
+    """`img` (a frame, or a rect's part of one) as a home video tape plays it on clip frame `frame` (second `t`): soft
+    luma, colour bled sideways and to the right, `saturation`, noise in streaks, lines jittered sideways, a tracking
+    band rolling up the picture (lines torn sideways, snow, washed out), the head-switching tear along its foot
+    (`switching`), scanlines."""
+    h, w = img.shape[:2]
+    d = tape_draws(fx, frame, t, px, w, h)
+    ycc = cv2.cvtColor(np.ascontiguousarray(np.clip(img, 0.0, 1.0), np.float32), cv2.COLOR_RGB2YCrCb)
+    y, c = ycc[..., 0], ycc[..., 1:] - np.float32(0.5)
+    if fx["soft"] > 0:
+        s = fx["soft"] * px
+        y = cv2.GaussianBlur(y, (0, 0), sigmaX=s, sigmaY=max(0.35 * s, 0.3))
+    if fx["chroma"] > 0:
+        r = fx["chroma"] * px
+        c = cv2.blur(c, (max(int(round(2.0 * r)), 1), 1))
+        c = cv2.GaussianBlur(c, (0, 0), sigmaX=max(0.5 * r, 0.3), sigmaY=max(0.6 * px, 0.3))
+        c = cv2.warpAffine(c, np.float32([[1, 0, CHROMA_SHIFT * r], [0, 1, 0]]), (w, h), flags=cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_REPLICATE)
+    c = c * np.float32(fx["saturation"])
+    if d["ny"] is not None:
+        y = y + np.float32(fx["noise"]) * cv2.resize(d["ny"], (w, h), interpolation=cv2.INTER_LINEAR)
+        c = c + np.float32(0.5 * fx["noise"]) * cv2.resize(d["nc"], (w, h), interpolation=cv2.INTER_LINEAR)
+    out = cv2.cvtColor(np.dstack([y, c + np.float32(0.5)]).astype(np.float32), cv2.COLOR_YCrCb2RGB)
+    off = d["off"]
     if np.abs(off).max() > 0.01:
         xs, ys = _grid(w, h)
         out = cv2.remap(out, xs + off[:, None], ys, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-    if band is not None and band.max() > 0.01:
-        streak = max(int(round(9.0 * px)), 1)
-        snow = (rng.random((h, max(w // streak, 2))) < 0.45 * band[:, None]).astype(np.float32)
-        snow = cv2.resize(snow, (w, h), interpolation=cv2.INTER_NEAREST) * np.minimum(band * 1.6, 1.0)[:, None]
+    if d["snow"] is not None:
+        band = d["band"]
+        snow = cv2.resize(d["snow"], (w, h), interpolation=cv2.INTER_NEAREST) * np.minimum(band * 1.6, 1.0)[:, None]
         grey = out.mean(axis=2, keepdims=True)
         wash = (0.45 * band)[:, None, None]
         out = out * (1.0 - wash) + (grey * 0.8 + 0.2) * wash
@@ -358,23 +387,23 @@ def _lay(img, mask, x0, y0, colour, alpha=1.0):
     img[ay:by, ax:bx] = img[ay:by, ax:bx] * (1.0 - m) + np.asarray(colour, np.float32) * m
 
 
-def _stamp_item(img, item, x, base, right, colour, shadow):
+def _stamp_item(inks, item, x, base, right, colour, shadow):
     """One piece of a stamp (a _line or a _glyph) with its rim and shadow, its ink starting at x (ending there when
-    `right`) on the baseline row `base`."""
+    `right`) on the baseline row `base`, added to `inks` as stamp_inks lists them; its advance."""
     fill, rim, b, ix, adv = item
     x0 = int(round((x - adv if right else x) - ix))
     y0 = int(round(base - b))
-    _lay(img, rim, x0 + shadow, y0 + shadow, (0.0, 0.0, 0.0), 0.45)
-    _lay(img, rim, x0, y0, (0.02, 0.02, 0.03), 0.8)
-    _lay(img, fill, x0, y0, colour)
+    inks += [(rim, (0.0, 0.0, 0.0), x0 + shadow, y0 + shadow, 0.45), (rim, (0.02, 0.02, 0.03), x0, y0, 0.8),
+             (fill, colour, x0, y0, 1.0)]
     return adv
 
 
-def draw_stamp(img, fx, t, px, font):
-    """`img` (in place) with a camcorder's stamp at clip second `t`, crisp: the time over the date in its `corner`,
-    `size` short sides tall at 1080, in `color` with a dark rim and shadow; its indicator (PLAY and a triangle, or a
-    blinking red dot and REC) at the top, on the left unless the stamp is there."""
-    h, w = img.shape[:2]
+def stamp_inks(size, fx, t, px, font):
+    """A camcorder's stamp at clip second `t` over a frame of `size` (w, h), crisp: the time over the date in its
+    `corner`, `size` short sides tall at 1080, in `color` with a dark rim and shadow; its indicator (PLAY and a
+    triangle, or a blinking red dot and REC) at the top, on the left unless the stamp is there. As the coverages laid
+    in order ([(mask, colour, x0, y0, alpha)], _lay's arguments)."""
+    w, h = size
     st = PC.stamp(fx, t)
     cap = fx["size"] * 1080.0 * px
     em, edge = _em(font, round(cap, 1)), max(int(round(0.08 * cap)), 1)
@@ -383,11 +412,12 @@ def draw_stamp(img, fx, t, px, font):
     right, bottom = fx["corner"].endswith("right"), fx["corner"].startswith("bottom")
     lead = 1.45 * cap
     n = len(st["lines"])
+    inks = []
     for i, text in enumerate(st["lines"]):
         base = h - margin - (n - 1 - i) * lead if bottom else margin + cap + i * lead
-        _stamp_item(img, _line(text, font, em, edge), w - margin if right else margin, base, right, fx["color"], shadow)
+        _stamp_item(inks, _line(text, font, em, edge), w - margin if right else margin, base, right, fx["color"], shadow)
     if st["indicator"] is None:
-        return img
+        return inks
     word = _line(st["indicator"], font, em, edge)
     mark = _glyph("play" if st["indicator"] == "PLAY" else "dot", int(round(cap)), edge)
     gap = 0.4 * cap
@@ -398,8 +428,15 @@ def draw_stamp(img, fx, t, px, font):
     x = (w - margin - total) if at_right else margin
     for it, col in items:
         if col is not None:
-            _stamp_item(img, it, x, margin + cap, False, col, shadow)
+            _stamp_item(inks, it, x, margin + cap, False, col, shadow)
         x += it[4] + gap
+    return inks
+
+
+def draw_stamp(img, fx, t, px, font):
+    """`img` (in place) with a camcorder's stamp at clip second `t` (stamp_inks)."""
+    for mask, colour, x0, y0, alpha in stamp_inks((img.shape[1], img.shape[0]), fx, t, px, font):
+        _lay(img, mask, x0, y0, colour, alpha)
     return img
 
 
@@ -596,7 +633,7 @@ class PictureFx:
         """The fonts of the camcorders and the booths' captions, found now: a missing one is an FX.FxError before any
         frame is drawn."""
         self._font_of = font_of or font_source()
-        self._memo, self._cells, self._films, self._fonts = {}, {}, {}, {}
+        self._seen, self._cells, self._films, self._fonts = {}, {}, {}, {}   # _seen: pictures as they reached an fx
         for fx in self.fxs:
             if fx["kind"] == "camcorder" or (fx["kind"] == "booth" and fx["caption"]):
                 self._fonts[fx["index"]] = self._font_of(fx["font"])
@@ -606,7 +643,7 @@ class PictureFx:
         mosh with a flow holds): `img` on `g` itself, kept for the frames after (mk post goes through them in order);
         else what was kept then; else the cut's frame `g` with the effects before `fx` in the table applied again (frames
         asked out of order, as mk look asks them). None when the cut has no frame `g`."""
-        memo = self._memo.setdefault(fx["index"], {})
+        memo = self._seen.setdefault(fx["index"], {})
         if g == frame:
             memo[g] = img
             return img
@@ -645,13 +682,16 @@ class PictureFx:
         m = self._figure(fx, frame)
         return m if fx["mask"] == "figure" else 1.0 - m
 
-    def _pixelsort(self, fx, frame, img):
-        """Steady at `strength`, or on hits: full on the frame of each and dying as exp(-age / decay), the strongest
-        counting."""
+    def pixelsort_at(self, fx, frame):
+        """A pixel sort's strength on `frame`: steady at `strength`, or on hits full on the frame of each and dying as
+        exp(-age / decay), the strongest counting."""
         t = self._t(frame)
         times = [(FX.frame_of(h, self.fps, self.frame0) - self.frame0) / self.fps for h in self._hit_times(fx)]
         on = 1.0 if fx.get("lane") is None and not times else float(FX.punch(t, times, 0.0, fx["decay"]))
-        s = float(np.clip(FX.strength(fx, t) * on, 0.0, 1.0))
+        return float(np.clip(FX.strength(fx, t) * on, 0.0, 1.0))
+
+    def _pixelsort(self, fx, frame, img):
+        s = self.pixelsort_at(fx, frame)
         if s <= 1e-3:
             return img
         region = self._masked(fx, frame)
@@ -675,7 +715,7 @@ class PictureFx:
         if last is None or last[0] != k:
             held = self._reached(fx, g, frame, img)
             held = img if held is None else held
-            self._memo[fx["index"]] = {g: held}
+            self._seen[fx["index"]] = {g: held}
             last = self._films[fx["index"]] = (k, self._region(fx, held, lambda pic, box: film(pic, fx, k, self.px)))
         return self._mix(fx, frame, img, last[1])
 
@@ -718,7 +758,7 @@ class PictureFx:
                     held = self._reached(fx, g, frame, img)
                     held = img if held is None else held
                     self._cells[key] = cover(held[y0:y1, x0:x1], size, fx["focus"])
-                    self._memo.get(fx["index"], {}).pop(g, None)
+                    self._seen.get(fx["index"], {}).pop(g, None)
                 photos.append((tc, self._cells[key]))
             return booth(fx, (x1 - x0, y1 - y0), self.px, t, photos, self._fonts.get(fx["index"]))
         return self._mix(fx, frame, img, self._region(fx, img, draw))

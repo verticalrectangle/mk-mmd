@@ -10,6 +10,8 @@ over them (mkmmd.framefx); anything else that shows a clip (a split screen's vid
       .frame(i)                       frame i decoded, RGB uint8 (h, w, 3)
       .picture(t, size, start, rate, loop, fit, focus, mirror, back)   float32 RGB 0..1 (h, w, 3) at size (w, h)
     fit(rgb, size, fit, focus, mirror, back)   one decoded frame fitted to a size
+    fitted(rgb, size, fit, focus, mirror)      the part of it that shows, resized (uint8), and where it lands
+    fit_box(src, size, fit, focus, mirror)     where: the part that shows, the size it takes, where it lands, how
 
 A FootageError (a FileNotFoundError) says what is wrong: a missing or unreadable clip, a span that starts past its end."""
 import math
@@ -22,8 +24,16 @@ import numpy as np
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mpg", ".mpeg", ".mts", ".m2ts", ".ogv")
 FITS = ("cover", "contain")
 FRAMES = 3                      # decoded frames kept per clip (a 4K frame is 25 MB)
-PICTURES = 4                    # fitted pictures kept per clip
+PICTURES = 2                    # fitted pictures kept per clip (one shown over several frames of a slower clip)
 SKIP = 120                      # frames read on rather than seeking (a seek decodes on from the key frame before)
+OPEN = 2                        # clips a source keeps open, the last asked (a 4K decoder and its frames: some 300 MB)
+DECODE_THREADS = 4              # FFmpeg's threads per clip: its default, one a core, spends twice the CPU on a frame
+                                # (the frames are the same bytes whatever the count)
+
+
+def _capture(path):
+    """OpenCV's FFmpeg reader of the clip at `path`, decoding on DECODE_THREADS threads."""
+    return cv2.VideoCapture(str(path), cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, DECODE_THREADS])
 
 
 class FootageError(FileNotFoundError):
@@ -69,55 +79,78 @@ def resolve(clip, root=None):
 
 
 def source(root=None):
-    """callable(clip) -> Clip for a project at `root`: each clip resolved (`resolve`) and opened once."""
-    opened = {}
+    """callable(clip) -> Clip for a project at `root`: each clip resolved (`resolve`) and made once, the OPEN asked last
+    kept open (the others let go of their decoders and frames until they are asked again)."""
+    opened = OrderedDict()
 
     def get(clip):
         if clip not in opened:
             opened[clip] = Clip(resolve(clip, root))
+        opened.move_to_end(clip)
+        for older in list(opened.values())[:-OPEN]:
+            older.close()
         return opened[clip]
     return get
+
+
+def fit_box(src, size, fit="cover", focus=(0.5, 0.5), mirror=False):
+    """How a frame of `src` (w, h) px meets a picture of `size` (w, h) (`fit()`): ((x, y, w, h) the part of the frame that
+    shows, in the frame as shown (mirrored first with `mirror`), the size (w, h) it is resized to, where in the picture
+    its top left lands (x, y), how it is resized: "area" (shrunk) or "cubic"; one of its own size is left as it is)."""
+    if fit not in FITS:
+        raise ValueError(f"fit {fit!r}: one of {', '.join(FITS)}")
+    W, H = int(size[0]), int(size[1])
+    w, h = int(src[0]), int(src[1])
+    fx, fy = float(focus[0]), float(focus[1])
+    if mirror:
+        fx = 1.0 - fx
+    if fit == "cover":                          # the part that shows, in the frame's own pixels, then resized
+        s = max(W / w, H / h)
+        cw, ch = min(max(int(round(W / s)), 1), w), min(max(int(round(H / s)), 1), h)
+        x0 = int(round(min(max(fx * w - cw / 2.0, 0.0), w - cw)))
+        y0 = int(round(min(max(fy * h - ch / 2.0, 0.0), h - ch)))
+        return (x0, y0, cw, ch), (W, H), (0, 0), "area" if s < 1.0 else "cubic"
+    s = min(W / w, H / h)
+    sw, sh = min(max(int(round(w * s)), 1), W), min(max(int(round(h * s)), 1), H)
+    return (0, 0, w, h), (sw, sh), ((W - sw) // 2, (H - sh) // 2), "area" if s < 1.0 else "cubic"
+
+
+def fitted(rgb, size, fit="cover", focus=(0.5, 0.5), mirror=False):
+    """A decoded frame (uint8 RGB (h, w, 3)) resized as `fit()` lays it in a picture of `size` (w, h): (the part that
+    shows, uint8 RGB (sh, sw, 3), resized by OpenCV; where its top left lands in the picture (x, y))."""
+    (x0, y0, cw, ch), (sw, sh), at, how = fit_box((rgb.shape[1], rgb.shape[0]), size, fit, focus, mirror)
+    if mirror:
+        rgb = rgb[:, ::-1]
+    part = np.ascontiguousarray(rgb[y0:y0 + ch, x0:x0 + cw])
+    return cv2.resize(part, (sw, sh), interpolation=cv2.INTER_AREA if how == "area" else cv2.INTER_CUBIC), at
 
 
 def fit(rgb, size, fit="cover", focus=(0.5, 0.5), mirror=False, back=(0.0, 0.0, 0.0)):
     """A decoded frame (uint8 RGB (h, w, 3)) fitted to `size` (w, h) as float32 RGB 0..1: `cover` fills it, scaled to the
     larger of the two ratios and cropped with the video's point `focus` ([x, y], 0..1 of the video as the file has it) as
     near the middle as the crop allows; `contain` shows it whole, scaled to the smaller ratio, centred on `back`.
-    `mirror` flips it left to right (the focus point flips with it)."""
-    if fit not in FITS:
-        raise ValueError(f"fit {fit!r}: one of {', '.join(FITS)}")
+    `mirror` flips it left to right (the focus point flips with it). `fit_box` works out where, `fitted` resizes."""
+    small, (px, py) = fitted(rgb, size, fit, focus, mirror)
+    if fit == "cover":
+        return small.astype(np.float32) / np.float32(255.0)
     W, H = int(size[0]), int(size[1])
-    h, w = rgb.shape[:2]
-    fx, fy = float(focus[0]), float(focus[1])
-    if mirror:
-        rgb, fx = rgb[:, ::-1], 1.0 - fx
-    if fit == "cover":                          # the part that shows, in the frame's own pixels, then resized
-        s = max(W / w, H / h)
-        cw, ch = min(max(int(round(W / s)), 1), w), min(max(int(round(H / s)), 1), h)
-        x0 = int(round(min(max(fx * w - cw / 2.0, 0.0), w - cw)))
-        y0 = int(round(min(max(fy * h - ch / 2.0, 0.0), h - ch)))
-        part = np.ascontiguousarray(rgb[y0:y0 + ch, x0:x0 + cw])
-        out = cv2.resize(part, (W, H), interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_CUBIC)
-        return out.astype(np.float32) / np.float32(255.0)
-    s = min(W / w, H / h)
-    sw, sh = min(max(int(round(w * s)), 1), W), min(max(int(round(h * s)), 1), H)
-    small = cv2.resize(np.ascontiguousarray(rgb), (sw, sh), interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_CUBIC)
+    sh, sw = small.shape[:2]
     out = np.empty((H, W, 3), np.float32)
     out[:] = np.asarray(back, np.float32)
-    x0, y0 = (W - sw) // 2, (H - sh) // 2
-    out[y0:y0 + sh, x0:x0 + sw] = small.astype(np.float32) / np.float32(255.0)
+    out[py:py + sh, px:px + sw] = small.astype(np.float32) / np.float32(255.0)
     return out
 
 
 class Clip:
     """One video file read frame by frame: `fps`, `count` (frames), `size` (w, h) and `duration` (s) from its container;
-    a frame decoded once is kept until a few others have been."""
+    a frame decoded once is kept until a few others have been. `close` lets go of the decoder and the frames until the
+    next frame is asked."""
 
     def __init__(self, path):
         self.path = Path(path)
         if not self.path.is_file():
             raise FootageError(f"{self.path} does not exist")
-        cap = cv2.VideoCapture(str(self.path))
+        cap = _capture(self.path)
         if not cap.isOpened():
             raise FootageError(f"{self.path}: not a video OpenCV can read")
         self.fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
@@ -133,6 +166,14 @@ class Clip:
     @property
     def duration(self):
         return self.count / self.fps
+
+    def close(self):
+        """Let go of the decoder and of the decoded frames and pictures (a clip not shown for a while)."""
+        if self._cap is not None:
+            self._cap.release()
+        self._cap, self._next = None, 0
+        self._frames.clear()
+        self._pictures.clear()
 
     def index(self, t, start=0.0, rate=1.0, loop=False):
         """The clip's frame (0 .. count - 1) on screen `t` seconds into a span that starts `start` seconds into the clip
@@ -153,6 +194,10 @@ class Clip:
         if got is not None:
             self._frames.move_to_end(i)
             return got
+        if self._cap is None:                           # closed: opened again, at its first frame
+            self._cap = _capture(self.path)
+            if not self._cap.isOpened():
+                raise FootageError(f"{self.path}: not a video OpenCV can read")
         if not self._next <= i <= self._next + SKIP:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             self._next = i

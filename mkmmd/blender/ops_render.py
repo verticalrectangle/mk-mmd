@@ -9,8 +9,10 @@ Text, Screen type) is kept off the frame: `screen/<frame>.png` (RGBA, written be
 to lay over the cut's frame and its effects. args["keep"] ({armature, materials}: `[post] keep`, mkmmd.core.keep) adds
 `keep/<frame>.png`, the mask of where those materials are seen (written before the frame; a frame on disk without one
 gets it). args["mk"] lists frames mk's own renderer draws (mkmmd.render): this job leaves them alone and draws only the
-layers of those in args["mk_layers"] (its share), the screen type first. A frame or plate seen through a fisheye camera
-wants Cycles: under another engine the job fails before it draws anything (mkmmd.blender.fisheye.refuse)."""
+layers of those in args["mk_layers"] (its share), the screen type first, but for the screen type of args["mk_screen"]
+and the keep masks of args["mk_keep"] (frames whose layer that renderer draws itself: mkmmd.render.mkr). A frame or
+plate seen through a fisheye camera wants Cycles: under another engine the job fails before it draws anything
+(mkmmd.blender.fisheye.refuse)."""
 import os
 import time
 
@@ -71,6 +73,8 @@ def render_frames(args):
     layers = TRN.Layers(sc, looks, args.get("aspect"), out_dir, args["demands"]) if looks and args.get("demands") else None
     freezes = FRZ.windows(sc)
     others, mine = {int(f) for f in args.get("mk") or ()}, {int(f) for f in args.get("mk_layers") or ()}
+    their_screen = {int(f) for f in args.get("mk_screen") or ()}       # mk's renderer draws these frames' layers
+    their_keep = {int(f) for f in args.get("mk_keep") or ()}
     FE.refuse(sc, [int(f) for f in args["frames"] if int(f) not in others], args.get("aspect"),
               args["demands"] if layers else None)
     t0, done, skipped, drawn, screens, masks = time.time(), 0, 0, 0, 0, 0
@@ -89,12 +93,13 @@ def render_frames(args):
             f = int(f)
             path = os.path.join(out_dir, f"{f:05d}.png")
             kpath = os.path.join(out_dir, KP.rel(f)) if keep else None
-            want_keep = kpath is not None and not os.path.exists(kpath)
+            want_keep = kpath is not None and f not in their_keep and not os.path.exists(kpath)
             if f in others:                               # mk's renderer draws the frame: its screen type and layers here
                 if f not in mine:
                     continue
                 layer = os.path.join(out_dir, SRT.layer_rel(f))
-                screen = looks is not None and any(looks.screen_live(f, args.get("aspect"))) and not os.path.exists(layer)
+                screen = (looks is not None and f not in their_screen and any(looks.screen_live(f, args.get("aspect")))
+                          and not os.path.exists(layer))
                 if screen or want_keep or (layers and layers.pending(f)):
                     FRZ.frame_set(sc, f, freezes)
                     if want_keep:

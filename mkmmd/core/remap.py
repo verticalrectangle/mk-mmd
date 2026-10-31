@@ -381,17 +381,23 @@ def _bspline(f):
                      (-3.0 * f ** 3 + 3.0 * f ** 2 + 3.0 * f + 1.0) / 6.0, f ** 3 / 6.0], -1)
 
 
-def spread(n, cell, shift=0.0):
-    """(n, m) weights carrying a lattice of points `cell` px apart (moved `shift` cells along) onto `n` pixels by cubic
-    B-splines: a smooth field (twice differentiable) out of m lattice values."""
+def spread_taps(n, cell, shift=0.0):
+    """spread's weights as taps: (first lattice point (n,) int, the 4 weights (n, 4) float32, m lattice points), each
+    pixel weighing lattice points first .. first + 3."""
     u = (np.arange(n) + 0.5) / cell + shift
     i = np.floor(u).astype(np.int64)
     lo = int(i.min()) - 1
     m = int(i.max()) + 3 - lo
+    return i - lo - 1, _bspline(u - i).astype(np.float32), m
+
+
+def spread(n, cell, shift=0.0):
+    """(n, m) weights carrying a lattice of points `cell` px apart (moved `shift` cells along) onto `n` pixels by cubic
+    B-splines: a smooth field (twice differentiable) out of m lattice values."""
+    first, wts, m = spread_taps(n, cell, shift)
     W = np.zeros((n, m), np.float32)
-    wts = _bspline(u - i)
     for j in range(4):
-        W[np.arange(n), i - lo - 1 + j] = wts[:, j]
+        W[np.arange(n), first + j] = wts[:, j]
     return W
 
 
@@ -433,8 +439,7 @@ def melt_field(mode, size, centre, level, scale, speed, age, unit, seed=(1, 0), 
         lam = scale * unit
         dx, dy, r = _radial(xs, ys, centre)
         if front:
-            rs = np.linspace(0.0, float(r.max()) + 1.0, 256)
-            amp = np.array([level(age - x / front) if age - x / front >= 0 else 0.0 for x in rs], np.float32)
+            rs, amp = ripple_amp(level, age, front, r.max())
             if not amp.any():
                 return zero, zero.copy()
             a = np.interp(r.ravel(), rs, amp * np.float32(unit)).reshape(r.shape).astype(np.float32)
@@ -448,7 +453,7 @@ def melt_field(mode, size, centre, level, scale, speed, age, unit, seed=(1, 0), 
     a = float(level(age))
     if a == 0.0:
         return zero, zero.copy()
-    wave = math.sin(2.0 * math.pi * speed * age) if speed and mode in ("breathe", "swirl") else 1.0
+    wave = melt_wave(mode, speed, age)
     if mode == "breathe":
         dx, dy, r = _radial(xs, ys, centre)
         g = max(a * wave, -0.9)
@@ -481,13 +486,42 @@ def drip(size, reach, width, speed, age, seed=(1, 0)):
     below what the row under it shows (the picture stretches, it does not fold)."""
     w, h = size
     ys = grid((w, h))[1]
+    drips, col = drip_columns(w, width, speed, age, seed)
+    depth = ys / np.float32(h)                                     # 0 at the top, 1 at the bottom
+    run = 0.9 + 0.1 * np.sin(np.float32(2.0 * np.pi) * (depth - np.float32(speed * age)) + np.float32(3.0) * drips)
+    sag = np.float32(reach) * depth * np.sqrt(depth) * col[None, :] * run
+    return np.zeros_like(sag), (-sag).astype(np.float32)
+
+
+def melt_wave(mode, speed, age):
+    """A breath's or a swirl's swing at `age` seconds into the span: sin(2 pi speed age), 1 when it holds still and for
+    the other modes."""
+    return math.sin(2.0 * math.pi * speed * age) if speed and mode in ("breathe", "swirl") else 1.0
+
+
+def ripple_amp(level, age, front, rmax):
+    """A ripple's amplitude out along r when its swell runs out at `front` px a second: (rs, amp float32) at 256 points
+    from 0 to `rmax` (the farthest pixel's r) + 1 px, each the level when that stretch of rings left the centre (0 before
+    the span), as melt_field interpolates it."""
+    rs = np.linspace(0.0, float(rmax) + 1.0, 256)
+    return rs, np.array([level(age - x / front) if age - x / front >= 0 else 0.0 for x in rs], np.float32)
+
+
+def drip_columns(w, width, speed, age, seed=(1, 0)):
+    """(drips, col) float32 (w,) of a drip on a frame `w` px wide: each column's drip (-1 .. 1) and the share of the
+    reach it sags (0.2 .. 1: where it drips)."""
     cell = max(width, 2.0)
     tau = 0.15 * speed * age                                       # the drips' lengths change slowly
     Wx = spread(w, cell)
     drips = saturate((Wx @ noise(list(seed) + [1], (Wx.shape[1],), tau)) / SPREAD).astype(np.float32)   # -1 .. 1
     u = np.clip((drips - np.float32(0.15)) / np.float32(0.55), 0.0, 1.0)
-    col = 0.2 + 0.8 * u * u * (3.0 - 2.0 * u)                     # 0.2 .. 1 across the frame: where it drips
-    depth = ys / np.float32(h)                                     # 0 at the top, 1 at the bottom
-    run = 0.9 + 0.1 * np.sin(np.float32(2.0 * np.pi) * (depth - np.float32(speed * age)) + np.float32(3.0) * drips)
-    sag = np.float32(reach) * depth * np.sqrt(depth) * col[None, :] * run
-    return np.zeros_like(sag), (-sag).astype(np.float32)
+    return drips, 0.2 + 0.8 * u * u * (3.0 - 2.0 * u)
+
+
+def corner_reach(size, centre):
+    """The farthest r = |p - centre| (float32, as numpy works it out over the pixels) of a frame of `size`: at a
+    corner."""
+    w, h = size
+    dx = np.float32([0.0, w - 1.0]) - np.float32(centre[0])
+    dy = np.float32([0.0, h - 1.0]) - np.float32(centre[1])
+    return float(np.sqrt(np.max(dx * dx)[None] + np.max(dy * dy)[None])[0])

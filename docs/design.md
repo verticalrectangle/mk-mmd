@@ -16,6 +16,7 @@ degrees (see [Conventions](#conventions)).
 
 - [Layers](#layers)
 - [The bridge](#the-bridge)
+- [The GPU lock](#the-gpu-lock)
 - [Conventions](#conventions)
 - [Configuration](#configuration)
 - [Project file](#project-file)
@@ -100,6 +101,32 @@ blender -b SCENE.blend -y --python-exit-code 3 --python-expr BOOT -- job.json re
   a render shows, for [`form`](#form)) and a character's skinned limbs on every frame, with their rest shape (for
   `skin_collapse`) to an `.npz`; checks and solvers work on that.
 
+## The GPU lock
+
+One GPU job at a time (`mkmmd/gpulock.py`; in Rust the crate `mkr/mkr-gpulock`). The card's memory is shared by every job on
+it, and what does not fit spills into system memory, which cannot be swapped: two or three renders at once filled the 12 GB
+card, spilled 10 GB into RAM and got processes killed. So every job that draws on the GPU holds one lock while it runs and the
+others wait their turn, saying once on stderr who has it (`waiting for the GPU, held by <pid> <command>`):
+
+- `mkr` and `mkr-post` take it when they open the GPU (`Gpu::new`) and keep it until they exit;
+- the bridge's render jobs (`render_frames`, `look`, `lab_build`, `lab_variant`) hold it while Blender runs;
+- `mk render`, and `mk post` when it uses the GPU (`--gpu` or the vaapi encoder), hold it for the whole command, so what
+  they start (mkr, mkr-post, Blender jobs, the encoder) runs inside their turn;
+- anything else that uses the GPU (a Blender script run by hand, GPU tests such as `cargo test` in `mkr/`, a scratch mkr
+  build) goes through `mk gpu run [--what TEXT] -- CMD [ARG...]`: the command and everything it starts hold the lock until
+  the last of them exits.
+
+The lock is an advisory `flock` on `$MK_GPU_LOCK`, else `<cache>/gpu.lock` (`$MK_CACHE`, default `~/.cache/mk`); the
+kernel releases it however its holder ends, so a crashed or killed job never leaves it held. The holder writes its pid and
+command into the file. Jobs are served first come, first served: one that finds the GPU busy, or others already waiting,
+puts a ticket `<ns>-<pid>` into `gpu.lock.queue/` beside the lock file and waits until its ticket is the oldest of those
+whose process still runs (`waiting for the GPU, held by <pid> <command> (N in line)`); a finished or killed job's ticket is
+dropped by whoever sees it. A holder sets `MK_GPU_LOCK_HELD=1` for what it starts, and anything that finds it set skips
+the lock (a job inside a job does not wait for itself). Hold it only while the GPU works and for minutes, not hours: a
+loop of renders takes it per render (`mk parity tune` per evaluation). `mk gpu status` prints who holds it, the card's
+memory in use and spilled into system memory (`spilled_mb`, the GTT pool), and the processes using GPU memory, largest
+first.
+
 ## Conventions
 
 - Units are metres, Z is up. A character faces -Y unless a seat or placement says otherwise. MMD models import at
@@ -145,6 +172,7 @@ collections|actions|objects` lists names; `--summary` prints min, max and mean.
 | `mmd_addon` | `MK_MMD_ADDON` | `bl_ext.user_default.mmd_tools` |
 | `assets` | `MK_ASSETS` | `~/mk-assets` |
 | `player` | `MK_PLAYER` | none: the system's opener (`mk play`) |
+| `vaapi_device` | `MK_VAAPI_DEVICE` | `/dev/dri/renderD128`: the GPU `mk post --encoder vaapi` encodes on |
 
 Environment only: `MK_CONFIG` (the config file, default `~/.config/mk/config.toml`), `MK_CACHE` (the user scratch folder:
 job folders, serve sockets, samples, look output outside a project, reference downloads; default `~/.cache/mk`),
@@ -664,11 +692,75 @@ member or the camera cannot be used by a stage that runs before them):
 | stepped | `[[stepped]]` | the cast on twos: each member's whole motion held 1 / fps s at a time over a window, the cameras on every frame | [Stepped motion](#stepped-motion) |
 | clip | | every shot camera starts at half the depth of the nearest geometry it sees, keyed on every frame (follows `--until` as `save` and `bake` do) | [Clip ranges](#clip-ranges) |
 | save | | the `.blend` | |
-| bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderer, every frame's bones, morphs, objects, visibility and shot cameras (with their clip ranges), the meshes, what the glb cannot carry as Blender evaluates it on each frame, what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light) and the [[medium]] windows (`mk build --bake` bakes a saved scene again) | [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
+| bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderers, every frame's bones, morphs, objects, visibility and shot cameras (with their clip ranges), the meshes, what the glb cannot carry as Blender evaluates it on each frame, what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light), the [[medium]] windows, and the lit scene mkr draws from: the view transform, world, lights, material node graphs, images and every mesh as Blender renders it, checked against Blender's ([The bake](#the-bake); `mk build --bake` bakes a saved scene again) | [The bake](#the-bake), [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
 
 The text stage runs after `lights` and before `keys`, so a `[[key]]` can toggle a text's `hide_render` or move it. A stage
 that has nothing to read for a cast member (no `[pose.rin]`, no `[perform.rin]`) leaves it alone, and a `[pose.x]`, `[perform.x]` or `[sim.x]` named after no cast member is ignored
 without a word (see [Cast](#cast)).
+
+### The bake
+
+The bake stage writes `<blend>.bake/` (version 5): `scene.glb`, `bake.json` and `bake.bin` (float32 values per frame) for the
+site's scene viewer and the vector look's renderer, and the `lit` section of bake.json with `lit.bin` (vertex attributes,
+triangles and shape-key deltas, little-endian), `view_lut.bin` and `images/` for mkr, mk's GPU renderer of the lit frames.
+`mkmmd/blender/build/bake.py` has the format of the first and `bake_lit.py` of the second. Positions and directions are in
+glTF's axes (+Y up); what node graphs read (Generated coordinates, attributes) stays in Blender's.
+
+- View: Blender's display transform for the scene's view settings (transform, look, exposure, gamma, curves, display), captured
+  by saving a float image of a 65³ grid of scene-linear values (2^-12.5 to 2^12.5 on a log2 scale) through them as a 16-bit
+  PNG with no dither and reading it back: the display-referred value before 8-bit quantisation (`zero` for black), and the
+  render's dither. Film filter and transparency, every render and EEVEE setting.
+- World, materials and node groups: every node of their trees with every value of the node (colour ramps with a 257-sample
+  table, curve mappings sampled where Blender builds its tables), its sockets, the links and what a muted node passes through;
+  node groups once each with their interface. Images as files: absolute paths, packed and generated ones written into
+  `images/`, and one Blender cannot load marked `missing` (Blender draws it magenta).
+- On every frame: each light (position, direction, colour, energy, size, spot cone, whether it shows), each shot camera's
+  depth of field, every node value that is keyed or driven (the mmd_bind inputs mmd_tools drives with a material morph), and
+  per mesh what its materials' Attribute nodes of type Object, Instancer or View Layer read off its object (`object_attrs`:
+  a custom property, else an RNA path, of the object, else of its data, as Blender looks it up; a ringing string's swing, the
+  ink's clock), which mkr fills into each draw's own parameters.
+- Meshes: every mesh the clip shows, as Blender renders it, its vertices split where Blender's corner data differs, with what
+  its materials read (UV maps, colour attributes, named attributes, tangents, Generated coordinates), its triangles grouped by
+  material slot, and its world matrix, visibility and shape-key values on every frame (a key that stays 0 over the clip is
+  left out). A mesh is `static`, `skinned` (one armature modifier: up to 8 bones a vertex, weighted as the modifier normalises
+  them, on the joints the bake already has) or `by_frame`: anything else Blender evaluates (other modifiers, curves, text,
+  metaballs, mmd_tools' SDEF, preserve volume, absolute shape keys) as its evaluated mesh in its own space, with its world
+  matrix, on every frame it shows: an unchanged geometry or array is not stored again (a sign's type riding a car, 38 000
+  vertices, is stored once and moves with its matrix), up to 256 MB an object, evaluated with the render's modifier settings
+  (shown as in renders, Subdivision Surface and Multires at their render levels, curves and metaballs at their render
+  resolution: the scene is put back after the bake; the report's `lit.render_settings` lists what that changed, and the
+  version-4 `by_frame` geometry of those objects is evaluated the same way). Instances (geometry nodes' object instances,
+  collection instances, particles) are meshes of their own that share their source's vertices. A mesh that bends (skinned or
+  shape-keyed) carries its corner fans, so a renderer rebuilds its normals on the deformed mesh as Blender does, custom
+  normals included; the bake picks each fan's reference edge against Blender's own deformed normals on a few frames (turning
+  the rest normals with the joints instead misses Blender's by 14 to 23° on 1 % of an MMD model's corners).
+- Every lit mesh names its look record (`record`: the object's own entry in bake.json's `objects`, an instance its
+  instancer's), and `lit.records` holds the records of those no look sorts (screen type, objects drawn for one output only),
+  so the figure, bare and keep patterns resolve from the bake alone.
+- What Blender renders that the bake cannot hold (a volume, hair, a point cloud, a mesh over its cap, instances of a deforming
+  object) is listed in `left_out` with the frames it shows on, so `mk render` leaves those frames to Blender.
+- Screen type (`lit.screen`): every word of it on the frames it shows (`show` [on, off) frames, `aspect` its output,
+  `knockout`), the screen layer's orthographic camera per output (one frame height tall, at z = 10 looking down, +Y up,
+  in glTF's axes), its pass (EEVEE, film transparent, lights off, black world, no motion blur or dither, the shot look's
+  samples or 16), its view transform (Standard, no look) captured as a LUT like the scene's, and its file format
+  (straight RGBA, 8 bits). A word is held as fitted geometry (`mkmmd/core/fitgeo.py`, numpy, tested; mkr decodes it in
+  `mkr/mkr/src/screen_geo.rs`): the prototype shapes of its islands (a letter, each outline copy of it, its parts), and
+  per frame one map of the whole word or a map per island (affine; with quadratic terms for letters that wobble before
+  the word bends round a ring; projective for a tilt seen in perspective) and the islands' attribute values, every map
+  measured as decoded against Blender's evaluation (1e-5 frame heights, normals within 1.1 degrees); a frame no map
+  holds starts a new geometry. Crimson and Clover's 297 words, 21.8 GB as meshes of every frame, fit in a few tens of
+  MB. The layer may add 512 MB to lit.bin in all: what is not baked when that runs out is listed in `lit.screen.left_out`
+  with its output and frames, and those frames' screen layers are Blender's. The self-check decodes every word on the
+  first, middle and last frame of its window from the files and measures it against Blender's drawing (`check.screen`).
+- Points (`lit.points`): every world point the cut's layers ask for (a transition's or insert's anchor, an effect's
+  centre: `point` items of mkmmd.core.transition.demands), evaluated on the frames that ask for it as `mk render` evaluates
+  it (the `mk q` namespace; NaN elsewhere, a failure kept with its frames) with the shot per run of frames. The point layer
+  file is `{"p": [x, 1 - y], "depth": z, "m": hypot((qx - x) w / h, qy - y)}`, (x, y, z) the point through the shot
+  camera of the output (0..1 from the bottom left, z its depth), (qx, qy) the point one metre along the camera's own +Y
+  axis seen the same way, w and h the output's size (a fisheye's: mkmmd.core.fisheye, which mkr leaves to Blender).
+- Self-check: the bake rebuilds every static and skinned mesh from lit.bin and bake.bin alone on the export frame, the middle
+  frame and the last, and measures it against Blender's evaluated mesh. The report's `lit` has the worst distance per mesh
+  (`check_mm`; over 0.1 mm is a WARNING), bake.json's `lit.check` the normals' worst, 99th and 99.9th-percentile angle too.
 
 ### Targets
 
@@ -5070,6 +5162,8 @@ slots = { gold = "#f2c46d" }        # one slot overridden for this project
 | `preview` | 50 % | 32 | on |
 | `final` | 100 % | 64 | on |
 
+With `engine = "mkr"` the final preset's own 64 samples are drawn as 36 of twice the scene's shadow rays ([mkr](#mkr): its samples).
+
 `[render]` (all optional) overrides the preset: `samples`, `shutter` (the motion blur shutter, 0.35) and `engine` (`eevee`, the
 default (EEVEE Next), `cycles`, `workbench` or `mk`, below). A fisheye shot ([Fisheye shots](#fisheye-shots)) needs `cycles`:
 under another engine the render stops before it starts, naming the frame and the camera. `--samples`, `--percent` and `--engine` override both for one run; `--output NAME` renders some
@@ -5114,6 +5208,361 @@ deformed mesh, so on a bent limb the line where light turns to shadow can move a
 with `mk` (its own frames in under two of them, about 0.1 s of GPU each; Blender's share, the lit orbit, the screen type and
 the effects' layers, alongside) against 14 min 7 s in Blender, one job per output.
 
+#### mkr
+
+mkr (`mkr/mkr`, Rust and wgpu on Vulkan) draws EEVEE Next's lit frames from the bake, deferred the way EEVEE draws them
+(`mkr render --bake BAKE --output NAME --frames SPEC --out DIR`, with `--samples`, `--percent`, `--motion-blur`,
+`--shutter`, `--params FILE.json`; `mkr/mkr/src/render.rs`). Per frame: the scene posed on the frame's own time (with
+motion blur on the shutter's middle, and on its open and close too: skinning, morphs, the bend normals) and the shadow
+maps of the lights that cast
+shadows, drawn once (`shadows.rs`: a cube of faces around each light, five for area and spot lights, or for a sun four
+orthographic maps, as EEVEE's sun reads the clipmap level around the camera that holds the receiver: three over slices
+of the view from the camera out to 3, 24 and 192 m, one over every caster, each receiver reading the finest that holds
+it and its shadow ray running eight times that map's width, or across the last one's depth). EEVEE draws each face at
+the level its receivers on screen ask for (their pixel
+footprint, bounded by the light's `shadow_maximum_resolution` and scaled by the scene's `shadow_resolution_scale`; 8192
+texels across a face at the finest; `shaders/shadow_lod.wgsl` has the rules measured): mkr keeps every face whole at a
+coarse level (`shadow_face_size`, 1024 texels, halved while the faces would take more than 1 GB) and lays a pool of
+finer windows (`shadow_windows`, 8 of `shadow_map_size`, 2048 texels) over the receivers that ask for more, placed after
+the first sample's depth prepass (`shaders/shadow_setup.wgsl`). Then per sample (the camera jittered by EEVEE's film
+filter): a depth prepass, where dithered materials test a
+hashed threshold (a hash of the surface's position on grids a quarter of a pixel wide, turned by the sample's offset:
+coplanar layers cover together and the noise left is EEVEE's); the G-buffer of the opaque and dithered surfaces, each
+material its own small module from `mkr-shade`; one lighting compute pass over it, compiled once (`shaders/light.wgsl`,
+`ltc.wgsl`, `shadow_map.wgsl`: each light's lobes integrated over its shape with linearly transformed cosines and
+EEVEE's sphere approximation of the horizon, faded out at EEVEE's influence radius (the light's own when it has one:
+`use_custom_distance`, `cutoff_distance`), and shadowed by tracing a ray toward
+a random point of the light through its maps in the scene's shadow steps, by the hit rule measured on EEVEE's frames:
+the steps near the receiver read the level it asks for, the farther ones the face's, and the ray's offsets off the
+surface and its depth tolerance are counted in that level's texels, as EEVEE's are); the blended surfaces lit forward,
+back to front; with motion blur, EEVEE's post process smearing the sample's picture (below); and the film taking the
+samples four at a time. Then the view transform's table, EEVEE's dither and 8
+bits, read back and written while the next frame draws. Dithered materials whose shadows follow their alpha cast
+EEVEE's hashed shadow, a texel stopping the light with the probability of the caster's opacity per sample: the maps hold
+their nearest partly transparent layer over the opaque casters and the product of the layers' transparencies.
+`shadow_mode: "rays"` traces ray queries toward the light instead of the maps: converged soft shadows, as EEVEE's
+jittered shadows and Cycles draw them.
+
+Motion blur (`--motion-blur`, `motion_blur.rs`, `shaders/motion_blur.wgsl`) is EEVEE Next's at `motion_blur_steps` 1:
+every sample drawn at the shutter's middle (the frame itself, a half shutter later when the scene's
+`motion_blur_position` is START, earlier when END), the G-buffer keeping each pixel's velocity to where the shutter's open
+and its close show it (the bake's poses on those times: bones, object matrices, shape keys, frame-by-frame meshes, the
+camera; where nothing is drawn, the camera's turn alone), then per sample, before the film takes it, the post process:
+the longest velocity toward each end per 32 px tile, spread along its line over the tiles it reaches (a tile taking the
+other end's longest too: on the lab that halves the error), and per pixel 6 taps along its tile's longest velocity and 6
+along its own for each half of the shutter (`mb_taps`; EEVEE takes 8; over a frame's 64 samples 6 leave mkr's frames as
+close to its, and final frames' 36 samples take 8: below), the tile picked a random quarter tile off and the taps a
+random offset per pixel and sample, each counted as background or foreground by a soft depth test (the scene's
+`motion_blur_depth_scale`)
+and by whether its blur reaches, the background's mean standing for what the taps leave uncovered (the weights
+Jimenez 2014 describes, after McGuire et al. 2012 and Guertin et al. 2014). EEVEE Next has no `motion_blur_max`: it
+smears a 300 px move over 300 px. `motion_blur: "quality"` draws each sample at its own time in the shutter instead
+(true motion blur, as Cycles draws it); a scene of more than one step gets that too until mkr draws EEVEE's segments.
+Over the moving pixels (where Blender's frame differs from the one before by more than 8 levels, dilated 4 px; in the
+lab, where the blur changes the frame), mean |error| with the post process against the time samples (Vega Tables
+measured with 8 taps):
+
+| Frames | Moving | Post process | Time samples |
+|---|---|---|---|
+| lab `mb_translate`, `mb_start`, `mb_end`, `mb_shutter1` | 11-15 % | 1.56, 1.36, 1.50, 1.78 | 2.74, 2.50, 2.65, 3.90 |
+| lab `mb_spin`, `mb_arm`, `mb_pan` | 9-71 % | 3.07, 2.13, 0.65 | 3.31, 3.18, 2.39 |
+| lab `mb_steps3` (3 steps: both on time samples) | 11 % | 2.37 | 2.37 |
+| Playing Possum final, 16:9 and 9:16 (20 frames each) | 14, 32 % | 2.72, 2.85 | 3.05, 3.36 |
+| Vega Tables final, 16:9 and 9:16 (20 each) | 13, 25 % | 1.60, 1.68 | 1.96, 2.48 |
+| Crimson and Clover final, 16:9 and 9:16 (21 each) | 11, 22 % | 3.77, 3.47 | 4.58, 4.13 |
+
+The post process costs 7-24 ms of a 64-sample 1080p frame's GPU time (Crimson 9.9, 7.0 and 15.4 ms for 16:9, 1:1
+and 9:16, 1-2 ms less than with 8 taps; Playing Possum 15 and 24 for 16:9 and 9:16). Blurring the film of a group of
+samples at a time instead (the blur is linear in colour) would cost a tenth of that (once on the whole film, averaging
+8 draws of its noise: Crimson 1.2, 0.9 and 2.0 ms), but the depth and velocity it blurs by are one sample's, which
+leaves the film's soft edges of what moves partly sharp: 0.07-0.15 levels more error over the moving pixels (Crimson
+3.88 and 3.57, Playing Possum 2.79 and 2.96, the lab's mb cases 1.95 on average against 1.80), so mkr blurs each
+sample as EEVEE does.
+
+Every constant that matches Blender only by measurement is a tunable: `mkr params` lists them with their defaults (the
+best values measured), `--params FILE.json` changes some, and `mk parity tune` climbs them (below). Each material's
+pipelines compile in parallel threads (at most one per 1.5 GB of free memory, 4 by default, `MKR_COMPILE_THREADS`)
+through the driver's pipeline cache, kept per adapter and driver in `$XDG_CACHE_HOME/mkr` (else `~/.cache/mkr`): Crimson
+and Clover's 79 materials compile in about 3.5 s from cold (1.2 GB peak) and in 0.3 s warm. The report on stdout times
+every frame: `gpu_ms_per_frame` and `gpu_ms_phases` (pose, shadow maps, prepass, gbuffer, lighting, blended, motion
+blur, film, dof,
+resolve; GPU timestamps), `cpu_ms_encode` (recording and submitting a frame, of which `cpu_ms_stage` poses it and
+`cpu_ms_submit` is wgpu finishing and submitting its commands), `cpu_ms_wait` (blocked on the GPU), `cpu_ms_collect`
+(the readback and the PNG writers' queue), `setup_seconds`, `compile_seconds` and `peak_rss_mb`.
+
+On Crimson and Clover (64 samples, motion blur, 100 frames across the clip on an RX 7700 XT) a 1920 x 1080 frame takes
+70 ms (GPU 66: prepass 8.8, G-buffer 14.3, lighting 17.4, blended 4.9, motion blur 9.9, film 6.2, shadow maps 4.0)
+against Blender's 1.9 s, a 1080 x 1080 one 60 ms (GPU 56) and a 1080 x 1920 one 97 ms (GPU 93, lighting 31: the
+portrait frame is mostly her); the CPU's 16 ms a frame overlap the GPU's. The lighting is the shadow tracing (each
+step about 3 ms of the portrait frame's); the
+geometry passes are bound by vertex work, run twice per sample, and the swarm's 144 butterflies (88 % of the triangles)
+take about a third of them. Per-draw overhead, varyings, rasterisation and the map lookups' memory are not what costs
+(measured: doubling the draws, halving the varyings or culling back faces leave the time within noise, and testing
+coarse blocks of the maps before their texels gains 2 % at most). A G-buffer without the depth prepass would save
+7 ms, but its extras are storage writes, which need the single surface per pixel the prepass leaves. With the extras
+in two more colour targets, the butterflies drawn straight into the G-buffer save 3-5 ms of the geometry passes, but
+they add to what makes frames differ from run to run. RADV's colour compression (DCC) of the G-buffer's colour targets
+now and then gives one pixel of one sample another value: a 1-2 level speck in one or two of every 300 9:16 frames, in
+today's frames as in the earliest build measured (none in 680 frames with those targets uncompressed, none with
+`RADV_DEBUG=nodcc`, which leaves every other frame byte for byte as it is); the two extra targets triple it.
+Uncompressed G-buffer targets would cost 3 ms of a 1:1 frame and 9 ms of a 9:16 one, so mkr keeps them compressed, and
+the prepass; byte-identity checks between two builds run both with `RADV_DEBUG=nodcc`.
+
+Measured against EEVEE's frames: Crimson's 90 test frames (30 per output, no motion blur) at a pooled mean |error| of
+0.83 levels (0.66, 0.80 and 1.02 for 16:9, 1:1 and 9:16; 2.82, 2.63 and 2.40 over her figure alone, 11.8, 10.8 and 9.4 %
+of its pixels off by more than 8), from 5.1 (18.0, 14.8, 13.9) before; the lab's cases between 0.03 and 1.75 (`mk parity
+lab`). The shadow tunables' defaults are `mk parity tune`'s best over Crimson's figure and the lab's cases together, the
+lab weighted 3 to 1 so that no setting buys the figure with the lab. EEVEE's glossy light is an LTC table fitted
+the way Heitz et al. fit theirs (normalised over the whole sphere, so the part of a rough lobe under the horizon is
+lost), times the split-sum albedo, faded out as the light's bounding sphere sinks under the lobe's horizon
+(`ltc_glossy: "eevee"`, measured on probes; `"mkr"` integrates true GGX). What still differs: EEVEE's shadow tracing is
+known by measurement only (`shadow_rule`: the default rule matches Crimson's frames and the MMD lab cases best; `"v2"`,
+fitted on EEVEE's probes, the lab's plates and square or disk lights), and its dithered alpha leaves per-pixel noise mkr
+reproduces only statistically.
+
+Its samples. Fewer samples leave more of mkr's own noise in its frames, so their error against EEVEE's grows (Crimson's
+90 frames at 64, 48 and 32 samples: 0.833, 0.855 and 0.889 levels; the figure 2.56, 2.63 and 2.73). Split by giving one
+source of noise its own sample count (the others repeating each draw twice), the shadows' rays are most of it: alone at
+32 they cost 0.025 levels of the 0.055 (the figure 0.076 of 0.170), the film's jitter 0.003 (0.008), hashed alpha
+0.0002, the materials' closure picks nothing (no depth of field, ray tracing or motion blur in those frames). So a
+sample can trace several shadow rays per light (`shadow_rays`, a multiple of the scene's `shadow_ray_count`, EEVEE's
+own rays per sample: ray r of sample s draws point s K + r of the sequences, so two rays at 32 samples are bit for bit
+64 samples whose pairs share a G-buffer), and draw them from a better sequence (`shadow_sequence: "sobol"`: one point
+of Sobol's sequence in five dimensions per ray, its index shuffled among the frame's rays and its numbers
+Owen-scrambled per pixel and light, where the default R2 draws the light's point and the filter disk's from one
+sequence turned two ways; Sobol's alone takes 64 samples from 0.833 to 0.828). `mk render --preset final` with mkr
+draws 36 samples of twice the scene's shadow rays from Sobol's sequence with 8 motion blur taps (`mkmmd/render/mkr.py`
+FINAL, when the preset's own samples apply: no `--samples`, no `[render] samples`; `mk parity frames --preset final`
+draws the same; the defaults stay the scene's rays from R2 and 6 taps). Against EEVEE's frames (Crimson without motion
+blur; Vega Tables and Playing Possum final, 20 frames per output, whole frame and moving pixels; the lab's 51 case
+outputs, mean of their means, scored as the shadow tune scores: the figure plus 3 times the lab) and GPU ms per frame
+with motion blur (Crimson 100 frames, both in one hold):
+
+| | 64 samples | final: 36 x 2 rays, Sobol, 8 taps |
+|---|---|---|
+| Crimson whole: 16:9, 1:1, 9:16 (pooled) | 0.664, 0.804, 1.019 (0.8334, 3.376 % over 8) | 0.661, 0.801, 1.012 (0.8290, 3.373 %) |
+| Crimson figure (pooled) | 2.815, 2.626, 2.397 (2.5624, 10.384 %) | 2.803, 2.616, 2.381 (2.5489, 10.373 %) |
+| Vega whole / moving, 16:9 and 9:16 | 0.564 / 1.598, 0.701 / 1.684 | 0.563 / 1.598, 0.700 / 1.682 |
+| Possum whole / moving, 16:9 and 9:16 | 0.535 / 2.715, 1.216 / 2.853 | 0.534 / 2.712, 1.213 / 2.849 |
+| lab mean (over 8), shadow tune score | 1.2478 (4.45 %), 6.306 | 1.2456 (4.50 %), 6.286 |
+| GPU ms: Crimson, Vega, Possum | 67.8 / 57.2 / 96.1, 331 / 322, 100 / 124 | 49.8 / 42.3 / 74.9, 283 / 277, 75 / 101 |
+
+The lab's areas, penumbra and ggx gain 0.03-0.11, `dof_psf` 0.17; `alpha_hashed` loses 0.27 (11.1 % over 8 against
+8.2: hashed alpha's own noise, which smaller hash cells only raise), `dof` 0.19 (36 points of the aperture), `mb_steps3`
+0.04 (time samples). Vega's 16:9 moving pixels are 0.0004 levels worse (1.5982 against 1.5978), its 9:16 ones 0.002
+better; with 6 taps they were 0.003 worse on both. Scenes whose lighting is most of a frame gain least (Vega's 14
+shadowed lights: 14 %); jwin's, its lighting mostly lobes and ray tracing per sample, 38 % (419 -> 259 ms). Its 36
+depth-of-field frames per output (final settings, against Blender's): whole frame 4.586 -> 4.586 and 3.681 -> 3.676,
+the error depth of field adds (DepthOfField's measure) +0.665 -> +0.668 and +0.498 -> +0.498, but the blur itself
+against Blender's (both frames less their DOF-off ones) 1.508 -> 1.527 and 1.117 -> 1.127: 36 aperture points are a
+little noisier, which the shadows' gain covers on the whole frame; the lab's `dof` loses 0.19, `dof_psf` gains 0.17.
+
+The world (`mkr/mkr/src/world.rs`, `shaders/world*.wgsl`): mkr-shade compiles the world's node tree like a material
+(`mat_world`, its animated values and images in the scene's buffers); the camera sees it where no surface is (a pass
+after the lighting, per sample, through the sample's jittered camera; not with the film transparent), and surfaces are
+lit by its probe as EEVEE Next lights them without ray tracing (measured on the lab's world_* cases): the world drawn
+once a frame (again only when its animated values change) into a cube map as half the World's `probe_resolution`
+across, the Light Path seeing no camera ray there (world_lightpath), its mips box-averaged; glossy lobes read it along
+the reflection at the mip whose texels are `world_glossy_blur` (4) GGX alphas across, blending into the harmonics'
+light from roughness 0.7 to 0.9; diffuse and translucent closures read its L1 spherical harmonics, projected from the
+32-texel mip, band 1 at `world_band1` (0.675) of the cosine lobe's weight: EEVEE's diffuse world light fits that to
+0.2-0.5 % on a lab ball (band 1 at full weight is 10-20 % off), band 0 at 0.991. EEVEE leaves world light unshadowed
+without ray tracing (no contact darkening at all in world_uniform) and ignores the world's ray visibility flags
+(Cycles' own: world_visibility), so mkr does too. Against EEVEE (64 samples), mean |error| in levels: world_uniform
+0.20, world_lightpath 0.15, world_transparent 1.13, world_visibility 1.20, world_sky 1.49, world_stripes 2.79 (the
+rough balls' blur: EEVEE's probe filter is not a box pyramid). A scene without a world draws byte for byte as before
+(no pass runs, the lighting adds nothing). What mkr still leaves to Blender, every lit frame and plate (`mkr info`:
+`unsupported.scene`): EEVEE's ray tracing by light probes (`ray_tracing_method` PROBE), a world mkr-shade cannot draw
+(a volume, node types it lacks), a bake older than the world's settings, and a world over a non-zero sun threshold
+(EEVEE takes that light out into a sun light: world_sun) unless it is one colour under it; mk's own worlds
+(night_sky, photo_world) set the threshold to 0. The look passes, drawn with a black world and no ray tracing, stay
+mkr's.
+
+EEVEE's ray tracing (`use_raytracing`, method SCREEN: `mkr/mkr/src/raytrace.rs`, `shaders/raytrace.wgsl`), measured
+on the lab's rt_* cases against EEVEE's frames, its frames without ray tracing (`noraytrace`) and Cycles with bounces
+(`cycles_gi`): each glossy lobe (reflection, coat) up to the scene's `trace_max_roughness` sends a ray per
+sample, drawn from its GGX distribution of visible normals, through the sample's depth buffer (`trace_steps` 32,
+denser near the surface, then a bisection; a hit where the ray's stretch since the last step overlaps a surface as
+deep as the scene's `screen_trace_thickness`). A ray that finds a surface takes the light the previous sample left
+there (the lighting pass keeps its lit picture, so light bounces from sample to sample as EEVEE's radiance feedback
+does; the first sample's comes from a lighting pass of its own before it); one that finds nothing takes the world's
+probe along the ray, blurred as a lobe half as rough (`trace_miss` 0.5: EEVEE's traced rough floors are darker where
+they mirror the sky than its probe alone, by 1-5 levels at roughness 0.25-0.4; read along the mirror direction mkr's
+were 2-3 levels too bright). The film's samples average the rays, as EEVEE's denoiser averages its neighbours'. Lobes
+rougher than `trace_max_roughness` fade from their ray into fast GI as EEVEE's do (progressively), wholly fast GI's
+from roughness `gi_rough` (1): EEVEE's open rough floor (lab `gi_rough`) keeps 0.75-0.81 of its probe-lit light at
+roughness 0.5-0.6, 0.82-0.96 at 0.7-0.8 and 0.97 at 0.9-1. Blended surfaces are lit forward with the probe, as EEVEE
+lights them. Fast GI (`fast_gi`, on: as the scene sets it; `raytrace.wgsl` `rt_scan`) is EEVEE's horizon scan: per
+sample `fast_gi_ray_count` / `fast_gi_resolution`² slices of the directions round the view vector (at least one; a
+sample's screen direction the same for every pixel, stratified over the samples, so neighbours read neighbouring
+texels), each scanned both ways in `fast_gi_step_count` depth samples out to the screen's edge (or
+`fast_gi_distance`), denser near the pixel; every sample hides the directions from its front to its back
+(`fast_gi_thickness_near` farther along its camera ray, and at least `fast_gi_thickness_far` of angle past its front),
+in 32 sectors of equal cosine-weighted measure (a visibility bitmask, after Therrien et al. 2023), the normal leaning
+`fast_gi_bias` toward the camera. What stays open passes the world's diffuse light; the GLOBAL_ILLUMINATION method adds
+what a sample hides first, lit as the previous sample left it, `gi_bounce` of it: one bounce of each sample's direct
+and reflected light (the lighting pass keeps its picture without that bounce for the next sample's rays; fed back, a
+closed space lit itself over the samples). `gi_bounce` is 0 for now: the occlusion alone, see jwin below. Measured on
+the lab's white-world cases with their fastgi_ao, noraytrace and cycles_gi variants: a floor 2.5, 5.5 and 10.5 m from
+a 2.5 m wall keeps 0.78, 0.88 and 0.96 of its light under EEVEE's occlusion alone, its bounce brings it to 1.05, 1.02
+and 0.99 (Cycles' bounces: 0.89, 0.98, 1.0), a body 10 cm off the wall up to 1.4 times Cycles' light; in the open
+cabin EEVEE's occlusion blackens the seat back yet leaves 0.19-0.27 on the walls and roof, where Cycles leaves 0.04-0.09
+(the screen does not show what closes the cabin). Mean \|error\| against EEVEE (levels, % of pixels over 8), fast GI
+off (before) -> the occlusion alone (default) -> with the bounce (`gi_bounce` 1) -> the bounce fed back over the
+samples: gi_wall 3.58 -> 8.21 -> 3.23 (9.5) -> 3.09, gi_cabin 22.69 -> 17.04 -> 6.02 (27.9) -> 6.39, gi_rough 10.18 ->
+7.61 -> 5.69 (36.0) -> 5.88, rt_corner 13.75 -> 14.45 -> 6.02 (43.1) -> 5.19, rt_corner_ao 0.97 -> 0.38 (0.1),
+rt_world 6.03 -> 3.23 -> 3.37 (13.3) -> 3.54, rt_rough 2.72 -> 3.29 -> 2.96 (11.3) -> 2.94, rt_mirror 1.44 -> 1.96 ->
+1.57 (3.7) -> 1.32 (the cosine rays marched through the depth buffer that came before: gi_cabin 15.16, rt_corner 8.78,
+rt_world 4.76). EEVEE itself is 2.6, 8.8, 7.4, 2.3 levels from Cycles on rt_mirror, rt_rough, rt_world, rt_corner; mkr
+still misses EEVEE's 2-7 % darker open floor under the sky (rt_world) and 4-6 levels of rt_corner's bounce. On jwin's
+frames (Coverage's 15:25 bake, 26 frames per output two a lit shot, final settings), the same four: 16:9 4.16 (18.1 %
+over 8) -> 3.05 (10.2) -> 4.83 (22.2) -> 5.24 (24.4), over the figure 4.21 -> 3.09 -> 4.90 -> 5.31; 9:16 3.60 (15.5) ->
+2.64 (8.7) -> 4.30 (20.8) -> 4.63 (22.6), figure 3.64 -> 2.67 -> 4.36 -> 4.69. With the occlusion alone mkr is still 1-2.8
+levels too bright on every kind of surface; the one bounce adds 3.5, 2.0 and 2.4 levels (r, g, b) on average, 9.7 on
+the orange seats (their own light between cushion and back) and 8.5 in red on the red hair (its strands in the depth
+buffer lighting their neighbours; fed back: 4.2, 12 and 9.4): mkr's scan gathers far more of the seats' and the hair's
+own light than EEVEE's half-resolution, denoised scan does there, which the lab does not show yet. Its cost on jwin: 70
+and 61 ms a frame of 64 samples (GPU 416 -> 486 and 408 -> 469 ms; two slices a sample were 107 and 95), the rough
+lobes' rays included. A scene without ray tracing compiles none of it (`pipelines.rs`
+`RT_TRACED`): Crimson's frames are the same bytes as before (10 frames, `RADV_DEBUG=nodcc`). A ray's light, found or
+the probe's, is clamped as the scene's `clamp_surface_indirect` says (10 by Blender's default, jwin's too): scaled down
+until its largest channel is the clamp (lab `rt_clamp`, strips glowing at 2.5-160 over a mirror and a wet asphalt: 7.70
+levels unclamped, 4.61 with that rule, 4.99 by luminance, 4.84 per channel; no other rt_* or gi_* case moves). A point
+or spot light is lit as EEVEE lights it, as a disk as wide as its sphere through its centre facing the point (on its
+axis P / (4 pi (d² + r²)), where the sphere's own silhouette gives P / (4 pi d²): lab `point_near`, lights of radius
+5 cm 0.1-0.8 m over a diffuse and a glossy floor, EEVEE within 0.2-2 % of Cycles there, mkr 22 % too bright under
+the nearest before and within 1 % after; `point` 0.263 -> 0.246, `spot` 0.292 -> 0.288); one narrower than 1e-4 of
+its distance (`shadow_soft_size` 0: jwin's headlights) is a disk that wide with its radiance spread to match, so it
+falls off with the square of the distance (it lit jwin's whole road before: 14.7 levels on 16:9, 4.6 after).
+
+jwin split by EEVEE's own frames per component (6 frames per output, no motion blur: the world, the moon with and
+without its shadow, each light group, the emission alone, all rendered by EEVEE and by mkr from the same bake, both
+scene-linear, per surface class from mkr's material indices): EEVEE's components add up to its frame within 0.2 %.
+Before these two changes the frames were 2.70 levels off (bias +1.5): the wet asphalt 6.4 (+6.3, 8 % of the pixels),
+the car's interior 3.6 (+2.8, 16 %), the seats 2.8 (+2.3), car paint 2.5 (+1.1), the eyes -2.4; skin, hair and clothes
+within 1.3. The interior's excess was the dash glow (a point light of radius 5 cm about 0.2 m from the wheel's hub:
+x2.65 there, x1.81 over the frame, the four interior area lights within 1 %); the asphalt's the wet coat's traced
+reflections of the lamps', cars' and signs' emission (x1.5-2.6, in the emission alone; EEVEE's clamp takes its own
+down by up to x1.58 there). Still open: mkr's traced reflections of bright emitters stay 1.25-1.4 times EEVEE's on
+`rt_clamp` even on the mirror (EEVEE draws a broad glow round them that mkr's bounce, off, does not), the world on
+the seats x1.2-2.6 (fast GI's occlusion), the eyes x0.86, and the mixed pixels (edges, depth of field, hashed alpha).
+Over jwin's 26 frames per output (two a lit shot, 64 samples, motion blur): 16:9 3.05 (10.2 % over 8) -> 2.96 (10.0)
+with the clamp -> 2.75 (9.3) with the disk, over the figure 3.09 -> 3.01 -> 2.80; 9:16 2.64 (8.7) -> 2.50 (8.5) ->
+2.31 (7.7), figure 2.67 -> 2.54 -> 2.34; GPU 484 and 467 ms a frame either way. Crimson's frames are the same bytes.
+
+Many lights (jwin_mv: 74, a road lamp every 50 m, tunnel lights, cars' beams): a frame of more than eight
+(`pipelines.rs` `TILED_FROM`) culls them per 8 x 8 tile first (`shaders/deferred.wgsl` `light_pass_tiled`): the tile
+bounds its pixels' surface points and keeps, a bit per light, the lights that may reach that box (inside the influence
+radius, in front of a one-sided area light, inside a spot's cone: `light.wgsl` `light_reaches_box`, each test with a
+margin over its rounding); its pixels run only those, in the order every light runs, so the picture is the same to the
+bit. Closures no light lights (emission and transparency alone: jwin's glows and halos) skip the lights altogether, in
+the lighting pass and the blended one. On jwin (7 frames per output, 64 samples, motion blur) the lighting pass went
+from 272 to 250 ms a frame on 16:9 and from 265 to 246 on 9:16, the blended pass from 55 to 14 and 52 to 12.5 (GPU 466
+-> 404 and 448 -> 390 ms); what is left of the lighting is the lights each pixel does reach (their lobes over a 32-gon
+for spot and point lights) and the per-pixel rest (the moon's shadow, the world, the traced reflections: 134 ms with
+the moon alone). Crimson's six lights keep the plain pass: its frames are the same bytes, its lighting the same 21 and
+35 ms. With the lights' own distances (the road lamps reach 90 m, not the threshold's 66; the tunnel lights 45, not 29)
+jwin's tunnel shots on 16:9 went from 4.7-4.8 to 3.2-3.4 levels; over 26 frames, two a lit shot: 16:9 4.69 -> 4.53
+(21.1 -> 20.2 % over 8; over the figure 4.75 -> 4.59), 9:16 3.95 -> 3.96 (18.1 %; figure 3.99 -> 4.01). Split by drawing
+the frames again without each group of lights, the world's diffuse light or the shadows, mkr's frames were 3.3-3.6
+levels too bright on average, and the error fit (regressed on each group's share of the picture) as: the moon (the
+scene's sun) where EEVEE shows none of it, 1.2 levels: its one map was fitted to every caster, a 24 km ground plane
+among them (17 m texels), and its shadow ray sampled that map's depth span of kilometres, its nearest steps hundreds of
+metres from the receiver, so the car kept no shadow of its own (`shadow_mode: "rays"`: 16:9 4.53 -> 4.09, 9:16 3.96 ->
+3.53). The sun's clipmaps above bring it to 4.16 and 3.60 (18.1 and 15.5 % over 8; over the figure 4.21 and 3.64) for
+24 ms of GPU a frame (lighting 250 -> 273 ms, shadow maps 0.3 -> 1.7); the lab's `sun` 0.28 -> 0.26, `rt_mirror` and
+`rt_rough` unchanged, a scene without a shadowed sun compiles the code of one map (Crimson: the same bytes and times).
+What is left: the world's diffuse light where it alone lights a pixel, a quarter too bright (EEVEE's horizon scan
+occludes it in the car: fast GI, above, now draws that scan; its occlusion alone takes these frames to 3.05 and 2.64,
+the scene's GLOBAL_ILLUMINATION bounce on top, gathered from the seats' and the hair's own light, to 4.83 and 4.30),
+and 1.4-1.7 levels over every pixel that no group explains: not the view, film, render or compositor settings (jwin's are
+Crimson's but for ray tracing, and its compositor tree has no nodes), not the glows' emission (scaling it only adds
+error). The car's interior lights, the road lamps, the tunnel lights and the beams fit within 2-25 % of their own
+light.
+
+Depth of field (a shot's `dof`; `mkr/mkr/src/dof.rs`, `camera.rs`): by default each sample looks from its own point of
+the aperture through the focus plane (the camera moved there and its frame sheared so the focus plane keeps its place:
+a thin lens, what EEVEE's jittered camera and Cycles converge on), the aperture's points a sunflower over the disk
+mapped area-evenly onto the blades' polygon (turned by the rotation, narrowed across by the ratio), ordered over the
+samples apart from their jitter and shutter time; the rigid-mesh cull widens each frustum side by the aperture.
+`--params` `dof: "eevee"` follows the scene's EEVEE scheme instead: its post process (an emulation, `shaders/dof.wgsl`:
+the half-resolution copy that favours the widest blur and dark colours, gathered layers, slight focus, run once on the
+film), or with `use_bokeh_jittered` the jittered camera over most of the aperture and the post process over the rest;
+`dof: "off"` draws the pinhole. An orthographic camera's depth of field stays Blender's (`mkr info`), and so do a
+look's EEVEE passes through a camera with depth of field. EEVEE's own post process is far from a lens: on the lab's
+`dof` case it is 3.66 levels mean \|error\| (11.0 % of pixels over 8) from Cycles' and 4.19 (17.3 %) from its own
+jittered camera; it drops small bright highlights and thin details beside a wider blur and darkens what it blurs.
+mkr's lens is 1.03 (1.6 %) from Cycles and 3.79 (11.1 %) from EEVEE's default frames, the emulation 3.41 (11.5 %);
+on `dof_psf` the lens 3.06 (8.5 %), the emulation 3.70 (9.4 %). On
+a lit MV's DOF shots (36 frames per output, 16:9 and 9:16, final settings; Blender's frames again with every camera's
+depth of field off isolate it from the scene's other gaps) the error the depth of field adds is 0.43 and 0.27 levels
+with the lens, 0.51 and 0.31 with the emulation, 0.98 and 0.80 drawing none: the lens is the default. It costs nothing
+measurable per frame (the samples are there anyway); the emulation 1.2-1.3 ms of GPU at 1080p (`gpu_ms_phases` "dof").
+
+#### mkr's layers
+
+With `engine = "mkr"` mkr (`mkr/`, mk-mmd's renderer of the lit scene from the bake) draws the layers beside its own
+frames too, so a frame needs no Blender at all: `mk render` resolves the layers' object patterns on the bake's records
+(`mkmmd/render/mkr.py`), `mkr info --layers` sorts every layer of the frames between mkr and Blender, and `mkr render
+--layers` draws mkr's share into the same files Blender would write (`mkr/mkr/src/layers.rs`, `layers_gpu.rs`):
+
+| Layer | How mkr draws it |
+|---|---|
+| `plate/<shot>/`, `bare/<key>/` | a lit frame like the cut's, through the other shot's camera, or with the glitch's objects hidden from the camera and from the shadows |
+| `figure/<key>/` | the objects' coverage as Workbench antialiases it: its 16 sample points and their weights, measured on probe scenes Blender rendered (a sample counts for a pixel by the Blackman-Harris weight of twice its offset), and the curve its film bends the weighted coverage through (an edge loses about 0.13 px) |
+| `point/<key>/` | the bake's world point (`lit.points`) through the shot's camera, `world_to_camera_view`'s numbers |
+| `keep/` | EEVEE's flat emission pass: kept materials white, the others black, an MMD material transparent by its own alpha (hashed or blended as in the frame), everything else opaque |
+| `screen/` | the screen type's meshes through the screen camera, lights off, the Standard view's LUT on the straight colour; the GPU holds only the words on screen on the frame being drawn (a project's whole screen type can run to tens of millions of vertices) |
+
+Blender keeps what mkr cannot draw: anything seen through a reflection, a fisheye, and what the bake could not hold
+(screen type over the bake's cap: `lit.screen.left_out`); `mkr info` names each such layer and why (`unsupported.layers`
+lists the kinds). A Blender job starts only when something is left for it: frames mkr cannot draw, layers it cannot
+draw, the screen type and keep masks of its frames it leaves (`mk_screen`, `mk_keep` tell the job which mkr draws). The
+report adds per output `blender_layers` (items and screen layers left to Blender) and `blender_jobs`, and mkr's own
+report counts its `layers` and `looks`.
+
+On Crimson and Clover (900 frames, three outputs, with a `[post] keep` and a glitch added for the test) `mk render
+--engine mkr --preset final` left Blender one job per output, for the eight silhouette frames and their own layers, and
+wrote every file Blender would have (900 frames, 1921 transition and effect layers, 900 keep masks, 861 screen layers per
+output) in 409, 311 and 376 s for 16:9, 1:1 and 9:16 (the draft: 119, 137 and 214 s). Against Blender's own files, all
+three outputs: figures (3702) 0.006 to 0.010 levels mean |error|, 0.009 to 0.014 % of pixels off by more than 8; points
+(1635) the same numbers to the files' six decimals; screen type (2583) 0.04 to 0.09 levels, 0.18 to 0.34 % over 8 (the
+edges of the letters); plates (408) 0.10 to 0.18 levels, 0.31 to 0.61 % over 8, and bare frames (6 of 16:9, against a
+Blender render of the same glitch) 0.18 levels and 0.78 %, as close as mkr's lit frames; keep masks (15 frames of 16:9)
+0.002 levels, 0.006 % over 8. Each pass draws its samples into the layers of a texture array and one compute pass spreads
+them with the pass's filter, in order, and resolves them to the file's bytes (`shaders/layer_film.wgsl`; a grey byte per
+pixel for a figure or keep mask, widened to the file's channels by the PNG writers), read back through a ring of eight
+buffers while the GPU draws the next passes; the screen type's words of a frame are rebuilt in parallel. On Crimson
+and Clover's whole clip (1230 figures and 853 screen layers per output) the flat passes take 7.5, 6.0 and 7.6 s for 16:9,
+1:1 and 9:16 (28.1, 20.9 and 27.9 s when each sample had a film pass of its own), every file the same pixels; a keep mask
+takes about 9 ms.
+
+#### mkr's looks
+
+A frame or layer in a silhouette or vector look (a shot's or a [[medium]] window's: the cut's frames, plates and bare
+frames seen through one, mattes and their backs) is mkr's too. `mk render` sorts each look's objects on the bake's
+records as styles.Looks sorts the scene's (`mkmmd/render/mkr.py`: `look_jobs`, a figure seen through a look loses what
+the look hides) and hands mkr one job per picture; mkr draws the passes Blender's job renders (`mkr/mkr/src/looks.rs`,
+`looks_gpu.rs`) into a spool in memory, and worker processes compose them with the same `compose_silhouette` /
+`compose_vector`, rings and type as Blender's frames (`mkmmd/render/compose.py`: `finish_look`) while mkr draws the next:
+
+| Pass | How mkr draws it |
+|---|---|
+| `flat`, `matte` | Workbench's flat light: the subject and hard accents in their colours (linear, as the look sets `Object.color`), depth-tested; a matte the subject's coverage at twice the frame's size (in a vector look too). Workbench's antialiasing exactly: its 16 sample points (BLI_jitter_init), the Blackman-Harris weight of twice each one's offset, summed in log2 in half floats rounded toward zero (what gives a whole pixel 254 of 255 and a flat #1f1d2e 32 30 47), through the Standard view the bake captures (`looks.lut`) |
+| `soft`, `type`, `knock` | EEVEE with the lights off: the soft accents' coverage and the opaque share of their Mix Shader (each soft material compiled once more with styles.add_weight_aov's AOV), the type's emission held out by the subject and hard accents, the knock-out objects; the look's samples and EEVEE's film filter |
+| `screen_knock` | a silhouette frame's knock-out screen type, reversed out of its figure: drawn as the screen layer draws the rest of the screen type (through the screen camera, lights off), at the screen layer's samples |
+| `id`, `depth`, `shade`, `tex` | the vector look at twice the frame's size, as the Chromium engine draws them: the material ids and planar depth without antialiasing, the studio light with the stencil shadow volumes of the look's light, the texture colour, the last two through Workbench's antialiasing |
+
+The bake adds what the looks read: each object's `soft` flag, the image of each material's Workbench texture, the tint
+holders' values on every frame (`looks.tints`) and the Standard view (`looks_lut.bin`). Blender keeps a reflection, a
+silhouette frame whose look's samples differ from the screen layer's while knock-out screen type is on it, screen type the
+bake could not hold, a soft accent drawn BLENDED, instances in a silhouette's flat colours, and a look's EEVEE passes
+through a camera with depth of field. Against Blender's own frames: Crimson's two silhouettes (24 final frames, three
+outputs) 0.003 to 0.004 levels mean |error|, under 0.01 % of pixels off by more than 8; Samurai's draft (60 frames, three
+outputs) silhouettes 0.01 to 0.02 levels, vector close-ups with drawn tones 0.08 to 0.11 levels (0.11 to 0.14 % over 8),
+medium windows (sketch and cel) 0.20 to 0.34 levels (0.10 to 0.30 %); Playing Possum's final 16:9 silhouettes and
+sketches 0.002 levels. A silhouette frame costs about 0.3 s of wall time with eight workers composing.
+
 ### Post
 
 `mk post` composites the cut effects over the cut's frames, draws the lens streaks (`streaks`, below) from the result, lays the screen
@@ -5124,7 +5573,126 @@ seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 32
 its own size, with no sound (the sim and cloth reports then measure its frame and the two before). A missing frame or layer is an error
 unless `--allow-gaps` (the previous frame repeats; the plain cut shows where a layer is missing); `--to DIR` also copies the videos;
 `mk look` composes the same way for the images it shows. The report has each video's frames, size, `screen_type_frames`, and the darkest luma
-after the grade (`min_luma`).
+after the grade (`min_luma`), the encoder, the processes (`jobs`) and whether the GPU finished frames (`gpu`: true, or why not).
+
+The frames are finished by worker processes over chunks of about a dozen consecutive frames and handed to the encoder in
+order (`mkmmd/postframes.py`): `--jobs N` or `[post] jobs` (default: up to 4, fewer when half the memory available would
+not hold them at a worker's peak, about 1.7 GB at 1920 x 1080; one process for a little work). They are the frames one
+process makes in order: a missing frame repeats the last one rendered before it in any chunk, the wrap's frame 0 as
+finished is finished afresh by a worker that needs it, and a chunk only starts on a frame where no effect holds a picture
+of the frames before (a film's frame over its step, a booth's captures, an eraser's frame, a mosh with a flow:
+`FrameFx.safe`). Two things remain that can move a level here and there: OpenCV and numpy round a pixel differently when
+a picture's memory is aligned otherwise (the same pass started at another frame shows it too), and footage relies on
+OpenCV seeking to the exact frame (checked on every clip frame Crimson and Clover shows). On Crimson and Clover's final
+16:9 cut (900 frames, four workers) 883 frames are byte for byte today's; of the 17 others, those checked differ in one
+pixel by one level.
+
+The encoder is `[post] encoder` or `--encoder`: `x264` (the default: libx264 at `[post] x264_preset` or `--x264-preset`,
+`slow` by default, CRF `--crf`) or `vaapi` (the GPU's H.264 encoder on the config's `vaapi_device`, constant QP `--crf`:
+some 250 frames a second at 1080p against x264 slow's 14, larger files).
+
+`--gpu` or `[post] gpu = true` hands what mkr-post can do of each frame to the GPU (`mkr/mkr-post`, driven by
+`mkmmd/postgpu.py`): the frame effects it draws, the screen type, the keep mask, the grade and the bytes for the encoder,
+the rest of a frame (cut effects, the other kinds, an entry with a `rect` but a film's, entries before the last one it
+cannot draw) worked out by the workers and handed on as a picture; the loop's wrap, `halation` and `streaks` stay on the
+CPU (with either, the whole output does). Each kind it draws has a module in `mkmmd/gpufx/` that works the frame's
+numbers out with the same `FrameFx` methods the CPU path uses, and `mkr/mkr-post/src/fx/<kind>.rs` with
+`shaders/fx_<kind>.wgsl` draws the pixels; what an effect keeps from frame to frame (a mosh's picture, a film's print)
+stays on the GPU, and a frame whose keeping started on the CPU stays there. A picture or layer that is not an 8-bit PNG
+of the output's size (the CPU path resamples it) leaves its entry to the CPU. mkr-post writes each finished frame
+straight into the encoder's pipe (`serve --stats FD`: its index and darkest luma come back on a pipe of their own), a
+frame finished on the CPU handed through it in order (`finished` jobs). The worker processes (`--jobs`, default up to
+3 on this path) only plan the frames, up to 32 ahead of mkr-post, and plan a heavy frame (one whose picture they work
+out whole: the entries before a pixel sort, some fifty times a plain frame's work) long before its turn, from the
+output's start, on one worker fewer than `--jobs` at most and with 512 MB of such pictures waiting at most
+(`postframes.EARLY_BYTES`), so the frames round it never wait for it; a group of consecutive heavy frames is cut into
+one run for each of those workers, so each reads its clips on from frame to frame rather than seeking them afresh. A
+thread of mk post's own sends mkr-post the jobs in order, a footage op's clip frame decoded and fitted there first (one
+decoder a clip, read in order, as the CPU path reads them), while the main thread takes the planned frames from the
+workers and mkr-post's answers. A clip frame decoded for one output is fitted on a thread of its own for the outputs
+after it whose entry shows the same clip on the same frames (once their first frame says their size), into rgb24 files
+under `.mk/cache/post/` (on disk, a quarter of its free space at most) that mkr-post reads and leaves until the run
+ends, so a run decodes each clip frame once, not once an output (`gpufx.footage.Kept`). A scope's stems are read once a
+process, not once an output. mkr-post decodes the PNGs a frame reads on four threads, each row packed into the words
+the GPU takes as it comes out of the decoder (a figure layer's luma as one byte a pixel, widened on the GPU), and those
+threads write the frame, its screen layer and its keep mask into buffers the GPU copies from, so the thread that hands
+the frames' work to the GPU copies none of them (`engine::inputs`). The outputs go one after another (one mkr-post on
+the card at a time: `mkmmd/gpulock.py`), sharing the workers; each output's setup (its pipeline built, its files
+checked) is worked out on a thread while the output before it is finished (the first one's while the GPU is waited
+for), and each encoder writes its last frames while the next output starts. The kinds, and what else of them stays on
+the CPU:
+
+| Kinds | On the CPU |
+|---|---|
+| `zoom`, `lens`, `push`, `shock`, `split`, `slab`, `melt`, `kaleido`, `tunnel` (with a `mask` too: the hole filled, the figure laid back as a sticker) | |
+| `echo`, `slitscan`, `trails`, `scope` (its trace drawn on the CPU) | a slit scan whose ages do not run one way |
+| `mosh` (the cut's motion, or a flow's moves, worked out on the CPU) | a frame the cut has not rendered; a flow whose frame before went the CPU's way |
+| `pixelsort` | lines over 4096 px; and it is always the first op of its frame (below) |
+| `footage` (the clip decoded and fitted by OpenCV as the CPU path reads it, in the planning process, and handed over as rgb24: an enlarging fit's bicubic is IPP's, which no kernel would match) | a pattern round a contained clip |
+| `liquid`, `flood`, `spiral`, `tint`, `invert`, `halftone` | |
+| `mandala` (sprite, shape and figure rings, the centre figure, pattern backs, googly eyes and smiles) | a figure moved by `keys`, `at` or `height`; a silkscreen fill |
+| `grid` (colour and picture backs, silkscreen fills) | pattern backs |
+| `stack` | wallpaper bands, era looks, squash, silkscreen and copies under 0.75 |
+| `doodle`, `label`, `camcorder` (strokes, text, leaders, the tape's random parts and its stamp drawn by the workers), `film` (in a `rect` too: its box printed as a picture of its own) | |
+
+Its kernels follow the numpy and OpenCV code they replace: warps and remaps sample at float coordinates with fused
+multiply-adds as OpenCV 5 does (bit for bit), sorts pack their keys as numpy does, the vignette, the grain and the 1/255
+table come from numpy. Each kind matches the CPU path within a level on every frame of the projects that use it (Crimson
+and Clover, Samurai, Vega, Playing Possum), and `tests/test_gpu_*.py` hold every path to it on synthetic pictures. Over
+Crimson and Clover's 900 final 16:9 frames, every entry but those before its pixel sort drawn by mkr-post, no pixel is
+off by more than one level from the CPU path (at most 16,609 pixels a frame off by one, 671 on the median frame). A pixel
+sort is chaotic in its input: a key a float's last bits higher can land in the next of its 16-bit steps, or a pixel cross
+a run's threshold, and pixels move along their runs (1e-6 of noise in the picture moved thousands of pixels of a Crimson
+frame by up to 99 levels). Effects drawn on the GPU before it, each within a level, would hand it another picture, so
+on a frame it sorts the entries before it are worked out by the workers and mkr-post sorts exactly the CPU path's
+picture (`postgpu.first`). Each frame's bytes are taken back and written out on a thread of their own while the GPU goes
+on with the next (three frames in flight). Nothing of a frame is read back while it is drawn but the box of a figure
+mask's sticker (the figure as the remap left it, which only the GPU has) and the support of a stack's figure warped by a
+map that turns: a figure layer's coverage is summarised as it is read (each row's and column's largest byte, a bit per
+covered pixel: `fx::Cover`, on the reader threads), and the boxes a masked remap fills, a footage lays its figure over
+and a stack cuts its layers from come from it, through a map that keeps the axes exactly as the warp kernel samples
+(`figure::carried_support`); a fill's pushpull runs only when the GPU finds a hole pixel no ground mirrors into (its
+passes dispatched indirectly, all or none of their workgroups), a masked melt that moves nothing is put back on the
+GPU, and a film's grain spread is folded in 64-bit floats on the GPU where the device has them (the row sums read back
+and folded on the CPU otherwise). Coverages, rings and shadows are single-float planes (`fx/plane.rs`), worked out over
+the box they reach with the frame's coordinates and borders (a pasted figure's: every pixel as over the whole frame),
+and a Gaussian blur reads each run of a row into a workgroup's memory once, the same taps summed in the same order.
+With `MKR_POST_PROFILE=1` mkr-post logs each frame's time waiting for its files, drawing and handing it on, each op's
+CPU time and each file read, and GPU timestamps after every op and its stages (`profile gpu frame K step=ms ...`,
+without holding the frames back), as `profile ...` lines on its stderr, which mk post keeps in `mkr-post.log` in the
+run's scratch folder until it ends; `MKR_POST_PROFILE=passes` adds a timestamp after every pass, `k_<kernel>`.
+
+On Crimson and Clover's three outputs (900 final frames each, VAAPI encode) `mk post --gpu` took 76 to 82 s on this
+machine while other jobs kept its load at 6 to 21 (31 to 33, 16 and 24 to 26 s for 16:9, 1:1 and 9:16; every frame
+within a level of the build before, 883 to 894 of each output's 900 identical), against 90 and 102 s for that build in
+the same GPU turns, once each clip frame was decoded once a run, consecutive heavy frames planned in one run a worker,
+figure layers sent to the card at a byte a pixel, the frames' files staged for the card by the threads that read them
+and each output's setup worked out while the output before it was finished; 187 s with the first mkr-post on a quiet
+machine. The CPU sets the pace, not the card (busy 49 to 52 %): about 200 s in mkr-post (most of it decoding PNGs: some
+3,100 an output, and its one thread that hands each frame's work to the card, some 20 ms a frame), 80 s in mk post's
+own process (most of it decoding the clips' frames, 698 an output, once for the three), 150 s in the workers (about
+half of it the 18 heavy frames an output) and 46 s in ffmpeg (the encoder's YUV made from the RGB frames). With the
+final sampling ([mkr](#mkr): its samples), `mk render --engine mkr --preset final --post --post-args "--gpu --encoder
+vaapi"` finishes the three videos in 227 s on a quiet machine, against 5508 s in Blender and numpy (3292 s of render,
+2216 of post); run one after the other, the render takes 197 s (60, 50 and 83 s for 16:9, 1:1 and 9:16; 47, 39 and
+68 ms of GPU a lit frame) and `mk post --gpu` 64 s (30, 13 and 21 s).
+
+`--follow` takes the frames as a running `mk render` writes them. Before it draws, mk render writes each output folder's
+manifest, `render.json` (`mkmmd/core/progress.py`): its process, the clip frames it leaves there and, when the engine can
+say (mkr's can), the files every frame gets: the frame, its layers (the cut effects' and the collages' items), its screen
+type where the frame has any, its keep mask. It marks the manifest done when it stops, with the error that stopped it.
+mk post then plans each frame once every file promised for it and for the frames before it is all there: a PNG once it
+ends with its IEND chunk (Blender writes a frame over its claim in place, mkr renames a finished file into place), a
+point once it parses (a heavy frame is planned before its turn only once its files are there). A cut effect that
+settles its scale over its window (an expand, a collapse, a slice) waits for the whole window first. A render that
+stops without a promised file is an error naming it, and a manifest whose process is gone counts as stopped. Without a
+manifest (another engine, no render running) it waits a minute for one, then takes the folder as it is. `mk render
+--post` starts `mk post --preset P --follow` for the same outputs alongside the render, inside the render's own hold of
+the GPU lock (the two are one job: mkr and one mkr-post on the card; a `mk post --follow` started on its own waits for
+the render's hold to end), `--post-args "..."` adding its flags (e.g. `--gpu --encoder vaapi`), and adds its report
+under `post`. mkr draws an output 48 frames at a time (`mkr/mkr/src/main.rs`): those frames' lit frames, then their
+flat layers and their looks' passes (`Renderer::draw_flats` with the layer kit made once), so a frame's files land a
+chunk after it is drawn, the files the same bytes as when every lit frame came first.
 
 `[audio.master]` (or `master = true` in `[audio]` for the defaults) masters the clip's audio for small speakers before it is
 encoded (`mkmmd/master.py`, numpy only). A phone's speakers play little below about 250 Hz, so a mix whose kick or 808 lives
@@ -5202,6 +5770,157 @@ player = "tern-video-block --split right --chapters {chapters} --first-frame {fr
 you are in, focused: every output side by side, in sync, with the song, the shots as chapters (PgUp / PgDn) and the
 project's frame numbers in its status line. `player = "mpv --chapters-file={chapters}"` plays them one after another.
 
+### Parity
+
+`mk parity` measures how close mkr's frames are to Blender's (`mkmmd/render/parity.py`; the lab in `mkmmd/render/lab.py` and
+the Blender ops `lab_build` and `lab_variant`, `mkmmd/blender/ops_lab.py`). Every number is in 8-bit levels over the pixels
+measured (a 16-bit PNG counts as levels with fractions, value x 255 / 65535):
+
+| Metric | Meaning |
+|---|---|
+| `mean_abs` | mean \|test - reference\| over pixels and channels |
+| `bias` | per channel, the mean of test - reference (positive: the test is brighter) |
+| `over8`, `over32` | % of pixels whose largest channel is off by more than 8 (32) levels |
+| `p99`, `max` | the 99th percentile and the largest per-pixel error (its largest channel's), in 1/8-level steps |
+| `rmse`, `psnr` | root mean square error over pixels and channels; 10 log10(255² / MSE) dB (null when identical) |
+
+Over several frames the pixels pool (a frame weighs its pixel count). "1:1" is a pooled `mean_abs` <= 1.0 and `over8` <=
+0.5 % (`pass` in every report; `--gate` exits 1 without it). Two 8-bit frames are measured in integers, exactly. Contact
+sheets (`sheet_NN.png`, six frames each) put Blender's frame, the test's and the error as heat side by side (`--gain`, 8:
+32 levels saturate; `--signed` adds the signed luma error, red where the test is brighter), for at most 60 frames: the
+worst half and an even spread of the rest. `--mask FILE|DIR` (white counts; a folder holds one per frame) and `--region
+X0,Y0,X1,Y1` (fractions of the frame when all are <= 1, else pixels) limit the pixels, and `--figure [LEVELS]` keeps only
+the figure: the pixels where either frame has a channel above LEVELS (4), so the black void around a character does not
+dilute the numbers (`tune --figure` scores the same way). Frames are read and measured in parallel threads: 30 frames of
+1080p in about 1.4 s, 3 s more for their sheets.
+
+| Subcommand | Does |
+|---|---|
+| `compare REF_DIR TEST_DIR` | any two folders of frames, matched by name (`00091.png` and `91.png` are frame 91; an empty claim file is no frame); `--frames` limits them; `summary.json` (with every frame's metrics and the frames only one folder has) and the sheets go to `--out` (default `TEST_DIR-compare` beside it) |
+| `frames` | renders frames with `mkr render` from the project's bake into `.mk/parity/<run>/<output>/frames/` and compares them with Blender's (`renders/<preset>/<output>`, or `--refs` DIR: a folder of frames, or of `<output>/` folders) in `compare/` beside them, every output unless `--output`; by default every frame of the clip the references have. Frames whose picture Blender does not draw lit are skipped and listed by reason: a shot with a render-time look for that output (the bake's shot table), a [[medium]] window's look, a fisheye camera. mkr gets the references' resolution percentage (`--percent` overrides), `--samples` (64; with `--preset final` and neither `--samples` nor `[render] samples`, the final sampling `mk render` gives mkr, its tunables under `--params`': [mkr](#mkr)), motion blur as the preset has it (`--motion-blur` / `--no-motion-blur`, `--shutter`, else `[render] shutter`, 0.35), `--params` and whatever follows `--mkr-args`; the report is also `run.json` |
+| `lab [CASES]` | mkr on the lab's cases (below), a table on stderr (`--per-frame`: a row per frame, with its label); `--variant` renders Blender's variants of them, `--against` measures mkr against one, `--separate` splits the error with them |
+| `tune PARAMS.json` | hill climbing over mkr's tunables (below) |
+
+#### The lab
+
+Small scenes that each isolate one thing EEVEE does, rendered by Blender once and by mkr as often as it changes, from the
+same bake. A case is a tiny project in `<lab>/<case>/` (`--root`, else `$MK_LAB`, else `~/.cache/mk/lab`): `mk.toml` (30
+fps, `frame0` 1, its outputs, `blend = "scene.blend"`), `case.json` (the case as built: its spec, the Blender version, the
+EEVEE settings, times), `scene.blend`, `scene.bake/` (the build's own bake stage), Blender's frames in three forms from one
+render each (`ref/<output>/` 8-bit as `mk render` writes them, the target; `ref16/` the same picture as 16-bit PNG,
+before 8-bit quantisation and its dither; `linear/` scene-linear OpenEXR, half float, no view transform), then
+`mkr/<output>/` and `compare/<output>/` of the last run. Every case has one shot, `lab`, over its frames, a camera
+`lab@<output>` per output; outputs are `main` (960x540) unless named. EEVEE Next, 64 samples, no world, filter 1.5, AgX
+unless the case says, dither 1, shadows on, no ray tracing.
+
+| Case | Isolates |
+|---|---|
+| `area_square`, `area_rect`, `area_disk`, `area_ellipse`, `point`, `spot`, `sun` | one light over a diffuse plane, a diffuse sphere and a glossy one (roughness 0.25): frame 1 from above in front, frame 2 low from behind (the light partly under the spheres' horizon) |
+| `contact_shadow` | a box, a ball and a 5 cm pole on the plane under a 10 cm area light, high then low |
+| `penumbra` | a ball and a slab floating over the plane under a disk light 2 m, then 0.6 m wide |
+| `ggx` | the Glossy BSDF, one roughness a frame: multiscatter GGX at 0.05-0.8, then GGX at 0.1, 0.35, 0.8 |
+| `principled` | the Principled BSDF, one sphere a frame: dielectric, metallic, specular, coat, sheen, transmission |
+| `view_agx`, `view_standard` | emission strips of white, the primaries, their mixes and a skin tone from 2^-10 to 2^8 across, through AgX and Standard |
+| `film_edge` | the film filter: a slanted white edge, a grey one, lines 0.3 and 1 px wide, a 0.4 px dot (Standard, 1 px = 1 cm) |
+| `alpha_hashed`, `alpha_blended` | an alpha ramp and a half-transparent plane over a checkerboard, DITHERED and BLENDED (MMD's Transparent BSDF mix) |
+| `skinned_bend` | a tube skinned to two bones bending 0-105 degrees |
+| `motion_blur` | shutter 0.35: a ball moving 1 m and a bar turning 30 degrees a frame (frames 2-4), then the camera panning (7-9) |
+| `mb_translate` | motion blur (shutter 0.35, centred, 1 step): rows of an emission card, a sphere and a box crossing the frame at 6, 24, 60, 150 and 300 px of blur over a checkered wall, behind a still pole (frames 2-4) |
+| `mb_start`, `mb_end`, `mb_shutter1`, `mb_steps3` | the same rows with the shutter opening on the frame (START), closing on it (END), a whole frame long, and in 3 steps |
+| `mb_spin` | a bar at 30, a disc of 24 sectors at 45 and a propeller at 90 degrees a frame, facing the camera |
+| `mb_arm` | a skinned arm swinging 30 degrees a frame at the shoulder and bending 20 at the elbow |
+| `mb_pan` | the camera panning and tracking sideways over a still pole, ball, box and wall |
+| `dof` | depth of field through an 85 mm lens: emission checkerboards at 1, 2, 2.3 and 4 m before a checkered wall at 8 m, small bright spheres for bokeh; f/1.4, 2.8, 5.6, 8 (round), 6 blades, 6 turned 15 degrees, 5 blades, ratio 2, focus 1 m, focus 8 m |
+| `dof_psf` | the same lens over black, focus 2 m: lines 0.6 px wide at 16 depths (the blur's profile across), 2 x 2 px squares dim, above EEVEE's sprite threshold and far above, an in-focus card over a blurred one and a blurred one over an in-focus one; f/1.4, 2.8, 5.6, 6 blades, turned, 5 blades, ratio 2 and 0.5 |
+| `mmd_model` | a cast member at rest under one area light a frame (a warm 260 W key, a neutral 90 W fill, a red 180 W rim), then all three; `full` (1080x1920) and `face` (1920x1080) |
+| `mmd_sphere` | a sphere in each of the member's three most used MMD materials, the key light |
+| `shadow_bias` | 16 plates 0.1-8 mm over the plane, hidden from the camera, under a light 1 cm wide from 0, 30 and 60 degrees off the normal: EEVEE's normal offset and depth tolerance; `near` (960x540, 0.5 m away: EEVEE's finest shadow texels) and `far` (480x270, 2.4 m: coarser ones) |
+| `shadow_thin` | strands 0.5-2 mm thick, a 2 mm card and lash-like slivers 5 mm to 8 cm over the plane under a key light (1.6 m, 260 W) from the front, the side and behind; `near` and `far` |
+| `shadow_layers` | cloth layers: plates 2, 4 and 8 mm off a block's front and top, a sleeve over a hand, the same key light and views |
+| `shadow_hashed` | hashed (DITHERED) see-through casters: plates of alpha 0.25, 0.5, 0.75 and strands of 0.5, the same key light and views |
+| `shadow_close` | a close-up (`near` only, 0.36 m away) of cards 2.5 cm wide 5, 10, 20 and 50 mm over the plane and strands 1 mm thick 5 and 10 mm over it, hidden from the camera, under Crimson's key light (1.6 m square, 260 W, 3.2 m away, 35 degrees off the normal), then overhead, then a 1.6 x 0.25 m rectangle long along the strands and long across them (the rays toward its ends spread out of the plane of incidence, then in it). EEVEE lets about half the light into the cards' umbrae (visibility 0.49 under the 5 mm card, where Cycles has 0.001); mkr matches that overhead and is darker at 35 degrees, most for the rays spread in the plane of incidence (0.27 against 0.43): mean \|error\| 0.96. Reading the receiver's level along the whole ray (`shadow_lod_reach` 1000) brings it to 0.43 but darkens Crimson's close-ups (key light alone: figure 4.72 to 5.50) |
+| `world_uniform`, `world_sky`, `world_stripes`, `world_sun` | a grey floor, a diffuse ball and glossy balls (roughness 0.05, 0.2, 0.4, 0.7) under a world: uniform (grey, then blue x2.5, keyed), a sky (ground, horizon, zenith, a soft sun), 16 sharp bands round the sky, a sky with a sun disc over the sun threshold (EEVEE's extracted sun); from the front (the sky over them) and from above |
+| `world_transparent`, `world_lightpath`, `world_visibility` | the sky with the film transparent; a world warm to camera rays and cool to the rest (Light Path); the sky with its camera and glossy ray visibility off |
+| `rt_world`, `rt_mirror`, `rt_rough`, `rt_corner`, `rt_corner_ao` | EEVEE's ray tracing as mk's scenes set it (screen traced to roughness 0.5, denoised, fast GI at half resolution): the balls under the sky; a glossy floor (0.02, then 0.1-0.7 keyed) reflecting a box, a ball and a lamp above the frame; a white floor in a red and green corner with a block (fast GI's bounce, then its ambient occlusion alone) |
+| `gi_wall`, `gi_cabin`, `gi_rough` | fast GI alone (mk's ray tracing settings, lit by the world, no light): under a white world a white floor and wall, a slab 0.3 m over the floor (a car's underside), a body 10 cm off the wall and one in the open, from 3, 6 and 12 m; a body seated in a car's cabin open at the front, seen through it from 3.6 and 2.2 m; a glossy floor of roughness 0.5-1 (keyed) under the sky by a white wall, a box and a ball |
+| `rt_clamp` | EEVEE's clamp of the light reflected through ray tracing (`clamp_surface_indirect`, 10 as Blender sets it): white and saturated red emissive strips glowing at 2.5, 10, 40 and 160 over a floor that mirrors them, then a wet asphalt (a base of roughness 0.175 under a coat of 0.1, as mk's highway sets it), the base alone, the coat alone |
+| `point_near` | the near field of a sphere light (jwin's dash glow on the wheel): point lights of radius 5 cm, no shadows, 0.1, 0.2, 0.4 and 0.8 m over a diffuse grey floor and a dark glossy one (roughness 0.5), their power growing as the height squared |
+
+`--build` builds the cases not built yet with Blender (seconds each, the mmd ones minutes), `--rebuild` all named again,
+`--rebake` bakes the built ones again (`mk build --bake` on each case project: after the bake changes), `--refs-only` stops
+there. `mmd_model` and `mmd_sphere` take the member from a built scene: `--source` a project folder (`--cast` one of its
+[[cast]] names) or a .blend (`--cast` its armature); the scene is stripped to the member (unanimated, its rest pose, at the
+origin) before the lights and cameras go in, and a rebuild remembers the source. Over the lab, the 8-bit frames are the
+16-bit ones 0.41 levels brighter on average (mean \|difference\| 0.45, at most 1.75 levels): Blender's dither and rounding.
+
+`--variant NAME` renders a variant of every named built case with Blender, again from its saved scene (the Blender op
+`lab_variant` changes the scene in memory and writes nothing of the case: `scene.blend`, `ref/` and the bake stay), into
+`<case>/variants/<name>/`: `<output>/` 8-bit PNG with the scene-linear EXR beside it, `16/<output>/` 16-bit PNG, and
+`variant.json` (the variant, the engine's settings, the lights, times). Each run renders it again; a rebuild of the
+case deletes its variants (they showed the old scene).
+
+| Variant | Is |
+|---|---|
+| `noshadow` | the case's EEVEE frames with every light's shadow off |
+| `cycles` | Cycles with direct light only: the light EEVEE approximates, computed exactly. No bounce (EEVEE has no world, light probes or ray tracing here) but through transparency (64 layers, no Russian roulette), 2048 samples (`mmd_*` 4096; `--variant-samples`) from seed 0 (`--seed`), no adaptive sampling, denoiser, clamping or light threshold, a Blackman-Harris filter as wide as EEVEE's, the lights unseen by the camera as EEVEE has them, the case's view transform and dither; on the GPU when Blender finds one |
+| `cycles_noshadow` | the same with every light's shadow off (Cycles 4.2 reads the lights' `use_shadow`) |
+| `jittered` | EEVEE as the case has it with `use_bokeh_jittered` on (a variant's `eevee` table sets scene.eevee properties): the camera jittered over the aperture each sample, the post process blurring the rest |
+| `raytrace`, `fastgi_ao`, `noraytrace` | EEVEE as the case has it with mk's ray tracing on, with fast GI as ambient occlusion alone, or with ray tracing off (a nested `eevee` table sets `ray_tracing_options`) |
+| `noclamp` | EEVEE as the case has it without its clamp of the indirect light (`clamp_surface_indirect` 0) |
+| `cycles_gi` | `cycles` with 4 diffuse and 4 glossy bounces: the indirect light a world, ray tracing and fast GI approximate, computed exactly |
+
+Cycles' noise at those counts, from two renders with seeds 0 and 1 (the noise of one render: their difference over
+sqrt 2): 0.002-0.024 levels mean, the 99th percentile of a pixel's largest channel 0.09-0.54 (area_rect, penumbra, ggx,
+alpha_hashed at 2048); on mmd_model's face at 4096, 0.023-0.028 mean, over the figure 0.07-0.09 and p99 1.4-1.5. A
+960x540 frame takes Cycles 35-60 s at 2048 samples on an RX 7700 XT (HIP), a 1920x1080 mmd_model frame 2-7 min at 4096.
+
+`--against NAME` measures mkr against a variant's frames instead of `ref/` (sheets and summary in
+`variants/<name>/compare/<output>/`). `--separate` draws mkr as it is (`mkr/`) and with `{"shadows": false}` over its
+`--params` (`mkr_noshadow/`), then splits each case's error (every comparison is test minus reference; the table on
+stderr, `--per-frame` a row per frame, the numbers as JSON on stdout, sheets in `<case>/separate/<comparison>/<output>/`;
+a comparison whose frames are not all there is listed as missing):
+
+| Column | Compares |
+|---|---|
+| `E-C`, `M-C`, `M-E` | EEVEE against Cycles, mkr against Cycles, mkr against EEVEE: mean \|error\| and the bias over the channels |
+| `En-Cn`, `Mn-Cn`, `Mn-En` | the same with every shadow off: the light integral alone (the BSDF over the light's shape, falloff, film, view) |
+| shadow terms | a renderer's frame minus its frame without shadows, over the pixels any of them darkens by more than 4 levels (`shad %` of the frame): how deep each one's shadows are (`dE dC dM`, luma), the terms against each other (`sE-C sM-C sM-E`, mean \|difference\|: a difference of the unshadowed light counts too), the light leaking into Cycles' umbra (`leakE leakM`: the renderer's luma minus Cycles' where Cycles' term is below -4 and its shadowed luma at most 5 % of its unshadowed one) and, in the JSON, `acne`: the shadow where Cycles has none (mean term where Cycles' is within half a level of 0, % of those pixels below -4) |
+| probes | per case (`PROBES` in lab.py: the penumbra's and contact_shadow's shadow edges and the darkening by the ball's, slab's and cube's contacts; on `mmd_model`'s face under the key, the fill and all lights, the hair's shadow between the bangs and by a side lock, the eye white under the lid and the head's shadow on the neck; `--probes FILE`, `{case: {"lines": [...], "boxes": [...]}}`, replaces them): a shadow edge's 10-90 % width in pixels along a scanline (`y` and `x: [x0, x1]`, or `x` and `y: [y0, y1]`; 5 rows or columns averaged) on each renderer's shadowed frame, and the mean luma in a box with each renderer's darkening there (its unshadowed frame minus it) |
+
+#### Tuning
+
+`mk parity tune PARAMS.json --cases CASE... | --project DIR` climbs mkr's `--params` tunables (a flat JSON object, `mkr
+params` prints them with their defaults) on the mean, over every frame of the cases (or of the project's frames, chosen as
+for `frames`: `--output`, `--frames`, `--preset`, `--refs`), of one metric. With `--cases` and `--project` together the
+score is the project's mean plus the cases' mean, so that no setting wins one by losing the other whatever their frame
+counts, each times its `weights` entry (1 unless named: `{"lab": 3}` keeps a setting that helps the project from
+costing the lab); `--pool` (or `"pool": true`) scores each output's (or case's) frames pooled over their pixels, as
+`compare` reports them, then takes the mean over the outputs (for `mean_abs`, `over8`, `over32`, `bias_abs`):
+
+```json
+{"params": {"area_scale": {"start": 1.0, "step": 0.05, "min": 0.5, "max": 2.0},
+            "shadow_steps": {"step": 2, "min": 1, "int": true},
+            "filter": {"choices": ["gauss", "box"]}},
+ "fixed": {"other": 1}, "metric": "mean_abs", "method": "coord", "iterations": 60, "min_step": 0.001, "pool": false,
+ "weights": {"project": 1, "lab": 1}}
+```
+
+A param without `start` starts at mkr's default. `metric` is `mean_abs`, `rmse`, `over8`, `over32`, `p99`, `max`,
+`bias_abs` (the mean of the channels' \|bias\|) or `psnr` (maximised); `--metric`, `--method` and `--iterations` override the
+file. `coord` is coordinate descent: each number a step up and down, going on while it pays, each choice tried; a sweep
+that moves nothing halves the steps (whole numbers down to 1, others down to `min_step`, default a 64th of the step).
+`nelder-mead` is scipy's, from a simplex one step along each number, inside the bounds. A point already measured costs
+nothing and counts no evaluation; a render mkr refuses scores infinity. Every evaluation is a line of `OUT/tune.jsonl`
+(params, the metric, score, the score per case and output, with both the project's and the cases' too, seconds), the
+best so far `OUT/best.json` and `OUT/best_params.json` (mkr's `--params` file: `fixed` and the best), and at the end the
+best is drawn once more with sheets under `OUT/scratch/` (`OUT/scratch/project/` and `lab/` with both; `--no-sheets`:
+not; `OUT`: `--out`, else `<project>/.mk/parity/tune-<time>/` with a project, else `<lab>/_tune/<time>/`).
+
+`--resume LOG` goes on from an earlier run's `OUT/tune.jsonl` (the same tune file, options and mkr), one stopped or cut
+short: its points are known, so the same search walks through them again for nothing, its best is the one to beat, and
+`--iterations` counts the new evaluations. Each evaluation, its renders and their comparisons, holds the GPU lock and
+lets it go before the next: a tune waits for the GPU once per evaluation, not once per render.
+
 ## Timeline
 
 `mk timeline analyze` turns the clip's song span into `audio/timeline.json`: `bpm`, `beat_s`, `beats`, `downbeats`,
@@ -5263,7 +5982,10 @@ after the clip), `bpm`, `beat_s`, `beats` and `downbeats` (clip seconds), `grid`
 `<project>/.mk/cache/<kind>/` holds what is slow to compute, keyed by a SHA-256 of the inputs (arguments, input-file fingerprints,
 the solver's source): `grip/` (hand grips, one `.npz` per hand and spec), `strands/` (secondary motion per chain group),
 `form/` (prop boxiness, by the evaluated geometry), `timeline/` (Demucs stems, by a hash of the audio span:
-`stems-<key>.npz`). Changing hair settings re-runs only the hair; nothing else is recomputed; editing a solver invalidates its results.
+`stems-<key>.npz`), `screen/` (each screen word's fitted encoding for the bake, by its modifiers and node trees with every
+value, the keys on them, on the object and its parents, the fonts' bytes, the frames it shows on, what its materials read
+and the bake's own source: a word that reads the scene elsewhere, through drivers, constraints, time or another object, is
+baked every time). Changing hair settings re-runs only the hair; nothing else is recomputed; editing a solver invalidates its results.
 `<project>/.mk/look/<time>/` is where `mk look` writes by default. The user cache `~/.cache/mk/` (`MK_CACHE`) holds the job folders, serve
 sockets, `empty.blend`, `samples/` and `look/` outside a project, and the reference sets.
 

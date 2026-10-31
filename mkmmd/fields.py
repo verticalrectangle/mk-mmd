@@ -31,7 +31,8 @@ LIGHT_DIR = (0.6, 0.8)           # a liquid's drops are lit from the top left: t
 SWELL = 0.12                     # how far a hit lowers a liquid's level (its blobs grow)
 CELL_CUT = (0.78, 0.36)          # oil cells show where a patch noise is over 0.78 - 0.36 x `cells`
 BULGE = (0.55, 0.42)             # a checkerboard's bulge at warp 1: how much it swells its middle, and how far (units)
-GRIDS = 24                       # coordinate grids kept (sizes and centres)
+GRIDS = 24                       # coordinate grids kept (sizes and centres), at most
+GRID_BYTES = 200 * 2 ** 20       # and no more than this much of them (a full HD polar grid is 33 MB)
 _M32 = np.uint64(0xFFFFFFFF)
 
 
@@ -83,17 +84,24 @@ def bump(x):
 
 
 class _Memo(OrderedDict):
-    """A few computed arrays kept by key, the oldest dropped."""
+    """A few computed arrays kept by key, the oldest dropped past GRIDS entries or GRID_BYTES (the newest stays)."""
 
     def get_or(self, key, make):
         got = self.get(key)
         if got is None:
             got = self[key] = make()
-            while len(self) > GRIDS:
+            while len(self) > GRIDS or (len(self) > 1 and sum(map(_nbytes, self.values())) > GRID_BYTES):
                 self.popitem(last=False)
         else:
             self.move_to_end(key)
         return got
+
+
+def _nbytes(v):
+    """Bytes of the arrays in a memo's value (an array or tuples of them)."""
+    if isinstance(v, np.ndarray):
+        return v.nbytes
+    return sum(_nbytes(x) for x in v) if isinstance(v, (tuple, list)) else 0
 
 
 def polar(size, centre, unit, memo=None):
@@ -108,8 +116,7 @@ def polar(size, centre, unit, memo=None):
                 np.arctan2(-DY, DX).astype(np.float32))
     if memo is None:
         return make()
-    return memo.get_or(("polar", int(size[0]), int(size[1]), round(float(centre[0]), 3), round(float(centre[1]), 3),
-                        float(unit)), make)
+    return memo.get_or(("polar", int(size[0]), int(size[1]), float(centre[0]), float(centre[1]), float(unit)), make)
 
 
 # ================================================================================================= op-art patterns
@@ -342,8 +349,7 @@ def _work(size, centre, unit, memo):
         ys = ((np.arange(hh, dtype=np.float32) + 0.5) * f - 0.5 - np.float32(centre[1])) / np.float32(unit)
         return (np.ascontiguousarray(np.broadcast_to(xs[None, :], (hh, ww))),
                 np.ascontiguousarray(np.broadcast_to(ys[:, None], (hh, ww))))
-    return f, memo.get_or(("work", int(size[0]), int(size[1]), round(float(centre[0]), 3), round(float(centre[1]), 3),
-                           float(unit)), make)
+    return f, memo.get_or(("work", int(size[0]), int(size[1]), float(centre[0]), float(centre[1]), float(unit)), make)
 
 
 def _up(a, f, size):
@@ -491,14 +497,14 @@ def _cell_walls(P, fx, oil, frame, first, f, size, unit, t):
         P[ch] += (one - P[ch]) * lit
 
 
-def _bubbles(out, fx, t, centre, unit, first):
-    """Bubbles in the liquid: `bubbles` to a unit square of the frame (its short side squared), seeded over the square
-    the balls are (BOX x 2 units across) and riding the first dish (`first`) with a wobble, each growing in and
-    shrinking away over a life of its own, another then taking its slot: a rim lit, a darker ring outside it, a glint."""
-    h, w = out.shape[:2]
+def bubbles(fx, t, centre, unit, first, size):
+    """The liquid's bubbles at clip second `t` over a picture of `size` (w, h) about pixel `centre` (`unit` px its short
+    side): `bubbles` to a unit square of the frame, seeded over the square the balls are (BOX x 2 units across) and
+    riding the first dish (`first`) with a wobble, each growing in and shrinking away over a life of its own, another
+    then taking its slot. Yields (cx, cy, rad) px and the box (x0, y0, x1, y1) a bubble is drawn in, in order."""
+    w, h = size
     px = unit / 1080.0
     _, om, th0, (ox, oy), _ = first
-    one = np.float32(1.0)
     for j in range(int(round(fx["bubbles"] * (2.0 * BOX) ** 2))):
         r0 = np.random.default_rng([fx["seed"], 2027, j]).random(2)
         life = 3.0 + 4.0 * r0[0]
@@ -516,8 +522,15 @@ def _bubbles(out, fx, t, centre, unit, first):
         reach = rad + 4.0 * px + 2.0
         x0, x1 = max(int(cx - reach), 0), min(int(cx + reach) + 2, w)
         y0, y1 = max(int(cy - reach), 0), min(int(cy + reach) + 2, h)
-        if x1 <= x0 or y1 <= y0:
-            continue
+        if x1 > x0 and y1 > y0:
+            yield (cx, cy, rad), (x0, y0, x1, y1)
+
+
+def _bubbles(out, fx, t, centre, unit, first):
+    """`out` (in place) with the liquid's bubbles (`bubbles`): a rim lit, a darker ring outside it, a glint."""
+    px = unit / 1080.0
+    one = np.float32(1.0)
+    for (cx, cy, rad), (x0, y0, x1, y1) in bubbles(fx, t, centre, unit, first, (out.shape[1], out.shape[0])):
         yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
         d = np.hypot(xx - np.float32(cx), yy - np.float32(cy)) - np.float32(rad)
         inside = np.clip(np.float32(0.5) - d, 0.0, 1.0)
@@ -548,8 +561,8 @@ def flood_front(fx, k, size, centre, unit, memo):
         rho = r * np.maximum(stretch, np.float32(0.2)) * np.float32(unit)
         mottle = noise(dx / np.float32(0.12), dy / np.float32(0.12), 0.0, seed + 2)
         return rho.astype(np.float32), mottle
-    return memo.get_or(("flood", fx["index"], k, int(size[0]), int(size[1]), round(float(centre[0]), 3),
-                        round(float(centre[1]), 3), float(unit)), make)
+    return memo.get_or(("flood", fx["index"], k, int(size[0]), int(size[1]), float(centre[0]), float(centre[1]),
+                        float(unit)), make)
 
 
 def flood(fx, size, centre, drops, memo):

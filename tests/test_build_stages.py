@@ -1513,6 +1513,433 @@ def test_the_bake_holds_a_mesh_scaled_to_nothing_as_no_geometry(make):
     assert sizes[20] and sizes[-1] == 0, sizes
 
 
+LIT = """[pose.mq]
+feet = "floor"
+[[move.mq]]
+name = "hands_up"
+t = 0.2
+dur = 1.2
+[perform.mq]
+expressions = [{ morph = "a", keys = [[0.0, 0.0], [1.0, 1.0]] }, { morph = "赤", keys = [[0.0, 0.0], [1.0, 0.8]] }]
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+keys = [{ t = 0.0 }, { t = 2.0, at = [0.6, -2.6, 0.9] }]
+[[freeze]]
+from = 1.5
+to = 1.8
+[[light]]
+name = "key"
+kind = "area"
+power = 200
+at = [1.0, -2.0, 2.5]
+look = [0.0, 0.0, 1.0]
+size = [1.0, 0.5]
+keys = [[0.0, 0.25], [1.0, 1.0]]
+[look]
+exposure = 0.7
+contrast = "Medium High Contrast"
+"""
+
+
+@pytest.fixture(scope="module")
+def lit(tmp_path_factory, mannequin):
+    """One build of LIT (the mannequin, given a material morph `赤` that reddens its skin, off the origin and turned,
+    raising its hands with its mouth opening and its skin reddening, a keyed area light, a freeze, a contrast look):
+    (project folder, its bake folder)."""
+    import contextlib
+    import io
+    root = tmp_path_factory.mktemp("lit")
+    m = X.read(str(mannequin[0]))
+    m.morphs.append(X.PmxMorph("赤", "red", 4, "material", [X.MaterialMorphOffset.of(0, 1, diffuse=(0.5, -0.3, -0.3, 0.0))]))
+    X.write(m, str(root / "mq_lit.pmx"))
+    (root / "mk.toml").write_text(HEAD + f'\n[[cast]]\nname = "mq"\npmx = "{root / "mq_lit.pmx"}"\nrig = "{mannequin[1]}"\n'
+                                  'at = [0.5, 0.3, 0.0]\nyaw = 30\n\n' + LIT, encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        MAIN.main(["build", "--project", str(root)])
+    assert e.value.code == 0, json.loads(buf.getvalue()).get("error")
+    return root, root / "build" / "t.bake"
+
+
+def lit_posed(bake_dir, name, frame):
+    """The lit mesh `name` on Blender frame `frame` from lit.bin and bake.bin alone, as bake_lit's docstring says a
+    renderer places it (shape keys, world matrix, skin), in the world in glTF's axes."""
+    bake = json.loads((bake_dir / "bake.json").read_text(encoding="utf-8"))
+    lit = np.fromfile(bake_dir / "lit.bin", np.uint8)
+    blob = np.fromfile(bake_dir / "bake.bin", "<f4")
+    m = next(x for x in bake["lit"]["meshes"] if x["name"] == name)
+    k, nv, a = frame - bake["frame0"], m["vertices"], m["attributes"]
+
+    def attr(key):
+        spec = a[key]
+        dt = {"f32": "<f4", "u16": "<u2", "u32": "<u4"}[spec["type"]]
+        return np.frombuffer(lit, dt, nv * spec["comp"], spec["offset"]).reshape(nv, spec["comp"]).astype(float)
+    v = attr("position")
+    if m["morphs"]:
+        nk = len(m["morphs"]["names"])
+        deltas = np.frombuffer(lit, "<f4", nk * nv * 3, m["morphs"]["deltas"]).reshape(nk, nv, 3)
+        v = v + np.tensordot(blob[m["morphs"]["values"] + nk * k:][:nk], deltas, 1)
+    o = m["matrix"]["offset"] + 12 * (k if m["matrix"]["frames"] > 1 else 0)
+    M = blob[o:o + 12].reshape(4, 3).T
+    v = v @ M[:, :3].T + M[:, 3]
+    if m["kind"] == "skinned":
+        arm = next(x for x in bake["armatures"] if x["name"] == m["armature"])
+        nb = len(arm["bones"])
+        J = blob[arm["offset"] + nb * 12 * k:][:nb * 12].reshape(nb, 4, 3).transpose(0, 2, 1)
+        joints = np.concatenate([attr(j) for j in ("joints", "joints2") if j in a], 1).astype(int)
+        w = np.concatenate([attr(j) for j in ("weights", "weights2") if j in a], 1)
+        moved = np.einsum("vk,vkij,vj->vi", w, J[joints], np.c_[v, np.ones(nv)])
+        v = np.where(w.sum(1, keepdims=True) > 0.0, moved, v)              # weights all 0: not deformed
+    return v
+
+
+def lit_normals(bake_dir, name, P):
+    """The normals of the lit mesh `name` whose vertices are at P, rebuilt from its `bend` arrays as a renderer does on
+    every frame (mkmmd.core.bend.normals)."""
+    from mkmmd.core import bend as BD
+    bake = json.loads((bake_dir / "bake.json").read_text(encoding="utf-8"))
+    lit = np.fromfile(bake_dir / "lit.bin", np.uint8)
+    m = next(x for x in bake["lit"]["meshes"] if x["name"] == name)
+    b, nv, a = m["bend"], m["vertices"], m["attributes"]
+
+    def u32(at, n):
+        return np.frombuffer(lit, "<u4", n, at).astype(np.int64)
+    ab = np.frombuffer(lit, "<f4", nv * 2, a["bend"]["offset"]).reshape(nv, 2).astype(float)
+    arrays = {"fan": u32(a["fan"]["offset"], nv), "alpha": ab[:, 0], "beta": ab[:, 1],
+              **{k: u32(b[k], b["fans"]) for k in ("center", "ref", "other")},
+              **{k: (u32(b[k]["offsets"], b[k]["count"] + 1), u32(b[k]["items"], b[k]["size"]))
+                 for k in ("corners", "edges", "faces")}}
+    tris = u32(m["triangles"]["offset"], 3 * m["triangles"]["count"]).reshape(-1, 3)
+    return BD.normals(P, tris, arrays)
+
+
+def test_the_lit_mesh_rebuilt_from_the_bake_alone_lands_on_blenders_posed_mesh(lit, capsys):
+    """mkr draws the lit frames from the bake's `lit` section alone: the skinned mannequin rebuilt from lit.bin and
+    bake.bin (rest vertices split by Blender's corner data, the mouth's shape key, its world matrix, up to 8 bones per
+    vertex) lands on Blender's own evaluation of the frame, moving, with the mouth half and fully open, and in the freeze
+    (the frame it holds), and its normals, rebuilt from its fans on the posed vertices, are Blender's corner normals
+    (where turning the rest normals with the bones misses them by tens of degrees); the bake's own check says so too."""
+    from scipy.spatial import cKDTree
+    root, d = lit
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    assert bake["version"] == 5
+    mesh = next(m for m in bake["lit"]["meshes"] if m["kind"] == "skinned")
+    check = bake["lit"]["check"]["meshes"][mesh["name"]]
+    assert "あ" in mesh["morphs"]["names"] and check["mm"] < 0.1 and check["normal_deg"][0] < 1.0, check
+    expr = ("(lambda o, dg: (lambda me, M: [np.array([(M @ v.co)[:] for v in me.vertices]).ravel().tolist(), "
+            "[c.vertex_index for c in me.loops], np.array([(M.to_3x3().inverted_safe().transposed() @ n.vector)"
+            ".normalized()[:] for n in me.corner_normals]).ravel().tolist()])(o.evaluated_get(dg).data, o.matrix_world))"
+            f"(bpy.data.objects[{mesh['name']!r}], bpy.context.evaluated_depsgraph_get())")
+    assert np.abs(lit_posed(d, mesh["name"], 34) - lit_posed(d, mesh["name"], 46)).max() > 0.05    # the hands go up
+    for frame, world in ((34, 34), (46, 46), (61, 61), (80, 76)):                # moving; in the freeze, held on 76
+        code, q = cli(["q", str(root / "build" / "t.blend"), expr, "--frames", str(world), "--project", str(root)], capsys)
+        assert code == 0, q.get("error")
+        pos, corner_v, nor = q["values"][0]
+        truth = np.array(pos).reshape(-1, 3)[:, [0, 2, 1]] * [1, 1, -1]
+        ours = lit_posed(d, mesh["name"], frame)
+        assert cKDTree(truth).query(ours)[0].max() < 5e-5, frame
+        assert cKDTree(ours).query(truth)[0].max() < 5e-5, frame               # and none of Blender's is missing
+        normals = lit_normals(d, mesh["name"], ours)
+        dist, near = cKDTree(ours).query(truth[corner_v], k=8, distance_upper_bound=5e-5)
+        cos = np.where(np.isfinite(dist), np.einsum("ckj,cj->ck", np.r_[normals, [[0.0, 0.0, 0.0]]][near],
+                                                    np.array(nor).reshape(-1, 3)[:, [0, 2, 1]] * [1, 1, -1]), -1.0)
+        worst = np.degrees(np.arccos(np.clip(cos.max(1), -1.0, 1.0))).max()     # each corner: its vertex at that point
+        assert worst < 1.0, (frame, worst)
+
+
+def test_a_keyed_light_and_a_material_morphs_node_input_carry_their_values_on_every_frame(lit, capsys):
+    """The area light's keyed power and the node input mmd_tools drives with the skin's material morph come out of the
+    bake as Blender has them on each frame (in the freeze, on the frame it holds), the light where it stands and
+    shining the way it points (its local -Z), its size as given."""
+    root, d = lit
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    blob = np.fromfile(d / "bake.bin", "<f4")
+    light = next(x for x in bake["lit"]["lights"] if x["name"] == "key")
+    anim = next(a for a in bake["lit"]["materials"]["skin"]["anim"] if a["node"].startswith("mmd_bind"))
+    assert (light["type"], light["shape"], light["frames"], anim["frames"]) == ("AREA", "RECTANGLE", 60, 60)
+    expr = ("(lambda L, nt: [list(L.matrix_world.translation), list(L.matrix_world.col[2])[:3], L.data.energy, "
+            f"next(s for s in nt.nodes[{anim['node']!r}].inputs if s.identifier == {anim['socket']!r}).default_value])"
+            "(bpy.data.objects['key'], bpy.data.materials['skin'].node_tree)")
+    seen = []
+    for frame, world in ((31, 31), (40, 40), (61, 61), (80, 76)):
+        code, q = cli(["q", str(root / "build" / "t.blend"), expr, "--frames", str(world), "--project", str(root)], capsys)
+        assert code == 0, q.get("error")
+        at, z, energy, value = q["values"][0]
+        row = blob[light["offset"] + 22 * (frame - bake["frame0"]):][:22]
+        assert np.allclose(row[0:3], [at[0], at[2], -at[1]], atol=1e-5) and np.allclose(row[3:6], [-z[0], -z[2], z[1]], atol=1e-5)
+        assert row[15] == pytest.approx(energy, rel=1e-6) and np.allclose(row[16:18], [1.0, 0.5], atol=1e-6) and row[21] == 1.0
+        assert blob[anim["offset"] + frame - bake["frame0"]] == pytest.approx(value, abs=1e-6)
+        seen.append((energy, value))
+    assert seen[0] == (pytest.approx(50.0), 0.0) and seen[2] == (pytest.approx(200.0), pytest.approx(0.8))
+
+
+ON_OBJECTS = """[[prop]]
+name = "page"
+card = "library:cafe_page"
+at = [0.0, -0.4, 0.75]
+[[prop]]
+name = "rug"
+card = "library:rug_80s"
+at = [0.0, 0.6, 0.0]
+[[text]]
+name = "ink"
+ink = { strokes = "ink.json", on = "page:page" }
+[[text]]
+name = "sign"
+text = "ON THE MOVE"
+at = [0.0, -0.6, 1.0]
+facing = [0.0, -1.0, 0.0]
+size = 0.05
+[[key]]
+target = "sign"
+prop = "location"
+index = 0
+keys = [[0.0, -0.3], [2.0, 0.3]]
+interp = "LINEAR"
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -1.6, 1.1]
+look = [0.0, -0.4, 0.85]
+"""
+
+
+@pytest.fixture(scope="module")
+def on_objects(tmp_path_factory):
+    """One build of ON_OBJECTS (handwriting ink on a page, whose material reads the ink object's keyed clock; a line of
+    type, frame by frame for its geometry-nodes modifier, sliding across the shot; a rug whose three material slots read
+    different things): (project folder, its bake folder)."""
+    import contextlib
+    import io
+    root = tmp_path_factory.mktemp("on_objects")
+    line = {"t": [0.2 + 0.01 * i for i in range(120)], "p": [[20.0 + 0.15 * i, 30.0] for i in range(120)]}
+    (root / "ink.json").write_text(json.dumps({"unit": "mm", "strokes": [line]}), encoding="utf-8")
+    (root / "mk.toml").write_text(HEAD + "\n" + ON_OBJECTS, encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        MAIN.main(["build", "--project", str(root)])
+    assert e.value.code == 0, json.loads(buf.getvalue()).get("error")
+    return root, root / "build" / "t.bake"
+
+
+def test_a_mesh_carries_what_any_of_its_materials_reads(on_objects):
+    """The rug's top is printed from its UV map in the first of its three slots, the other two read none: its lit mesh
+    carries that map (every material's own node tree is named "Shader Nodetree": told apart by name, only one of a
+    mesh's materials used to count, and the print came out flat in mkr)."""
+    root, d = on_objects
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    body = next(m for m in bake["lit"]["meshes"] if m["name"] == "rug_body")
+    assert len(set(body["materials"])) > 1 and "uv:UVMap" in body["attributes"], (body["materials"], sorted(body["attributes"]))
+
+
+def test_what_a_material_reads_off_its_object_is_in_the_bake_on_every_frame(on_objects, capsys):
+    """Handwriting ink shows behind the nib by its object's keyed clock (the custom property clip_t), which its material
+    reads with an Attribute node of type Object: the ink's lit mesh carries that value on every frame (object_attrs,
+    RGBA as the node reads a number: (v, v, v, 1)), as Blender has it, so mkr can draw the ink."""
+    root, d = on_objects
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    blob = np.fromfile(d / "bake.bin", "<f4")
+    ink = next(m for m in bake["lit"]["meshes"] if m["name"] == "ink")
+    rec = ink["object_attrs"]["OBJECT:clip_t"]
+    assert rec["frames"] == bake["frames"], rec
+    clocks = []
+    for frame in (31, 40, 55, 90):
+        code, q = cli(["q", str(root / "build" / "t.blend"), 'bpy.data.objects["ink"]["clip_t"]', "--frames",
+                       str(frame), "--project", str(root)], capsys)
+        assert code == 0, q.get("error")
+        v = blob[rec["offset"] + 4 * (frame - bake["frame0"]):][:4]
+        assert np.allclose(v, [q["values"][0]] * 3 + [1.0], atol=1e-6), (frame, v, q["values"][0])
+        clocks.append(float(v[0]))
+    assert clocks == sorted(clocks) and clocks[-1] > clocks[0], clocks         # the clock runs
+
+
+def test_an_object_baked_frame_by_frame_that_only_moves_holds_one_geometry_placed_by_its_matrix(on_objects, capsys):
+    """The sliding type is evaluated on every frame (its geometry-nodes modifier), but only its matrix changes: the bake
+    holds its geometry once, in its own space, and its world matrix per frame, which puts it where Blender draws it
+    (what kept a car's 38 000-vertex label under the bake's cap); a world-space geometry per frame would be 60."""
+    from scipy.spatial import cKDTree
+    root, d = on_objects
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    lit = np.fromfile(d / "lit.bin", np.uint8)
+    blob = np.fromfile(d / "bake.bin", "<f4")
+    sign = next(m for m in bake["lit"]["meshes"] if m["name"] == "sign")
+    bf, mat = sign["by_frame"], sign["matrix"]
+    assert sign["kind"] == "by_frame" and len(bf["geoms"]) == 1 and mat["frames"] == bake["frames"], (len(bf["geoms"]), mat)
+    g = bf["geoms"][0]
+    pos = np.frombuffer(lit, "<f4", 3 * g["vertices"], g["attributes"]["position"]["offset"]).reshape(-1, 3).astype(float)
+    expr = ("(lambda ev: [(ev.matrix_world @ v.co)[:] for v in ev.to_mesh().vertices])"
+            "(bpy.data.objects['sign'].evaluated_get(bpy.context.evaluated_depsgraph_get()))")
+    xs = []
+    for frame in (31, 60, 90):
+        code, q = cli(["q", str(root / "build" / "t.blend"), expr, "--frames", str(frame), "--project", str(root)], capsys)
+        assert code == 0, q.get("error")
+        truth = np.array(q["values"][0]).reshape(-1, 3)[:, [0, 2, 1]] * [1, 1, -1]
+        o = mat["offset"] + 12 * (frame - bake["frame0"])
+        M = blob[o:o + 12].reshape(4, 3).T
+        ours = pos @ M[:, :3].T + M[:, 3]
+        assert cKDTree(truth).query(ours)[0].max() < 1e-5 and cKDTree(ours).query(truth)[0].max() < 1e-5, frame
+        xs.append(float(ours[:, 0].mean()))
+    assert xs[0] < xs[1] < xs[2] and xs[2] - xs[0] > 0.5, xs                    # it slides 0.6 m
+
+
+def test_the_view_lut_the_bake_captures_is_blenders_display_transform(lit, capsys):
+    """bake.json's view LUT (view_lut.bin: the scene's view transform, its contrast look and exposure, sampled on a log2
+    grid) gives what Blender writes to an 8-bit file for scene-linear colours off the grid, to a level."""
+    from PIL import Image
+    root, d = lit
+    view = json.loads((d / "bake.json").read_text(encoding="utf-8"))["lit"]["view"]
+    assert (view["transform"], view["look"], view["exposure"]) == ("AgX", "AgX - Medium High Contrast", pytest.approx(0.7))
+    n, lo, hi = view["lut"]["n"], view["lut"]["lo"], view["lut"]["hi"]
+    lut = np.fromfile(d / view["lut"]["file"], "<f4").reshape(n, n, n, 3)          # [b][g][r]
+    rgb = np.array([[0.18, 0.18, 0.18], [0.9, 0.2, 0.05], [2.0, 1.0, 0.5], [0.01, 0.03, 0.002], [12.0, 4.0, 30.0],
+                    [0.05, 0.6, 0.3], [0.0, 0.0, 0.0]])
+    png = root / "view_probe.png"
+    flat = np.c_[rgb, np.ones(len(rgb))].ravel().tolist()
+    expr = ("(lambda sc, img: (img.pixels.foreach_set(" + repr(flat) + "), [setattr(sc.render.image_settings, k, v) "
+            "for k, v in (('file_format', 'PNG'), ('color_mode', 'RGB'), ('color_depth', '8'))], "
+            "setattr(sc.render, 'dither_intensity', 0.0), img.save_render(" + repr(str(png)) + ", scene=sc), 1)[-1])"
+            f"(scene, bpy.data.images.new('probe', {len(rgb)}, 1, float_buffer=True))")
+    code, q = cli(["q", str(root / "build" / "t.blend"), expr, "--frames", "31", "--project", str(root)], capsys)
+    assert code == 0, q.get("error")
+    blender = np.asarray(Image.open(png).convert("RGB"), float)[0]
+    x = np.clip((np.log2(np.maximum(rgb, 2.0 ** lo)) - lo) / (hi - lo) * (n - 1), 0, n - 1)
+    i = np.minimum(x.astype(int), n - 2)
+    f = x - i
+    ours = np.zeros_like(rgb)
+    for c in np.ndindex(2, 2, 2):                                     # trilinear in log2: what a renderer does with it
+        w = np.prod([f[:, a] if c[a] else 1 - f[:, a] for a in range(3)], 0)
+        ours += w[:, None] * lut[i[:, 2] + c[2], i[:, 1] + c[1], i[:, 0] + c[0]]
+    ours[-1] = view["zero"]
+    assert np.abs(ours * 255 - blender).max() <= 1.0, np.c_[ours * 255, blender]
+
+
+LAYERS = """[pose.mq]
+feet = "floor"
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+[[shot]]
+name = "p"
+plate = true
+at = [1.5, -2.0, 1.2]
+look = [0.0, 0.0, 1.0]
+lens = 35
+[[insert]]
+from = 0.5
+to = 1.5
+shot = "p"
+shape = "iris"
+anchor = "bone('head').head"
+[[text]]
+name = "title"
+screen = { anchor = "bottom", side = "left", height = 0.2 }
+text = "HI"
+size = 0.07
+kinetic = { show = [0.2, 1.6] }
+[[prop]]
+name = "pc"
+card = "library:pillow_cloud"
+at = [1.0, 0.5, 0.4]
+"""
+
+
+@pytest.fixture(scope="module")
+def layers(tmp_path_factory, mannequin):
+    """One build of LAYERS: the mannequin, a screen-type title shown 0.2 .. 1.6 s, an iris insert whose anchor is her
+    head (a point layer), a pillow whose subdivision renders a level finer than the viewport shows: (folder, bake)."""
+    import contextlib
+    import io
+    root = tmp_path_factory.mktemp("layers")
+    (root / "mk.toml").write_text(HEAD + f'\n[[cast]]\nname = "mq"\npmx = "{mannequin[0]}"\nrig = "{mannequin[1]}"\n\n'
+                                  + LAYERS, encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), pytest.raises(SystemExit) as e:
+        MAIN.main(["build", "--project", str(root)])
+    assert e.value.code == 0, json.loads(buf.getvalue()).get("error")
+    return root, root / "build" / "t.bake"
+
+
+def test_screen_type_is_baked_as_blender_evaluates_it_with_its_layers_camera_and_view_transform(layers, capsys):
+    """mkr draws the screen layer from the bake: each output's copy of the title as Blender evaluates it on the frames
+    it shows (none outside them), a frame of it landing on Blender's own evaluation, the orthographic camera one frame
+    height tall per output, and the layer's Standard view transform as a LUT (sRGB's curve)."""
+    from mkmmd.core import screentype as SR
+    root, d = layers
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    scr = bake["lit"]["screen"]
+    lit = np.fromfile(d / "lit.bin", np.uint8)
+    title = {m["aspect"]: m for m in scr["meshes"]}
+    assert set(title) == {"16x9", "9x16"} and all(m["show"] == [37, 79] for m in title.values())
+    frames = title["16x9"]["by_frame"]["frames"]
+    assert all((f >= 0) == (37 <= k + 31 < 79) for k, f in enumerate(frames)), frames
+    assert all(v["frames"] and not v["problems"] and v["px"] < 0.05 and v["normal_deg"] < 1.1
+               for v in bake["lit"]["check"]["screen"].values())                  # decoded words land on Blender's
+    for out, size in (("16x9", (640, 360)), ("9x16", (360, 640))):
+        cam = scr["cameras"][out]
+        assert cam["type"] == "ORTHO" and cam["ortho_scale"] == pytest.approx(SR.ortho_scale(size))
+        assert np.allclose(cam["matrix"][9:], [0.0, 10.0, 0.0])                         # z = 10 up, in glTF's axes
+    from mkmmd.core import fitgeo as FG
+    ours = FG.decode(lit, title["16x9"]["by_frame"], 50 - 31)["position"]           # as mkr decodes the fitted word
+    expr = ("(lambda o: (setattr(o, 'hide_viewport', False), scene.frame_set(scene.frame_current), (lambda ev: "
+            "[(ev.matrix_world @ v.co)[:] for v in ev.to_mesh().vertices])(o.evaluated_get("
+            "bpy.context.evaluated_depsgraph_get())))[-1])(bpy.data.objects['title@16x9'])")
+    code, q = cli(["q", str(root / "build" / "t.blend"), expr, "--frames", "50", "--project", str(root)], capsys)
+    assert code == 0, q.get("error")
+    truth = np.array(q["values"][0]).reshape(-1, 3)[:, [0, 2, 1]] * [1, 1, -1]
+    assert len(truth) > 10 and np.linalg.norm(truth[:, None] - ours[None], axis=2).min(1).max() < 2e-5     # fit: 1e-5
+    n, lo, hi = scr["lut"]["n"], scr["lut"]["lo"], scr["lut"]["hi"]
+    lut = np.fromfile(d / scr["lut"]["file"], "<f4").reshape(n, n, n, 3)
+    v = 2.0 ** (lo + (hi - lo) * np.arange(n) / (n - 1))
+    srgb = np.clip(np.where(v <= 0.0031308, 12.92 * v, 1.055 * v ** (1 / 2.4) - 0.055), 0.0, 1.0)
+    assert np.abs(lut[np.arange(n), np.arange(n), np.arange(n), 1] - srgb).max() < 1e-3
+
+
+def test_a_layer_point_and_render_level_geometry_come_from_the_bake_and_every_lit_mesh_has_a_look_record(layers, capsys):
+    """The iris's anchor (her head, through the cut's camera) is in the bake on the insert's frames and nowhere else, where
+    Blender's expression puts it; the pillow's subdivided mesh is baked at its render level (the viewport shows fewer
+    faces); every lit mesh names the look record its patterns match (screen type included)."""
+    root, d = layers
+    bake = json.loads((d / "bake.json").read_text(encoding="utf-8"))
+    blob = np.fromfile(d / "bake.bin", "<f4")
+    pt = bake["lit"]["points"]["i0"]
+    assert pt["frames"] == [[15, 45, "a"]] and not pt["errors"]
+    xyz = blob[pt["offset"]:pt["offset"] + 3 * bake["frames"]].reshape(-1, 3)
+    assert np.isnan(xyz[:15]).all() and np.isnan(xyz[45:]).all()
+    for frame in (46, 70):
+        code, q = cli(["q", str(root / "build" / "t.blend"), "list(bone('head').head)", "--frames", str(frame),
+                       "--project", str(root)], capsys)
+        assert code == 0, q.get("error")
+        x, y, z = q["values"][0]
+        assert np.allclose(xyz[frame - 31], [x, z, -y], atol=1e-5), frame
+    assert "pc_pillow" in bake["lit"]["render_settings"]
+    mesh = next(m for m in bake["lit"]["meshes"] if m["name"] == "pc_pillow")
+    ours = mesh["by_frame"]["geoms"][mesh["by_frame"]["frames"][0]]["triangles"]["count"]
+    tris = ("(lambda o, render: ([setattr(m, 'levels', m.render_levels) for m in o.modifiers if render and "
+            "m.type == 'SUBSURF'], bpy.context.view_layer.update(), (lambda me: (me.calc_loop_triangles(), "
+            "len(me.loop_triangles))[-1])(o.evaluated_get(bpy.context.evaluated_depsgraph_get()).data))[-1])"
+            "(bpy.data.objects['pc_pillow'], {})")
+    counts = []
+    for render in (True, False):
+        code, q = cli(["q", str(root / "build" / "t.blend"), tris.format(render), "--frames", "31", "--project",
+                       str(root)], capsys)
+        assert code == 0, q.get("error")
+        counts.append(q["values"][0])
+    assert ours == counts[0] > counts[1], (ours, counts)
+    looks = {o["name"] for o in bake["objects"]} | set(bake["lit"]["records"])
+    names = [m["record"] for m in bake["lit"]["meshes"] + bake["lit"]["screen"]["meshes"]]
+    assert names and set(names) <= looks and "title@16x9" in bake["lit"]["records"]
+
+
 FROZEN_CUT = """[vector]
 colors = { background = "#FFD21F", line = "#1B2A6B" }
 [vector.tones]
@@ -1746,6 +2173,60 @@ def test_mk_s_own_renderer_draws_the_vector_look_as_blender_does_and_leaves_blen
     for f, img in mine.items():                                  # measured: 0.05 to 0.11 % off by more than 8 levels
         off = np.abs(img - np.asarray(Image.open(d / f"{f:05d}.png").convert("RGB"), int)).max(-1) > 8
         assert off.mean() < 0.003, (f, off.mean())
+
+
+EXPANDED = """[pose.mq]
+feet = "floor"
+
+[[shot]]
+name = "a"
+from = 0.0
+to = 1.3
+at = [0.4, -2.4, 1.1]
+look = [0.0, 0.0, 0.9]
+lens = 35
+style = "vector"
+
+[[shot]]
+name = "b"
+from = 1.3
+to = 2.0
+at = [0.0, -2.6, 0.9]
+look = [0.0, 0.0, 0.9]
+lens = 35
+
+[[transition]]
+at = 1.3
+kind = "expand"
+dur = 0.3
+"""
+
+
+def test_mkr_draws_a_matte_through_a_vector_look_as_blender_does(make, capsys):
+    """An expand out of a shot in the vector look needs that shot's figure as a matte and its frame without her (back/)
+    on the transition's frames: mkr draws them (the look's passes and her coverage at twice the frame's size, as for a
+    silhouette) and they match Blender's files; no Blender job is left."""
+    import shutil
+    from PIL import Image
+    code, out = make(EXPANDED)
+    assert code == 0, out.get("error")
+    d = make.root / "renders" / "draft" / "16x9"
+
+    def render(*extra):
+        code, rep = cli(["render", "--project", str(make.root), "--output", "16x9", "--frames", "56:72", *extra], capsys)
+        assert code == 0, rep.get("error")
+        return rep
+    rep = render("--engine", "mkr")
+    got = rep["outputs"]["16x9"]
+    assert got["blender_jobs"] == 0 and got["engines"]["blender"] == 0, got
+    files = {p.relative_to(d): np.asarray(Image.open(p).convert("RGB"), int)
+             for kind in ("matte", "back") for p in (d / kind).rglob("*.png")}
+    assert {p.parts[0] for p in files} == {"matte", "back"}, sorted(files)
+    shutil.rmtree(d)
+    render()
+    for rel, img in files.items():                               # Blender's own files of the same layers
+        diff = np.abs(img - np.asarray(Image.open(d / rel).convert("RGB"), int)).max(-1)
+        assert diff.mean() < 0.5 and (diff > 8).mean() < 0.005, (str(rel), diff.mean(), (diff > 8).mean())
 
 
 # ---------------------------------------------------------------- cloth

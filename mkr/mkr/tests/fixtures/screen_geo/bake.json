@@ -1,0 +1,211 @@
+{
+ "version": 5,
+ "fps": 30,
+ "frame0": 1,
+ "frames": 9,
+ "outputs": [
+  {
+   "name": "16x9",
+   "size": [
+    1920,
+    1080
+   ]
+  }
+ ],
+ "lit": {
+  "file": "lit.bin",
+  "view": {
+   "lut": {
+    "file": "screen_lut.bin",
+    "n": 65,
+    "lo": -12.5,
+    "hi": 12.5
+   }
+  },
+  "screen": {
+   "meshes": [
+    {
+     "name": "fixture_word",
+     "kind": "by_frame",
+     "materials": [
+      "fill",
+      "outline"
+     ],
+     "visible": {
+      "camera": true,
+      "shadow": true,
+      "holdout": false
+     },
+     "aspect": "16x9",
+     "object": {
+      "color": [
+       1,
+       1,
+       1,
+       1
+      ],
+      "pass_index": 0
+     },
+     "instance": null,
+     "shown": null,
+     "matrix": null,
+     "why": "screen type",
+     "by_frame": {
+      "geoms": [
+       {
+        "vertices": 108,
+        "triangles": {
+         "offset": 0,
+         "count": 96
+        },
+        "slots": [
+         [
+          0,
+          0,
+          24
+         ],
+         [
+          1,
+          24,
+          72
+         ]
+        ],
+        "attributes": {},
+        "fit": {
+         "protos": {
+          "count": 3,
+          "table": 1088,
+          "vertices": 27,
+          "attributes": {
+           "position": {
+            "offset": 192,
+            "comp": 3,
+            "type": "f32"
+           },
+           "normal": {
+            "offset": 528,
+            "comp": 3,
+            "type": "f32"
+           },
+           "uv:": {
+            "offset": 864,
+            "comp": 2,
+            "type": "f32"
+           }
+          },
+          "triangles": {
+           "offset": 1136,
+           "count": 24
+          }
+         },
+         "islands": {
+          "count": 12,
+          "table": 0
+         },
+         "attrs": [
+          [
+           "attr:mk_alpha",
+           1
+          ]
+         ]
+        }
+       },
+       {
+        "vertices": 128,
+        "triangles": {
+         "offset": 4640,
+         "count": 112
+        },
+        "slots": [
+         [
+          0,
+          0,
+          28
+         ],
+         [
+          1,
+          28,
+          84
+         ]
+        ],
+        "attributes": {},
+        "fit": {
+         "protos": {
+          "count": 3,
+          "table": 5792,
+          "vertices": 27,
+          "attributes": {
+           "position": {
+            "offset": 4896,
+            "comp": 3,
+            "type": "f32"
+           },
+           "normal": {
+            "offset": 5232,
+            "comp": 3,
+            "type": "f32"
+           },
+           "uv:": {
+            "offset": 5568,
+            "comp": 2,
+            "type": "f32"
+           }
+          },
+          "triangles": {
+           "offset": 5840,
+           "count": 24
+          }
+         },
+         "islands": {
+          "count": 16,
+          "table": 4640
+         },
+         "attrs": [
+          [
+           "attr:mk_alpha",
+           1
+          ]
+         ]
+        }
+       }
+      ],
+      "frames": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       -1,
+       1,
+       1
+      ],
+      "poses": [
+       1424,
+       2256,
+       2336,
+       3168,
+       3248,
+       3376,
+       -1,
+       6128,
+       7232
+      ]
+     },
+     "show": [
+      1,
+      10
+     ],
+     "knockout": false
+    }
+   ],
+   "left_out": [],
+   "lut": {
+    "file": "screen_lut.bin",
+    "n": 65,
+    "lo": -12.5,
+    "hi": 12.5
+   }
+  }
+ }
+}
