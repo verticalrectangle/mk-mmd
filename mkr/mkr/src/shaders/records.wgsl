@@ -37,7 +37,8 @@ struct Frame {
                                     // the normal leans toward the camera, the roughness from which lobes are wholly its
     sampling: vec4<f32>,            // shadow rays per sample and light; 1: their numbers from Sobol's sequence
                                     // (light.wgsl shadow_draw), 0: R2's; EEVEE's clamp of a traced ray's light
-                                    // (raytrace.wgsl rt_clamp: clamp_surface_indirect, 0: none); 0
+                                    // (raytrace.wgsl rt_clamp: clamp_surface_indirect, 0: none); the share of the
+                                    // trace thickness a ray going away keeps past a surface it crosses (rt_trace)
 }
 
 struct SampleData {

@@ -5234,8 +5234,11 @@ EEVEE's sphere approximation of the horizon, faded out at EEVEE's influence radi
 `use_custom_distance`, `cutoff_distance`), and shadowed by tracing a ray toward
 a random point of the light through its maps in the scene's shadow steps, by the hit rule measured on EEVEE's frames:
 the steps near the receiver read the level it asks for, the farther ones the face's, and the ray's offsets off the
-surface and its depth tolerance are counted in that level's texels, as EEVEE's are); the blended surfaces lit forward,
-back to front; with motion blur, EEVEE's post process smearing the sample's picture (below); and the film taking the
+surface and its depth tolerance are counted in that level's texels, as EEVEE's are; the ray is lifted along the shading
+normal and its point of the light kept above that normal's horizon, as EEVEE's developer docs say its biases are: with
+the geometric normal Crimson's figure was 0.03 levels and lab `mmd_model` 0.01-0.04 further from EEVEE's frames); the
+blended surfaces lit forward, back to front; with motion blur, EEVEE's post process smearing the sample's picture
+(below); and the film taking the
 samples four at a time. Then the view transform's table, EEVEE's dither and 8
 bits, read back and written while the next frame draws. Dithered materials whose shadows follow their alpha cast
 EEVEE's hashed shadow, a texel stopping the light with the probability of the caster's opacity per sample: the maps hold
@@ -5309,7 +5312,7 @@ Uncompressed G-buffer targets would cost 3 ms of a 1:1 frame and 9 ms of a 9:16 
 the prepass; byte-identity checks between two builds run both with `RADV_DEBUG=nodcc`.
 
 Measured against EEVEE's frames: Crimson's 90 test frames (30 per output, no motion blur) at a pooled mean |error| of
-0.83 levels (0.66, 0.80 and 1.02 for 16:9, 1:1 and 9:16; 2.82, 2.63 and 2.40 over her figure alone, 11.8, 10.8 and 9.4 %
+0.82 levels (0.66, 0.80 and 1.00 for 16:9, 1:1 and 9:16; 2.78, 2.60 and 2.36 over her figure alone, 11.9, 10.8 and 9.4 %
 of its pixels off by more than 8), from 5.1 (18.0, 14.8, 13.9) before; the lab's cases between 0.03 and 1.75 (`mk parity
 lab`). The shadow tunables' defaults are `mk parity tune`'s best over Crimson's figure and the lab's cases together, the
 lab weighted 3 to 1 so that no setting buys the figure with the lab. EEVEE's glossy light is an LTC table fitted
@@ -5318,7 +5321,25 @@ lost), times the split-sum albedo, faded out as the light's bounding sphere sink
 (`ltc_glossy: "eevee"`, measured on probes; `"mkr"` integrates true GGX). What still differs: EEVEE's shadow tracing is
 known by measurement only (`shadow_rule`: the default rule matches Crimson's frames and the MMD lab cases best; `"v2"`,
 fitted on EEVEE's probes, the lab's plates and square or disk lights), and its dithered alpha leaves per-pixel noise mkr
-reproduces only statistically.
+reproduces only statistically. Her eyes are the largest share of what is left in the close-ups (5.0 levels over the
+eyes, mkr darker by 3.9): the eye white (白目) is the floor of a socket 2-3.5 cm deep, its walls the same material, the
+iris a lens floating 2 cm in front of it and the highlight 1-2 mm in front of that, all opaque but the iris's rim. Under
+the key light Cycles leaves that floor 4 % of its light, EEVEE 27 % and mkr 23 % (lab `mmd_model` face: the eye white
+0.83 times EEVEE's under the key, 0.91 under the fill, its unshadowed light within 0.3 %); jwin's eyes, the same
+model's sockets, are 0.86 times EEVEE's. Neither the casters' alpha, the normals, the levels the steps read nor the
+biases move it; the steps' placement does (12 steps: 0.26, step power 2.5: 0.26), but every such setting costs the
+lab's area, penumbra and `shadow_close` cases more than it gains. EEVEE's own frames at other `shadow_step_count`s show
+where the trace parts from its rule: its eye white keeps 0.40, 0.62, 0.47, 0.27, 0.19, 0.14 and 0.13 of its light at
+2, 3, 4, 6, 8, 12 and 16 steps, mkr's (`shadow_steps`) 0.19, 0.23, 0.24, 0.23, 0.23, 0.26 and 0.28; on
+`shadow_close` mkr's leak falls with the steps as EEVEE's does (the 5 mm card at 35 degrees, 6 to 16 steps: 0.34,
+0.26, 0.17, 0.14 against 0.48, 0.37, 0.21, 0.12) but not below 6 (2 steps: 0.45 against 0.58; overhead 0.67 against
+0.38). mkr meets the scene's 6 steps by its tuning, not by EEVEE's rule. Fitted apart from the hit rule, the steps
+spread over the whole ray (`shadow_trace` 1, fine reads along it: `shadow_lod_reach` 1000) follow EEVEE's curves on
+`shadow_close` best (mean |V - EEVEE| over 2-16 steps 0.094 -> 0.059; at 6 steps the 35-degree cards 0.45, 0.54,
+0.68, 0.86 against EEVEE's 0.48, 0.54, 0.66, 0.83), and `shadow_trace` 1 alone takes Crimson's figure from 2.78, 2.60
+and 2.36 to 2.61, 2.46 and 2.28 (her eyes 5.0 -> 4.0 levels); but it doubles the plain area cases' error (lab
+`area_square` 1.64 -> 2.85, the lab's mean 0.85 -> 1.06), so the default stays. No placement makes the eye white's
+curve peak and fall as EEVEE's does (0.16-0.28 at every step count): that part is the hit rule's.
 
 Its samples. Fewer samples leave more of mkr's own noise in its frames, so their error against EEVEE's grows (Crimson's
 90 frames at 64, 48 and 32 samples: 0.833, 0.855 and 0.889 levels; the figure 2.56, 2.63 and 2.73). Split by giving one
@@ -5382,14 +5403,16 @@ EEVEE's ray tracing (`use_raytracing`, method SCREEN: `mkr/mkr/src/raytrace.rs`,
 on the lab's rt_* cases against EEVEE's frames, its frames without ray tracing (`noraytrace`) and Cycles with bounces
 (`cycles_gi`): each glossy lobe (reflection, coat) up to the scene's `trace_max_roughness` sends a ray per
 sample, drawn from its GGX distribution of visible normals, through the sample's depth buffer (`trace_steps` 32,
-denser near the surface, then a bisection; a hit where the ray's stretch since the last step overlaps a surface as
-deep as the scene's `screen_trace_thickness`). A ray that finds a surface takes the light the previous sample left
-there (the lighting pass keeps its lit picture, so light bounces from sample to sample as EEVEE's radiance feedback
-does; the first sample's comes from a lighting pass of its own before it); one that finds nothing takes the world's
-probe along the ray, blurred as a lobe half as rough (`trace_miss` 0.5: EEVEE's traced rough floors are darker where
-they mirror the sky than its probe alone, by 1-5 levels at roughness 0.25-0.4; read along the mirror direction mkr's
-were 2-3 levels too bright). The film's samples average the rays, as EEVEE's denoiser averages its neighbours'. Lobes
-rougher than `trace_max_roughness` fade from their ray into fast GI as EEVEE's do (progressively), wholly fast GI's
+denser near the surface, then a bisection; a ray going away from the camera hits a surface it crossed since its last
+step, with `trace_cross` (0.25) of the scene's `screen_trace_thickness` to spare past it, one coming back toward the
+camera a surface it is less than that thickness behind: below). A ray that finds a surface takes the light the
+previous sample left there (the lighting pass keeps its lit picture, so light bounces from sample to sample as EEVEE's
+radiance feedback does; the first sample's comes from a lighting pass of its own before it); one that finds nothing
+takes the world's probe along the ray, blurred as a lobe half as rough (`trace_miss` 0.5: EEVEE's traced rough floors
+are darker where they mirror the sky than its probe alone, by 1-5 levels at roughness 0.25-0.4; read along the mirror
+direction mkr's were 2-3 levels too bright). The film's samples average what EEVEE's temporal accumulation leaves of
+the rays' light (`rt_temporal`, below). Lobes rougher than `trace_max_roughness` fade from their ray into fast GI as
+EEVEE's do (progressively), wholly fast GI's
 from roughness `gi_rough` (1): EEVEE's open rough floor (lab `gi_rough`) keeps 0.75-0.81 of its probe-lit light at
 roughness 0.5-0.6, 0.82-0.96 at 0.7-0.8 and 0.97 at 0.9-1. Blended surfaces are lit forward with the probe, as EEVEE
 lights them. Fast GI (`fast_gi`, on: as the scene sets it; `raytrace.wgsl` `rt_scan`) is EEVEE's horizon scan: per
@@ -5400,30 +5423,49 @@ texels), each scanned both ways in `fast_gi_step_count` depth samples out to the
 (`fast_gi_thickness_near` farther along its camera ray, and at least `fast_gi_thickness_far` of angle past its front),
 in 32 sectors of equal cosine-weighted measure (a visibility bitmask, after Therrien et al. 2023), the normal leaning
 `fast_gi_bias` toward the camera. What stays open passes the world's diffuse light; the GLOBAL_ILLUMINATION method adds
-what a sample hides first, lit as the previous sample left it, `gi_bounce` of it: one bounce of each sample's direct
-and reflected light (the lighting pass keeps its picture without that bounce for the next sample's rays; fed back, a
-closed space lit itself over the samples). `gi_bounce` is 0 for now: the occlusion alone, see jwin below. Measured on
-the lab's white-world cases with their fastgi_ao, noraytrace and cycles_gi variants: a floor 2.5, 5.5 and 10.5 m from
-a 2.5 m wall keeps 0.78, 0.88 and 0.96 of its light under EEVEE's occlusion alone, its bounce brings it to 1.05, 1.02
-and 0.99 (Cycles' bounces: 0.89, 0.98, 1.0), a body 10 cm off the wall up to 1.4 times Cycles' light; in the open
-cabin EEVEE's occlusion blackens the seat back yet leaves 0.19-0.27 on the walls and roof, where Cycles leaves 0.04-0.09
-(the screen does not show what closes the cabin). Mean \|error\| against EEVEE (levels, % of pixels over 8), fast GI
-off (before) -> the occlusion alone (default) -> with the bounce (`gi_bounce` 1) -> the bounce fed back over the
-samples: gi_wall 3.58 -> 8.21 -> 3.23 (9.5) -> 3.09, gi_cabin 22.69 -> 17.04 -> 6.02 (27.9) -> 6.39, gi_rough 10.18 ->
-7.61 -> 5.69 (36.0) -> 5.88, rt_corner 13.75 -> 14.45 -> 6.02 (43.1) -> 5.19, rt_corner_ao 0.97 -> 0.38 (0.1),
-rt_world 6.03 -> 3.23 -> 3.37 (13.3) -> 3.54, rt_rough 2.72 -> 3.29 -> 2.96 (11.3) -> 2.94, rt_mirror 1.44 -> 1.96 ->
-1.57 (3.7) -> 1.32 (the cosine rays marched through the depth buffer that came before: gi_cabin 15.16, rt_corner 8.78,
-rt_world 4.76). EEVEE itself is 2.6, 8.8, 7.4, 2.3 levels from Cycles on rt_mirror, rt_rough, rt_world, rt_corner; mkr
-still misses EEVEE's 2-7 % darker open floor under the sky (rt_world) and 4-6 levels of rt_corner's bounce. On jwin's
-frames (Coverage's 15:25 bake, 26 frames per output two a lit shot, final settings), the same four: 16:9 4.16 (18.1 %
-over 8) -> 3.05 (10.2) -> 4.83 (22.2) -> 5.24 (24.4), over the figure 4.21 -> 3.09 -> 4.90 -> 5.31; 9:16 3.60 (15.5) ->
-2.64 (8.7) -> 4.30 (20.8) -> 4.63 (22.6), figure 3.64 -> 2.67 -> 4.36 -> 4.69. With the occlusion alone mkr is still 1-2.8
-levels too bright on every kind of surface; the one bounce adds 3.5, 2.0 and 2.4 levels (r, g, b) on average, 9.7 on
-the orange seats (their own light between cushion and back) and 8.5 in red on the red hair (its strands in the depth
-buffer lighting their neighbours; fed back: 4.2, 12 and 9.4): mkr's scan gathers far more of the seats' and the hair's
-own light than EEVEE's half-resolution, denoised scan does there, which the lab does not show yet. Its cost on jwin: 70
-and 61 ms a frame of 64 samples (GPU 416 -> 486 and 408 -> 469 ms; two slices a sample were 107 and 95), the rough
-lobes' rays included. A scene without ray tracing compiles none of it (`pipelines.rs`
+what a sample hides first, lit as the previous sample left it, `gi_bounce` of it (1: the scene's method): one bounce of
+each sample's direct and reflected light (the lighting pass keeps its picture without that bounce for the next sample's
+rays; fed back, a closed space lit itself over the samples), and only off the side of a sample the camera sees when
+that side faces the pixel (the G-buffer's true normal there), its light clamped by `clamp_surface_indirect` as a traced
+ray's is (below). EEVEE draws both: the wall behind thin red strands gets none of their lit fronts' light (lab
+`gi_strands`: 0.002 where mkr's bounce gave 0.057 without the facing rule, 0.005 with it), and the floor round
+`rt_clamp`'s strips glows 6.5 times as much without the clamp, as the strips' 2.5, 10, 40 and 160 against 2.5, 10, 10
+and 10 add up. Measured on the lab's white-world cases with their fastgi_ao, noraytrace and cycles_gi variants: a floor
+2.5, 5.5 and 10.5 m from a 2.5 m wall keeps 0.78, 0.88 and 0.96 of its light under EEVEE's occlusion alone, its bounce
+brings it to 1.05, 1.02 and 0.99 (Cycles' bounces: 0.89, 0.98, 1.0), a body 10 cm off the wall up to 1.4 times Cycles'
+light; in the open cabin EEVEE's occlusion blackens the seat back yet leaves 0.19-0.27 on the walls and roof, where
+Cycles leaves 0.04-0.09 (the screen does not show what closes the cabin). How EEVEE's fast GI depends on its settings
+and the scene (the lit cases `gi_seat` and `gi_strands` and their `fastgi_*` variants, scene-linear, the bounce being
+GLOBAL_ILLUMINATION's frame less AMBIENT_OCCLUSION_ONLY's): its picture's resolution moves neither the occlusion
+anywhere nor the bounce of large surfaces (the seats' within 5 % at full, half and quarter resolution), but takes thin
+strands' bounce off the wall to 0.35 of full resolution's at half and 0.28 at a quarter; the near thickness at 2 cm
+(mk's 25) or the far one at 0.1 rad (pi / 4) move it by less than 10 %; the lights' shadows, the camera's clip range,
+the picture's size, motion and the material (Diffuse, Principled, MMD's Diffuse-Glossy mix, a Transparent mix) not at
+all. A strand's bounce falls with its distance from the wall (0.040, 0.032, 0.020 and 0.008 at 1, 3, 10 and 30 cm).
+The seats gather 36 % of their own light near (1.4 times Cycles' bounce), and EEVEE's bounce off large surfaces is
+1.1-2.1 times mkr's, more as the camera nears (the seats 1.8 at 1.3 m and 1.15 at 3.5 m, gi_wall 1.4-1.6, gi_cabin
+1.1-1.6, rt_corner 2.1); yet on jwin's own frames (the same frames with and without the bounce, at 1080p and 540p, the
+car's interior lights alone too) EEVEE's bounce is about 1 % of the picture (median 0.2-1.4 %, 95th percentile 4-9 %),
+on the faces, hair and seats alike: what keeps it that low there is not found (not the settings above, which jwin
+shares; EEVEE's full-resolution frames of jwin draw squares of other light and are no measure). mkr's bounce against
+EEVEE's (mean over the pixels it lights), before the two rules -> with them: the lab's boxes 0.5-0.9 -> 0.4-0.55, the
+strands 5-7 -> 1.5-2, the wall behind them 30 -> 3-4, two of jwin's interior frames 4.6 and 14 -> 0.9 and 2.1. Mean
+\|error\| against EEVEE (levels, % of pixels over 8), the occlusion alone -> the bounce before -> the bounce now:
+gi_seat 5.43 (31.7) -> 4.20 -> 2.59 (16.2), gi_strands 0.41 -> 0.72 -> 0.40, gi_wall 8.21 -> 3.23 -> 3.67 (11.2),
+gi_cabin 17.04 -> 6.02 -> 7.66 (35.6), gi_rough 7.52 -> 5.68 -> 5.40 (31.3), rt_corner 14.44 -> 6.01 -> 6.54 (49.8),
+rt_corner_ao 0.38, rt_world 3.29 -> 3.41 -> 2.41 (8.3), rt_rough 2.95 -> 2.86 -> 2.58 (8.8), rt_mirror 1.76 -> 1.33 ->
+1.37 (3.7), rt_clamp 4.63 -> 13.70 -> 3.81 (18.0): the eleven's mean 6.00 -> 4.32 -> 3.35 (fast GI off, before the
+scan: gi_wall 3.58, gi_cabin 22.69, gi_rough 10.18, rt_corner 13.75, rt_world 6.03, rt_rough 2.72, rt_mirror 1.44).
+EEVEE itself is 2.6, 8.8, 7.4, 2.3 levels from Cycles on rt_mirror, rt_rough, rt_world, rt_corner; mkr still misses
+EEVEE's 2-7 % darker open floor under the sky (rt_world) and half of its bounce off large surfaces. On jwin's frames
+(26 per output, two a lit shot, 64 samples, motion blur), the same three: 16:9 2.53 (8.1 % over 8) -> 4.43 (20.5) ->
+2.55 (7.6), over the figure 2.57 -> 4.49 -> 2.59; 9:16 2.06 (6.4) -> 3.88 (19.0) -> 2.15 (6.5), figure 2.09 -> 3.93 ->
+2.18. Against the occlusion alone on the same tree the bounce costs jwin 0.02 and 0.09 levels (16:9's pixels over 8
+fall from 8.1 to 7.6 %, 9:16's rise from 6.4 to 6.5 %), which the lab's gain outweighs: `gi_bounce` is 1 (the bounce
+before was measured on the tree just before EEVEE's temporal accumulation came in, whose occlusion alone was 2.75 and
+2.31). The bounce costs 10 and 7 ms of a jwin frame (GPU 489 -> 499 and 473 -> 480 ms); the scan itself 70 and 61 ms
+of a frame of 64 samples (GPU 416 -> 486 and 408 -> 469 ms when it came in; two slices a sample were 107 and 95), the
+rough lobes' rays included. A scene without ray tracing compiles none of it (`pipelines.rs`
 `RT_TRACED`): Crimson's frames are the same bytes as before (10 frames, `RADV_DEBUG=nodcc`). A ray's light, found or
 the probe's, is clamped as the scene's `clamp_surface_indirect` says (10 by Blender's default, jwin's too): scaled down
 until its largest channel is the clamp (lab `rt_clamp`, strips glowing at 2.5-160 over a mirror and a wet asphalt: 7.70
@@ -5443,12 +5485,54 @@ the car's interior 3.6 (+2.8, 16 %), the seats 2.8 (+2.3), car paint 2.5 (+1.1),
 within 1.3. The interior's excess was the dash glow (a point light of radius 5 cm about 0.2 m from the wheel's hub:
 x2.65 there, x1.81 over the frame, the four interior area lights within 1 %); the asphalt's the wet coat's traced
 reflections of the lamps', cars' and signs' emission (x1.5-2.6, in the emission alone; EEVEE's clamp takes its own
-down by up to x1.58 there). Still open: mkr's traced reflections of bright emitters stay 1.25-1.4 times EEVEE's on
-`rt_clamp` even on the mirror (EEVEE draws a broad glow round them that mkr's bounce, off, does not), the world on
-the seats x1.2-2.6 (fast GI's occlusion), the eyes x0.86, and the mixed pixels (edges, depth of field, hashed alpha).
+down by up to x1.58 there). Still open then: mkr's traced reflections of bright emitters 1.25-1.4 times EEVEE's on
+`rt_clamp` (split below), the world on the seats x1.2-2.6 (fast GI's occlusion), the eyes x0.86, and the mixed
+pixels (edges, depth of field, hashed alpha).
 Over jwin's 26 frames per output (two a lit shot, 64 samples, motion blur): 16:9 3.05 (10.2 % over 8) -> 2.96 (10.0)
 with the clamp -> 2.75 (9.3) with the disk, over the figure 3.09 -> 3.01 -> 2.80; 9:16 2.64 (8.7) -> 2.50 (8.5) ->
 2.31 (7.7), figure 2.67 -> 2.54 -> 2.34; GPU 484 and 467 ms a frame either way. Crimson's frames are the same bytes.
+
+Reflections of emitters, measured on the lab's `rt_emit` (one width of white card a frame, 2, 6, 20 and 60 cm across,
+under the clamp, over a black dielectric floor and a Glossy one at roughness 0, 0.1, 0.2 and 0.4) with EEVEE's
+denoiser stages and trace settings changed one at a time (variants `nodenoise`, `notemporal`, `nobilateral`,
+`trace_thin`, `trace_thick`, `trace_coarse`, `trace_fine`) and Cycles with bounces, each card's light summed over the
+floor. Three things make EEVEE's darker than mkr's were. The hit: EEVEE draws the same reflections at thicknesses 0.05
+and 0.2 (more at 1), on the mirror within 5 % of Cycles' for the 20 and 60 cm cards; mkr counted every ray whose
+stretch since its last step overlapped the whole thickness, so rays passing under and behind a card took its light,
+11-15 % more than EEVEE's undenoised frames on the 20 and 60 cm cards and up to 1.6 times on the thin ones. With
+`trace_cross` (rays going away from the camera keep a quarter of the thickness past a surface they crossed; rays
+coming back toward it, a ball's lower half mirroring the floor, the whole thickness: a quarter took `rt_world` from
+3.23 to 3.51) the wide cards' light is within 1.5 % of EEVEE's undenoised frames up to roughness 0.2. The denoiser:
+its temporal accumulation (off, the frames are the undenoised ones, the bilateral filter then changing nothing) and
+its bilateral filter take light away where few rays find the emitter, the edges and tails of a reflection and narrow
+ones: at roughness 0.1-0.2, 6-17 % of the 20 and 60 cm cards' light and 26-47 % of the 2 and 6 cm cards', 1-8 % on the
+mirror. The trace of rough lobes misses thin emitters: at roughness 0.4 EEVEE's undenoised frames find none of the
+2 cm card's light and a third to a half of the 6 cm card's (Cycles all of it, mkr most of it), more at precision 1
+(`trace_fine`) and less at 0 (`trace_coarse`).
+On `rt_clamp`'s mirror the white strips' reflections were within 2 % of EEVEE's; the excess was the red strips hidden
+behind them (mkr's rays took the white strips' light through the thickness) and, on the rough floors, the denoiser's
+loss; the glow round the strips is fast GI's bounce on the floor's diffuse base (none with `fastgi_ao`, 6 times
+brighter with `noclamp`: EEVEE clamps the bounce too). Mean \|error\| before -> after `trace_cross`: rt_emit 1.50 ->
+1.31, rt_clamp 4.61 -> 4.29, rt_mirror 1.96 -> 1.73, rt_rough 3.29 -> 3.19, gi_rough 7.61 -> 7.59, rt_world 3.23 ->
+3.25, the other rt_* and gi_* cases the same; jwin's 26 frames per output 16:9 2.75 (9.3 % over 8) -> 2.70 (9.0),
+figure 2.80 -> 2.74, 9:16 2.31 (7.7) -> 2.26 (7.5), figure 2.34 -> 2.29, GPU 483 -> 487 and 466 -> 469 ms a frame;
+Crimson's frames the same bytes. EEVEE's temporal accumulation (`raytrace.wgsl` `rt_temporal`, when the scene's
+`use_denoise` and `denoise_temporal` are on, as Blender sets them): the lighting pass keeps the traced lobes' light
+apart and blends it per pixel into a history over the frame's samples (two more pictures beside the traced light's:
+the result and the raw light's luminance), the history clamped in luminance to the range of the previous sample's raw
+light over the 3 x 3 pixels round it and of this sample's own, at 1 / (n + 1) on sample n; the next sample's rays still
+find the raw light. Where few rays find an emitter that range is often dark and the history loses its light, as
+EEVEE's does: rt_emit's 6-60 cm cards' light within 2 % of EEVEE's frames without its bilateral filter (`nobilateral`)
+at roughness 0.2, the 2 and 6 cm cards 8-15 % brighter at 0.1, the thin cards at 0.4 mostly gone as in EEVEE's. Mean
+\|error\| before -> after: rt_emit 1.31 -> 0.55, rt_rough 3.19 -> 2.95, rt_mirror 1.73 -> 1.76 and rt_world 3.25 ->
+3.29 (a little darker where the mirror and the balls reflect the box and the sky), rt_clamp 4.29 -> 4.63: its floor
+lacked fast GI's bounce glow (`gi_bounce` was 0 then), which mkr's brighter reflections hid: against EEVEE's frames
+without the bounce (`fastgi_ao`) it goes 1.57 -> 1.03, and with the clamped bounce on since (`gi_bounce` 1) it is 3.81
+against EEVEE's own; gi_rough 7.59 -> 7.52, the other rt_* and gi_* cases the same.
+jwin's 26 frames per output: 16:9 2.70 (9.0 % over 8) -> 2.53 (8.1), figure 2.74 -> 2.57, 9:16 2.26 (7.5) -> 2.06
+(6.4), figure 2.29 -> 2.09, GPU 487 -> 489-491 and 469 -> 471-474 ms a frame (two runs); Crimson's frames the same
+bytes (`RADV_DEBUG=nodcc`). Still open: the bilateral filter's further loss (EEVEE's frames 3-22 % darker than
+`nobilateral` at roughness 0.1-0.2) and the rough lobes' missed thin emitters in the trace itself.
 
 Many lights (jwin_mv: 74, a road lamp every 50 m, tunnel lights, cars' beams): a frame of more than eight
 (`pipelines.rs` `TILED_FROM`) culls them per 8 x 8 tile first (`shaders/deferred.wgsl` `light_pass_tiled`): the tile
@@ -5474,7 +5558,8 @@ metres from the receiver, so the car kept no shadow of its own (`shadow_mode: "r
 `rt_rough` unchanged, a scene without a shadowed sun compiles the code of one map (Crimson: the same bytes and times).
 What is left: the world's diffuse light where it alone lights a pixel, a quarter too bright (EEVEE's horizon scan
 occludes it in the car: fast GI, above, now draws that scan; its occlusion alone takes these frames to 3.05 and 2.64,
-the scene's GLOBAL_ILLUMINATION bounce on top, gathered from the seats' and the hair's own light, to 4.83 and 4.30),
+the scene's GLOBAL_ILLUMINATION bounce on top first to 4.83 and 4.30, then, off camera-facing sides and clamped, within
+0.02 and 0.09 of the occlusion alone),
 and 1.4-1.7 levels over every pixel that no group explains: not the view, film, render or compositor settings (jwin's are
 Crimson's but for ray tracing, and its compositor tree has no nodes), not the glows' emission (scaling it only adds
 error). The car's interior lights, the road lamps, the tunnel lights and the beams fit within 2-25 % of their own
@@ -5843,7 +5928,9 @@ unless the case says, dither 1, shadows on, no ray tracing.
 | `world_transparent`, `world_lightpath`, `world_visibility` | the sky with the film transparent; a world warm to camera rays and cool to the rest (Light Path); the sky with its camera and glossy ray visibility off |
 | `rt_world`, `rt_mirror`, `rt_rough`, `rt_corner`, `rt_corner_ao` | EEVEE's ray tracing as mk's scenes set it (screen traced to roughness 0.5, denoised, fast GI at half resolution): the balls under the sky; a glossy floor (0.02, then 0.1-0.7 keyed) reflecting a box, a ball and a lamp above the frame; a white floor in a red and green corner with a block (fast GI's bounce, then its ambient occlusion alone) |
 | `gi_wall`, `gi_cabin`, `gi_rough` | fast GI alone (mk's ray tracing settings, lit by the world, no light): under a white world a white floor and wall, a slab 0.3 m over the floor (a car's underside), a body 10 cm off the wall and one in the open, from 3, 6 and 12 m; a body seated in a car's cabin open at the front, seen through it from 3.6 and 2.2 m; a glossy floor of roughness 0.5-1 (keyed) under the sky by a white wall, a box and a ball |
+| `gi_seat`, `gi_strands` | fast GI with a light (mk's ray tracing settings, a dim uniform world of 0.1, one area light), the bounce of a surface's own object's light: two orange car seats (an L of cushion and back, one with side bolsters as a bucket seat's) from 1.3 m in front, 1.5 m from the side and 3.5 m; red strands 6 mm thick 1, 3, 10 and 30 cm off a white wall and a curtain of 24 of them 7 mm apart 2 cm off it, from 1.2 and 2.3 m |
 | `rt_clamp` | EEVEE's clamp of the light reflected through ray tracing (`clamp_surface_indirect`, 10 as Blender sets it): white and saturated red emissive strips glowing at 2.5, 10, 40 and 160 over a floor that mirrors them, then a wet asphalt (a base of roughness 0.175 under a coat of 0.1, as mk's highway sets it), the base alone, the coat alone |
+| `rt_emit` | the traced reflection of an emitter by its width and the floor's roughness: one width of white emissive card a frame (2, 6, 20 and 60 cm across, 40 cm tall, 10 cm over the floor, strength 4, under the clamp) over a black dielectric floor and a Glossy one, at roughness 0, 0.1, 0.2 and 0.4 |
 | `point_near` | the near field of a sphere light (jwin's dash glow on the wheel): point lights of radius 5 cm, no shadows, 0.1, 0.2, 0.4 and 0.8 m over a diffuse grey floor and a dark glossy one (roughness 0.5), their power growing as the height squared |
 
 `--build` builds the cases not built yet with Blender (seconds each, the mmd ones minutes), `--rebuild` all named again,
@@ -5866,7 +5953,10 @@ case deletes its variants (they showed the old scene).
 | `cycles_noshadow` | the same with every light's shadow off (Cycles 4.2 reads the lights' `use_shadow`) |
 | `jittered` | EEVEE as the case has it with `use_bokeh_jittered` on (a variant's `eevee` table sets scene.eevee properties): the camera jittered over the aperture each sample, the post process blurring the rest |
 | `raytrace`, `fastgi_ao`, `noraytrace` | EEVEE as the case has it with mk's ray tracing on, with fast GI as ambient occlusion alone, or with ray tracing off (a nested `eevee` table sets `ray_tracing_options`) |
+| `fastgi_res1`, `fastgi_ao_res1`, `fastgi_res4`, `fastgi_thin`, `fastgi_far`, `fastgi_noshadow`, `fastgi_ao_noshadow` | EEVEE with mk's ray tracing, one fast GI setting changed: the GI picture at full resolution (with the bounce, then as ambient occlusion alone), at a quarter, the near thickness 2 cm (mk's 25), the far (angular) thickness 0.1 rad (mk's pi / 4), every light's shadow off (with the bounce, then the occlusion alone) |
 | `noclamp` | EEVEE as the case has it without its clamp of the indirect light (`clamp_surface_indirect` 0) |
+| `nodenoise`, `notemporal`, `nobilateral` | EEVEE as the case has it with its ray tracing's denoiser off, or its temporal accumulation or its bilateral filter alone off |
+| `trace_thin`, `trace_thick`, `trace_coarse`, `trace_fine` | EEVEE's ray tracing undenoised with the screen trace's thickness 0.05 or 1, or its precision 0 or 1 (mk's: 0.2 and 0.5) |
 | `cycles_gi` | `cycles` with 4 diffuse and 4 glossy bounces: the indirect light a world, ray tracing and fast GI approximate, computed exactly |
 
 Cycles' noise at those counts, from two renders with seeds 0 and 1 (the noise of one render: their difference over

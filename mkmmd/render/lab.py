@@ -285,6 +285,25 @@ RT_CLAMP_STRIPS = [{"kind": "box", "name": f"strip_{name}_{i}", "size": [0.3, 0.
                     "material": {"kind": "emission", "inputs": {"Color": color, "Strength": s}}}
                    for name, color, y in (("white", [1.0, 1.0, 1.0], 2.0), ("red", [1.0, 0.05, 0.02], 3.2))
                    for i, s in enumerate((2.5, 10.0, 40.0, 160.0))]
+# one width of white emissive card a frame (2, 6, 20 and 60 cm across, 40 cm tall, 10 cm over the floor, strength 4:
+# under the clamp) over a black dielectric floor (left) and a Glossy one (right), at roughness 0, 0.1, 0.2 and 0.4: how
+# much of a card's light EEVEE's traced reflections find by its width and the floor's roughness (its variants: the
+# denoiser's stages, the trace's thickness and quality)
+RT_EMIT_WIDTHS = [0.02, 0.06, 0.2, 0.6]
+RT_EMIT_FRAMES = [(w, r) for r in (0.0, 0.1, 0.2, 0.4) for w in RT_EMIT_WIDTHS]
+RT_EMIT_FLOORS = [
+    _plate("diel", [4.0, 16.0], [-2.0, 4.0, 0.0],
+           {"kind": "principled", "inputs": {"Base Color": [0.0, 0.0, 0.0], "Roughness": 0.0, "Specular IOR Level": 0.5},
+            "keys": {"Roughness": [r for _, r in RT_EMIT_FRAMES]}}),
+    _plate("glossy", [4.0, 16.0], [2.0, 4.0, 0.0],
+           {"kind": "glossy", "inputs": {"Color": [0.8, 0.8, 0.8], "Roughness": 0.0},
+            "keys": {"Roughness": [r for _, r in RT_EMIT_FRAMES]}})]
+RT_EMIT_CARDS = [{"kind": "box", "name": f"e_{side}_{round(w * 100)}", "size": [w, 0.02, 0.4],
+                  "at": [sgn * x, 2.0, 0.3],
+                  "material": {"kind": "emission", "inputs": {"Color": [1.0, 1.0, 1.0], "Strength": 4.0},
+                               "keys": {"Strength": [4.0 if fw == w else 0.0 for fw, _ in RT_EMIT_FRAMES]}}}
+                 for side, sgn in (("d", -1.0), ("g", 1.0))
+                 for w, x in zip(RT_EMIT_WIDTHS, (0.6, 1.2, 1.8, 2.6))]
 
 # point lights of radius 5 cm (jwin's dash glow: 2 W about 0.2 m from the wheel's hub) at 0.1, 0.2, 0.4 and 0.8 m over
 # a diffuse grey floor (left) and a dark glossy one (right, roughness 0.5: the wheel's), 2 W times the height squared
@@ -332,6 +351,35 @@ GI_ROUGH_FLOOR = ([_plate("floor", [14.0, 14.0], [0.0, 0.0, 0.0],
                           {"kind": "glossy", "inputs": {"Color": [0.5] * 3, "Roughness": GI_ROUGH[0]},
                            "keys": {"Roughness": GI_ROUGH}}),
                    _plate("wall", [5.0, 2.5], [0.0, 3.0, 1.25], GI_GREY, rot=[90.0, 0.0, 0.0])] + RT_FLOOR[:2])
+
+# fast GI with lights (the lit scenes' case): a dim world and an area light, so a surface's bounce is mostly its own
+# object's light. An L of an orange cushion and back (jwin's car seats), and one with side bolsters as a bucket seat's
+GI_DIM = {"kind": "uniform", "color": [0.1] * 3}
+GI_ORANGE = _shade("diffuse", [0.8, 0.32, 0.1])
+GI_SEAT = ([_plate("floor", [8.0, 8.0], [0.0, 0.0, 0.0], _shade("diffuse", [0.15] * 3))]
+           + [{"kind": "box", "name": n, "size": s, "at": a, "material": GI_ORANGE} for n, s, a in (
+               ("cushion_l", [0.5, 0.5, 0.12], [-0.35, 0.0, 0.45]), ("back_l", [0.5, 0.1, 0.65], [-0.35, 0.3, 0.8]),
+               ("cushion_r", [0.5, 0.5, 0.12], [0.35, 0.0, 0.45]), ("back_r", [0.5, 0.1, 0.65], [0.35, 0.3, 0.8]),
+               ("bolster_a", [0.08, 0.14, 0.55], [0.14, 0.18, 0.8]), ("bolster_b", [0.08, 0.14, 0.55], [0.56, 0.18, 0.8]))])
+GI_SEAT_LIGHT = _area("SQUARE", 0.5, 40.0, place=[[0.0, -1.0, 1.9], [0.0, 0.15, 0.7]])
+# thin red strands 6 mm thick (jwin's red hair) hanging 1, 3, 10 and 30 cm off a white wall, and a curtain of 24 of
+# them 7 mm apart 2 cm off it, the key light from the front left
+GI_RED = _shade("diffuse", [0.7, 0.06, 0.04])
+GI_STRANDS = ([_plate("floor", [8.0, 8.0], [0.0, 0.0, 0.0], _shade("diffuse", [0.15] * 3)),
+               _plate("wall", [4.0, 2.5], [0.0, 0.5, 1.25], GI_GREY, rot=[90.0, 0.0, 0.0])]
+              + [{"kind": "tube", "name": f"strand_{i}", "r": 0.003, "h": 0.6, "at": [x, 0.497 - g, 0.5],
+                  "material": GI_RED} for i, (x, g) in enumerate(((-0.4, 0.01), (-0.28, 0.03), (-0.16, 0.1), (-0.04, 0.3)))]
+              + [{"kind": "tube", "name": f"curtain_{i}_{j}", "r": 0.003, "h": 0.6,
+                  "at": [0.1 + 0.007 * i, 0.477 - 0.007 * j, 0.5], "material": GI_RED} for i in range(12) for j in range(2)])
+GI_STRANDS_LIGHT = _area("SQUARE", 1.0, 120.0, place=[[-0.8, -1.6, 1.7], [0.0, 0.45, 0.8]])
+
+
+def _gi_lit_case(doc, objects, light, views, labels):
+    case = _gi_case(doc, GI_DIM, objects, views, labels)
+    case["params"]["lights"] = [light]
+    return case
+
+
 
 # Motion blur (EEVEE Next: steps 1 renders every sample at the shutter's middle and blurs it along the pixels' motion
 # to the shutter's ends; steps N renders N such segments). Rows of things crossing the frame at blur lengths of 6 to
@@ -572,12 +620,28 @@ CASES = {
     "gi_rough": _gi_case("fast GI on a glossy floor of roughness 0.5-1 under the sky by a white wall, a box and a ball",
                          SKY, GI_ROUGH_FLOOR, [[0.0, -4.0, 1.6], [0.0, 1.5, 0.0]], [f"rough {r:g}" for r in GI_ROUGH],
                          frames=len(GI_ROUGH)),
+    "gi_seat": _gi_lit_case("fast GI on two orange car seats (an L of cushion and back, one with side bolsters) under an "
+                            "area light and a dim world, from 1.3 m in front, 1.5 m from the side and 3.5 m",
+                            GI_SEAT, GI_SEAT_LIGHT,
+                            [[[0.0, -1.1, 1.0], [0.0, 0.15, 0.72]], [[-1.0, -0.9, 1.15], [0.1, 0.15, 0.72]],
+                             [[0.3, -3.2, 1.3], [0.0, 0.15, 0.7]]], ["near", "side", "far"]),
+    "gi_strands": _gi_lit_case("fast GI on thin red strands (6 mm) 1-30 cm off a white wall and a curtain of them 2 cm off "
+                               "it, a key light from the front left and a dim world, from 1.2 and 2.3 m",
+                               GI_STRANDS, GI_STRANDS_LIGHT,
+                               [[[0.0, -0.7, 0.85], [0.0, 0.5, 0.8]], [[0.2, -1.8, 1.0], [0.0, 0.5, 0.8]]],
+                               ["near", "far"]),
     "rt_clamp": {"kind": "scene", "doc": "EEVEE's clamp of the light reflected through ray tracing "
                  "(clamp_surface_indirect, 10 as Blender sets it): white and red emissive strips of 2.5-160 over a "
                  "floor, a mirror, then a wet asphalt (rough base under a coat), the base alone, the coat alone",
                  "frames": 4, "labels": ["mirror", "wet", "base", "coat"], "outputs": MAIN, "eevee": RT,
                  "params": {"objects": [RT_CLAMP_FLOOR] + RT_CLAMP_STRIPS, "camera": [[0.0, -4.0, 1.6], [0.0, 1.5, 0.0]],
                             "lens": 35.0}},
+    "rt_emit": {"kind": "scene", "doc": "one width of white emissive card a frame (2, 6, 20, 60 cm, strength 4) over a "
+                "black dielectric floor and a Glossy one at roughness 0, 0.1, 0.2, 0.4: the traced reflection of an "
+                "emitter by its width and the floor's roughness", "frames": len(RT_EMIT_FRAMES),
+                "labels": [f"w{round(w * 100)} r{r:g}" for w, r in RT_EMIT_FRAMES], "outputs": MAIN, "eevee": RT,
+                "params": {"objects": RT_EMIT_FLOORS + RT_EMIT_CARDS, "camera": [[0.0, -4.0, 1.0], [0.0, 2.0, 0.0]],
+                           "lens": 35.0}},
     "point_near": {"kind": "scene", "doc": "point lights 5 cm across, 0.1-0.8 m over a diffuse floor and a dark glossy "
                    "one (roughness 0.5, a steering wheel's), no shadows, their power growing as the height squared: the "
                    "near field of a sphere light (jwin's dash glow on the wheel)", "frames": 1, "labels": ["near"],
@@ -609,6 +673,40 @@ VARIANTS = {
     "cycles_gi": {"doc": "Cycles with bounces (4 diffuse, 4 glossy): the indirect light ray tracing and fast GI "
                          "approximate, and what a world lights, computed exactly", "engine": "CYCLES", "shadows": True,
                   "samples": CYCLES_SAMPLES, "seed": 0, "transparent": 64, "bounces": 4},
+    "fastgi_res1": {"doc": "EEVEE with mk's ray tracing, fast GI at full resolution (fast_gi_resolution 1)",
+                    "engine": "EEVEE", "shadows": True, "eevee": dict(RT, fast_gi_resolution="1")},
+    "fastgi_ao_res1": {"doc": "EEVEE with mk's ray tracing, fast GI as ambient occlusion only at full resolution",
+                       "engine": "EEVEE", "shadows": True,
+                       "eevee": dict(RT, fast_gi_method="AMBIENT_OCCLUSION_ONLY", fast_gi_resolution="1")},
+    "fastgi_res4": {"doc": "EEVEE with mk's ray tracing, fast GI at quarter resolution (fast_gi_resolution 4)",
+                    "engine": "EEVEE", "shadows": True, "eevee": dict(RT, fast_gi_resolution="4")},
+    "fastgi_thin": {"doc": "EEVEE with mk's ray tracing, fast GI's near thickness 2 cm (mk's: 25 cm)", "engine": "EEVEE",
+                    "shadows": True, "eevee": dict(RT, fast_gi_thickness_near=0.02)},
+    "fastgi_far": {"doc": "EEVEE with mk's ray tracing, fast GI's far (angular) thickness 0.1 rad (mk's: pi / 4)",
+                   "engine": "EEVEE", "shadows": True, "eevee": dict(RT, fast_gi_thickness_far=0.1)},
+    "fastgi_noshadow": {"doc": "EEVEE with mk's ray tracing (fast GI's bounce), every light's shadow off (as jwin's car "
+                               "lights)", "engine": "EEVEE", "shadows": False, "eevee": RT},
+    "fastgi_ao_noshadow": {"doc": "EEVEE with mk's ray tracing, fast GI as ambient occlusion only, every light's shadow "
+                                  "off", "engine": "EEVEE", "shadows": False,
+                           "eevee": dict(RT, fast_gi_method="AMBIENT_OCCLUSION_ONLY")},
+    "nodenoise": {"doc": "EEVEE with its ray tracing's denoiser off (use_denoise)", "engine": "EEVEE", "shadows": True,
+                  "eevee": {"ray_tracing_options": {"use_denoise": False}}},
+    "notemporal": {"doc": "EEVEE with the denoiser's temporal accumulation off", "engine": "EEVEE", "shadows": True,
+                   "eevee": {"ray_tracing_options": {"denoise_temporal": False}}},
+    "nobilateral": {"doc": "EEVEE with the denoiser's bilateral filter off", "engine": "EEVEE", "shadows": True,
+                    "eevee": {"ray_tracing_options": {"denoise_bilateral": False}}},
+    "trace_thin": {"doc": "EEVEE's ray tracing undenoised, screen trace thickness 0.05 (mk's: 0.2)", "engine": "EEVEE",
+                   "shadows": True,
+                   "eevee": {"ray_tracing_options": {"use_denoise": False, "screen_trace_thickness": 0.05}}},
+    "trace_thick": {"doc": "EEVEE's ray tracing undenoised, screen trace thickness 1 (mk's: 0.2)", "engine": "EEVEE",
+                    "shadows": True,
+                    "eevee": {"ray_tracing_options": {"use_denoise": False, "screen_trace_thickness": 1.0}}},
+    "trace_coarse": {"doc": "EEVEE's ray tracing undenoised, screen trace precision 0 (mk's: 0.5)", "engine": "EEVEE",
+                     "shadows": True,
+                     "eevee": {"ray_tracing_options": {"use_denoise": False, "screen_trace_quality": 0.0}}},
+    "trace_fine": {"doc": "EEVEE's ray tracing undenoised, screen trace precision 1 (mk's: 0.5)", "engine": "EEVEE",
+                   "shadows": True,
+                   "eevee": {"ray_tracing_options": {"use_denoise": False, "screen_trace_quality": 1.0}}},
 }
 # The error split of `separate`: (key, its column in the table: E EEVEE, C Cycles, M mkr, n shadows off, test - reference;
 # the reference folder, the test folder), each folder of the case holding <output>/

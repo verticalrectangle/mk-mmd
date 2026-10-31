@@ -216,6 +216,18 @@ pub fn layouts(device: &wgpu::Device, images: u32) -> Layouts {
                 },
                 count: None,
             },
+            // the traced reflections' history (raytrace.wgsl rt_temporal): the previous sample's, and this one's
+            texture(7, wgpu::TextureSampleType::Float { filterable: false }),
+            wgpu::BindGroupLayoutEntry {
+                binding: 8,
+                visibility: cs,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: COLOR_FORMAT,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
         ],
     });
     Layouts { render, gbuffer, light }

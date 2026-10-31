@@ -7,8 +7,9 @@
 //! `fast_gi_ray_count` slices of directions round the view vector, each scanned both ways in `fast_gi_step_count` depth
 //! samples, every sample hiding the directions from its front to its back (`fast_gi_thickness_near` behind it, at least
 //! `fast_gi_thickness_far` of angle); what stays open lets the world's light through to diffuse closures and (the
-//! GLOBAL_ILLUMINATION method, `gi_bounce` of it) what hides it lights them. Glossy lobes rougher than the trace's
-//! limit fade from their ray into fast GI.
+//! GLOBAL_ILLUMINATION method, `gi_bounce` of it) what hides it lights them, where the side of it the camera sees faces
+//! them, its light clamped by `clamp_surface_indirect`. Glossy lobes rougher than the trace's limit fade from their ray
+//! into fast GI.
 
 use serde_json::Value;
 
@@ -20,11 +21,15 @@ use crate::params::{Params, RayTraceMode};
 pub struct RayTrace {
     /// Lobes up to this roughness trace rays; rougher ones fade into fast GI.
     pub max_roughness: f32,
-    /// How far behind a surface of the depth buffer a ray may pass and still hit it (m along the view axis).
+    /// How far behind a surface of the depth buffer a ray coming back toward the camera may pass and still hit it (m
+    /// along the view axis); a ray going away hits what it crossed since its last step, `trace_cross` of this to spare.
     pub thickness: f32,
     /// EEVEE's clamp of the light a ray brings (`clamp_surface_indirect`, 0: none): a ray's light whose largest
     /// channel passes it is scaled down to it (lab `rt_clamp`).
     pub clamp: f32,
+    /// EEVEE's temporal accumulation of the traced light (`use_denoise` and `denoise_temporal` on, Blender's
+    /// defaults; raytrace.wgsl rt_temporal): with it off EEVEE's frames are the undenoised ones (lab `notemporal`).
+    pub temporal: bool,
     /// Fast GI: 0 none, 1 occlusion of the world's light (AMBIENT_OCCLUSION_ONLY), 2 occlusion and bounce
     /// (GLOBAL_ILLUMINATION); slices per sample, depth samples each way, thickness (m), how far it reaches (m, 0: across
     /// the screen), angular thickness (rad), how far the normal leans toward the camera.
@@ -46,6 +51,7 @@ impl RayTrace {
         let opts = eevee.get("ray_tracing_options");
         let f = |k: &str, d: f64| opts.and_then(|o| o.get(k)).and_then(Value::as_f64).unwrap_or(d) as f32;
         let e = |k: &str, d: f64| eevee.get(k).and_then(Value::as_f64).unwrap_or(d);
+        let on = |k: &str| opts.and_then(|o| o.get(k)).and_then(Value::as_bool).unwrap_or(true);
         let gi_method = match eevee.get("fast_gi_method").and_then(Value::as_str) {
             _ if !p.fast_gi => 0,
             Some("AMBIENT_OCCLUSION_ONLY") => 1,
@@ -59,6 +65,7 @@ impl RayTrace {
             max_roughness: f("trace_max_roughness", 0.5),
             thickness: f("screen_trace_thickness", 0.2),
             clamp: e("clamp_surface_indirect", 10.0).max(0.0) as f32,
+            temporal: on("use_denoise") && on("denoise_temporal"),
             gi_method,
             gi_rays: (e("fast_gi_ray_count", 2.0) / (res * res)).round().max(1.0) as u32,
             gi_steps: if p.gi_steps > 0 { p.gi_steps } else { e("fast_gi_step_count", 8.0).max(1.0) as u32 },
@@ -69,18 +76,21 @@ impl RayTrace {
         })
     }
 
-    /// The frame record's tracing fields (`rt`, `rt2`, `rt3`, `rt4`, and `sampling.z`: the clamp) for camera `cam`.
-    pub fn record(&self, cam: &Cam, p: &Params) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], f32) {
+    /// The frame record's tracing fields (`rt`, `rt2`, `rt3`, `rt4`, and `sampling.zw`: the clamp and the share of the
+    /// thickness a ray going away keeps past a surface it crosses) for camera `cam`; `rt.x` 1: traced, 2: and the
+    /// traced light accumulated over the samples as EEVEE's denoiser does.
+    pub fn record(&self, cam: &Cam, p: &Params) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 2]) {
         let method = match self.gi_method {
             0 => 0.0,
             1 => 1.0,
             _ => 1.0 + p.gi_bounce,
         };
-        ([1.0, self.max_roughness, self.thickness * p.trace_thickness, p.trace_steps.max(1) as f32],
+        ([if self.temporal { 2.0 } else { 1.0 }, self.max_roughness, self.thickness * p.trace_thickness,
+          p.trace_steps.max(1) as f32],
          [p.trace_offset, p.trace_miss, cam.near, cam.far],
          [method, self.gi_rays as f32, self.gi_steps as f32, self.gi_thickness * p.gi_thickness],
          [self.gi_reach, self.gi_far * p.gi_far, self.gi_bias * p.gi_bias, p.gi_rough],
-         self.clamp)
+         [self.clamp, p.trace_cross])
     }
 }
 
@@ -107,6 +117,12 @@ mod tests {
         assert_eq!(rt.clamp, 10.0, "Blender's clamp_surface_indirect when the bake has none");
         eevee["clamp_surface_indirect"] = json!(0.0);
         assert_eq!(RayTrace::of(&eevee, &p).unwrap().clamp, 0.0);
+        assert!(rt.temporal, "Blender's use_denoise and denoise_temporal when the bake has none");
+        eevee["ray_tracing_options"]["denoise_temporal"] = json!(false);
+        assert!(!RayTrace::of(&eevee, &p).unwrap().temporal);
+        eevee["ray_tracing_options"]["denoise_temporal"] = json!(true);
+        eevee["ray_tracing_options"]["use_denoise"] = json!(false);
+        assert!(!RayTrace::of(&eevee, &p).unwrap().temporal);
         eevee["fast_gi_resolution"] = json!("1");
         assert_eq!(RayTrace::of(&eevee, &p).unwrap().gi_rays, 2);
         eevee["fast_gi_method"] = json!("AMBIENT_OCCLUSION_ONLY");

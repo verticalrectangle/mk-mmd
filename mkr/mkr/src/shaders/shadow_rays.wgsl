@@ -29,7 +29,8 @@ fn shadow_hit(c: RayIntersection, light: u32) -> bool {
 }
 
 // 1 when the ray from P toward a random point of light `li` (above P's horizon) reaches it, 0 when something stops it.
-fn shadow_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> f32 {
+// The ray leaves along the geometric normal Ng, as Cycles' do (N, the shading normal, is the maps' tracing's).
+fn shadow_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>, N: vec3<f32>) -> f32 {
     if (l.spot.z < 0.5 || frame.shadow.w < 0.5) {
         return 1.0;
     }

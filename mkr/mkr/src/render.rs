@@ -840,10 +840,10 @@ impl<'b> Renderer<'b> {
             entries: &[b(0, gb_extras.as_entire_binding())],
         });
         // the screen tracing's light (raytrace.rs): two pictures, sample s writing one and reading the other, the one
-        // sample s - 1 wrote (a texel each without tracing)
+        // sample s - 1 wrote (a texel each without tracing); and so the traced reflections' history (rt_temporal)
         let (rw, rh) = if self.raytrace.is_some() { (w, h) } else { (1, 1) };
-        let radiance = [0, 1].map(|_| device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("traced light"),
+        let pair = |label: &str| [0, 1].map(|_| device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
             size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
@@ -852,6 +852,8 @@ impl<'b> Renderer<'b> {
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         }).create_view(&Default::default()));
+        let radiance = pair("traced light");
+        let history = pair("traced reflections' history");
         let light_bg = [0, 1, 2, 3].map(|k| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("lighting"),
@@ -864,6 +866,8 @@ impl<'b> Renderer<'b> {
                     b(4, wgpu::BindingResource::TextureView(&colors[k])),
                     b(5, wgpu::BindingResource::TextureView(&radiance[(k + 1) % 2])),
                     b(6, wgpu::BindingResource::TextureView(&radiance[k % 2])),
+                    b(7, wgpu::BindingResource::TextureView(&history[(k + 1) % 2])),
+                    b(8, wgpu::BindingResource::TextureView(&history[k % 2])),
                 ],
             })
         });
@@ -1694,7 +1698,9 @@ impl<'b> Renderer<'b> {
             (frame.world, frame.world_probe) = world.record(&self.params);
         }
         if let Some(rt) = &self.raytrace {
-            (frame.rt, frame.rt2, frame.rt3, frame.rt4, frame.sampling[2]) = rt.record(&cam, &self.params);
+            let zw;
+            (frame.rt, frame.rt2, frame.rt3, frame.rt4, zw) = rt.record(&cam, &self.params);
+            frame.sampling[2..].copy_from_slice(&zw);
         }
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&frame));
         if !lights.is_empty() {

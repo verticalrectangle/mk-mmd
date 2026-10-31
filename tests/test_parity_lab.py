@@ -306,6 +306,23 @@ def test_the_fast_gi_cases_trace_as_mks_scenes_and_key_a_view_or_a_roughness_per
     assert floor["keys"]["Roughness"] == LB.GI_ROUGH and len(LB.GI_ROUGH) == LB.spec("gi_rough")["frames"]
 
 
+def test_the_lit_fast_gi_cases_light_an_l_and_thin_strands_and_each_variant_changes_one_setting():
+    for name in ("gi_seat", "gi_strands"):
+        case = LB.spec(name)
+        assert case["eevee"] == LB.RT and case["world"]["color"] == [0.1] * 3                  # a dim world, one light
+        assert len(case["params"]["lights"]) == 1
+        assert len(case["labels"]) == case["frames"] == len(case["params"]["camera"])
+    strands = [o for o in LB.spec("gi_strands")["params"]["objects"] if o["kind"] == "tube"]
+    assert {o["r"] for o in strands} == {0.003} and len(strands) == 28
+    for v, key, value in (("fastgi_res1", "fast_gi_resolution", "1"), ("fastgi_res4", "fast_gi_resolution", "4"),
+                          ("fastgi_thin", "fast_gi_thickness_near", 0.02), ("fastgi_far", "fast_gi_thickness_far", 0.1)):
+        eevee = LB.VARIANTS[v]["eevee"]
+        assert eevee[key] == value and {k: x for k, x in eevee.items() if k != key} == {
+            k: x for k, x in LB.RT.items() if k != key}, v
+    assert LB.VARIANTS["fastgi_ao_res1"]["eevee"]["fast_gi_method"] == "AMBIENT_OCCLUSION_ONLY"
+    assert not LB.VARIANTS["fastgi_noshadow"]["shadows"] and not LB.VARIANTS["fastgi_ao_noshadow"]["shadows"]
+
+
 def test_the_clamp_case_keys_one_floor_a_frame_under_strips_past_the_clamp():
     case = LB.spec("rt_clamp")
     assert case["eevee"] == LB.RT and LB.VARIANTS["noclamp"]["eevee"] == {"clamp_surface_indirect": 0.0}
@@ -313,6 +330,19 @@ def test_the_clamp_case_keys_one_floor_a_frame_under_strips_past_the_clamp():
     assert all(len(v) == case["frames"] == len(case["labels"]) for v in floor["material"]["keys"].values())
     strengths = sorted({s["material"]["inputs"]["Strength"] for s in strips})
     assert strengths[0] < 10.0 < strengths[-1]          # under and over Blender's clamp_surface_indirect (10)
+
+
+def test_the_emitter_case_lights_one_card_width_a_frame_under_the_clamp():
+    case = LB.spec("rt_emit")
+    assert case["eevee"] == LB.RT and len(case["labels"]) == case["frames"] == len(LB.RT_EMIT_FRAMES)
+    cards = [o for o in case["params"]["objects"] if o["kind"] == "box"]
+    for f, (w, r) in enumerate(LB.RT_EMIT_FRAMES):
+        on = [c for c in cards if c["material"]["keys"]["Strength"][f] > 0.0]
+        assert len(on) == 2 and all(c["size"][0] == w for c in on)          # that width over each floor
+        assert all(0.0 < c["material"]["keys"]["Strength"][f] < 10.0 for c in on)   # under clamp_surface_indirect
+    for floor in case["params"]["objects"][:2]:
+        assert floor["material"]["keys"]["Roughness"] == [r for _, r in LB.RT_EMIT_FRAMES]
+    assert LB.VARIANTS["trace_thick"]["eevee"]["ray_tracing_options"]["use_denoise"] is False
 
 
 def test_a_penumbra_is_measured_10_to_90_percent_from_the_dark_side():

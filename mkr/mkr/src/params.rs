@@ -138,19 +138,24 @@ pub struct Params {
     /// ray takes through the depth buffer, a multiplier of the scene's trace thickness, how far off the surface a ray
     /// starts (m, per metre of view distance plus one), and what a ray that finds nothing reads: negative, the probe as
     /// its lobe sees it without tracing (along the mirror direction); else the probe along the ray itself, blurred as
-    /// a lobe that many times as rough (measured: 0.5; the mirror direction leaves rough floors 2-3 levels too bright).
+    /// a lobe that many times as rough (measured: 0.5; the mirror direction leaves rough floors 2-3 levels too bright);
+    /// and the share of the thickness a ray going away from the camera keeps past a surface it crossed since its last
+    /// step (measured: 0.25; the whole thickness on top of the stretch finds 11-15 % more of the lab's rt_emit cards'
+    /// light than EEVEE's undenoised frames, from rays passing under and behind them).
     pub raytrace: RayTraceMode,
     pub trace_steps: u32,
     pub trace_thickness: f32,
     pub trace_offset: f32,
     pub trace_miss: f32,
+    pub trace_cross: f32,
     /// Fast GI with ray tracing (raytrace.rs): drawn as the scene sets it (false: never), EEVEE's horizon scan of the
     /// depth buffer: its depth samples each way (0: the scene's fast_gi_step_count), multipliers of the scene's
     /// fast_gi_thickness_near, fast_gi_thickness_far (angular) and fast_gi_bias, how far it reaches (m; 0: the scene's
     /// fast_gi_distance, across the screen when that is 0 too); the roughness from which glossy lobes are wholly fast
     /// GI's (from trace_max_roughness up they fade into it from their traced ray); and how much of the
-    /// GLOBAL_ILLUMINATION method's bounce mkr draws, one bounce of each sample's light (0 for now: the occlusion
-    /// alone, as jwin's frames want; 1, all of it, is what the lab's cases want but leaves jwin worse than no fast GI).
+    /// GLOBAL_ILLUMINATION method's bounce mkr draws, one bounce of each sample's light off the sides of surfaces
+    /// facing the pixel, clamped as EEVEE clamps indirect light (1, all of it, the scene's method: the lab's rt_* and
+    /// gi_* cases 6.00 -> 3.35 levels against the occlusion alone, jwin +0.02 / +0.09; 0: the occlusion alone).
     pub fast_gi: bool,
     pub gi_steps: u32,
     pub gi_thickness: f32,
@@ -272,6 +277,7 @@ impl Default for Params {
             trace_thickness: 1.0,
             trace_offset: 2e-4,
             trace_miss: 0.5,
+            trace_cross: 0.25,
             fast_gi: true,
             gi_steps: 0,
             gi_thickness: 1.0,
@@ -279,7 +285,7 @@ impl Default for Params {
             gi_far: 1.0,
             gi_bias: 1.0,
             gi_rough: 1.0,
-            gi_bounce: 0.0,
+            gi_bounce: 1.0,
         }
     }
 }

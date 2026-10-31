@@ -4,13 +4,16 @@
 // surface takes the light the previous sample left there (radiance_in: the lit opaque surfaces, reflections included,
 // so light bounces from sample to sample as EEVEE's radiance feedback does); one that leaves the screen, goes behind
 // everything or passes farther than the trace's thickness behind a surface takes the world's probe (world_light.wgsl).
-// The film averages the samples' rays, as EEVEE's denoiser averages its neighbours'. Fast GI (rt_scan): EEVEE's
+// The film averages the samples' rays after EEVEE's temporal accumulation (rt_temporal). Fast GI (rt_scan): EEVEE's
 // horizon scan of the depth buffer hides the world's light from diffuse closures (and, GLOBAL_ILLUMINATION, lights
 // them with what it finds); rougher glossy lobes fade from their traced ray into it. Only the deferred lighting pass
 // (deferred.wgsl) traces: blended surfaces are lit forward with the probe, as EEVEE lights them.
 
 @group(1) @binding(5) var radiance_in: texture_2d<f32>;
 @group(1) @binding(6) var radiance_out: texture_storage_2d<rgba16float, write>;
+// the traced lobes' light after rt_temporal and the raw light's luminance: the previous sample's, and this one's
+@group(1) @binding(7) var history_in: texture_2d<f32>;
+@group(1) @binding(8) var history_out: texture_storage_2d<rgba16float, write>;
 
 // Distance along the view axis of the point at reversed depth d (frame.rt2: near and far planes).
 fn rt_distance(d: f32) -> f32 {
@@ -42,8 +45,12 @@ fn rt_visible_normal(Ve: vec3<f32>, a: f32, u: vec2<f32>) -> vec3<f32> {
 }
 
 // The pixel where a ray from P along L first passes behind a surface of the sample's depth buffer, a surface being
-// `thickness` deep (metres along the view axis): the ray's stretch since the last step overlaps it; x -1 when it
-// finds none on the screen. `steps` steps, denser near P, a random offset per pixel and sample, then a bisection.
+// `thickness` deep (metres along the view axis); x -1 when it finds none on the screen. `steps` steps, denser near P, a
+// random offset per pixel and sample, then a bisection. A ray going away from the camera hits a surface it crossed since
+// the last step, with frame.sampling.w (trace_cross) of the thickness to spare past it; one coming back toward the
+// camera, a surface it is less than the thickness behind (lab rt_emit: EEVEE draws the same reflections at thicknesses
+// 0.05 and 0.2; this finds the 20 and 60 cm cards' light within 1.5 % of its undenoised frames up to roughness 0.2,
+// where the stretch overlapping the whole thickness found 11-15 % more, from rays passing under and behind the cards).
 fn rt_trace(P: vec3<f32>, L: vec3<f32>, vp: mat4x4<f32>, jitter: f32, steps: u32, thickness: f32) -> vec2<i32> {
     let size = frame.size.xy;
     // how far the ray may go: to the far plane, or to the near plane when it comes back toward the camera
@@ -82,9 +89,12 @@ fn rt_trace(P: vec3<f32>, L: vec3<f32>, vp: mat4x4<f32>, jitter: f32, steps: u32
         let p = ps + d * t;
         let scene = textureLoad(gb_depth, vec2<i32>(floor(p)), 0);
         let dr = mix(ns.z, ne.z, t);
-        // behind the surface now, and in front of its back side a step ago
+        // behind the surface now, and less than the slack behind it: a ray going away takes its stretch since the last
+        // step on top of a share of the thickness
+        let dcur = rt_distance(dr);
+        let dstep = dcur - rt_distance(mix(ns.z, ne.z, t_prev));
         if (dr < scene) {
-            if (rt_distance(mix(ns.z, ne.z, t_prev)) - rt_distance(scene) < thickness) {
+            if (dcur - rt_distance(scene) < select(thickness, frame.sampling.w * thickness + dstep, dstep > 0.0)) {
                 var lo = t_prev;
                 var hi = t;
                 for (var k = 0u; k < 5u; k = k + 1u) {
@@ -218,7 +228,9 @@ fn rt_bits(b0: u32, b1: u32) -> u32 {
 // ways `steps` depth samples out to the screen's edge (or the reach), denser near the pixel; each sample hides the
 // sectors between its front and its back (the near thickness farther along its camera ray, and at least the angular
 // thickness beyond its front), the slice's sectors equal in the cosine-weighted measure (32 of them). rgb: the light
-// of the sectors a sample hides first (the previous sample's picture there: the bounce), a: the open share.
+// of the sectors a sample hides first (the previous sample's picture there: the bounce) when the side of it the camera
+// sees faces the pixel, clamped as EEVEE clamps indirect light (lab gi_strands: no bounce on the wall behind thin
+// strands from their lit fronts; rt_clamp: the floor's glow round bright strips), a: the open share.
 fn rt_scan(h: Shading, N0: vec3<f32>) -> vec4<f32> {
     let sd = samples[imm.sample];
     let size = frame.size.xy;
@@ -306,8 +318,9 @@ fn rt_scan(h: Shading, N0: vec3<f32>) -> vec4<f32> {
                 let b1 = u32(round(32.0 * clamp(rt_slice_cdf(a1, n) / total, 0.0, 1.0)));
                 let m = rt_bits(b0, b1);
                 let fresh = m & ~mask;
-                if (bounce_on && fresh != 0u) {
-                    b = b + textureLoad(radiance_in, qi, 0).rgb * f32(countOneBits(fresh));
+                if (bounce_on && fresh != 0u
+                    && dot(gb_unpack_n8(textureLoad(gb_base, qi, 0).w & 0xffffu), dF) < 0.0) {
+                    b = b + rt_clamp(textureLoad(radiance_in, qi, 0).rgb) * f32(countOneBits(fresh));
                 }
                 mask = mask | m;
             }
@@ -358,17 +371,64 @@ fn traced_light(h: Shading, reflection_roughness: f32, coat_roughness: f32) -> v
     if (frame.world.x > 0.5) {
         o = o + world_light(rest, reflection_roughness, coat_roughness);
     }
+    rt_reflected = vec3<f32>(0.0);
     if (any(h.reflection > vec3<f32>(0.0))) {
-        o = o + h.reflection * rt_lobe(h, h.reflection_N, reflection_roughness, 1000u, g);
+        let lr = h.reflection * rt_lobe(h, h.reflection_N, reflection_roughness, 1000u, g);
+        o = o + lr;
+        rt_reflected = rt_reflected + lr * (1.0 - rt_fade(reflection_roughness));
         if (rough_r) {
             rt_bounce = rt_bounce + h.reflection * rt_fade(reflection_roughness) * g.rgb;
         }
     }
     if (any(h.coat > vec3<f32>(0.0))) {
-        o = o + h.coat * rt_lobe(h, h.coat_N, coat_roughness, 1004u, g);
+        let lc = h.coat * rt_lobe(h, h.coat_N, coat_roughness, 1004u, g);
+        o = o + lc;
+        rt_reflected = rt_reflected + lc * (1.0 - rt_fade(coat_roughness));
         if (rough_c) {
             rt_bounce = rt_bounce + h.coat * rt_fade(coat_roughness) * g.rgb;
         }
     }
     return o;
+}
+
+// The share of traced_light's light that its traced rays brought (the lobes' light, less what fades into fast GI):
+// what EEVEE's denoiser filters (rt_temporal).
+var<private> rt_reflected: vec3<f32>;
+
+// EEVEE's temporal accumulation of the traced light T (frame.rt.x 2: the scene's use_denoise and denoise_temporal on)
+// over a frame's samples: the pixel's history, clamped in luminance to the range of the previous sample's raw traced
+// light over the 3 x 3 pixels round it and of this sample's own, blended with T at 1 / (n + 1) on sample n; history_out
+// keeps the result and T's luminance. Where few rays find an emitter (the edges and tails of its reflection, thin
+// emitters, rough lobes) the range is often dark and the history loses its light, as EEVEE's does: lab rt_emit 1.31 ->
+// 0.55 levels, the 6-60 cm cards' light within 2 % of EEVEE's frames without the bilateral filter (nobilateral) at
+// roughness 0.2, the 2 and 6 cm cards 8-15 % brighter at 0.1. The bilateral filter's further loss is not drawn.
+fn rt_temporal(T: vec3<f32>) -> vec3<f32> {
+    let px = vec2<i32>(g_pixel);
+    let lum = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let lt = dot(T, lum);
+    var O = T;
+    if (g_sample > 0u) {
+        let size = vec2<i32>(frame.size.xy);
+        var lo = lt;
+        var hi = lt;
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            for (var dx = -1; dx <= 1; dx = dx + 1) {
+                let a = textureLoad(history_in, clamp(px + vec2<i32>(dx, dy), vec2<i32>(0), size - 1), 0).a;
+                lo = min(lo, a);
+                hi = max(hi, a);
+            }
+        }
+        let H = textureLoad(history_in, px, 0).rgb;
+        let lh = dot(H, lum);
+        var Hc = H;
+        if (lh > hi) {
+            Hc = H * (hi / lh);
+        } else if (lh < lo) {
+            // up toward T until its luminance is the range's low end (lt >= lo > lh)
+            Hc = H + (T - H) * ((lo - lh) / max(lt - lh, 1e-6));
+        }
+        O = mix(Hc, T, 1.0 / f32(g_sample + 1u));
+    }
+    textureStore(history_out, px, vec4<f32>(O, lt));
+    return O;
 }

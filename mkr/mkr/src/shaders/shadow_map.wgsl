@@ -187,12 +187,14 @@ fn shadow_step(i: u32, steps: u32, jit: f32) -> f32 {
     return frame.trace.y * pow((f32(steps - 1u - i) + jit) / f32(steps), frame.shadow_map.x);
 }
 
-// Visibility of light `li` from P (geometric normal Ng): EEVEE Next's shadow map tracing as measured on probes
-// (subagent ShadowTrace; clean-room, from EEVEE's frames at 64 samples). Every scale follows P's texel radius r
-// (shadow_lod.wgsl): the ray runs from P' (P lifted along Ng by r sin(theta) (frame.bias.x + F frame.bias.w), theta
-// between Ng and the direction to C, F the light's filter radius: EEVEE's filter shifts a tilted receiver's shadow
-// toward the light by about 0.7 to 0.85 F r sin(theta) on its probes, then jittered over a disk of F r x
-// frame.shadow_map.z square to that direction) toward a random point O of the light (above P's horizon), sampled at
+// Visibility of light `li` from P (geometric normal Ng, shading normal N on its side): EEVEE Next's shadow map tracing
+// as measured on probes (subagent ShadowTrace; clean-room, from EEVEE's frames at 64 samples). Every scale follows P's
+// texel radius r (shadow_lod.wgsl): the ray runs from P' (P lifted along N by r sin(theta) (frame.bias.x + F
+// frame.bias.w), theta between N and the direction to C, F the light's filter radius: EEVEE's filter shifts a tilted
+// receiver's shadow toward the light by about 0.7 to 0.85 F r sin(theta) on its probes, then jittered over a disk of F
+// r x frame.shadow_map.z square to that direction) toward a random point O of the light (above N's horizon). EEVEE's
+// biases follow the shading normal (its developer docs: they are optimal only where it is close to the geometric
+// one); with Ng instead, Crimson's figure is 0.03 levels and lab mmd_model 0.01-0.04 further from its frames. Sampled at
 // t_k = len ((k + u) / S)^p of the way (k < S = frame.trace.x steps, one u per ray, len = frame.trace.y, p =
 // frame.shadow_map.x) and at P' itself, far to near, every lookup at
 // P's level. In the plane of the ray and the map's origin C (u along the ray, v the distance from it toward C,
@@ -209,7 +211,7 @@ fn shadow_step(i: u32, steps: u32, jit: f32) -> f32 {
 //   parallel to B - A; each must cross the ray between this sample and the previous one.
 // A sun's map lines all run toward it: its points keep v in units of the sun direction's offset from the ray; its
 // texel and its ray's length are those of its map around P (shadow_sun_texel, shadow_sun_ray), at no level.
-fn shadow_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> f32 {
+fn shadow_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>, N: vec3<f32>) -> f32 {
     if (l.spot.z < 0.5 || frame.shadow.w < 0.5 || l.map.x < 0.0) {
         return 1.0;
     }
@@ -242,9 +244,9 @@ fn shadow_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> f32 {
         r = shadow_radius(2.0 * f.a / SHADOW_LOD0 * exp2(lod), fp, l.map.w);
     }
     let toward = normalize(select(l.pos.xyz - P, -l.fwd.xyz, sun));
-    let cos_t = clamp(dot(Ng, toward), -1.0, 1.0);
+    let cos_t = clamp(dot(N, toward), -1.0, 1.0);
     let filt = l.factor.w;
-    var E = P + Ng * (r * sqrt(1.0 - cos_t * cos_t) * (frame.bias.x + filt * frame.bias.w));
+    var E = P + N * (r * sqrt(1.0 - cos_t * cos_t) * (frame.bias.x + filt * frame.bias.w));
     if (filt > 0.0) {
         // the end jittered over a disk of the filter radius, square to the direction toward the light
         let tx = normalize(select(cross(toward, vec3<f32>(0.0, 1.0, 0.0)), cross(toward, vec3<f32>(1.0, 0.0, 0.0)),
@@ -253,7 +255,7 @@ fn shadow_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> f32 {
         let j = shadow_disk_u(li);
         E = E + (tx * cos(MKS_TAU * j.y) + ty * sin(MKS_TAU * j.y)) * (sqrt(j.x) * filt * frame.shadow_map.z * r);
     }
-    var O = light_point_above(l, li, P, Ng);
+    var O = light_point_above(l, li, P, N);
     if (sun) {
         // a sun's ray ends where its map does: across the depth span, or SUN_RAY widths of a finer map
         O = E + normalize(O - E) * shadow_sun_ray(l, P);

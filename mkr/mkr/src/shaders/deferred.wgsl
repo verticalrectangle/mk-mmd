@@ -59,6 +59,9 @@ fn light_none(px: vec2<u32>) {
     if (RT_TRACED && frame.rt.x > 0.5) {
         textureStore(radiance_out, px, vec4<f32>(0.0, 0.0, 0.0, 1.0));
     }
+    if (RT_TRACED && frame.rt.x > 1.5 && imm.draw == 0u) {
+        textureStore(history_out, px, vec4<f32>(0.0));
+    }
 }
 
 // A surface pixel's position on the frame's own time: from the sample's depth, plus the motion offset back.
@@ -183,14 +186,21 @@ fn light_pixel(px: vec2<u32>, base: vec4<u32>, P: vec3<f32>, sd: SampleData, til
         lit = light_shading(h);
     }
     var c = emission + lit;
+    // what the next sample's rays find: the raw traced light (EEVEE's denoiser filters what the film takes)
+    var fed = c;
     if (RT_TRACED && frame.rt.x > 0.5 && imm.draw == 0u) {
         c = c + traced_light(h, rough, coat_rough);
+        fed = c;
+        if (frame.rt.x > 1.5) {
+            c = c - rt_reflected + rt_temporal(rt_reflected);
+        }
     } else if (frame.world.x > 0.5) {
         c = c + world_light(h, rough, coat_rough);
+        fed = c;
     }
     textureStore(color_out, px, vec4<f32>(c, 1.0));
     if (RT_TRACED && frame.rt.x > 0.5) {
         // the next sample's rays read the light without fast GI's bounce (raytrace.wgsl rt_bounce: zero unless traced)
-        textureStore(radiance_out, px, vec4<f32>(c - rt_bounce, 1.0));
+        textureStore(radiance_out, px, vec4<f32>(fed - rt_bounce, 1.0));
     }
 }

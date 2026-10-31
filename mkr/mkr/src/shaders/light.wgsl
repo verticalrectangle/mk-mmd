@@ -377,8 +377,9 @@ fn light_point_above(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> vec3<f32
     return q;
 }
 
-// Light li's visibility from P (shadow_visibility: the maps' tracing, or ray queries), the mean of its rays.
-fn light_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> f32 {
+// Light li's visibility from P (shadow_visibility: the maps' tracing, or ray queries), the mean of its rays: Ng the
+// geometric normal on the side it lights, N the shading normal there.
+fn light_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>, N: vec3<f32>) -> f32 {
     if (l.spot.z < 0.5 || frame.shadow.w < 0.5) {
         return 1.0;
     }
@@ -388,7 +389,7 @@ fn light_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> f32 {
     for (var r = 0u; r < k; r = r + 1u) {
         g_sample = s * k + r;
         shadow_draw(li);
-        v = v + shadow_visibility(l, li, P, Ng);
+        v = v + shadow_visibility(l, li, P, Ng, N);
     }
     g_sample = s;
     return v / f32(k);
@@ -409,11 +410,14 @@ fn light_add(out: vec3<f32>, i: u32, h: Shading) -> vec3<f32> {
     let behind = dot(toward, h.Ng) < 0.0;
     var v_front = 1.0;
     if (front || (through && !behind)) {
-        v_front = light_visibility(l, i, h.P, h.Ng);
+        // EEVEE lifts its shadow rays along the shading normal (the G-buffer's, kept on the surface's side)
+        let n = h.diffuse_N;
+        let N = select(h.Ng, normalize(n), dot(n, n) > 0.25 && dot(n, h.Ng) > 0.0);
+        v_front = light_visibility(l, i, h.P, h.Ng, N);
     }
     var v_back = v_front;
     if (through && behind) {
-        v_back = light_visibility(l, i, h.P, -h.Ng);
+        v_back = light_visibility(l, i, h.P, -h.Ng, -h.Ng);
     }
     return out + o.front * v_front + o.translucent * v_back;
 }
