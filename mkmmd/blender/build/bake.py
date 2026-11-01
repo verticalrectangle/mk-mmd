@@ -412,13 +412,16 @@ def bake(ctx, out_dir):
     order_ok = {a.name: [b.name for b in a.data.bones] == [p.name for p in a.pose.bones] for a in arms}
     if not all(order_ok.values()):
         raise BuildError(f"bake: an armature's pose bones are not in its bones' order ({[k for k, v in order_ok.items() if not v]})")
-    nodes = {o.name: np.empty((n, 4, 4)) for o in meshes}
-    shown = {o.name: np.empty(n, bool) for o in meshes}
+    node_arr, shown_arr = np.empty((len(meshes), n, 4, 4)), np.empty((len(meshes), n), bool)
+    nodes = {o.name: node_arr[i] for i, o in enumerate(meshes)}
+    shown = {o.name: shown_arr[i] for i, o in enumerate(meshes)}
     morphs = {o.name: np.empty((n, len(o.data.shape_keys.key_blocks) - 1), np.float32) for o in keyed}
     kbuf = {o.name: np.empty(len(o.data.shape_keys.key_blocks), np.float32) for o in keyed}
     cam_data = {c: np.empty((n, 15), np.float32) for c in cams}
     cam_clip = {c: np.empty((n, 2), np.float32) for c in cams}             # its clip range: keyed by the clip stage
-    vis = {o.name: np.zeros(n, bool) for o in looks + [b for b, _ in blocks]}
+    vis_names = [o.name for o in looks + [b for b, _ in blocks]]
+    vis_arr = np.zeros((len(vis_names), n), bool)
+    vis = {name: vis_arr[i] for i, name in enumerate(vis_names)}
     centres = {r["index"]: np.full((n, 3), np.nan, np.float32) for r in point_rings}
     ring_errors = {}
     tints = tint_holders(sc)
@@ -429,6 +432,10 @@ def bake(ctx, out_dir):
     lit = BL.Lit(sc, n, cams, part, ctx.log, ctx=ctx, outputs=outputs)
     loop = dict.fromkeys(("frame_set", "transforms", "by_frame", "lit", "rings_tints"), 0.0)   # seconds, all frames
     t_setup = time.time() - t0
+    order = {o.name: i for i, o in enumerate(bpy.data.objects)}     # every object's matrix and visibility in one read
+    mesh_at = np.array([order[o.name] for o in meshes], int)
+    vis_at = np.array([order[name] for name in vis_names], int)
+    all_m, all_h = np.empty(16 * len(bpy.data.objects), np.float32), np.empty(len(bpy.data.objects), bool)
     try:
         for k, f in enumerate(frames):
             ta = time.perf_counter()
@@ -438,9 +445,11 @@ def bake(ctx, out_dir):
                 W = np.array(a.matrix_world)
                 T = W @ pose_matrices(a, bufs[a.name]) @ rest[a.name] @ np.linalg.inv(W)
                 joints[a.name][k] = affine(gl(T))
-            for o in meshes:
-                nodes[o.name][k] = np.array(o.matrix_world)
-                shown[o.name][k] = not o.hide_render
+            bpy.data.objects.foreach_get("matrix_world", all_m)
+            bpy.data.objects.foreach_get("hide_render", all_h)
+            node_arr[:, k] = all_m.reshape(-1, 4, 4)[mesh_at].transpose(0, 2, 1)
+            shown_arr[:, k] = ~all_h[mesh_at]
+            vis_arr[:, k] = ~all_h[vis_at]
             for o in keyed:
                 o.data.shape_keys.key_blocks.foreach_get("value", kbuf[o.name])
                 morphs[o.name][k] = kbuf[o.name][1:]
@@ -449,8 +458,6 @@ def bake(ctx, out_dir):
                 cam_data[c][k, :12] = affine(gl(np.array(ob.matrix_world)))
                 cam_data[c][k, 12:] = (ob.data.lens, ob.data.shift_x, ob.data.shift_y)
                 cam_clip[c][k] = (ob.data.clip_start, ob.data.clip_end)
-            for name in vis:
-                vis[name][k] = not bpy.data.objects[name].hide_render
             dg = bpy.context.evaluated_depsgraph_get()
             tc = time.perf_counter()
             for fx in flex:

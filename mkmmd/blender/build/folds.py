@@ -15,6 +15,7 @@ from ...core import folds as FD
 from ...solvers import geom
 from .. import keys as K
 from .. import scene as S
+from .. import scope as SCOPE
 from . import cloth as CL
 
 
@@ -28,11 +29,12 @@ def sample_rotations(arm, bones, frames):
     sc = bpy.context.scene
     rest = {b: geom.unscaled(_mat(arm.data.bones[b].matrix_local))[:3, :3] for b in bones}
     out = {b: np.zeros((len(frames), 3, 3)) for b in bones}
-    for i, f in enumerate(frames):
-        sc.frame_set(int(f))
-        ev = arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
-        for b in bones:
-            out[b][i] = geom.unscaled(_mat(ev.pose.bones[b].matrix))[:3, :3] @ rest[b].T
+    with SCOPE.only([arm]):
+        for i, f in enumerate(frames):
+            sc.frame_set(int(f))
+            ev = arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            for b in bones:
+                out[b][i] = geom.unscaled(_mat(ev.pose.bones[b].matrix))[:3, :3] @ rest[b].T
     return out
 
 

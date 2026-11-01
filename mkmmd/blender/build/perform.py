@@ -88,6 +88,7 @@ from ...core import lipsync as LS
 from ...core import perform as PF
 from ...core import timeline as TL
 from .. import keys as K
+from .. import scope as SCOPE
 from .. import scene as S
 from . import BuildError, targets
 from . import strings as STRINGS
@@ -110,17 +111,19 @@ def _sample_pass(ctx, m, look_refs, frames):
     smap = S.semantic_map(arm)
     eyes_b = [smap[k] for k in ("eye.L", "eye.R") if k in smap] or [smap["head"]]
     A, E, T = [], [], {i: [] for i in range(len(look_refs))}
-    for f in frames:
-        sc.frame_set(int(f))
-        dg = bpy.context.evaluated_depsgraph_get()
-        ae = arm.evaluated_get(dg)
-        Aw = ae.matrix_world.copy()
-        inv = Aw.inverted()
-        e = sum((ae.pose.bones[b].head for b in eyes_b), Vector()) / len(eyes_b)
-        A.append(Aw)
-        E.append(e)
-        for i, ref in enumerate(look_refs):
-            T[i].append(inv @ targets.point(ctx, ref))
+    reads = [arm, m.root] + [o for ref in look_refs for o in targets.objects(ctx, ref)]
+    with SCOPE.only(reads):
+        for f in frames:
+            sc.frame_set(int(f))
+            dg = bpy.context.evaluated_depsgraph_get()
+            ae = arm.evaluated_get(dg)
+            Aw = ae.matrix_world.copy()
+            inv = Aw.inverted()
+            e = sum((ae.pose.bones[b].head for b in eyes_b), Vector()) / len(eyes_b)
+            A.append(Aw)
+            E.append(e)
+            for i, ref in enumerate(look_refs):
+                T[i].append(inv @ targets.point(ctx, ref))
     return A, E, T
 
 

@@ -41,6 +41,7 @@ from mathutils.kdtree import KDTree
 
 from ...core import garment as GM
 from .. import scene as S
+from .. import scope as SCOPE
 from . import BuildError, collection
 from .cast import material_name
 
@@ -143,11 +144,12 @@ def motion_key(ctx, m, entry, sha, settings):
     arm = m.arm
     idx = [arm.pose.bones.find(b) for b in entry["bones"]]
     buf = np.zeros(len(arm.pose.bones) * 16, np.float32)
-    for f in ctx.frames:
-        bpy.context.scene.frame_set(int(f))
-        arm.pose.bones.foreach_get("matrix", buf)
-        M = np.asarray(arm.matrix_world, float) @ buf.reshape(-1, 4, 4).transpose(0, 2, 1)[idx]
-        h.update(np.round(M, 6).astype(np.float32).tobytes())
+    with SCOPE.only([arm]):
+        for f in ctx.frames:
+            bpy.context.scene.frame_set(int(f))
+            arm.pose.bones.foreach_get("matrix", buf)
+            M = np.asarray(arm.matrix_world, float) @ buf.reshape(-1, 4, 4).transpose(0, 2, 1)[idx]
+            h.update(np.round(M, 6).astype(np.float32).tobytes())
     return h.hexdigest()[:24]
 
 

@@ -940,12 +940,10 @@ class _Track:
         self.geom = self.rec = None
         self.oattr = _ObjectAttrs.of([s.material for s in o.material_slots], n)
 
-    def sample(self, k, shown):
-        self.M[k] = np.array(self.ob.matrix_world)
-        self.shown[k] = shown
-        if self.kb is not None:
-            self.ob.data.shape_keys.key_blocks.foreach_get("value", self.kb)
-            self.keys[k] = self.kb
+    def sample(self, k):
+        """Its shape keys' values on frame k (its matrix and visibility are read with every object's: Lit._make_bulk)."""
+        self.ob.data.shape_keys.key_blocks.foreach_get("value", self.kb)
+        self.keys[k] = self.kb
 
 
 class _ObjectAttrs:
@@ -1393,7 +1391,12 @@ class Lit:
                 flex_n += 1
             else:
                 self.tracks.append(_Track(o, kind, arm, n))
-        self.shown = {name: np.zeros(n, bool) for name in self.watch}
+        self.shown_arr = np.zeros((len(self.watch), n), bool)         # filled for all of them at once (`_bulk`)
+        self.shown = {name: self.shown_arr[i] for i, name in enumerate(self.watch)}
+        self.track_M, self.track_shown = np.empty((len(self.tracks), n, 4, 4)), np.zeros((len(self.tracks), n), bool)
+        for i, t_ in enumerate(self.tracks):
+            t_.M, t_.shown = self.track_M[i], self.track_shown[i]
+        self.bulk = None
         self.saved, self.render_changes = [], {}          # what the bake changes for its loop, put back by `restore`
         for fx in self.flex:                              # the lit frames are renders: evaluated as a render does
             self._render_settings(fx.ob)
@@ -1415,6 +1418,7 @@ class Lit:
                 self.saved.append((o, "hide_viewport", o.hide_viewport))   # evaluated inside its window only
                 o.hide_viewport = k0 > 0 or sw.cached     # one that shows from the first frame: evaluated from it
         self.t_screen_keys = time.time() - t0_key
+        self.holder = self._materials_holder()
         self.screen_doc = self._screen_doc(sc, outputs) if self.screen else None
         self.points = {}                                  # the layers' points: key -> expression, shots, world xyz
         self.points_error = None
@@ -1481,11 +1485,37 @@ class Lit:
         if changes:
             self.render_changes[o.name] = changes
 
+    def _materials_holder(self):
+        """An empty mesh that wears every screen word's materials, shown for the bake's loop: a word is hidden from the
+        depsgraph outside its window and the whole clip when its encoding comes from the cache, and a material no shown
+        object wears is not evaluated, so its drivers (a breathing palette's colours) would stop on whatever value they
+        last had. None without screen type."""
+        mats = []
+        for sw in self.screen:
+            for name in ST.look_materials(sw.ob):
+                if name in bpy.data.materials and name not in mats:
+                    mats.append(name)
+        if not mats:
+            return None
+        me = bpy.data.meshes.new("mk_bake_materials")
+        for name in mats:
+            me.materials.append(bpy.data.materials[name])
+        ob = bpy.data.objects.new("mk_bake_materials", me)
+        ob.hide_render = True
+        self.sc.collection.objects.link(ob)
+        return ob
+
     def restore(self):
-        """Put back what the bake changed for its loop (render settings, screen type shown to the depsgraph)."""
+        """Put back what the bake changed for its loop (render settings, screen type shown to the depsgraph) and remove
+        its materials holder."""
         for owner, attr, value in reversed(self.saved):
             setattr(owner, attr, value)
         self.saved = []
+        if self.holder is not None:
+            me = self.holder.data
+            bpy.data.objects.remove(self.holder)
+            bpy.data.meshes.remove(me)
+            self.holder = None
 
     def _screen_doc(self, sc, outputs):
         """The screen layer's pass (styles.Looks._screen_pass): its view transform as a LUT (Standard, no look), the
@@ -1559,8 +1589,11 @@ class Lit:
     def sample(self, k, dg):
         t0 = time.time()
         t = time.perf_counter()
-        for name, (o, always) in self.watch.items():
-            self.shown[name][k] = always or not o.hide_render
+        b = self.bulk or self._make_bulk()
+        bpy.data.objects.foreach_get("matrix_world", b["m"])
+        bpy.data.objects.foreach_get("hide_render", b["h"])
+        W = b["m"].reshape(-1, 4, 4)
+        self.shown_arr[:, k] = b["always"] | ~b["h"][b["watch"]]
         for o, rows in self.lights:
             rows[k] = self._light_row(o, self.shown[o.name][k])
         for c in self.cams:
@@ -1569,13 +1602,14 @@ class Lit:
             v = s.default_value
             vals[k] = v[:] if hasattr(v, "__len__") else v
         for name, M in self.node_objects.items():
-            M[k] = np.array(bpy.data.objects[name].matrix_world)
+            M[k] = W[b["at"][name]].T
         t = self._tick("records", t)
-        for t_ in self.tracks:
-            t_.sample(k, self.shown[t_.ob.name][k])
-        for h in self.tracks + self.flex:
-            if h.oattr is not None:
-                h.oattr.sample(k, h.ob, self.sc)
+        self.track_M[:, k] = W[b["tracks"]].transpose(0, 2, 1)
+        self.track_shown[:, k] = self.shown_arr[b["track_watch"], k]
+        for t_ in b["keyed"]:
+            t_.sample(k)
+        for h in b["attrs"]:
+            h.oattr.sample(k, h.ob, self.sc)
         t = self._tick("tracks", t)
         if self.instancers:
             self._instances(k, dg)
@@ -1601,6 +1635,22 @@ class Lit:
             self._truth(k, dg)
         self._tick("truth", t)
         self.t_sample += time.time() - t0
+
+    def _make_bulk(self):
+        """Where each object the frames sample sits among bpy.data.objects, so that one foreach_get of every object's
+        matrix and visibility a frame serves them all (reading them one by one took 40 ms a frame with a thousand
+        props); made on the first frame, when the objects the loop sees are all there."""
+        order = {o.name: i for i, o in enumerate(bpy.data.objects)}
+        pos = {name: i for i, name in enumerate(self.watch)}
+        self.bulk = {"m": np.empty(16 * len(order), np.float32), "h": np.empty(len(order), bool),
+                     "watch": np.array([order[name] for name in self.watch], int),
+                     "always": np.array([always for _, always in self.watch.values()], bool),
+                     "at": {name: order[name] for name in self.node_objects},
+                     "tracks": np.array([order[t_.ob.name] for t_ in self.tracks], int),
+                     "track_watch": np.array([pos[t_.ob.name] for t_ in self.tracks], int),
+                     "keyed": [t_ for t_ in self.tracks if t_.kb is not None],
+                     "attrs": [h for h in self.tracks + self.flex if h.oattr is not None]}
+        return self.bulk
 
     def _tick(self, part, t):
         """Add the time since `t` to `part` of the frames' sampling; now."""

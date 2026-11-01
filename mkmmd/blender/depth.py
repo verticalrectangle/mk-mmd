@@ -23,14 +23,16 @@ class Depth:
     def __init__(self):
         self.pieces = {}              # object name -> (Piece, (vertices, triangles) it was made for)
         self.drawn = set()            # objects found in a drawn collection (asked again while they are not)
-        self.items, self.read = [], {}
+        self.boxes = {}               # object name -> its box, for objects whose geometry cannot change (`_box`)
+        self.lo = self.hi = np.zeros((0, 3))
+        self.M, self.gets, self.read = np.zeros((0, 4, 4)), [], {}
 
     def frame(self):
         """Take what the scene renders on its current frame: every drawn object's box, frame and (when it is wanted)
         triangles; instances of geometry made by other objects count as solid boxes."""
         dg = bpy.context.evaluated_depsgraph_get()
         vl = bpy.context.view_layer.objects
-        self.items, self.read = [], {}
+        boxes, mats, self.gets, self.read = [], [], [], {}
         for inst in dg.object_instances:
             ob = inst.object
             if ob.type not in GEOMETRY and ob.type not in BOXES:
@@ -47,8 +49,23 @@ class Depth:
                         continue
                     self.drawn.add(name)
                 get = (lambda ob=ob: self._piece(ob))
-            box = np.array([tuple(c) for c in ob.bound_box], float)
-            self.items.append(((box.min(0), box.max(0)), np.array(inst.matrix_world, float), get))
+            boxes.append(self._box(ob, orig) if not inst.is_instance else _bounds(ob))
+            mats.append(np.array(inst.matrix_world, float))
+            self.gets.append(get)
+        B = np.array(boxes, float).reshape(-1, 2, 3)
+        self.lo, self.hi = B[:, 0], B[:, 1]
+        self.M = np.array(mats, float).reshape(-1, 4, 4)
+
+    def _box(self, ob, orig):
+        """(lo, hi) of an evaluated object's box in its own frame; kept for a mesh without modifiers, shape keys or keys
+        on its data, whose geometry is its data's as it stands."""
+        got = self.boxes.get(orig.name)
+        if got is not None:
+            return got
+        got = _bounds(ob)
+        if ob.type == "MESH" and not orig.modifiers and orig.data.shape_keys is None and orig.data.animation_data is None:
+            self.boxes[orig.name] = got
+        return got
 
     def _piece(self, ob):
         name = ob.original.name
@@ -77,18 +94,18 @@ class Depth:
         one nor a fisheye mk projects)."""
         cd = cam.data
         to_cam = np.linalg.inv(np.array(cam.matrix_world.normalized(), float))
-        items = [(box, to_cam @ M, get) for box, M, get in self.items]
+        M = to_cam @ self.M
         if cd.type == "PANO":
             try:
                 lens = FEB.lens(cam, size)
             except FE.FisheyeError:
                 return None
-            return CL.least_distance(items, CL.Cone(lens.reach()))
+            return CL.least_distance_of(self.lo, self.hi, M, self.gets, CL.Cone(lens.reach()))
         if cd.type != "PERSP":
             return None
         sensor = cd.sensor_height if cd.sensor_fit == "VERTICAL" else cd.sensor_width
         view = CL.View(cd.lens, sensor, size, (cd.shift_x, cd.shift_y), cd.sensor_fit)
-        return CL.least_depth(items, view)
+        return CL.least_depth_of(self.lo, self.hi, M, self.gets, view)
 
     def near(self, cam, size):
         """The clip_start `cam` wants on the current frame for a picture of `size` (None: leave it as it is)."""
@@ -98,3 +115,9 @@ class Depth:
 
 def _none():
     return None
+
+
+def _bounds(ob):
+    """(lo, hi) of an evaluated object's box in its own frame."""
+    box = np.array([tuple(c) for c in ob.bound_box], float)
+    return box.min(0), box.max(0)

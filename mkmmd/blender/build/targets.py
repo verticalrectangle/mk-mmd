@@ -47,6 +47,37 @@ def eyes(member):
     return sum(pts, Vector()) / len(pts)
 
 
+def objects(ctx, ref):
+    """The objects `point(ctx, ref)` reads (for mkmmd.blender.scope.only): a prop's root and the object a use point rides,
+    a member's root and armature, a set's root, the active camera; none for a world point."""
+    if isinstance(ref, dict):
+        if "prop" in ref and ref["prop"] in ctx.props:
+            return [ctx.props[ref["prop"]].root]
+        if "cast" in ref and ref["cast"] in ctx.cast:
+            m = ctx.cast[ref["cast"]]
+            return [m.root, m.arm]
+        if "path" in ref:
+            st = getattr(ctx, "sets", {}).get(ref["path"].partition(":")[0])
+            return [st.root] if st is not None else []
+        return []
+    if not isinstance(ref, str):
+        return []
+    if ref == "camera":
+        return [bpy.context.scene.camera] if bpy.context.scene.camera is not None else []
+    if ref.startswith("cast:"):
+        m = ctx.cast.get(ref[5:].partition(".")[0])
+        return [m.root, m.arm] if m is not None else []
+    prop, _, use = ref.partition(":")
+    if prop not in ctx.props:
+        return []
+    out = [ctx.props[prop].root]
+    for items in ctx.props[prop].card.get("use", {}).values():
+        for u in items if isinstance(items, list) else []:
+            if isinstance(u, dict) and u.get("name") == use and u.get("object") in bpy.data.objects:
+                out.append(bpy.data.objects[u["object"]])
+    return out
+
+
 def point(ctx, ref, frame=None):
     """World position of a reference at the current scene frame (callers frame_set first when it moves)."""
     if isinstance(ref, (list, tuple)) and len(ref) == 3:

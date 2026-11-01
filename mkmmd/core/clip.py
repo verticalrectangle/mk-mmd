@@ -172,17 +172,27 @@ def least_depth(items, view):
     (Piece, V) its triangles and their vertices when they are wanted (a callable, so objects whose boxes are farther
     than what was found are never read), or None for an object that only has its box (taken as solid). Objects and
     their chunks are taken nearest corner first, the chunks' triangles BATCH at a time, until none left can be nearer."""
-    if not items:
+    return least_depth_of(*_arrays(items), view)
+
+
+def _arrays(items):
+    """`items` (box, M, piece) as (lo (k, 3), hi (k, 3), M (k, 4, 4), [piece])."""
+    return (np.array([b[0] for b, _, _ in items], float).reshape(-1, 3),
+            np.array([b[1] for b, _, _ in items], float).reshape(-1, 3),
+            np.array([m for _, m, _ in items], float).reshape(-1, 4, 4), [p for _, _, p in items])
+
+
+def least_depth_of(lo, hi, M, pieces, view):
+    """`least_depth` of objects given as arrays: their boxes lo, hi (k, 3), frames to the camera's axes M (k, 4, 4) and
+    pieces [k callables] (as an item's)."""
+    if not len(lo):
         return np.inf
-    lo = np.array([b[0] for b, _, _ in items], float)
-    hi = np.array([b[1] for b, _, _ in items], float)
-    M = np.array([m for _, m, _ in items], float)
     b0 = corner_bounds(lo, hi, M, view)
     best = np.inf
     for i in np.argsort(b0, kind="stable"):
         if b0[i] >= best:
             break
-        got = items[i][2]()
+        got = pieces[i]()
         if got is None:
             best = min(best, float(box_depth(lo[i], hi[i], M[i], view)[0]))
             continue
@@ -276,17 +286,19 @@ def least_distance(items, cone):
     """`least_depth` for a fisheye: the least distance (m) from the camera of the geometry of `items` (as there) that may
     lie inside `cone`, inf when there is none. An object that only has its box counts with its bounding sphere's
     distance."""
-    if not items:
+    return least_distance_of(*_arrays(items), cone)
+
+
+def least_distance_of(lo, hi, M, pieces, cone):
+    """`least_distance` of objects given as arrays (as `least_depth_of`)."""
+    if not len(lo):
         return np.inf
-    lo = np.array([b[0] for b, _, _ in items], float)
-    hi = np.array([b[1] for b, _, _ in items], float)
-    M = np.array([m for _, m, _ in items], float)
     b0 = sphere_bounds(lo, hi, M, cone)
     best = np.inf
     for i in np.argsort(b0, kind="stable"):
         if b0[i] >= best:
             break
-        got = items[i][2]()
+        got = pieces[i]()
         if got is None:
             best = min(best, float(b0[i]))
             continue

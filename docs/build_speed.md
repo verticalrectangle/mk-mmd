@@ -23,6 +23,33 @@ jwin_mv's 918 frames carry 180 screen words, and nearly all its bake is theirs: 
 cache (step 2) a rebake that changes no word takes the rest, about 300 s. The scene's own stages (`sim`, `clip`,
 `shots`, ...) take 92 s on Crimson.
 
+**Cabin Essence (2026-11-01, warm screen cache): 405 s → 180 s.** A profile of its whole build showed most of it was
+Blender evaluating every frame again and again: the sampling passes of `perform`, `shots` and `sim` each change frame
+~900 times, and each change cost 13 ms because ~1,000 driver-animated props (confetti, a track) were evaluated too.
+Those passes now evaluate only what they read (`mkmmd.blender.scope`, 13 → 4 ms a frame); the bake reads every object's
+matrix and visibility with one `foreach_get` a frame instead of one object at a time (its transforms 37.6 → 1.9 s, the
+lit tracks 8.8 → 0.1 s); the clip ranges keep static boxes and take the objects as arrays. The bake's files are the same
+bytes as before (but for mmd_tools' run-specific node names).
+
+| stage | before | after |
+|---|---|---|
+| sim | 88-147 | 33 |
+| clip | 56 | 42 |
+| bake (warm) | 91-125 | 47 |
+| shots | 46 | 7 |
+| perform | 38-40 | 3 |
+| cast | 20 | 20 |
+| everything else | ~38 | ~28 |
+| **total** | **405-427** | **180** |
+
+Found on the way: a bake whose screen words came from the cache, or a stretch with no word shown, froze the breathing
+colours of the words' materials (a material no shown object wears is not evaluated); `Lit` now shows an empty mesh
+wearing them for the loop, and the colours match the drivers exactly on every frame.
+
+What is left on Cabin Essence: `bake` 47 (Blender's frame changes 13, the glTF export 8, capture 8, check 4), `clip` 42
+(Blender's frame changes and the depth search of ~1,400 objects a frame), `sim` 33 (five levels of chains, each sampled
+over every frame), `cast` 20 (mmd_tools importing the models).
+
 ## Steps
 
 1. **Measure.** Done: the bake's report has the parts above (jwin_mv's from its earlier reports; its `frame_set`

@@ -65,6 +65,7 @@ from ...core import shotspec as SP
 from ...core import shotstyle as SS
 from ...core import transition as TR
 from .. import keys as K
+from .. import scope as SCOPE
 from .. import styles as ST
 from . import BuildError, collection, targets
 
@@ -151,6 +152,38 @@ def run(ctx):
     shots = ctx.data.get("shot", [])
     if not shots:
         return {}
+    with SCOPE.only(_reads(ctx, shots)):           # the cameras sample their mounts and targets on every frame
+        return _run(ctx, shots)
+
+
+def _reads(ctx, shots):
+    """The objects the shots' cameras read: their mounts and every target their positions, aims, follows, framing and
+    focus name, in every output's version of each shot."""
+    sc = bpy.context.scene
+    outs = ctx.project.get("outputs") or [{"name": "main", "size": [sc.render.resolution_x, sc.render.resolution_y]}]
+    reads = []
+    for spec in shots:
+        for out in outs:
+            try:
+                sp = SP.merged(spec, (spec.get("aspect") or {}).get(out["name"]))
+                refs = [sp.get("at"), sp.get("look")] + [k.get(x) for k in sp.get("keys") or [] for x in ("at", "look")]
+                reads.append(_mount(ctx, sp.get("mount")))
+            except (AttributeError, TypeError, SP.ShotError, BuildError):
+                continue                               # refused with its error where the shot is made
+            for table, key in (("follow", "target"), ("dof", "focus")):
+                if isinstance(sp.get(table), dict):
+                    refs.append(sp[table].get(key))
+            if isinstance(sp.get("frame"), dict):
+                subj = sp["frame"].get("subject")
+                refs += subj if isinstance(subj, list) and not (len(subj) == 3 and all(
+                    isinstance(v, (int, float)) for v in subj)) else [subj]
+            for ref in refs:
+                if ref is not None:
+                    reads += targets.objects(ctx, ref)
+    return reads
+
+
+def _run(ctx, shots):
     try:
         plan = TR.plan(ctx.data, ctx.fps, ctx.frame0, ctx.palette)
     except TR.TransitionError as e:

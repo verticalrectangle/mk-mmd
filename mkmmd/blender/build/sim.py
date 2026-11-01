@@ -31,6 +31,7 @@ from ...core import families as FAM
 from ...core import tables as TB
 from ...solvers import geom
 from .. import keys as K
+from .. import scope as SCOPE
 from ..ops_sample import resolve_collider
 from . import BuildError
 
@@ -57,21 +58,23 @@ def sample_sources(sources, frames):
     F, S = len(frames), len(sources)
     pos, rot = np.zeros((F, S, 3)), np.tile(np.eye(3), (F, S, 1, 1))
     arms = {o.name: o for o in bpy.data.objects if o.type == "ARMATURE"}
-    for i, f in enumerate(frames):
-        sc.frame_set(int(f))
-        dg = bpy.context.evaluated_depsgraph_get()
-        evald = {}
-        for j, (kind, owner, name) in enumerate(sources):
-            if kind == "world":
-                continue
-            if kind == "bone":
-                if owner not in evald:
-                    evald[owner] = arms[owner].evaluated_get(dg)
-                ae = evald[owner]
-                M = geom.unscaled(_mat(ae.matrix_world @ ae.pose.bones[name].matrix))
-            else:
-                M = geom.unscaled(_mat(bpy.data.objects[name].evaluated_get(dg).matrix_world))
-            pos[i, j], rot[i, j] = M[:3, 3], M[:3, :3]
+    reads = [arms[owner] if kind == "bone" else bpy.data.objects[name] for kind, owner, name in sources if kind != "world"]
+    with SCOPE.only(reads):
+        for i, f in enumerate(frames):
+            sc.frame_set(int(f))
+            dg = bpy.context.evaluated_depsgraph_get()
+            evald = {}
+            for j, (kind, owner, name) in enumerate(sources):
+                if kind == "world":
+                    continue
+                if kind == "bone":
+                    if owner not in evald:
+                        evald[owner] = arms[owner].evaluated_get(dg)
+                    ae = evald[owner]
+                    M = geom.unscaled(_mat(ae.matrix_world @ ae.pose.bones[name].matrix))
+                else:
+                    M = geom.unscaled(_mat(bpy.data.objects[name].evaluated_get(dg).matrix_world))
+                pos[i, j], rot[i, j] = M[:3, 3], M[:3, :3]
     return pos, rot
 
 
