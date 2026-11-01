@@ -6074,8 +6074,12 @@ the solver's source): `grip/` (hand grips, one `.npz` per hand and spec), `stran
 `form/` (prop boxiness, by the evaluated geometry), `timeline/` (Demucs stems, by a hash of the audio span:
 `stems-<key>.npz`), `screen/` (each screen word's fitted encoding for the bake, by its modifiers and node trees with every
 value, the keys on them, on the object and its parents, the fonts' bytes, the frames it shows on, what its materials read
-and the bake's own source: a word that reads the scene elsewhere, through drivers, constraints, time or another object, is
-baked every time). Changing hair settings re-runs only the hair; nothing else is recomputed; editing a solver invalidates its results.
+and the code that bakes it: a word that reads the scene elsewhere, through drivers, constraints, time or another object, is
+baked every time). The code is `mkmmd.cache.code`'s fingerprint, not a module's whole source: the functions, classes and
+constants that make the result and everything they reach in the package, compared as syntax trees without docstrings, so
+an edit to a comment or to code that does not make the word keeps the cache (the screen words: `_ScreenWord`, the `Lit`
+methods that drive it, `_geom` and the fitter they reach in `mkmmd.core.fitgeo`). Changing hair settings re-runs only the
+hair; nothing else is recomputed; editing a solver invalidates its results.
 `<project>/.mk/look/<time>/` is where `mk look` writes by default. The user cache `~/.cache/mk/` (`MK_CACHE`) holds the job folders, serve
 sockets, `empty.blend`, `samples/` and `look/` outside a project, and the reference sets.
 

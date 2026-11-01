@@ -129,12 +129,14 @@ SCREEN a word of screen type (mkmmd/core/fitgeo.py makes it, mkr/mkr/src/screen_
 Self-check: `check` reads lit.bin and bake.bin back and rebuilds every static and skinned mesh on the export frame, the
 middle frame and the last (positions and normals), against the evaluated mesh Blender had on those frames; and every
 screen word on the first, middle and last frame of its window against Blender's drawing of them."""
+import functools
 import hashlib
 import json
 import os
 import re
 import shutil
 import struct
+import sys
 import time
 import zlib
 
@@ -1097,11 +1099,18 @@ def _anim(idb):
             "nla": [[t.mute, [[_props(s, depth=0), curves(s.action)] for s in t.strips]] for t in ad.nla_tracks]}
 
 
+@functools.cache
+def _screen_code():
+    """The fingerprint of the code that bakes a screen word (mkmmd.cache.code): _ScreenWord, the Lit methods that drive
+    and evaluate it and all they reach, fitgeo included; an edit anywhere else in the bake leaves the cache as it is."""
+    return CA.code(sys.modules[__name__], "_ScreenWord", "Lit._screen", "Lit._render_settings")
+
+
 def _screen_key(o, reads, k0, k1, frame0, n):
     """The cache key of a screen word's fitted encoding (`<project>/.mk/cache/screen/<key>.npz`): a SHA-256 of what
     makes its geometry and attributes on each frame of its window (its modifiers and their node trees with every node
     value, the F-curves on them, on the object and on its parents, the object's and its parents' transforms, the fonts'
-    bytes, the window, what its materials read, and this module's and fitgeo's source), or None when it reads the
+    bytes, the window, what its materials read, and the code that bakes it: _screen_code), or None when it reads the
     scene elsewhere (drivers, constraints, time, other objects, images, simulation): such a word is baked every time."""
     used = {"groups": set(), "images": set(), "objects": set()}
     mods, trees, fonts = [], {}, []
@@ -1144,7 +1153,7 @@ def _screen_key(o, reads, k0, k1, frame0, n):
     shape = {"vertices": len(data.vertices) if o.type == "MESH" else None,
              "texspace": [list(data.texspace_location), list(data.texspace_size)] if hasattr(data, "texspace_location")
              else None}
-    return CA.key("screen", CA.Path(__file__), CA.Path(FG.__file__), chain, shape, mods, trees, fonts,
+    return CA.key("screen", _screen_code(), chain, shape, mods, trees, fonts,
                   [k0, k1, frame0, n], sorted(reads), [NORMAL_KEY, SCREEN_CHECK])
 
 
@@ -1444,6 +1453,7 @@ class Lit:
                     self.node_objects[ob.name] = np.empty((n, 4, 4))
         self.inst = {}
         self.t_sample = 0.0
+        self.t_parts = dict.fromkeys(("records", "tracks", "instances", "by_frame", "screen", "points", "truth"), 0.0)
         self.docs = None
         log(f"bake: lit: {len(self.tracks)} meshes, {len(self.flex)} by frame, {len(self.lights)} lights, "
             f"{len(self.chans)} animated node values, view LUT in {self.t_lut:.1f}s")
@@ -1548,6 +1558,7 @@ class Lit:
     # ------------------------------------------------------------------------------------------------- every frame
     def sample(self, k, dg):
         t0 = time.time()
+        t = time.perf_counter()
         for name, (o, always) in self.watch.items():
             self.shown[name][k] = always or not o.hide_render
         for o, rows in self.lights:
@@ -1559,18 +1570,23 @@ class Lit:
             vals[k] = v[:] if hasattr(v, "__len__") else v
         for name, M in self.node_objects.items():
             M[k] = np.array(bpy.data.objects[name].matrix_world)
-        for t in self.tracks:
-            t.sample(k, self.shown[t.ob.name][k])
+        t = self._tick("records", t)
+        for t_ in self.tracks:
+            t_.sample(k, self.shown[t_.ob.name][k])
         for h in self.tracks + self.flex:
             if h.oattr is not None:
                 h.oattr.sample(k, h.ob, self.sc)
+        t = self._tick("tracks", t)
         if self.instancers:
             self._instances(k, dg)
+        t = self._tick("instances", t)
         for fx in self.flex:
             if self.shown[fx.ob.name][k]:
                 fx.add(k, dg)
+        t = self._tick("by_frame", t)
         if self.screen:
             self._screen(k)
+        t = self._tick("screen", t)
         due = [p for p in self.points.values() if k in p["shots"]]
         if due:
             ns = _namespace(None)                         # as mk render's point layer evaluates them
@@ -1580,9 +1596,17 @@ class Lit:
                     p["xyz"][k] = AXES3 @ np.array(tuple(eval(p["code"], ns)), float)   # noqa: S307 - the project's own
                 except Exception as e:  # noqa: BLE001 - a failing expression is the project's: recorded with its frames
                     p["errors"].setdefault(str(e), []).append(self.frame0 + k)
+        t = self._tick("points", t)
         if k in self.check_k or k in self.fit_k:
             self._truth(k, dg)
+        self._tick("truth", t)
         self.t_sample += time.time() - t0
+
+    def _tick(self, part, t):
+        """Add the time since `t` to `part` of the frames' sampling; now."""
+        now = time.perf_counter()
+        self.t_parts[part] += now - t
+        return now
 
     @staticmethod
     def _light_row(o, shown):
@@ -2107,5 +2131,6 @@ class Lit:
                 "points": {k: len(p["errors"]) for k, p in (d.get("points") or {}).items()},
                 "render_settings": d.get("render_settings") or {},
                 "seconds": {"lut": round(self.t_lut, 2), "frames": round(self.t_sample, 2),
+                            "frames_by_part": {k: round(v, 2) for k, v in self.t_parts.items()},
                             "capture": round(self.t_capture, 2), "write": round(self.t_finish, 2),
                             "check": round(self.t_check, 2)}}

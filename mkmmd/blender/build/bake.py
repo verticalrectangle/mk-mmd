@@ -427,9 +427,13 @@ def bake(ctx, out_dir):
     shutil.rmtree(part, ignore_errors=True)
     os.makedirs(part)
     lit = BL.Lit(sc, n, cams, part, ctx.log, ctx=ctx, outputs=outputs)
+    loop = dict.fromkeys(("frame_set", "transforms", "by_frame", "lit", "rings_tints"), 0.0)   # seconds, all frames
+    t_setup = time.time() - t0
     try:
         for k, f in enumerate(frames):
+            ta = time.perf_counter()
             FRZ.frame_set(sc, f, wins)
+            tb = time.perf_counter()
             for a in arms:
                 W = np.array(a.matrix_world)
                 T = W @ pose_matrices(a, bufs[a.name]) @ rest[a.name] @ np.linalg.inv(W)
@@ -448,9 +452,12 @@ def bake(ctx, out_dir):
             for name in vis:
                 vis[name][k] = not bpy.data.objects[name].hide_render
             dg = bpy.context.evaluated_depsgraph_get()
+            tc = time.perf_counter()
             for fx in flex:
                 fx.add(k, dg)
+            td = time.perf_counter()
             lit.sample(k, dg)
+            te = time.perf_counter()
             if point_rings:
                 live = {r["index"] for r in RG.live(rings, (f - ring_tab["frame0"]) / ring_tab["fps"])}
                 for r in point_rings:
@@ -461,6 +468,12 @@ def bake(ctx, out_dir):
                             ring_errors[r["index"]] = str(e)
             for i, (holder, prop) in enumerate(tints):
                 tint_vals[i, k] = tint_value(holder, prop)
+            tf = time.perf_counter()
+            loop["frame_set"] += tb - ta
+            loop["transforms"] += tc - tb
+            loop["by_frame"] += td - tc
+            loop["lit"] += te - td
+            loop["rings_tints"] += tf - te
     finally:
         FRZ.release()
         lit.restore()                              # the render settings and screen type it changed for the loop
@@ -591,6 +604,7 @@ def bake(ctx, out_dir):
               "armatures": len(index["armatures"]), "cameras": len(cams),
               "glb_mb": round(os.path.getsize(os.path.join(out_dir, "scene.glb")) / 1e6, 1),
               "bin_mb": round(size * 4 / 1e6, 1), "export_seconds": round(t_glb, 1), "lit": lit.report(out_dir),
+              "setup_seconds": round(t_setup, 1), "loop_seconds": {k: round(v, 1) for k, v in loop.items()},
               "seconds": round(time.time() - t0, 1)}
     if flex_why:
         report["not_by_frame"] = flex_why
