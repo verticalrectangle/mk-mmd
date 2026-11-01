@@ -48,7 +48,10 @@ wearing them for the loop, and the colours match the drivers exactly on every fr
 
 What is left on Cabin Essence: `bake` 47 (Blender's frame changes 13, the glTF export 8, capture 8, check 4), `clip` 42
 (Blender's frame changes and the depth search of ~1,400 objects a frame), `sim` 33 (five levels of chains, each sampled
-over every frame), `cast` 20 (mmd_tools importing the models).
+over every frame). `cast` 20 -> 4 s: each model's mmd_tools import is kept in `<project>/.mk/cache/cast/` as a
+.blend (keyed by the model file, the import's settings, mmd_tools' version and the code) and appended on later builds,
+its shared node groups and images and its materials' mmd ids as a fresh import leaves them: the bake the same bytes.
+The whole build: 165 s.
 
 ## Steps
 

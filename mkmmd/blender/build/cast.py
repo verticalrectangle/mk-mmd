@@ -13,10 +13,13 @@ material) has its morph sliders bound (`bind_morphs`), so every morph is keyed t
 import json
 import math
 import os
+import re
+import sys
 
 import bpy
 from mathutils import Euler, Vector
 
+from ... import cache as CA
 from ...core import cast as CN
 from ...core import palette as PAL
 from . import BuildError, Member, collection, link
@@ -54,13 +57,25 @@ def resolve(ctx, spec):
     return pmx, rig
 
 
-def import_model(path, physics):
+def import_model(path, physics, cache=None):
+    """Import a PMX with mmd_tools (no Bullet unless physics is "bullet"): (root, armature, meshes, every new object).
+    With a cache folder the import is kept there as a .blend keyed by the model file, the import's settings, mmd_tools'
+    version and this function's code (`_import_key`), and a later build appends it instead of importing again."""
     types = {"MESH", "ARMATURE", "DISPLAY", "MORPHS"}
     if physics == "bullet":
         types.add("PHYSICS")
-    before = set(bpy.data.objects)
-    bpy.ops.mmd_tools.import_model(filepath=path, types=types, scale=0.08, log_level="ERROR")
-    new = [o for o in bpy.data.objects if o not in before]
+    blend = os.path.join(cache, "cast", _import_key(path, types) + ".blend") if cache else None
+    if blend is not None and os.path.exists(blend):
+        new = _append(blend)
+    else:
+        before = set(bpy.data.objects)
+        bpy.ops.mmd_tools.import_model(filepath=path, types=types, scale=0.08, log_level="ERROR")
+        new = [o for o in bpy.data.objects if o not in before]
+        if blend is not None:
+            os.makedirs(os.path.dirname(blend), exist_ok=True)
+            tmp = f"{blend}.{os.getpid()}.tmp"
+            bpy.data.libraries.write(tmp, set(new), compress=True)
+            os.replace(tmp, blend)                     # whole or not at all for a build that reads it meanwhile
     root = next(o for o in new if getattr(o, "mmd_type", "") == "ROOT")
     arm = next(o for o in root.children_recursive if o.type == "ARMATURE")
     meshes = [o for o in root.children_recursive if o.type == "MESH" and getattr(o, "mmd_type", "") == "NONE"]
@@ -68,6 +83,43 @@ def import_model(path, physics):
         if getattr(o, "mmd_type", "") in SKIP_TYPES:
             o.hide_render = True
     return root, arm, meshes, new
+
+
+def _import_key(path, types):
+    """What an import makes depends on: the model file, the import's settings, mmd_tools' version and the code that
+    asks for it (mkmmd.cache.code)."""
+    mod = next((m for name, m in sys.modules.items() if name.split(".")[-1] == "mmd_tools" and getattr(m, "__file__", None)),
+               None)
+    manifest = os.path.join(os.path.dirname(mod.__file__), "blender_manifest.toml") if mod is not None else None
+    version = CA.Path(manifest) if manifest and os.path.exists(manifest) else getattr(mod, "bl_info", {}).get("version")
+    return CA.key("cast import", CA.Path(path), sorted(types), 0.08, str(version), bpy.app.version_string,
+                  CA.code(sys.modules[__name__], "import_model", "_append"))
+
+
+def _append(blend):
+    """The objects of a kept import, appended and linked to the scene; the node groups and images it shares with a model
+    imported before it are the ones already there, as mmd_tools' own import reuses them, and its materials' mmd ids
+    follow the ones already taken, as mmd_tools numbers a new model's."""
+    groups, images, mats = set(bpy.data.node_groups), set(bpy.data.images), set(bpy.data.materials)
+    taken = max([m.mmd_material.material_id for m in mats], default=-1)
+    with bpy.data.libraries.load(blend, link=False) as (src, dst):
+        dst.objects = list(src.objects)
+    new = [o for o in dst.objects if o is not None]
+    for o in new:
+        bpy.context.scene.collection.objects.link(o)
+    for coll, before, same in ((bpy.data.node_groups, groups, lambda a, b: a.bl_idname == b.bl_idname),
+                               (bpy.data.images, images, lambda a, b: a.filepath == b.filepath)):
+        for idb in [x for x in coll if x not in before]:
+            m = re.fullmatch(r"(.*)\.\d{3}", idb.name)
+            kept = coll.get(m.group(1)) if m else None
+            if kept is not None and kept in before and same(idb, kept):
+                idb.user_remap(kept)
+                coll.remove(idb)
+    added = sorted((m for m in bpy.data.materials if m not in mats and m.mmd_material.material_id >= 0),
+                   key=lambda m: m.mmd_material.material_id)
+    for i, m in enumerate(added):
+        m.mmd_material.material_id = taken + 1 + i
+    return new
 
 
 def bind_morphs(root, coll):
@@ -185,7 +237,7 @@ def run(ctx):
         except ValueError as e:
             raise BuildError(f"cast {name!r}: {e}") from None
         pmx, rig = resolve(ctx, spec)
-        root, arm, meshes, new = import_model(pmx, physics)
+        root, arm, meshes, new = import_model(pmx, physics, ctx.cache)
         title = CN.root_name(spec)
         root.name = title
         arm.name = CN.armature_name(spec)
