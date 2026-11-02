@@ -22,14 +22,21 @@ def set_engine(sc, engine):
 
 
 def ensure_action(id_data, name=None):
+    import bpy
     ad = id_data.animation_data or id_data.animation_data_create()
     if ad.action is None:
         import bpy
         ad.action = bpy.data.actions.new(name or f"{id_data.name}_act")
     # Blender 5: a slotted action plays only when the ID's `action_slot` points at one of
     # its slots (5.2 leaves it None on a fresh action); without it every fcurve is dead.
-    if ad.action_slot is None and len(ad.action.slots):
-        ad.action_slot = ad.action.slots[0]
+    if ad.action_slot is None and ad.action.slots:
+        want = ad.action.slots[0].target_id_type      # the fcurves' own target type
+        try:
+            if ad.action.slots[0].target_id_type == "OBJECT" and not isinstance(id_data, bpy.types.Object):
+                return ad.action                      # a KEY (shape key) with a stray OB slot: not assignable
+            ad.action_slot = ad.action.slots[0]
+        except RuntimeError:
+            pass                                      # an unsuitable slot: leave it unset (as before the 5 change)
     return ad.action
 
 
