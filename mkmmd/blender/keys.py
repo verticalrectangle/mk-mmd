@@ -26,6 +26,10 @@ def ensure_action(id_data, name=None):
     if ad.action is None:
         import bpy
         ad.action = bpy.data.actions.new(name or f"{id_data.name}_act")
+    # Blender 5: a slotted action plays only when the ID's `action_slot` points at one of
+    # its slots (5.2 leaves it None on a fresh action); without it every fcurve is dead.
+    if ad.action_slot is None and len(ad.action.slots):
+        ad.action_slot = ad.action.slots[0]
     return ad.action
 
 
