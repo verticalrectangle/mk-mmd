@@ -28,7 +28,14 @@ from . import transition as TRN
 from .build.cast import material_name
 from .runtime import op
 
-ENGINES = {"eevee": "BLENDER_EEVEE_NEXT", "cycles": "CYCLES", "workbench": "BLENDER_WORKBENCH"}
+def _engine(name):
+    import bpy
+    enum = bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items
+    return {"eevee": "BLENDER_EEVEE_NEXT" if "BLENDER_EEVEE_NEXT" in enum else "BLENDER_EEVEE",
+            "workbench": "BLENDER_WORKBENCH", "cycles": "CYCLES"}[name]
+
+
+ENGINES = {"eevee": _engine("eevee"), "cycles": "CYCLES", "workbench": "BLENDER_WORKBENCH"}
 
 
 def kept_materials(keep):
@@ -57,7 +64,7 @@ def render_frames(args):
     r.resolution_percentage = int(args.get("percent", 100))
     if args.get("engine"):
         r.engine = ENGINES[args["engine"]]
-    if r.engine == "BLENDER_EEVEE_NEXT" and args.get("samples"):
+    if r.engine in ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE") and args.get("samples"):
         sc.eevee.taa_render_samples = int(args["samples"])
     if r.engine == "CYCLES" and args.get("samples"):
         sc.cycles.samples = int(args["samples"])

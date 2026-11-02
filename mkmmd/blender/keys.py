@@ -10,6 +10,17 @@ from mathutils import Matrix, Quaternion, Vector
 INTERP = {"CONSTANT": 0, "LINEAR": 1, "BEZIER": 2}
 
 
+def set_engine(sc, engine):
+    """The render engine by mk's name: BLENDER_EEVEE_NEXT on 4.2, BLENDER_EEVEE from 5 on (the enum was renamed)."""
+    import bpy
+    names = {"eevee": "BLENDER_EEVEE_NEXT", "workbench": "BLENDER_WORKBENCH", "cycles": "CYCLES"}
+    if engine == "eevee" and "BLENDER_EEVEE_NEXT" not in bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items:
+        engine = "BLENDER_EEVEE"
+    else:
+        engine = names.get(engine, engine)
+    sc.render.engine = engine
+
+
 def ensure_action(id_data, name=None):
     ad = id_data.animation_data or id_data.animation_data_create()
     if ad.action is None:

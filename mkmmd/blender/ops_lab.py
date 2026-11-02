@@ -838,6 +838,8 @@ def _clear():
 def _eevee(e, table):
     """Set scene.eevee properties from a table, a nested table setting a struct's own (ray_tracing_options)."""
     for k, v in table.items():
+        if not hasattr(e, k) and not (isinstance(v, dict)):
+            continue              # a property 4.2 had and 5.x dropped (fast_gi_thickness_far): not settable here
         if isinstance(v, dict):
             _eevee(getattr(e, k), v)
         else:
@@ -850,7 +852,7 @@ def _settings(sc, case):
     mk's scenes have them unless the case says otherwise, motion blur only when it asks; the case's `eevee` table sets
     any scene.eevee property over those (shadow_step_count, use_raytracing, ray_tracing_options: {...}, ...)."""
     r, e, rs = sc.render, sc.eevee, case.get("render") or {}
-    r.engine = "BLENDER_EEVEE_NEXT"
+    K.set_engine(sc, "eevee")
     sc.world = world(case["world"], list(range(1, int(case["frames"]) + 1))) if case.get("world") else None
     r.fps, r.fps_base = int(case.get("fps", 30)), 1.0
     sc.frame_start, sc.frame_end = 1, int(case["frames"])

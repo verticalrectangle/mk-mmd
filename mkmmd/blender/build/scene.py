@@ -15,7 +15,8 @@ def run(ctx):
     if outs:
         sc.render.resolution_x, sc.render.resolution_y = outs[0]["size"]
     sc.render.resolution_percentage = 100
-    sc.render.engine = "BLENDER_EEVEE_NEXT"
+    from .keys import set_engine as _set_engine
+    _set_engine(sc, "eevee")
     sc.unit_settings.system = "METRIC"
     for m in list(sc.timeline_markers):
         sc.timeline_markers.remove(m)
