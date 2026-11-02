@@ -189,6 +189,8 @@ impl World {
                 .unwrap_or_else(|| vec![0.0; 3]);
             let wgsl = format!("// mkr: the world's colour (no nodes)\nfn mat_world(s: Surface) -> Closures {{\n  \
                                 return mks_closure_from_color(vec3f({:?}, {:?}, {:?}));\n}}\n", c[0], c[1], c[2]);
+            let keyed: Vec<String> = w.get("keyed").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+            unsupported.extend(mkr_shade::keyed_reason(&keyed, None, groups));
             (wgsl, Vec::new(), Vec::new())
         };
         let world = World { name, wgsl, params, param_base, image_base, unsupported, props: props.unwrap_or_default(),
@@ -651,6 +653,45 @@ mod tests {
         assert!(support.materials.get("ring").is_some_and(|why| why.iter().any(|w| w.contains("OBJECT:mk_amp"))),
                 "{:?}", support.materials);
         assert!(support.meshes.is_empty(), "{:?}", support.meshes);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Keyed or driven values the bake holds one value of (bake.json `keyed`): a colour ramp's stops and a node's
+    /// setting on a material with nodes, the colour of a material without nodes, and the colour of a world without nodes
+    /// make those materials (and, for the world, the whole scene) Blender's, saying which paths; a driven socket value
+    /// (its per-frame values in bake.bin: `anim`) and a plain material do not.
+    #[test]
+    fn keyed_values_the_bake_holds_once_are_left_to_blender() {
+        let dir = std::env::temp_dir().join(format!("mkr_materials_keyed_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mesh = |name: &str, mat: &str| json!({"name": name, "kind": "static", "materials": [mat],
+            "triangles": {"offset": 0, "count": 0},
+            "attributes": {"position": {"offset": 0, "comp": 3, "type": "f32"},
+                           "normal": {"offset": 0, "comp": 3, "type": "f32"}}});
+        let mut ramp = shows_attribute("GEOMETRY", "col");
+        ramp["keyed"] = json!([r#"nodes["ramp"].color_ramp.elements[0].color"#, r#"nodes["mix"].blend_type"#]);
+        let doc = json!({"version": 5, "fps": 30.0, "frame0": 1, "frames": 2, "outputs": [{"name": "o", "size": [4, 4]}],
+            "lit": {"view": {"lut": {"file": "view_lut.bin", "n": 2, "lo": -1.0, "hi": 1.0}},
+                    "world": {"name": "w", "use_nodes": false, "color": [0.2, 0.2, 0.25], "props": {},
+                              "keyed": ["color"]},
+                    "materials": {"ramp": ramp, "driven": shows_attribute("GEOMETRY", "col"),
+                                  "flat": {"settings": {"diffuse_color": [1.0, 0.2, 0.2, 1.0]}, "tree": null,
+                                           "anim": [], "keyed": ["diffuse_color"]}},
+                    "meshes": [mesh("a", "ramp"), mesh("b", "driven"), mesh("c", "flat")]}});
+        std::fs::write(dir.join("bake.json"), doc.to_string()).unwrap();
+        let floats: [f32; 14] = [0.0; 14];
+        std::fs::write(dir.join("bake.bin"), bytemuck::cast_slice(&floats)).unwrap();
+        std::fs::write(dir.join("lit.bin"), b"").unwrap();
+        let bake = Bake::open(&dir).unwrap();
+        let support = Support::of(&bake).unwrap();
+        let why = |m: &str| support.materials.get(m).map(|w| w.join("; ")).unwrap_or_default();
+        assert!(why("ramp").contains("values keyed or driven that the bake holds one of")
+                && why("ramp").contains("color_ramp.elements[0].color") && why("ramp").contains("blend_type"),
+                "{:?}", support.materials);
+        assert!(why("flat").ends_with("diffuse_color"), "{:?}", support.materials);
+        assert!(!support.materials.contains_key("driven"), "a driven socket is mkr's: {:?}", support.materials);
+        let scene = support.scene.clone().unwrap_or_default();
+        assert!(scene.starts_with("world w:") && scene.ends_with("color"), "{scene:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -217,14 +217,14 @@ pub fn load(doc: &Value) -> ProbeScene {
             })
             .unwrap_or_default();
         let tree = ctx.tree(&g["tree"]);
-        groups.insert(name.clone(), GroupDesc { interface, tree, anim: Vec::new() });
+        groups.insert(name.clone(), GroupDesc { interface, tree, anim: Vec::new(), keyed: Vec::new() });
     }
     let mut materials = BTreeMap::new();
     if let Some(mats) = doc["materials"].as_object() {
         for (name, m) in mats {
             let tree = if m["tree"].is_object() { Some(ctx.tree(&m["tree"])) } else { None };
             let settings = m["props"].as_object().cloned().unwrap_or_default();
-            materials.insert(name.clone(), MaterialDesc { settings, tree, anim: Vec::new() });
+            materials.insert(name.clone(), MaterialDesc { settings, tree, anim: Vec::new(), keyed: Vec::new() });
         }
     }
     ProbeScene { materials, groups, images: ctx.images.into_values().collect() }

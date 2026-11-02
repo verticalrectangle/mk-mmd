@@ -410,6 +410,25 @@ fn nodeless(id: &str, settings: &serde_json::Map<String, Value>) -> CompiledMate
     }
 }
 
+/// Why mkr cannot follow a material or world over the frames as Blender draws it: what is keyed or driven on it (`own`)
+/// or on a node group its tree uses (followed down) that the bake holds one value of (bake_lit `_keyed`: a colour ramp's
+/// stops, a node's setting, a material's or a world's own settings when it draws without nodes), or None.
+pub fn keyed_reason(own: &[String], tree: Option<&graph::Graph>, groups: &BTreeMap<String, GroupDesc>) -> Option<String> {
+    let mut paths: Vec<String> = own.to_vec();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut todo: Vec<&graph::Graph> = tree.into_iter().collect();
+    while let Some(t) = todo.pop() {
+        for g in t.nodes.iter().filter_map(|n| n.group.as_deref()) {
+            if let (true, Some(gd)) = (seen.insert(g), groups.get(g)) {
+                paths.extend(gd.keyed.iter().map(|p| format!("group {g}: {p}")));
+                todo.push(&gd.tree);
+            }
+        }
+    }
+    (!paths.is_empty())
+        .then(|| format!("values keyed or driven that the bake holds one of (EEVEE draws them changing): {}", paths.join(", ")))
+}
+
 /// Compile one material. `id`: a WGSL identifier fragment (functions are `mat_<id>...`); `images`: the renderer's
 /// global images list; `param_base`: the first `mkr_param` slot this material may use.
 pub fn compile(
@@ -422,14 +441,19 @@ pub fn compile(
     if !valid_id(id) {
         return Err(format!("material id {id:?} is not a WGSL identifier fragment"));
     }
+    let keyed = keyed_reason(&material.keyed, material.tree.as_ref(), groups);
     let Some(tree) = &material.tree else {
-        return Ok(nodeless(id, &material.settings));
+        let mut c = nodeless(id, &material.settings);
+        c.unsupported.extend(keyed);
+        return Ok(c);
     };
     let flat = graph::flatten(tree, &material.anim, groups);
     let pass_index = material.settings.get("pass_index").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let slab = material.settings.get("thickness_mode").and_then(|v| v.as_str()) == Some("SLAB");
     let b = build(id, "material", &flat, "OUTPUT_MATERIAL", images, param_base, pass_index, false, slab);
-    Ok(finish(id, b, &flat, param_base))
+    let mut c = finish(id, b, &flat, param_base);
+    c.unsupported.extend(keyed);
+    Ok(c)
 }
 
 /// Compile the world: `mat_<id>(s) -> Closures` whose emission is the background radiance. The renderer evaluates it
@@ -448,7 +472,9 @@ pub fn compile_world(
     let tree = world.tree.clone().unwrap_or_default();
     let flat = graph::flatten(&tree, &world.anim, groups);
     let b = build(id, "world", &flat, "OUTPUT_WORLD", images, param_base, 0.0, true, false);
-    Ok(finish(id, b, &flat, param_base))
+    let mut c = finish(id, b, &flat, param_base);
+    c.unsupported.extend(keyed_reason(&world.keyed, Some(&tree), groups));
+    Ok(c)
 }
 
 /// Parse and validate a complete module with naga (all capabilities); Err holds the formatted diagnostic.

@@ -39,7 +39,7 @@ GLOSS = (0.22, 28.0)                  # the paint's highlight: strength, sharpne
 ROUGH = {"wood": 0.6, "paint": 0.3, "ink": 0.3, "picture": 0.4}
 GLOW = {True: 1.0, False: 0.3}        # default emission of the self-shaded paint, screen type / in the scene
 LIT = {True: 0.0, False: 1.0}         # default share of the scene's light (screen type is drawn with the lights off)
-MAX_OBJECT = 63                       # characters Blender keeps of a name
+MAX_OBJECT = 63                       # bytes Blender keeps of a name (UTF-8: a kana or kanji takes 3)
 
 
 # ------------------------------------------------------------------------------------------------------ glyphs
@@ -333,9 +333,9 @@ def build(ctx, coll, spec, suffix, cache):
     words = {}
     for b in plan.blocks:
         oname = f"{name}_{b.tag}{suffix}"
-        if len(oname) > MAX_OBJECT:
-            raise BuildError(f"text {name!r}: the block name {oname!r} is {len(oname)} characters, over {MAX_OBJECT}: "
-                             "shorten the entry's name")
+        if len(oname.encode("utf-8")) > MAX_OBJECT:
+            raise BuildError(f"text {name!r}: the block name {oname!r} takes {len(oname.encode('utf-8'))} bytes (UTF-8), "
+                             f"over {MAX_OBJECT}: shorten the entry's name")
         if bpy.data.objects.get(oname) is not None:
             raise BuildError(f"text {name!r}: an object named {oname!r} exists already")
         mkey = (font_label, b.mesh)

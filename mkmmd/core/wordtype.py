@@ -639,13 +639,14 @@ def _accent(w, lyr, entry):
     return colors[((w.line - 1) if by == "line" else w.k) % len(colors)]
 
 
-def _word_boxes(words, measure, what, fonts=None, rel=None, look=None, pads=None):
-    """(boxes, cap): per word (w, y0, y1), the ink box in em with the baseline at 0 (widths include the spread headroom), and
-    the cap height per em of the entry's own font. A word in a font of its own (`fonts[k]`) or at another size (`rel[k]`, a
-    share of the common cap height) is returned in the common em: its box is scaled so that its cap height comes out
-    `rel[k]` times the common one. `look` = {font, tracking} of the entry when it names them (the measure is then asked for
-    those too: a zone's overlay may change them). `pads[k]` = (pad x, pad y, height) in the word's em of the strip of tape
-    behind it, or None: the box is that strip's, wider and taller than the ink, so that neighbours never overlap."""
+def _word_boxes(words, measure, what, fonts=None, rel=None, look=None, pads=None, headroom=True):
+    """(boxes, cap): per word (w, y0, y1), the ink box in em with the baseline at 0 (widths include the spread headroom
+    unless `headroom` is False: words with no note, which never spread), and the cap height per em of the entry's own font.
+    A word in a font of its own (`fonts[k]`) or at another size (`rel[k]`, a share of the common cap height) is returned
+    in the common em: its box is scaled so that its cap height comes out `rel[k]` times the common one. `look` = {font,
+    tracking} of the entry when it names them (the measure is then asked for those too: a zone's overlay may change them).
+    `pads[k]` = (pad x, pad y, height) in the word's em of the strip of tape behind it, or None: the box is that strip's,
+    wider and taller than the ink, so that neighbours never overlap."""
     if measure is None:
         raise LyricsError(f"lyrics: layout {what!r} measures the words; the build supplies that")
     n = len(words)
@@ -663,7 +664,8 @@ def _word_boxes(words, measure, what, fonts=None, rel=None, look=None, pads=None
     boxes = []
     for k, (w, m, r) in enumerate(zip(words, ms, rel)):
         f = r * cap / m["cap"]
-        x, y0, y1 = m["w"] * (1.0 + spread_max(w.start, w.voiced_end)) * f, m["y0"] * f, m["y1"] * f
+        room = spread_max(w.start, w.voiced_end) if headroom else 0.0
+        x, y0, y1 = m["w"] * (1.0 + room) * f, m["y0"] * f, m["y1"] * f
         if pads is not None and pads[k] is not None:
             px, py, h = pads[k]
             x += 2.0 * px * f
@@ -691,11 +693,12 @@ def _auto_rows(boxes, gap, panel, fit, size, cap, leading, min_pitch=0.0, align=
     return best[1]
 
 
-def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None, rims=None):
+def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None, rims=None, headroom=True):
     """Where every word goes: (places, slot of each word, common cap-height size or None). A place is {"spec": keys for
     the word's text, "offset": (u, v) metres from the panel's centre or None, "tilt": degrees or None}; a ring word's also
     has "ring" (mkmmd/core/typering.py: its ring, orientation, the ring's radius, turn and centre). `rims` is the outline
-    round each word (em of the common size), which a ring leaves room for."""
+    round each word (em of the common size), which a ring leaves room for; `headroom` False sets words that never spread
+    (no note) without room for a spread."""
     n = len(words)
     layout = lyr.get("layout", "same")
     lay = dict(layout) if isinstance(layout, dict) else {"kind": layout}
@@ -716,7 +719,7 @@ def _places(words, entry, lyr, panel, measure, fonts=None, rel=None, pads=None, 
         return kind, places, slot_of, size
     fit, sz = entry.get("fit"), entry.get("size")
     boxes, cap = _word_boxes(words, measure, kind, fonts, rel,
-                             {"font": entry.get("font"), "tracking": entry.get("tracking")}, pads)
+                             {"font": entry.get("font"), "tracking": entry.get("tracking")}, pads, headroom)
     if kind == "bleed":                                     # huge words off the edges, each at its own size
         if not panel:
             raise LyricsError("lyrics: layout 'bleed' needs a panel (`screen`, `on` or `box`): the words run off its "
@@ -917,7 +920,7 @@ def expand(entry, tl, *, fps, frame0=0, panel=None, measure=None, shots=None, pa
     unknown = sorted(set(lyr) - LYRICS_KEYS)
     if unknown:
         raise LyricsError(f"text {name!r}: lyrics keys {unknown} are unknown (known: {sorted(LYRICS_KEYS)})")
-    for bad in ("text", "value", "kinetic", "reveal", "lyric"):
+    for bad in ("text", "value", "kinetic", "reveal", "lyric", "calls"):
         if bad in entry:
             raise LyricsError(f"text {name!r}: a lyrics entry takes its words from the timeline: drop `{bad}`")
     try:
@@ -1013,9 +1016,13 @@ def _scales(lyr, var, n):
     return rel
 
 
-def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
-    words = select(tl, lyr.get("line"), lyr.get("lines"), lyr.get("words"), fps, lyr.get("case", "keep"),
-                   lyr.get("clean", False))
+def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None, words=None, hold=None, headroom=True):
+    """The words of one block as text specs. `words` are given instead of the timeline's selection by entries whose words
+    are their own (calls on hits: mkmmd/core/calltype.py), `hold` (s) is how long each word stays up after it lands (it
+    leaves the way its slot's `recycle` says, fading and sliding), `headroom` False lays out words that never spread."""
+    if words is None:
+        words = select(tl, lyr.get("line"), lyr.get("lines"), lyr.get("words"), fps, lyr.get("case", "keep"),
+                       lyr.get("clean", False))
     n = len(words)
     style = lyr.get("style", "pop")
     p = style_params(style, lyr.get("arrive"), fps)
@@ -1076,7 +1083,7 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
     kind, places, slot_of, size = _places(words, entry, lyr, panel, measure,
                                           fonts if any(f is not None for f in fonts) else None,
                                           rel if any(r != 1.0 for r in rel) else None,
-                                          pads if any(x is not None for x in pads) else None, rims)
+                                          pads if any(x is not None for x in pads) else None, rims, headroom)
     off0 = entry.get("offset") or (0.0, 0.0)
     _with_offset(places, off0)
     ring_t0 = {}                                            # a ring turns from the moment its first word is sung
@@ -1138,6 +1145,10 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
         for k, h in enumerate(recycle_hide(lands, group, rec.get("gap", 0))):
             if h is not None:
                 hide[k] = min(hide[k], h)
+    gone = [None] * n                            # up for `hold` seconds after the landing only: gone after them
+    if hold is not None:
+        gone = [lands[k] + max(1, int(round(float(hold) * fps))) for k in range(n)]
+        hide = [min(h, g) for h, g in zip(hide, gone)]
 
     keep = [k for k in range(n) if hide[k] > lands[k] and (only is None or k in only)]   # never on screen: drops out
     skipped = [[words[k].line, words[k].index] for k in range(n) if k not in keep and (only is None or k in only)]
@@ -1249,7 +1260,7 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None):
         wow_k = (wow_p, 2.0 * math.pi * h01(w.line, w.index, 41)) if wow_p and TF.wow_held(w.start, w.voiced_end, wow_p) else None
         rew_k = (rew_t0[k], rew) if rew_t0[k] is not None else None
         kin = sub["kinetic"] = _kinetic(w, k, n, lands, hide[k], k_style, pw, fps, spread_k, wt_k, rcw, vs, tilt, drip,
-                                        drip_t0[k], rec, group, t_last, wow_k, rew_k)
+                                        drip_t0[k], rec, group, t_last, wow_k, rew_k, gone[k])
         if ring is not None:                    # carried round the turning ring, the letters following its curve
             kin["orbit"] = {"center": [off0[0] + ring["center"][0], off0[1] + ring["center"][1]],
                             "keys": compress(TR.orbit_keys(ring["turn"], ring_t0[ring["ring"]], *kin["show"]))}
@@ -1438,8 +1449,9 @@ def _tape(arr, w, land, last, fps, wow, rew):
 
 
 def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, drip, drip_t0, rec, slot_of, t_last,
-             wow=None, rew=None):
-    """The `kinetic` table of one word (the keys are listed in mkmmd/core/typefx.py)."""
+             wow=None, rew=None, gone=None):
+    """The `kinetic` table of one word (the keys are listed in mkmmd/core/typefx.py); `gone` is the frame its `hold` is
+    over (None: it has none)."""
     land = lands[k]
     last = hide - 1
     kin = {"show": [land / fps, hide / fps]}
@@ -1450,11 +1462,12 @@ def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, dr
         arr["rot"] = [(t, -v) for t, v in arr["rot"]]
     if wow is not None or rew is not None:          # the held note's wow and flutter, the rewind: on top of the arrival
         _tape(arr, w, land, last, fps, wow, rew)
-    exit_at = None                                  # (t, frames): when a recycled slot's next word takes it, the fade
-    if rec is not None and float(rec.get("fade", 0)) > 0:
+    exit_at = None                                  # (t, frames): when the word leaves its slot (the slot's next word takes
+    if rec is not None and float(rec.get("fade", 0)) > 0:   # it, or its hold is over) and the fade before that
         nxt = next((lands[j] for j in range(k + 1, n) if slot_of[j] == slot_of[k]), None)
-        if nxt is not None:
-            exit_at = ((nxt - float(rec.get("gap", 0))) / fps, float(rec["fade"]))
+        ends = [e for e in (None if nxt is None else nxt - float(rec.get("gap", 0)), gone) if e is not None]
+        if ends:
+            exit_at = (min(ends) / fps, float(rec["fade"]))
     if exit_at is not None and float(rec.get("slide", 0.0)):  # it is flung off sideways over the fade, faster and faster
         t_exp, fr = exit_at
         c0 = max(int(math.floor(t_exp * fps - fr)), land)

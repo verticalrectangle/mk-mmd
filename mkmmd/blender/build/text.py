@@ -47,6 +47,10 @@ are packed into the .blend.
   lyrics = {timeline = "audio/timeline.json", line = 3, words = [1, 4], style = "pop", from = t, to = t, ...}
                             one text per sung word, read from the timeline (never printed anywhere), each with its own
                             `kinetic` keys; the entry's placement and look keys go to every word: build/wordtype.py
+  calls = {words = ["ハイ！", "オイ！"], lane = "kick", style = "slam", hold = 1.2, ...}   words of the entry's own
+                            (shouts, fan calls: never the song's), one text per hit of `times` or a lane of the [audio]
+                            hits file, round-robin, with the lyric machinery's arrival, layout, recycle and cycled looks:
+                            build/calltype.py
   blocks = {hits = {lane = "kick", move = "jump"}, ...}   the text (or, with lyrics style "blocks", the sung words) as 3D
                             toy alphabet blocks, one object per letter: build/blocktype.py
   backing = {color = "rose", pattern = "stripe", ...}   a strip of tape behind the text (core/typefx.py): it is the
@@ -77,6 +81,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix
 
+from ...core import glyphs as GL
 from ...core import screentype as SR
 from ...core import wordtype as LY
 from ...core import typefx as FX
@@ -91,7 +96,7 @@ KNOWN = {"name", "on", "mount", "at", "facing", "up", "box", "text", "value", "f
          "offset", "color", "glow", "lit", "depth", "lift", "tracking", "word_spacing", "leading", "reveal", "blink",
          "flicker", "fade", "ghost", "halo", "haze", "back", "kinetic", "lyric", "backing", "outline", "screen", "knockout",
          "blocks", "_aspect", "_multi", "_shot", "_path"}
-MAX_NAME = 50                  # characters of a text's name: Blender keeps 63, and the node group's `mk_text_` takes 8
+MAX_NAME = 50                  # bytes of a text's name in UTF-8 (a kana takes 3): Blender keeps 63 and `mk_text_` takes 8
 LIFT = 0.002                    # m in front of the surface
 GHOST_BACK = 0.0006             # m the unlit segments sit behind the lit ones
 GHOST_STRENGTH = 0.10           # brightness of the unlit segments as displayed, as a share of the lit ones
@@ -164,9 +169,11 @@ def _filled(g, curves):
 
 class _Measure:
     """A throwaway geometry-nodes object that lays strings out exactly as the text object will (same node, font,
-    alignment and spacing) and reports the ink box of each, so fit and alignment are exact for any font."""
+    alignment and spacing) and reports the ink box of each, so fit and alignment are exact for any font. `cover` is the
+    font's own code points (mkmmd.core.glyphs; None: not known): Blender draws what a font lacks in a fallback face."""
 
-    def __init__(self, coll, font, align_x, tracking, word_spacing, tag):
+    def __init__(self, coll, font, align_x, tracking, word_spacing, tag, cover=None):
+        self.cover = cover
         self.nt = _new_tree(f"mk_text_measure_{tag}")
         self.s_id = self.nt.interface.new_socket("String", in_out="INPUT", socket_type="NodeSocketString").identifier
         self.l_id = self.nt.interface.new_socket("Line Spacing", in_out="INPUT",
@@ -209,15 +216,16 @@ class _Measure:
         return res
 
     def cap_ratio(self):
-        """Cap height per em: the height of a flat-topped capital (E, then H)."""
+        """Cap height per em: the height of a flat-topped capital the font has itself (E, then H; a kana or kanji face
+        without them, ロ then 口: mkmmd.core.glyphs.CAP_REFS), never one Blender's fallback face draws for it."""
         if self.cap is None:
-            for ch in ("E", "H"):
+            for ch in GL.cap_refs(self.cover):
                 b = self.ink(ch, 1.0)
                 if b:
                     self.cap = b[3] - b[1]
                     break
             else:
-                raise T.TextError("the font has neither E nor H to take a cap height from")
+                raise T.TextError(f"the font has none of {' '.join(GL.CAP_REFS)} to take a cap height from")
         return self.cap
 
     def close(self):
@@ -236,7 +244,8 @@ def _registry(ctx):
 
 
 def _font(ctx, ref, cache):
-    """(VectorFont or None for the built-in font, label) for a registry slug or a file; fonts are packed."""
+    """(VectorFont or None for the built-in font, label) for a registry slug or a file; fonts are packed. The code points
+    the file draws itself go to `cache["cover"][label]` (None: not known, as for the built-in font)."""
     if not ref:
         return None, "builtin"
     ref = str(ref)
@@ -256,6 +265,12 @@ def _font(ctx, ref, cache):
     vf = bpy.data.fonts.load(path, check_existing=True)
     if vf.packed_file is None:
         vf.pack()
+    try:                                        # what it draws itself: Blender quietly draws the rest in a fallback face
+        cover = GL.codepoints(path)
+    except GL.FontError as e:
+        ctx.log(f"WARNING font {ref}: {e}; the characters it lacks are not checked")
+        cover = None
+    cache.setdefault("cover", {})[ref] = cover
     cache["fonts"][ref] = vf
     return vf, ref
 
@@ -468,13 +483,17 @@ def _text_mesh(g, P, string, reveal):
     curves = stc.outputs["Curve Instances"]
     if reveal:
         curves = _reveal(g, curves)
-    mesh = _filled(g, curves)
-    if P["depth"] > 0:
-        ext = g.node("GeometryNodeExtrudeMesh", mode="FACES")
-        g.put(ext.inputs["Mesh"], mesh)
-        ext.inputs["Offset Scale"].default_value = P["depth"]
-        mesh = ext.outputs["Mesh"]
-    return mesh
+    return _extruded(g, P, _filled(g, curves))
+
+
+def _extruded(g, P, mesh):
+    """The flat mesh extruded `depth` toward the viewer (as it is when the text is flat)."""
+    if P["depth"] <= 0:
+        return mesh
+    ext = g.node("GeometryNodeExtrudeMesh", mode="FACES")
+    g.put(ext.inputs["Mesh"], mesh)
+    ext.inputs["Offset Scale"].default_value = P["depth"]
+    return ext.outputs["Mesh"]
 
 
 def _placed(g, P, mesh, mat, dz, motion=None):
@@ -586,6 +605,10 @@ NODE_NAMES = {"scale": "Pop", "sx": "SquashX", "sy": "SquashY", "dx": "Dx", "dy"
               "dyp": "DyPanel", "rot": "Rot", "tracking": "Tracking", "weight": "Weight", "opacity": "Opacity",
               "tint": "Tint", "yaw": "Yaw", "pitch": "Pitch"}
 WEIGHT_COPIES = 12              # copies on the ring a keyed weight grows the filled letters with
+OUTLINE_DISC = 32               # sides of the discs that round an outline's corners: round to 0.5 % of its width
+OUTLINE_TURN = 360.0 / OUTLINE_DISC     # degrees a rim turns at a vertex past which the outline puts a disc there (a
+#                                         smaller turn is rounded as closely by the band along the rim)
+OUTLINE_WELD = 1e-5             # em: an outline's bands and discs are welded to the letters' vertices they start from
 
 
 def _val(g, name, v):
@@ -747,6 +770,83 @@ def _grown(g, P, mesh, weight):
     return real.outputs[0]
 
 
+def _outline(g, P, mesh, reach):
+    """The filled shapes `mesh` grown by `reach` em (a number or a socket) with round joins: exactly the ground a round
+    pen of radius `reach` covers when drawn along every rim (the shapes' sum with a disc), so every hole keeps its own rim
+    and a thin stroke (a dakuten, a hairline) a whole ring. It is the shapes; a straight band `reach` either side of
+    every rim edge, each edge's own, so the band holds its full width to both ends of the edge; a band along every rim
+    loop, its profile on the bisector of each turn, which closes the wedge between two edge bands where the rim turns a
+    little; and a disc on every vertex where the rim turns more than OUTLINE_TURN degrees or a loop ends. Round to 0.5 %
+    of `reach`. Every band's middle and every disc's centre lie on the rim's vertices, where they are welded on, so a
+    letter's outline is one piece with it (the bake keeps a word as pieces each moving its own way: build/bake_lit.py)
+    and carries its attributes (`mk_alpha`)."""
+    keyed = isinstance(reach, bpy.types.NodeSocket)
+    r = g.math("MULTIPLY", reach, P["em"]) if keyed else float(reach) * P["em"]
+    line = g.node("GeometryNodeCurvePrimitiveLine")                 # the bands' profile: across the rim, in the plane
+    g.put(line.inputs["Start"], _xyz(g, g.math("MULTIPLY", r, -1.0) if keyed else -r, 0.0, 0.0))
+    g.put(line.inputs["End"], _xyz(g, r, 0.0, 0.0))
+    profile = g.node("GeometryNodeResampleCurve", mode="COUNT")     # a point on the rim itself, to weld on
+    g.put(profile.inputs["Curve"], line.outputs["Curve"])
+    profile.inputs["Count"].default_value = 3
+    rim = g.math("LESS_THAN", g.node("GeometryNodeInputMeshEdgeNeighbors").outputs["Face Count"], 1.5)
+    each = g.node("GeometryNodeDuplicateElements", domain="EDGE")  # every rim edge on its own: a curve of two points
+    g.put(each.inputs["Geometry"], mesh)
+    g.put(each.inputs["Selection"], rim)
+    parts, loops = [mesh], None
+    for src, sel in ((each.outputs["Geometry"], None), (mesh, rim)):
+        crv = g.node("GeometryNodeMeshToCurve")
+        g.put(crv.inputs["Mesh"], src)
+        if sel is not None:
+            g.put(crv.inputs["Selection"], sel)
+        nrm = g.node("GeometryNodeSetCurveNormal", mode="Z_UP")    # normals in the text plane: the profile lies flat
+        g.put(nrm.inputs["Curve"], crv.outputs["Curve"])
+        band = g.node("GeometryNodeCurveToMesh")
+        g.put(band.inputs["Curve"], nrm.outputs["Curve"])
+        g.put(band.inputs["Profile Curve"], profile.outputs[0])
+        parts.append(band.outputs["Mesh"])
+        loops = nrm.outputs["Curve"]
+    pos = g.node("GeometryNodeInputPosition").outputs[0]
+    steps, gentle = [], 1.0                                         # each loop point's unit steps in and out
+    for off in (-1, 1):
+        o = g.node("GeometryNodeOffsetPointInCurve")
+        o.inputs["Offset"].default_value = off
+        s = g.node("GeometryNodeSampleIndex", data_type="FLOAT_VECTOR", domain="POINT")
+        g.put(s.inputs["Geometry"], loops)
+        g.put(s.inputs["Value"], pos)
+        g.put(s.inputs["Index"], o.outputs["Point Index"])
+        d = g.node("ShaderNodeVectorMath", operation="SUBTRACT")
+        g.put(d.inputs[0], pos if off < 0 else s.outputs[0])
+        g.put(d.inputs[1], s.outputs[0] if off < 0 else pos)
+        u = g.node("ShaderNodeVectorMath", operation="NORMALIZE")
+        g.put(u.inputs[0], d.outputs[0])
+        steps.append(u.outputs[0])
+        gentle = g.math("MULTIPLY", gentle, o.outputs["Is Valid Offset"])     # a loop that ends has a corner there
+    cos = g.node("ShaderNodeVectorMath", operation="DOT_PRODUCT")
+    g.put(cos.inputs[0], steps[0])
+    g.put(cos.inputs[1], steps[1])
+    turn = math.cos(math.radians(OUTLINE_TURN))
+    gentle = g.math("MULTIPLY", gentle, g.math("GREATER_THAN", cos.outputs["Value"], turn))
+    circle = g.node("GeometryNodeMeshCircle", fill_type="TRIANGLE_FAN")
+    circle.inputs["Vertices"].default_value = OUTLINE_DISC
+    g.put(circle.inputs["Radius"], r)
+    inst = g.node("GeometryNodeInstanceOnPoints")
+    g.put(inst.inputs["Points"], loops)
+    g.put(inst.inputs["Selection"], g.math("LESS_THAN", gentle, 0.5))
+    g.put(inst.inputs["Instance"], circle.outputs["Mesh"])
+    real = g.node("GeometryNodeRealizeInstances")
+    g.put(real.inputs["Geometry"], inst.outputs["Instances"])
+    join = g.node("GeometryNodeJoinGeometry")
+    for p in parts + [real.outputs[0]]:
+        g.put(join.inputs["Geometry"], p)
+    weld = g.node("GeometryNodeMergeByDistance", mode="ALL")
+    g.put(weld.inputs["Geometry"], join.outputs[0])
+    weld.inputs["Distance"].default_value = OUTLINE_WELD * P["em"]
+    flat = g.node("GeometryNodeSetShadeSmooth")
+    g.put(flat.inputs["Geometry"], weld.outputs[0])
+    flat.inputs["Shade Smooth"].default_value = False
+    return flat.outputs[0]
+
+
 # ------------------------------------------------------------------------------------------------------ backing
 TAPE_COLS, TAPE_ROWS = 14, 9                    # grid of the strip: the zigzag of the torn ends lives on its end columns
 
@@ -863,20 +963,20 @@ def _tree_kinetic(name, P, string, mat):
     mesh = real.outputs[0]
     if "bend" in kin:
         mesh = RG.bend(g, P, mesh)
+    flat, weight = mesh, None                                     # the letters as drawn: the outline grows round them
     if "weight" in kin:
-        mesh = _grown(g, P, mesh, _val(g, NODE_NAMES["weight"], kin["weight"][0][1]))
-    if P["depth"] > 0:
-        ext = g.node("GeometryNodeExtrudeMesh", mode="FACES")
-        g.put(ext.inputs["Mesh"], mesh)
-        ext.inputs["Offset Scale"].default_value = P["depth"]
-        mesh = ext.outputs["Mesh"]
+        weight = _val(g, NODE_NAMES["weight"], kin["weight"][0][1])
+        mesh = _grown(g, P, mesh, weight)
+    mesh = _extruded(g, P, mesh)
     motion = _motion(g, P, kin)
     geo = _placed(g, P, mesh, mat, 0.0, motion)
     if P.get("outline"):
         o = P["outline"]
+        reach = o["width"] if weight is None else g.math("ADD", weight, o["width"])   # round the letters as bold
+        ring = _extruded(g, P, _outline(g, P, flat, reach))
         join = g.node("GeometryNodeJoinGeometry")
         g.put(join.inputs["Geometry"], geo)
-        g.put(join.inputs["Geometry"], _placed(g, P, _grown(g, P, mesh, o["width"]), o["material"], -o["dz"], motion))
+        g.put(join.inputs["Geometry"], _placed(g, P, ring, o["material"], -o["dz"], motion))
         geo = join.outputs[0]
     if P.get("backing"):
         b = P["backing"]
@@ -971,7 +1071,8 @@ def _measurer(coll, cache, font, font_label, align, tracking, words):
     """The shared _Measure of a font / alignment / spacing combination."""
     tag = f"{font_label}|{align}|{tracking:g}|{words:g}"
     if tag not in cache["measure"]:
-        cache["measure"][tag] = _Measure(coll, font, ALIGN_X[align], tracking, words, str(len(cache["measure"])))
+        cache["measure"][tag] = _Measure(coll, font, ALIGN_X[align], tracking, words, str(len(cache["measure"])),
+                                         (cache.get("cover") or {}).get(font_label))
     return cache["measure"][tag]
 
 
@@ -982,9 +1083,11 @@ def _one(ctx, coll, spec, cache):
     unknown = sorted(set(spec) - KNOWN)
     if unknown:
         raise BuildError(f"text {name!r}: unknown keys {unknown} (known: {sorted(KNOWN)})")
-    if len(name) > MAX_NAME:                    # Blender cuts names at 63 characters: two texts would end up sharing one
-        raise BuildError(f"text {name!r}: the name is {len(name)} characters, over {MAX_NAME} (the object is 63 at most and its "
-                         "node group adds a prefix); a lyric word's is <name>_l<line>w<word>[_<shot>][@<output>]")
+    nbytes = len(name.encode("utf-8"))          # Blender cuts a name at 63 bytes: two texts would end up sharing one
+    if nbytes > MAX_NAME:
+        raise BuildError(f"text {name!r}: the name takes {nbytes} bytes (UTF-8: a kana or kanji takes 3), over {MAX_NAME} "
+                         "(Blender keeps 63 of an object's and its node group adds a prefix); a lyric word's is "
+                         "<name>_l<line>w<word>[_<shot>][@<output>], a call's <name>_c<hit>[@<output>]")
     if bpy.data.objects.get(name) is not None:
         raise BuildError(f"text {name!r}: an object of that name exists already")
     kin = FX.kinetic_spec(spec)
@@ -1010,6 +1113,11 @@ def _one(ctx, coll, spec, cache):
     meas = _measurer(coll, cache, font, font_label, align, tracking, words)
     cap_ratio = meas.cap_ratio()
     ls = float(spec.get("leading", 1.5)) * cap_ratio
+    lacks = GL.missing(meas.cover, "".join(strings))  # drawn in Blender's fallback face: another weight, another style
+    if lacks:
+        what = (f"{len(lacks)} character(s) of the word ({lyric[0]}, {lyric[1]})" if lyric is not None
+                else ", ".join(f"{c} (U+{ord(c):04X})" for c in lacks))
+        ctx.log(f"WARNING text {name}: the font {font_label} has no glyph for {what}; Blender draws it in a fallback face")
 
     # layout: the ink of everything the text can show (and of its ghost segments) decides size and place
     ghost, ghost_text = _ghost(spec, strings)
@@ -1150,6 +1258,8 @@ def _one(ctx, coll, spec, cache):
                               int(round(ctx.frame(kin["show"][1]))) if len(kin["show"]) > 1 else None]
     if warn:
         info["warning"] = warn
+    if lacks:
+        info["missing_glyphs"] = len(lacks)
     if number is not None:
         info["value_keys"] = len(number["keys"])
     return info
@@ -1204,7 +1314,7 @@ def run(ctx):
     if not specs:
         return {}
     coll = collection("Text")
-    cache = {"fonts": {}, "measure": {}, "kmats": {}}
+    cache = {"fonts": {}, "measure": {}, "kmats": {}, "cover": {}}
     outputs = _outputs(ctx)
     out = {}
     try:
@@ -1234,6 +1344,14 @@ def run(ctx):
                     except T.TextError as e:
                         raise BuildError(f"text {vspec.get('name', '?')!r}: {e}") from None
                     out[f"{vspec['name']}{suffix}"] = {"lyrics": report}
+                elif vspec.get("calls") is not None:      # calls: words of the entry's own, one text per hit
+                    from . import calltype as CLB
+                    report = {}
+                    try:
+                        subs = CLB.expand(ctx, vspec, _measure_fn(ctx, coll, cache, vspec), report)
+                    except T.TextError as e:
+                        raise BuildError(f"text {vspec.get('name', '?')!r}: {e}") from None
+                    out[f"{vspec['name']}{suffix}"] = {"calls": report}
                 else:
                     subs = [vspec]
                 for sub in subs:

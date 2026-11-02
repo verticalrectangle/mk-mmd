@@ -95,6 +95,9 @@ pub struct MaterialDesc {
     pub tree: Option<Graph>,
     #[serde(default)]
     pub anim: Vec<Anim>,
+    /// What is keyed or driven on it that the bake holds one value of (bake_lit `_keyed`): mkr cannot follow it.
+    #[serde(default)]
+    pub keyed: Vec<String>,
 }
 
 /// A node group of bake.json `lit.groups`. Interface rows: [in_out, name, identifier, socket_type, default].
@@ -106,6 +109,8 @@ pub struct GroupDesc {
     pub tree: Graph,
     #[serde(default)]
     pub anim: Vec<Anim>,
+    #[serde(default)]
+    pub keyed: Vec<String>,
 }
 
 /// The world of bake.json `lit.world`.
@@ -117,6 +122,8 @@ pub struct WorldDesc {
     pub anim: Vec<Anim>,
     #[serde(default)]
     pub settings: serde_json::Map<String, Value>,
+    #[serde(default)]
+    pub keyed: Vec<String>,
 }
 
 /// Value types the generated code carries.

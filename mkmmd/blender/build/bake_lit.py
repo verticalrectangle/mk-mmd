@@ -20,14 +20,17 @@ bake.json "lit":
   film      filter_size, transparent; render: every RenderSettings value; eevee: every scene.eevee value
   world     null (no world: black, no light) or {name, use_nodes, color, props (every World value: probe_resolution,
             sun_threshold, sun_angle, use_sun_shadow, ...), visibility (its ray visibility flags: camera, diffuse,
-            glossy, transmission, shadow, scatter), tree: GRAPH (null without nodes), anim}
+            glossy, transmission, shadow, scatter), tree: GRAPH (null without nodes), anim, keyed}
   lights    [{name, type, shape, use_shadow, visible, aspect, props (every Light value), frames, offset}]: per frame
             (one when nothing changes) 22 floats at FLOAT offset + 22 k, in the world: position 3, forward 3 (the way it
             shines: local -Z), right 3 (local +X), up 3 (local +Y), colour 3 (linear), energy (W), size_x, size_y (area
             lights, m, the object's scale applied), spot_size (rad), spot_blend, radius (point, spot and area:
             shadow_soft_size as Blender uses it, not scaled; sun: its angle, rad), shown (1/0)
-  materials {name: {settings (every Material value), tree: GRAPH (null without nodes), anim: [ANIM]}}
-  groups    {name: {interface: [[in_out, name, identifier, socket_type, default]], tree: GRAPH, anim: [ANIM]}}
+  materials {name: {settings (every Material value), tree: GRAPH (null without nodes), anim: [ANIM], keyed}}
+  groups    {name: {interface: [[in_out, name, identifier, socket_type, default]], tree: GRAPH, anim: [ANIM], keyed}}
+            keyed: the data paths keyed or driven on it that the bake does not carry per frame and that change what
+            EEVEE draws (`_keyed`: a colour ramp's stops, a node's setting, a material's or a world's own settings when
+            it draws without nodes), which mkr cannot follow
   images    {name: {file (absolute, or images/<file> inside the bake for packed and generated images), colorspace,
             alpha_mode, float, size, source, format, missing}}: `missing` is an image Blender cannot load, which it
             draws magenta (1, 0, 1, 1)
@@ -360,6 +363,32 @@ def _channels(nt, owner=None):
         if s is not None and hasattr(s, "default_value"):
             out.append((node.name, s, "input" if m.group(2) == "inputs" else "output"))
     return out
+
+
+# a material's or world's own settings that only the viewport reads while it draws with nodes
+VIEWPORT_ONLY = {"material": ("diffuse_color", "metallic", "roughness", "specular_intensity", "specular_color",
+                              "line_color", "line_priority"), "world": ("color",)}
+
+
+def _keyed(kind, owner, nt):
+    """The data paths keyed or driven on a material, world or node group (`kind`) and its node tree that the bake does not
+    carry per frame and that change what EEVEE draws, so mkr cannot follow them: on its nodes anything but a socket's
+    value (a colour ramp's stops, a node's setting); its own settings, but for those only the viewport reads while it
+    draws with nodes (VIEWPORT_ONLY: a material or a world without nodes is drawn from them). Custom properties are
+    left out: a driver that reads one shows as the socket it drives."""
+    nodes = kind == "group" or bool(getattr(owner, "use_nodes", False))
+    out = set()
+    for p in (_anim_paths(owner) if kind != "group" else ()):
+        if p.startswith("["):
+            continue
+        if p.startswith("node_tree."):
+            if nodes and not _PATH.match(p):
+                out.add(p)
+        elif not nodes or p.split("[")[0] not in VIEWPORT_ONLY.get(kind, ()):
+            out.add(p)
+    if nodes and nt is not None:
+        out.update(p for p in _anim_paths(nt) if not p.startswith("[") and not _PATH.match(p))
+    return sorted(out)
 
 
 def _reads(trees):
@@ -1756,7 +1785,7 @@ class Lit:
             mat = bpy.data.materials[m]
             self.mat_docs[m] = {"settings": _props(mat, skip=_skip("id") | {"node_tree", "grease_pencil", "preview"}),
                                 "tree": graph(mat.node_tree, used) if mat.use_nodes and mat.node_tree else None,
-                                "anim": []}
+                                "anim": [], "keyed": _keyed("material", mat, mat.node_tree)}
         w = self.sc.world
         self.world_doc = None
         if w is not None:
@@ -1765,7 +1794,8 @@ class Lit:
                                                                      "light_settings", "mist_settings"}),
                               "visibility": {k: getattr(w.cycles_visibility, k)
                                              for k in ("camera", "diffuse", "glossy", "transmission", "shadow", "scatter")},
-                              "tree": graph(w.node_tree, used) if w.use_nodes and w.node_tree else None, "anim": []}
+                              "tree": graph(w.node_tree, used) if w.use_nodes and w.node_tree else None, "anim": [],
+                              "keyed": _keyed("world", w, w.node_tree)}
         self.group_docs, todo = {}, sorted(used["groups"])
         while todo:
             name = todo.pop()
@@ -1773,7 +1803,8 @@ class Lit:
                 continue
             ng = bpy.data.node_groups[name]
             before = set(used["groups"])
-            self.group_docs[name] = {"interface": _interface(ng), "tree": graph(ng, used), "anim": []}
+            self.group_docs[name] = {"interface": _interface(ng), "tree": graph(ng, used), "anim": [],
+                                     "keyed": _keyed("group", ng, ng)}
             todo.extend(sorted(used["groups"] - before - set(self.group_docs)))
         self.image_docs = {name: _image(bpy.data.images[name], self.part, i)
                            for i, name in enumerate(sorted(used["images"]))}
