@@ -279,6 +279,110 @@ overlap ahead of the forewing's hind edge and comes out right behind its corner,
 Checks used: the outlines over the photographs' landmarks, the patterns as flat previews against the photographs, and close-ups
 from above, below and three-quarter in the project's own lighting (the undersides are dark in a scene lit from above: `glow`).
 
+## Worked example: the spike mallet and the golden spike
+
+`mkmmd/blender/library/props/spike_mallet*.py` (card `library:spike_mallet`) and `golden_spike*.py` (`library:golden_spike`),
+tested in `tests/test_spike_mallet.py` and `tests/test_golden_spike.py`. Each `_layout` holds every number, the meshes and the
+card (numpy only); the builder makes the materials. Both build in a fraction of a second and score 0.00 on `form`.
+
+**What was measured.** The mallet: photographs of mochi pounding (`mk ref photos 'mochi pounding kine'`): a kine's head is a
+plain turned cylinder with rolled rims, its slim handle passing through the head's side (the tenon's end grain shows on the
+far side). The giant's head (0.46 x 0.24 m, a kine's 0.30 x 0.15 scaled up) and its frame were agreed with the move that
+swings it; iron hoops near the faces, as a carpenter's beetle (kakeya) wears them, make it read as a maul too. The spike: the
+1869 spike's 5 5/8 in length (the park service's figure), then a front photograph of the spike at its museum read at that
+length: the shank 13.1-13.5 mm across (17/32 in), the head 25 mm wide and about 4.5 mm high over a 7.5 mm flare, the chisel's
+bevel over the last 28 mm. Its engraved inscriptions are not copied: the band carries an ornament of its own.
+
+| part | how |
+|---|---|
+| mallet head | ONE `lathe` about its axis, laid along X: the crowned face (a parabola), the rim rolled by `fillet` on the corner between the crown's and the barrel's tangents, the barrel (R_MID at the middle, R_END at the rims) |
+| hoops | closed `lathe` loops (welded): the outside follows the barrel BAND_T over it, the inside 2 mm inside the wood, the outer edges filleted |
+| handle | a `lathe` of `handle_r` (a straight shaft plus a gaussian swell at the end, a smoothstep flare into the head, the end rounded on an ellipse); its top vertices are moved onto the barrel's top, 0.6 mm proud: the tenon's end follows the head's curve |
+| spike | ONE `cage` of superellipse rings: a thin slot at the chisel edge (its cap's dome puts the tip's middle at the origin), the square shank (exponent 4.5: flat faces, rounded arrises, which the box test does not count as a box), the flare (u^1.8 of the widening), the head's rolled edges; the crown's inner rings are lifted to a smooth pillow (a dome along the rounded rectangle's own rings creases on its diagonals) |
+| beads | closed `tube`s round the shank's section at the band's edges, half sunk |
+| materials | wood: growth rings (a wave texture's rings round a pith off the axis, its distortion stretched along the axis so the side shows straight figure and cathedrals while the faces' rings wander), end grain where the surface faces along the axis, faint rays, and a small glow of its colour; the hoops dark hammered iron (a Voronoi bump); the gold a studio reflection in its emission (the reflected ray's height picks a floor, a horizon streak or the sky) so it reads as polished metal in a black world, and the band's ornament (interlaced waves, dots, border lines) drawn from the angle round the shank and the height, cut in by an inverted bump and filled with the `engraving` colour |
+
+Checks used: `form` in a scratch build (0.00 for both); the spike's front view beside its photograph at the same angle (head
+width, flare, shank and point within a millimetre at the photograph's scale); both props alone from three sides and in
+close-ups under `rose-pine-moon` and `rose-pine-dawn`; the spike standing in a tie of the library track; the mallet swung by
+`pound` (both fists on the hold, its face meeting the floor on the hits).
+
+## Worked example: the speaker stack and the penlight
+
+`mkmmd/blender/library/props/speaker_stack*.py` (card `library:speaker_stack`) and `penlight*.py` (`library:penlight`), their
+colours resolved by `showkit.py` (a slot, `ink` / `paper`, `#hex` or `a:b:t`, from the slots the props stage hands over).
+
+| part | how |
+|---|---|
+| cabinet shell | ONE closed cage of rings round the depth: each ring the rounded rectangle inset by its d with the corner radius shrinking with the inset down to a few millimetres. An exact offset (`offset_rings`) past a corner's own radius turns the corner inside out, and the fan cap over such a ring shades as a dark wedge across the baffle. Support rings 4 mm beside every roll keep the big flat faces flat-shaded |
+| holes | a driver's cone lies behind the baffle, so the baffle needs real holes: the drivers' holes, the ports' tunnels and the horn's mouth are cutters (`shell_object(..., levels=0, render_levels=0, cutters=..., bake_it=True)`), and `set_sharp_from_angle(35 deg)` splits the normals at the cuts' rims so the baffle round them stays flat. Each hole's edge hides under a part (a driver's frame ring, a port's flared lip, the horn's lip) |
+| woofers | one lathe each, closed behind (out of sight in the cabinet); the pump is a shape key whose per-vertex weight comes from the profile (0 frame, 0..1 across the surround, 1 cone and cap), so the surround stretches as the cone pushes; a test keeps the pushed cone clear of the grille |
+| grille | a welded wire mesh: straight tubes, the vertical ones in front of the horizontal ones, their ends in a perimeter wire |
+| card | `layers` given from the layout: measuring them samples every surface (seconds on a dense prop) |
+| penlight | lathes (the ribbed handle, the collar, the tube with its domed tip), a `rounded_panel` button stood on the front; the tube's material picks one of N RGB nodes by Math ROUND, FLOORED_MODULO and COMPARE of the driven index (all drawn by mkr) |
+
+Checks used: close-ups of a woofer at pump 0 and 1 from the side, the stack under both palettes, Reisen's fists round the
+handle from four sides (a fist closes round a 31 mm handle at curls of about 52, 74, 50 degrees). `form`: the cabinets
+are boxes by nature (the stack 0.70 against its card's 0.8), the penlight 0.
+
+## Worked example: the railroad track
+
+`mkmmd/core/rail_track.py` (the plan, the laying schedule and its drivers, numpy, tested in `tests/test_rail_track.py`),
+`mkmmd/blender/library/props/rail_track_layout.py` (the meshes and the card) and `rail_track.py` (the Blender side; card
+`library:rail_track`; the build is checked in `tests/test_rail_track_build.py`): an 1860s standard-gauge track that lays itself.
+It builds in under half a second for 20 m and scores 0.00 on `form` (0.03 for a two-tie stub, where the bed is the prop).
+
+**What was measured.** Standard gauge, 1435 mm between the heads' inner faces 16 mm under the top (the test measures it on
+the meshes, straight and curved); ties 8.5 ft long, 7 in thick, 2 ft apart (2640 to the mile: the Central Pacific's count);
+a 56 lb/yd iron T rail of the time (4 in high, a 4 in foot, a 2 1/4 in head, 13 degree fishing slopes) in 30 ft lengths
+with suspended joints and 20 in fish plates with four bolts; cut spikes with 5/8 in shanks, two a rail on every tie,
+staggered, their heads hooked over the foot's edge.
+
+| part | how |
+|---|---|
+| tie | ONE cage of hewn sections along its length: a flat adzed top and bottom, the log's rounded sides (a pole tie, not a sawn box: its sides carry no flat area, so `form` sees no cuboid), the top corners' wane growing and shrinking along it, small random bows and widths, the end edges rolled; six seeded variants shared by every tie, its top's high points at z = 0 where the rails sit |
+| rail span | the rail's section (filleted foot, web, head, crowned running surface in its own material) carried along the track by `along`: every ring placed exactly square to the arc (a sweep's chord frames tilt the end rings on a curve), the ends capped by ear clipping (a T is not star-shaped: a fan cap folds outside it). Built at span 0's place about the circle's centre, so turning the object about the centre slides it along the arc |
+| bed piece | the bed's profile carried one tie spacing, open underneath (a flat hidden underside with sharp rims scored 0.49 alone); both ends 1 : 1 ramps capped separately (the sides' smooth normals run on into the next piece with no seam) and domed 6 cm forward, so the laying front shows a heap's rounded face and no large flat panel, and the next piece's start is the same surface |
+| spikes, plates, bolts | `rounded_box` heads and shanks (tiny parts), `rounded_panel` tie plates with low shoulders, hexagonal lathes for the bolts |
+| card | `bounds` and `layers` from the layout: measuring them samples every triangle down to 3 cm, minutes on a track's 9 m rail faces |
+| materials | gravel from a world-space Voronoi (one colour per stone, domed by the bump; world space so the pieces join seamlessly), wood streaked and checked along the tie in object space offset by Object Info Random, iron with a rust mix; all colours from roles |
+
+Checks used: the schedule's invariants as tests (nothing past `laid`, rails only over landed ties, clean rests on every
+tie spacing, whole from `done`), the drivers evaluated against their numpy twins, the built scene against the schedule on
+several frames, and look sheets of a track laid a tie per hit and a rail per hit.
+
+## Worked example: the mile post
+
+`mkmmd/blender/library/props/mile_post*.py` (card `library:mile_post`) and `mkmmd/core/numerals.py` (the numerals, numpy),
+tested in `tests/test_mile_post.py`: `mile_post_layout.py` holds every number, the meshes, the options and the card,
+`mile_post_mats.py` the materials. A post builds in well under a second and scores 0.11 on `form` (railroad) and 0.00
+(interstate), with no `form_max`.
+
+**What was measured.** The railroad post: the Southern Pacific's common standard mile post drawing (a 6 x 6 in post;
+numerals 10 in tall and 5 in wide with a 1 5/8 in stroke: half as wide as tall, the stroke 0.16 of the height) and
+photographs of old posts (`mk ref photos 'milepost'`, railfan pages): white paint, a hipped point, a tarred foot about a
+sixth of what stands out, stains running down from the top. The interstate marker: MUTCD 2009 Table 2H-1 and 2H.05 (a
+freeway reference location sign is 12 in wide with 10 in numerals, 24 / 36 / 48 in tall for 1 / 2 / 3 digits under the word
+MILE; without it each numeral takes 13 in: 17 / 30 / 43 in), the Standard Highway Signs D10 layout (3.5 in over and under
+the legend, 3 in between rows, 1.5 in corners, a 0.5 in border), FHWA Standard Alphabets 2000, Series E (numerals 0.81 of
+the height wide, the 1 0.30, the 4 0.94, the 0 0.84, the stroke 0.1725) and a 3 lb/ft U-channel post (3.5 in across the
+flanges, 1.75 in deep, a 1.625 in bearing face, 0.16 in steel, 3/8 in holes on 1 in centres); photographs of markers on
+I-587 and I-75.
+
+| part | how |
+|---|---|
+| numerals | `core.numerals`: each digit drawn once in the unit box of its centre lines (lines, elliptical arcs, cubic Beziers, superellipse loops; a stroke is tangent-continuous and a corner starts a new stroke, so the round caps make a round join), mapped onto the ink box of the width and stroke asked (`condense` narrows a digit without thinning its stroke: 0.70 for the plate's condensed gothic) and resampled evenly. Drawn by eye beside the Series E sheets from landmarks (where the 2's spine lands, the 3's middle bar, the 4's crossbar at 0.28, the top of the 5's bowl, the loops' sizes), never traced |
+| relief numerals | the stroke's section (a half superellipse on a foot sunk 0.8 mm into the plate) swept along every stroke; an open stroke runs on half a stroke past each end while its section narrows on a quarter circle (a round end in plan); a loop is a closed sweep, welded shut |
+| sheeting legend | flat `ribbon`s the stroke's width with half-disc caps, and the border a closed ribbon 0.375 in in from the edge, 0.3-0.45 mm over the face: graphic layers, `exempt` |
+| post | ONE cage of rings: the chamfered square's section with its eight corners eased (`fillet`, 3 mm) and three points on each face per season check (its lips and its floor); up the faces the floor sinks to the check's depth and back (smoothsteps over 0.16 m), then the shoulder (a 6 mm fillet) and the hips straight up to a rounded point. A square post is a box to the `form` test (two strong axes): its 1 1/8 in chamfers and the checks' walls take enough surface off the axes (0.11; chamfers alone needed about 1 3/8 in, an octagon). The check walls lean 59 degrees (6 mm wide, 5 mm deep): at 70 the turn passed the test's 65 degrees and the faces counted as sharp-rimmed panels (0.20) |
+| plate, panel | `rounded_panel`s with both edges rolled (an unrolled back is a sharp-rimmed flat patch); the plate's bead a closed sweep of a half round, the bolts lathes; the panel's face takes the sheeting by its normal, its back and edges bare aluminium |
+| U-channel | the sheet's middle line (flange, side, web, side, flange) with rounded bends, thickened into an outline and swept up Z; its ends closed by the strip between the sheet's two sides (the section is not star-shaped: a fan cap would cross it). Its sides lean 10.6 degrees, past the box test's 10 |
+| materials | the roles' colours in RGB nodes, the weathering in masks of the object's own coordinates and normal: a grain (a noise stretched along Z) through the paint, rain streaks and stains from a greyed top, blotches of lost paint (more toward the ground) showing the bare wood, dirt up the foot, the tarred foot's ragged edge, the checks darkened by the post's `mk_check` attribute (how open a check is at each ring point); painted cast iron with rust specks; galvanised spangle (Voronoi cells) and the holes drawn from the web's coordinates; sheeting glowing a little of its colour, as retroreflective sheeting does |
+
+Checks used: `form` in a scratch build (railroad 0.11, interstate 0.00), the post beside photographs of old posts at their
+angles and the marker beside a photograph of a marker on its road, both styles side by side under `rose-pine-moon` and
+`rose-pine-dawn`, blank plates written by `[[text]]` on their `plate` surface, and a frame drawn by mkr beside EEVEE's.
+
 ## Reviewing
 
 * Render the prop alone from named views and set it beside the reference photo at the same angle and lens: front 3/4

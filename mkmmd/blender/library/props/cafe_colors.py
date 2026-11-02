@@ -2,12 +2,15 @@
 
 Every colour is a blend of palette slots mixed in linear light: `Colors.blend(gold=.6, base=.4)` (weights are normalised;
 `k` scales the brightness, `hue` (deg) and `chroma` tilt it in OKLab, `a` is the alpha), `Colors.slot("pine")` is one
-slot, `Colors.light(...)` a light tint (a blend normalised to its brightest channel)."""
+slot, `Colors.light(...)` a light tint (a blend normalised to its brightest channel). `Colors.hex(spec)` resolves a colour
+spec as the rest of mk does (core.shotstyle.resolve_colour): a slot, a `#hex` or a mix `a:b:t` of two such; `paper` and
+`ink` name the palette's lightest and darkest neutral slot (white paint, black iron on any palette)."""
 import math
 
 from ....core import palette as PAL
 
 DAWN = PAL.PALETTES["rose-pine-dawn"]
+NEUTRAL = ("base", "surface", "overlay", "text")     # the slots `paper` (the lightest) and `ink` (the darkest) pick from
 
 
 def _to_oklab(r, g, b):
@@ -70,6 +73,37 @@ class Colors:
     def resolved(self):
         """{slot: '#rrggbb'} of the slots used so far (the card's `slots`)."""
         return {n: self.p[n] for n in sorted(self.used)}
+
+    def neutral(self, which):
+        """The palette slot that `paper` (the lightest of NEUTRAL) or `ink` (the darkest) names in this palette: text and
+        base in the dark Rose Pines, surface and text in Dawn."""
+        def lum(name):
+            r, g, b = PAL.linear(self.p[name])
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return (max if which == "paper" else min)(NEUTRAL, key=lum)
+
+    def hex(self, spec):
+        """'#rrggbb' of a colour spec: a palette slot, `paper` / `ink` (Colors.neutral), a '#hex' or a mix 'a:b:t' of two
+        such, the second weighing t (0..1), mixed in sRGB as core.palette.mix (and core.shotstyle.resolve_colour). The
+        slots it names count as used."""
+        parts = str(spec).split(":")
+        if len(parts) == 3:
+            try:
+                t = float(parts[2])
+            except ValueError:
+                raise ValueError(f"colour {spec!r}: bad mix weight") from None
+            if not 0.0 <= t <= 1.0:
+                raise ValueError(f"colour {spec!r}: the mix weight must be in 0..1")
+            return PAL.mix(self.hex(parts[0]), self.hex(parts[1]), t)
+        if len(parts) != 1 or not parts[0]:
+            raise ValueError(f"colour {spec!r}: expected a palette slot, 'paper', 'ink', '#hex' or 'a:b:t'")
+        name = parts[0]
+        if name.startswith("#"):
+            return name
+        if name in ("paper", "ink"):
+            name = self.neutral(name)
+        self.slot(name)
+        return self.p[name]
 
 
 def mix(c1, c2, t):

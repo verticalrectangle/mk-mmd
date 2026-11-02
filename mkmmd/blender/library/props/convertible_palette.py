@@ -1,7 +1,8 @@
 """Colour roles of the 1980s convertible (pure Python, no bpy: importable from tests).
 
 A role is a name the car's materials colour by (`body`, `rubber`, `interior`, ...). Its colour is a palette slot name, a
-'#rrggbb' hex or a blend 'slot:weight,slot:weight' mixed in linear light. A project recolours the car with
+'#rrggbb' hex, a blend 'slot:weight,slot:weight' mixed in linear light, or a mix of two colours 'a:b:t' (the second weighs t,
+mixed as everywhere else: in sRGB) as a part of such a blend. A project recolours the car with
 `[[prop]] slots = {body = "iris"}` (a role name) or by overriding palette slots (`{love = "#b4637a"}`); the roles'
 defaults are slot names, so every palette (rose-pine-moon, rose-pine, rose-pine-dawn) recolours the car consistently.
 """
@@ -38,28 +39,37 @@ def parse(part):
 
 
 class Pal:
-    """Role colours from the palette slots (and per-prop overrides), as linear RGB."""
+    """Role colours from the palette slots (and per-prop overrides), as linear RGB. `roles` is the prop's own
+    {role: default spec} table (default: the convertible's ROLES)."""
 
-    def __init__(self, slots=None):
+    def __init__(self, slots=None, roles=None):
         slots = dict(slots or {})
         self.palette = {k: slots.get(k, v) for k, v in MOON.items()}
-        self.specs = {r: str(slots.get(r, d)) for r, d in ROLES.items()}
+        self.specs = {r: str(slots.get(r, d)) for r, d in (ROLES if roles is None else roles).items()}
 
-    def slot_lin(self, name):
+    def slot_hex(self, name):
         if name.startswith("#"):
-            return PAL.linear(name)
+            return name
         if name not in self.palette:
             raise KeyError(f"colour {name!r} is neither a hex value nor a palette slot ({sorted(self.palette)})")
-        return PAL.linear(self.palette[name])
+        return self.palette[name]
+
+    def slot_lin(self, name):
+        return PAL.linear(self.slot_hex(name))
 
     def lin(self, spec):
-        """Linear RGB of a role name, a slot, a hex or a 'slot:weight,slot:weight' blend (weights are normalised)."""
+        """Linear RGB of a role name, a slot, a hex or a 'slot:weight,slot:weight' blend (weights are normalised), whose
+        parts may be 'a:b:t' mixes."""
         if spec in self.specs:
             spec = self.specs[spec]
         rgb, tot = [0.0, 0.0, 0.0], 0.0
         for part in spec.split(","):
-            name, w = parse(part)
-            c = self.slot_lin(name)
+            bits = part.strip().split(":")
+            if len(bits) == 3:
+                c, w = PAL.linear(PAL.mix(self.slot_hex(bits[0]), self.slot_hex(bits[1]), float(bits[2]))), 1.0
+            else:
+                name, w = parse(part)
+                c = self.slot_lin(name)
             for i in range(3):
                 rgb[i] += c[i] * w
             tot += w

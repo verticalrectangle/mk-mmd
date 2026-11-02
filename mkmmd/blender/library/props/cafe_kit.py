@@ -397,10 +397,9 @@ class Kit:
         return self.colors.slot(name, a)
 
     def role(self, role, roles):
-        """The colour of a colour role: the prop's `slots` entry for it (a palette slot or a hex), else its default slot in
-        `roles` ({role: slot})."""
-        v = str(self.slots.get(role, roles[role]))
-        return (*PAL.linear(v), 1.0) if v.startswith("#") else self.slot(v)
+        """The colour of a colour role: the prop's `slots` entry for it, else its default in `roles` ({role: spec}); a spec
+        is a palette slot, a hex or a mix `a:b:t` of two such (Colors.hex)."""
+        return (*PAL.linear(self.colors.hex(self.slots.get(role, roles[role]))), 1.0)
 
     def blend(self, **kw):
         return self.colors.blend(**kw)

@@ -90,3 +90,30 @@ def test_colors_blend_in_linear_light_and_follow_the_palette():
     assert set(P.resolved()) == {"pine"}
     with pytest.raises(KeyError):
         C.slot("nope")
+
+
+def test_colour_specs_resolve_slots_hexes_and_mixes_as_the_rest_of_mk():
+    """`Colors.hex` (what Kit.role resolves a prop's colour roles with) reads `a:b:t` mixes exactly as the frame effects'
+    resolver does (core.shotstyle.resolve_colour, in sRGB), and records the slots it names."""
+    from mkmmd.core import palette as PAL
+    from mkmmd.core import shotstyle as SS
+    moon = PAL.PALETTES["rose-pine-moon"]
+    C = Colors(moon)
+    for spec in ("gold", "#123456", "gold:muted:0.55", "love:#000000:0.25", "base:text:0"):
+        assert PAL.srgb(C.hex(spec)) == pytest.approx(SS.resolve_colour(spec, moon), abs=1 / 255)
+    assert C.hex("gold:muted:1") == moon["muted"]
+    assert set(C.resolved()) == {"gold", "muted", "love", "base", "text"}
+    for bad in ("gold:muted", "gold:muted:1.5", "gold:muted:x", ":", "nope:gold:0.5"):
+        with pytest.raises((KeyError, ValueError)):
+            C.hex(bad)
+
+
+def test_paper_and_ink_are_the_palettes_lightest_and_darkest_neutrals():
+    """White paint and black iron stay light and dark when the palette turns Dawn to Moon (the neutral slots swap ends)."""
+    from mkmmd.core import palette as PAL
+    moon, dawn = Colors(PAL.PALETTES["rose-pine-moon"]), Colors(PAL.PALETTES["rose-pine-dawn"])
+    assert (moon.neutral("paper"), moon.neutral("ink")) == ("text", "base")
+    assert (dawn.neutral("paper"), dawn.neutral("ink")) == ("surface", "text")
+    for C in (moon, dawn):
+        assert sum(PAL.linear(C.hex("paper"))) > 2.0 and sum(PAL.linear(C.hex("ink"))) < 0.4
+        assert C.hex("paper:ink:0.5") == PAL.mix(C.hex("paper"), C.hex("ink"), 0.5)
