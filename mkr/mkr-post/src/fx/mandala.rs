@@ -33,8 +33,10 @@ pub enum Back {
 }
 
 /// A sticker tile: one Python made (a sprite's or a drawn shape's: its picture (premultiplied rgb, coverage) and its
-/// ring, w x h vec4 float32 files), or the figure's own (mkmmd.mandala.figure_tile: the part of the frame cut, its size
-/// once resized (by area when shrunk), its fill (None: its picture), the padding round it and its edge's width).
+/// ring, w x h vec4 float32 files; `once`: written for this frame alone, in colours only a few frames show (a breathing
+/// palette on its way), and removed once read), or the figure's own (mkmmd.mandala.figure_tile: the part of the frame
+/// cut, its size once resized (by area when shrunk), its fill (None: its picture), the padding round it and its edge's
+/// width).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Tile {
@@ -43,6 +45,8 @@ pub enum Tile {
         #[serde(default)]
         ring: Option<String>,
         size: [u32; 2],
+        #[serde(default)]
+        once: bool,
     },
     Figure {
         crop: [u32; 4],
@@ -114,8 +118,10 @@ struct Laid {
     h: u32,
 }
 
-fn kept(path: &str, size: [u32; 2]) -> Input {
-    Input::Kept { path: path.to_string(), count: size[0] as usize * size[1] as usize * 4 }
+/// A tile's file as it is read: kept (cached, read again while it stays in the cache) or, `once`, read and removed.
+fn file(path: &str, size: [u32; 2], once: bool) -> Input {
+    let count = size[0] as usize * size[1] as usize * 4;
+    if once { Input::F32 { path: path.to_string(), count } } else { Input::Kept { path: path.to_string(), count } }
 }
 
 impl Mandala {
@@ -223,10 +229,10 @@ impl Effect for Mandala {
     fn inputs(&self) -> Vec<Input> {
         let mut v: Vec<Input> = self.figure.iter().map(|f| Input::Png(f.clone(), Kind::Luma)).collect();
         for t in &self.tiles {
-            if let Tile::File { rgba, ring, size } = t {
-                v.push(kept(rgba, *size));
+            if let Tile::File { rgba, ring, size, once } = t {
+                v.push(file(rgba, *size, *once));
                 if let Some(r) = ring {
-                    v.push(kept(r, *size));
+                    v.push(file(r, *size, *once));
                 }
             }
         }
@@ -256,11 +262,11 @@ impl Effect for Mandala {
         let mut laid = Vec::with_capacity(self.tiles.len());
         for t in &self.tiles {
             laid.push(match t {
-                Tile::File { rgba, ring, size } => {
-                    let a = cx.upload(&kept(rgba, *size), &files[next]);
+                Tile::File { rgba, ring, size, once } => {
+                    let a = cx.upload(&file(rgba, *size, *once), &files[next]);
                     next += 1;
                     let r = ring.as_ref().map(|r| {
-                        let b = cx.upload(&kept(r, *size), &files[next]);
+                        let b = cx.upload(&file(r, *size, *once), &files[next]);
                         next += 1;
                         b
                     });

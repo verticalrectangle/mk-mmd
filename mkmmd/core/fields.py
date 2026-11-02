@@ -3,8 +3,8 @@ a field of colour, checked and timed here; mkmmd/fields.py paints them.
 
     liquid  a 1960s oil-and-water light show: translucent inks between glass flowing, merging and parting, their edges lit
             by the light they bend, oil cells and bubbles in them; it swells on hits
-    spiral  op-art: a spiral, rings, a moire, a sunburst or a warped checkerboard in 2 to 4 colours, turning or flowing,
-            stepping on hits
+    spiral  op-art: a spiral, rings, a moire, a sunburst, a warped checkerboard or a drift in 2 to 4 colours, turning or
+            flowing, stepping on hits
     flood   a colour blooming out from a point to fill the frame, ink dropped in water, then receding or fading
 
 A collage's `back` may be a pattern too, `{pattern = "spiral", colors = [...], ...}` with the spiral kind's own keys
@@ -13,17 +13,29 @@ A collage's `back` may be a pattern too, `{pattern = "spiral", colors = [...], .
 A pattern is a stripe coordinate q over the picture: the colour of a pixel is colors[floor(q) % len(colors)], so `speed`
 (stripes a second) turns a spiral or a sunburst and makes rings, a moire or a checkerboard flow, and `step` (stripes) is
 how far a hit moves it. Times are clip seconds.
+
+A drift is a peripheral drift illusion: still op-art that seems to turn by itself (mkmmd.fields.drift). Its motifs (rail
+ties or wheels) stand in rings about the centre or in rows, each motif a dark tone with the darkest colour along one
+side and the lightest along the other, on a light tone, so its luminance steps run darkest, dark, lightest, light the
+same way round every motif: the eye sees each ring (row) creep that way, neighbouring rings the other way. Its colours
+take those four parts by their luma on every frame, whatever the palette. It stands still by default (`speed` 0, in
+motifs a second: a slow real creep under the illusion), steps a quarter of a motif on a hit, three steps a second at
+most (flash-safe).
 """
 import math
 
+from . import lanes as LN
 from . import tween as TW
 
 KINDS = ("liquid", "spiral", "flood")
-PATTERNS = ("spiral", "rings", "moire", "sunburst", "checker")
+PATTERNS = ("spiral", "rings", "moire", "sunburst", "checker", "drift")
 MOIRES = ("rings", "lines")                      # a moire's two sets: rings about two centres, or lines at an angle
 BLENDS = ("over", "screen", "multiply", "soft-light")
 HITS = {"times", "lane", "min_db", "every"}
 STEP = 0.12                                      # seconds: a pattern's step on a hit, eased out (a snap)
+DRIFT_LAYOUTS = ("rings", "rows")                # a drift's motifs: on rings about its centre, or in straight rows
+DRIFT_MOTIFS = ("tie", "wheel")                  # a drift's motif: a rail tie (a rounded bar across its way), a wheel
+DRIFT_PACE = 1.0 / 3.0                           # seconds: a drift steps on a hit at most three times a second
 ATTACK = 0.05                                    # seconds: a liquid's swell on a hit rises this fast, then decays
 FILL_EASE = 1.6                                  # a flood's front: share = 1 - (1 - u) ** FILL_EASE, fast then slowing
 PATTERN = {"pattern": "spiral", "colors": ["rose", "base"], "speed": 0.5, "step": 1.0, "center": [0.5, 0.5]}
@@ -31,7 +43,10 @@ PATTERN_OWN = {"spiral": {"arms": 5, "twist": 1.0},                  # each patt
                "rings": {"size": 0.05},
                "moire": {"size": 0.018, "moire": "rings", "offset": 4.0, "angle": 6.0},
                "sunburst": {"arms": 12},
-               "checker": {"size": 0.1, "warp": 0.6, "angle": 0.0}}
+               "checker": {"size": 0.1, "warp": 0.6, "angle": 0.0},
+               "drift": {"layout": "rings", "motif": "tie", "size": 0.07, "angle": 0.0}}
+# a pattern's own defaults of the shared keys: a drift stands still, steps a quarter of a motif, in four tones
+PATTERN_SHARED = {"drift": {"speed": 0.0, "step": 0.25, "colors": ["base", "pine", "gold", "text"]}}
 _OWN = sorted({k for own in PATTERN_OWN.values() for k in own})      # every pattern's own keys
 _LAY = {"blend", "opacity", "mask", "objects"}   # how a field is laid on the picture: blended, and kept to a part of it
 KEYS = {"liquid": _LAY | HITS | {"inks", "light", "scale", "speed", "pulse", "decay", "cells", "bubbles", "center",
@@ -90,8 +105,9 @@ def _spiral(FX, spec, out, palette, what):
 
 
 def _pattern(FX, v, palette, what):
-    """A pattern {pattern, colors, speed, step, its own keys} -> with PATTERN's and its own defaults, colours resolved.
-    A key of another pattern is an error that says whose it is. `center` is left to the caller."""
+    """A pattern {pattern, colors, speed, step, its own keys} -> with PATTERN's and its own defaults (PATTERN_SHARED: its
+    own of the shared keys), colours resolved. A key of another pattern is an error that says whose it is. `center` is
+    left to the caller."""
     p = v.get("pattern")
     if p not in PATTERNS:
         raise FX.FxError(f"{what}: pattern {p!r} is none of {', '.join(PATTERNS)}")
@@ -100,7 +116,7 @@ def _pattern(FX, v, palette, what):
     if alien:
         whose = ["{} (a key of {})".format(k, " or ".join(q for q in PATTERNS if k in PATTERN_OWN[q])) for k in alien]
         raise FX.FxError(f"{what}: {', '.join(whose)} does not shape a {p}: it takes {', '.join(sorted(own))}")
-    f = {**PATTERN, **own, **{k: x for k, x in v.items() if x is not None}}
+    f = {**PATTERN, **PATTERN_SHARED.get(p, {}), **own, **{k: x for k, x in v.items() if x is not None}}
     cs = f["colors"]
     if isinstance(cs, str) or not isinstance(cs, (list, tuple)) or not 2 <= len(cs) <= 4:
         raise FX.FxError(f"{what}: colors = {cs!r}: expected a list of 2 to 4 colours")
@@ -123,6 +139,11 @@ def _pattern(FX, v, palette, what):
         out["angle"] = FX._num(f["angle"], f"{what} angle", -180.0, 180.0)
     if "warp" in own:
         out["warp"] = FX._num(f["warp"], f"{what} warp", 0.0, 1.0)
+    if p == "drift":
+        for k, known in (("layout", DRIFT_LAYOUTS), ("motif", DRIFT_MOTIFS)):
+            if f[k] not in known:
+                raise FX.FxError(f"{what}: {k} {f[k]!r} is none of {', '.join(known)}")
+            out[k] = f[k]
     return out
 
 
@@ -174,8 +195,12 @@ def _flood(FX, spec, out, palette, what):
 # ================================================================================================= timing
 def phase(spec, t, t0, steps):
     """The stripe offset of a pattern at clip second `t` of a span from `t0`: `speed` stripes a second, and `step`
-    stripes on each of `steps` (clip seconds) gone by, each eased out over STEP seconds."""
+    stripes on each of `steps` (clip seconds) gone by, each eased out over STEP seconds. A drift's stripes are its
+    motifs, and it steps three times a second at most: a hit sooner than DRIFT_PACE after the last one it stepped on is
+    skipped."""
     q = spec["speed"] * (t - t0)
+    if spec.get("pattern") == "drift":
+        steps = LN.pace(steps, DRIFT_PACE)
     for h in steps:
         if t > h:
             q += spec["step"] * TW.ease((t - h) / STEP, "out")

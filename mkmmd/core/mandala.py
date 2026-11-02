@@ -77,12 +77,13 @@ def _edge(FX, e, palette, what):
             "width": FX._num(e.get("width", 3.0), f"{what} edge width", lo=0.0)}
 
 
-def _refs(FX, v, what):
-    """A sprite source's pictures: a registry slug, a file or a glob (project-relative, absolute or ~/...), or {tag} (one
-    tag or a list: the registry's pictures that have them all); one or a list -> [str or {"tag": [tags]}]."""
+def _refs(FX, v, what, key="sprites"):
+    """A sprite source's pictures (a print's photographs: `key` names them in messages): a registry slug, a file or a
+    glob (project-relative, absolute or ~/...), or {tag} (one tag or a list: the registry's pictures that have them
+    all); one or a list -> [str or {"tag": [tags]}]."""
     items = [v] if isinstance(v, (str, dict)) else v
     if not isinstance(items, (list, tuple)) or not items:
-        raise FX.FxError(f"{what}: sprites = {v!r}: expected slugs, files, globs or {{tag = ...}}, one or a list")
+        raise FX.FxError(f"{what}: {key} = {v!r}: expected slugs, files, globs or {{tag = ...}}, one or a list")
     out = []
     for r in items:
         if isinstance(r, str) and r.strip():
@@ -91,7 +92,8 @@ def _refs(FX, v, what):
         tags = r.get("tag") if isinstance(r, dict) and set(r) == {"tag"} else None
         tags = [tags] if isinstance(tags, str) else tags
         if not isinstance(tags, (list, tuple)) or not tags or not all(isinstance(x, str) and x.strip() for x in tags):
-            raise FX.FxError(f"{what}: sprite {r!r}: a slug, a file, a glob or {{tag = \"...\"}} (or a list of tags)")
+            raise FX.FxError(f"{what}: {key[:-1]} {r!r}: a slug, a file, a glob or {{tag = \"...\"}} (or a list of "
+                             f"tags)")
         out.append({"tag": [x.strip() for x in tags]})
     return out
 

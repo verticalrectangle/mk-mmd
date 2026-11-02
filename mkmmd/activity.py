@@ -209,9 +209,10 @@ class ActivityFx:
 
     # ---------------------------------------------------------------- the page
     def _page(self, fx):
-        """The empty page at this output's size: the paper and its fibres, the rules and the margin (kept)."""
-        key = (fx["index"], self.size)
-        if key not in self._ac_pages:
+        """The empty page at this output's size: the paper and its fibres, the rules and the margin (kept, and drawn
+        again when their colours move: a breathing palette)."""
+        key, inks = (fx["index"], self.size), (fx["paper"], fx["rule"], fx["margin"])
+        if self._ac_pages.get(key, (None,))[0] != inks:
             w, h = self.size
             px = self.px
             page = np.asarray(fx["paper"], np.float32)[None, None, :] * CR.fibres((h, w), px, fx["seed"], fx["grain"])[
@@ -231,8 +232,8 @@ class ActivityFx:
                 x = m["at"] * w
                 _poly(cov, [(x, -4.0), (x, h + 4.0)], False, m["width"] * px)
                 _ink(page, cov, m["color"], m["alpha"])
-            self._ac_pages[key] = np.clip(page, 0.0, 1.0).astype(np.float32)
-        return self._ac_pages[key]
+            self._ac_pages[key] = (inks, np.clip(page, 0.0, 1.0).astype(np.float32))
+        return self._ac_pages[key][1]
 
     def _activity(self, fx, frame, img):
         t = self._t(frame)

@@ -1,8 +1,8 @@
 """stack on the GPU (mkr-post fx/stack.rs): the copies on the frame (mkmmd.core.stack.copies, as StackFx._stacked lays
 them out), the frames and fills they are drawn from, their maps (StackFx._sk_map) and opacities, the mirror's
 reflections worked out here as mkmmd.stack.draw and lay work them out; each layer's box and every pixel drawn by
-mkr-post. Wallpaper bands, era looks, a squash, silkscreen fills and copies shrunk under SHRINK_BY_AREA stay on the
-CPU."""
+mkr-post. Wallpaper bands, era looks, a squash, silkscreen fills, copies shrunk under SHRINK_BY_AREA and a drift back
+stay on the CPU."""
 import math
 
 import numpy as np
@@ -11,6 +11,7 @@ from .. import framefx as FF
 from .. import stack as SKF
 from ..core import framefx as FX
 from ..core import stack as SK
+from . import fields as GFL
 from . import figure as GF
 from .mandala import back as back_of
 
@@ -20,7 +21,7 @@ def ops(ffx, fx, frame):
     s = float(np.clip(FX.strength(fx, t), 0.0, 1.0))
     if s <= 0.0:
         return []
-    if fx["squash"] is not None:
+    if fx["squash"] is not None or not GFL.backs_drawable(fx):
         return None
     paths = ffx.paths
     times = ffx._hit_times(fx)

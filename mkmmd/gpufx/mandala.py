@@ -49,7 +49,7 @@ def figure_tile(m, s, fill, ew, centre=None):
 
 
 def ops(ffx, fx, frame):
-    if ffx.paths is None or ffx.paths.scratch is None:
+    if ffx.paths is None or ffx.paths.scratch is None or not GFL.backs_drawable(fx):
         return None
     t = ffx._t(frame)
     s = float(np.clip(FX.strength(fx, t), 0.0, 1.0))
@@ -92,6 +92,7 @@ def ops(ffx, fx, frame):
             stickers.append({"tile": i, "box": [x0, y0, x1, y1], "warp": GF.warp(Mt, shape),
                              "inks": GF.ink_list(inks, ffx.paths.scratch,
                                                  f"mandala-{fx['index']}-{frame}-{len(stickers)}")})
+    once = frame if ffx.passing(fx, frame) else None     # shapes mid-breath: their tiles for this frame alone
     for cp in MD.copies(fx, t, times, ffx.fps, ffx.frame0, schedule):
         r = fx["rings"][cp["ring"]]
         grow = cp["scale"] / r["scale"] * cp["pop"]
@@ -121,7 +122,8 @@ def ops(ffx, fx, frame):
             else:
                 main, accent, ink = MD.shape_colours(src, j, k)
                 key = ("shape", MD.shape_of(src, j), tuple(main), tuple(accent), tuple(ink), round(size, 2), ew)
-            got = tile(key, lambda: (GF.tile_files(ffx, tl, key), tl.a.shape, tl.anchor))
+            got = tile(key, lambda: (GF.tile_files(ffx, tl, key, once if key[0] == "shape" else None), tl.a.shape,
+                                     tl.anchor))
         i, (_, shape, anchor) = got
         lay(i, shape, anchor, (centre[0] + cp["x"] * unit, centre[1] + cp["y"] * unit), cp["angle"], grow,
             cp["mirror"], face, pupils)
@@ -137,3 +139,9 @@ def ops(ffx, fx, frame):
     return [{"op": "mandala", "back": back(ffx, fx, frame, k), "figure": None if layer is None else str(layer),
              "tiles": [tl for tl, _, _ in tiles], "stickers": stickers,
              "edge": None if edge is None else GF.colour(edge[0]), "shadow": GF.shadow(ffx, fx), "strength": s}]
+
+
+def dropped(ffx, frame):
+    """The ops worked out for `frame` were not sent (mkmmd.postframes.Output.plan): the tiles written for that frame
+    alone are removed (mkr-post, which removes them once read, never reads them)."""
+    GF.forget_once(ffx, frame)

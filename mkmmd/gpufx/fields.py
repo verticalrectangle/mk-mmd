@@ -8,7 +8,7 @@ from .. import fields as FL
 from ..core import framefx as FX
 
 BLENDS = {"over": 0, "screen": 1, "multiply": 2, "soft-light": 3}      # fields.wgsl's field_blend modes
-PATTERNS = {"spiral": 0, "rings": 1, "sunburst": 2, "moire": 3, "checker": 4}
+PATTERNS = {"spiral": 0, "rings": 1, "sunburst": 2, "moire": 3, "checker": 4}   # a drift is the CPU's
 
 
 def f32(x):
@@ -21,6 +21,16 @@ def call(tau, seed):
     float32 Catmull-Rom weights of the four slices about it."""
     k = math.floor(tau)
     return {"k": int(k), "seed": int(seed), "w": [f32(w) for w in FL._catmull(tau - k)]}
+
+
+def drawable(spec):
+    """Whether mkr-post draws the pattern `spec` (PATTERNS: a drift, mkmmd.fields.drift, stays on the CPU)."""
+    return spec["pattern"] in PATTERNS
+
+
+def backs_drawable(fx):
+    """Whether mkr-post draws every pattern among a collage's `back` entries."""
+    return all(drawable(b) for b in fx["back"] if isinstance(b, dict))
 
 
 def region(ffx, fx, frame):

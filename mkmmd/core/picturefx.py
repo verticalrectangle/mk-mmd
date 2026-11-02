@@ -9,9 +9,11 @@ as a medium or draw on it, checked, timed and laid out here; mkmmd/picturefx.py 
     camcorder  a home video tape: a tracking band rolling up the frame, colour bleed, scanlines, line jitter, soft luma,
                noise and the head-switching tear at its foot (`switching`), the date and time stamp drawn crisp over it
                (`era` picks a preset of either: mkmmd.core.eralook.ERAS)
-    doodle     purikura-pen marks (a star, a heart, an X over an eye ...) popping in with a spring, boiling
+    doodle     purikura-pen marks (a star, a heart, an X over an eye, a bow, bunny ears ...) popping in with a spring,
+               boiling
     booth      a photo-booth strip: on each of the first hits the cut's frame is captured into a cell, with a flash,
-               the captures dropping into their cells, doodles round them
+               the captures dropping into their cells, doodles round them; `look = "purikura"` makes it a purikura
+               strip (mkmmd.core.purikura: a beauty filter, pastel frames, stamps, a date or a word written by hand)
 
 Times are clip seconds. Doodle shapes are strokes in a box -0.5..0.5 about their centre, x right and y down, as on
 screen. The randomness is seeded per effect and frame (or film frame, or boil step): the same seed draws the same frames
@@ -22,11 +24,14 @@ import re
 
 import numpy as np
 
+from . import purikura as PK
+
 KINDS = ("pixelsort", "film", "camcorder", "doodle", "booth")
 HOLDS = ("film", "booth")                       # the kinds that show a frame of the cut from before (a held frame, a capture)
 SORT_BY = ("luma", "hue", "sat")
 SORT_AXES = ("x", "y")
-SHAPES = ("star", "heart", "sparkle", "x", "swirl", "scribble", "arrow", "crown", "cat_ears")
+SHAPES = ("star", "heart", "sparkle", "x", "swirl", "scribble", "arrow", "crown", "cat_ears", "bow", "flower", "twinkle",
+          "bubble", "note", "bunny_ears", "whiskers", "blush")
 STICKERS = ("star", "heart", "sparkle", "swirl", "scribble", "arrow", "crown")   # what a booth draws round its photos
 ACCENTS = ("love", "gold", "rose", "pine", "foam", "iris")                       # the palette slots it draws them in
 CORNERS = ("bottom-right", "bottom-left", "top-left", "top-right")
@@ -179,6 +184,7 @@ def _doodle(FX, spec, out, palette, what):
 
 
 def _booth(FX, spec, out, palette, what):
+    PK.preset(spec, out)
     out["count"] = FX._num(out["count"], f"{what} count", 1, 12, integer=True)
     FX._hits(spec, out, what)
     for k in ("flash", "border"):
@@ -203,6 +209,9 @@ def _booth(FX, spec, out, palette, what):
     out["font"] = _font(FX, out["font"], f"{what} font")
     out["seed"] = FX._num(out["seed"], f"{what} seed", lo=0, integer=True)
     out["stickers"] = [FX._colour(c, palette, f"{what} doodle colour") for c in ACCENTS]
+    PK.normalize(FX, spec, out, palette, what)
+    ends = f"{what} caption (base, text)"            # the caption reads on the paper, in both looks (PK.readable)
+    out["color"] = PK.readable(out["color"], out["paper"], PK.dark(FX, palette, ends), PK.light(FX, palette, ends))
 
 
 # ================================================================================================= timing
@@ -415,6 +424,15 @@ def _sparkle(cx, cy, s):
     return _close(np.concatenate(path) * s + (cx, cy), 0.15)
 
 
+def _oval(cx, cy, rx, ry, a0=0.0, a1=360.0, tilt=0.0, n=40):
+    """Points on an ellipse about (cx, cy) from angle a0 to a1 (degrees: 0 to the right, 90 down), turned `tilt` degrees
+    counter-clockwise on screen about its centre."""
+    a = np.radians(np.linspace(a0, a1, n))
+    p = np.stack([rx * np.cos(a), ry * np.sin(a)], 1)
+    return turned([p], tilt)[0] + (cx, cy)
+
+
+
 def shape(name):
     """The strokes of a doodle `name` (SHAPES): [(n, 2) points], in a box -0.5..0.5 about its centre, x right, y down."""
     if name == "star":
@@ -454,6 +472,43 @@ def shape(name):
                                 _quad((-0.35, -0.17), (-0.25, -0.1), (-0.17, 0.05), 8)[1:]])
         flip = np.array([-1.0, 1.0])
         return [ear, inner, ear[::-1] * flip, inner[::-1] * flip]
+    if name == "bow":                                            # a ribbon bow: two loops, the knot, two notched tails
+        loop = np.concatenate([_quad((-0.06, -0.03), (-0.3, -0.52), (-0.48, -0.2), 12),
+                               _quad((-0.48, -0.2), (-0.58, 0.14), (-0.06, 0.04), 12)[1:]])
+        tail = np.array([(-0.04, 0.05), (-0.21, 0.42), (-0.14, 0.37), (-0.08, 0.46), (0.02, 0.08)])
+        flip = np.array([-1.0, 1.0])
+        return [_close(loop, 0.1), _close(loop[::-1] * flip, 0.1), _close(_ring(0.0, 0.0, 0.08, 14), 0.1),
+                _close(tail, 0.2), _close(tail[::-1] * flip, 0.2)]
+    if name == "flower":                                         # five round petals about a middle
+        th = np.linspace(0.0, 2.0 * np.pi, 151)[:-1]
+        r = 0.47 * (0.5 + 0.5 * np.abs(np.cos(2.5 * th)) ** 0.6)
+        return [_close(np.stack([r * np.sin(th), -r * np.cos(th)], 1), 0.08), _close(_ring(0.0, 0.0, 0.12, 16), 0.1)]
+    if name == "twinkle":                                        # a cluster of sparkles, large to small
+        return [_sparkle(-0.1, 0.1, 0.72), _sparkle(0.3, -0.24, 0.38), _sparkle(-0.33, -0.33, 0.24)]
+    if name == "bubble":                                         # a speech bubble, its tail at the lower left, dots in it
+        rim = np.concatenate([_oval(0.04, -0.08, 0.46, 0.33, 120.0, 465.0, n=60), [(-0.34, 0.46)]])
+        return [_close(rim, 0.06)] + [_close(_ring(x, -0.08, 0.045, 10), 0.1) for x in (-0.17, 0.04, 0.25)]
+    if name == "note":                                           # two quavers on their beam
+        heads = [_close(_oval(x, y, 0.13, 0.09, tilt=25.0, n=24), 0.1) for x, y in ((-0.27, 0.33), (0.25, 0.23))]
+        return heads + [np.array([(-0.15, 0.3), (-0.15, -0.3), (0.37, -0.42), (0.37, 0.2)]),
+                        np.array([(-0.15, -0.19), (0.37, -0.31)])]
+    if name == "bunny_ears":                                     # two long ears tipped outward, open at the head
+        out = []
+        for side in (-1.0, 1.0):
+            ear = _oval(0.0, -0.02, 0.15, 0.46, 112.0, 428.0, n=40)
+            inner = _oval(0.0, 0.05, 0.06, 0.3, 125.0, 415.0, n=28)
+            pivot = np.array([0.0, 0.42])
+            out += [turned([p - pivot], -12.0 * side)[0] + pivot + (0.24 * side, 0.0) for p in (ear, inner)]
+        return out
+    if name == "whiskers":                                       # a cat's whiskers, three a side
+        left = [_quad((-0.5, -0.18), (-0.34, -0.17), (-0.16, -0.08), 8), _quad((-0.5, 0.05), (-0.33, 0.03),
+                                                                             (-0.16, 0.03), 8),
+                _quad((-0.48, 0.27), (-0.32, 0.2), (-0.16, 0.13), 8)]
+        flip = np.array([-1.0, 1.0])
+        return left + [p[::-1] * flip for p in left]
+    if name == "blush":                                          # a blushing cheek: an oval, hatched
+        return [_close(_oval(0.0, 0.0, 0.46, 0.26, -120.0, 240.0, n=48), 0.08)] + \
+            [np.array([(x - 0.07, 0.15), (x + 0.07, -0.15)]) for x in (-0.2, 0.0, 0.2)]
     raise ValueError(f"no doodle shape {name!r} (shapes: {', '.join(SHAPES)})")
 
 

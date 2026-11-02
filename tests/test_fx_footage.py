@@ -368,7 +368,8 @@ def test_mk_ref_footage_downloads_into_the_project_registers_the_asset_and_credi
         grey_clip(dest)
         return dest.stat().st_size
     monkeypatch.setattr(PX, "download", download)
-    code, out = mk(["ref", "footage", "4254119", "9", "--orientation", "landscape", "--project", str(root)], capsys)
+    code, out = mk(["ref", "footage", "4254119", "9", "--orientation", "landscape", "--min-height", "32",   # 48x32 files
+                    "--project", str(root)], capsys)
     assert code == 1 and out["failed"] == [{"id": 9, "error": "it is portrait (1080x1920), not landscape"}]
     clip = out["clips"][0]
     assert clip["slug"] == "pexels_4254119" and clip["path"] == "footage/pexels_4254119.mp4"
@@ -379,10 +380,36 @@ def test_mk_ref_footage_downloads_into_the_project_registers_the_asset_and_credi
     reg = A.Registry()
     reg.update("pexels_4254119", tags=["mine"])
     reg.save()
-    code, out = mk(["ref", "footage", "4254119", "--project", str(root)], capsys)
+    code, out = mk(["ref", "footage", "4254119", "--min-height", "32", "--project", str(root)], capsys)
     assert code == 0 and A.Registry().get("pexels_4254119")["tags"] == ["mine", "footage", "pexels"]
     code, out = mk(["assets", "credits", "--project", str(root)], capsys)
     assert code == 0 and out["assets"] == ["pexels_4254119"] and "Driving on a forest road" in out["text"]
+
+
+def test_mk_ref_footage_registers_the_file_s_own_size_and_not_a_file_under_min_height(tmp_path, monkeypatch, capsys):
+    """Pexels can label a rendition bigger than the file it serves (a "1920x1080" that is 1280x720): the registry keeps
+    the file's own size, and a file whose short side is under --min-height is not registered."""
+    monkeypatch.setenv("MK_ASSETS", str(tmp_path / "assets"))
+    monkeypatch.setenv("MK_CACHE", str(tmp_path / "cache"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "mk.toml").write_text('[project]\nname = "p"\nfps = 30\nframe0 = 1\nduration = 4.0\n')
+    monkeypatch.setattr(PX, "api_key", lambda: "SECRET")
+    monkeypatch.setattr(PX, "video", lambda cid, key=None: video(int(cid), 1920, 1080))
+
+    def download(url, dest, max_bytes, expected=None, label=None):    # labelled 4096x2160, the file is 64x36
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        grey_clip(dest, size=(64, 36))
+        return dest.stat().st_size
+    monkeypatch.setattr(PX, "download", download)
+    code, out = mk(["ref", "footage", "5", "--min-height", "36", "--project", str(root)], capsys)
+    assert code == 0 and out["clips"][0]["size"] == [64, 36]
+    assert A.Registry().get("pexels_5")["extra"]["size"] == [64, 36]
+    code, out = mk(["ref", "footage", "6", "--project", str(root)], capsys)                 # --min-height 1080
+    assert code == 1 and out["clips"] == [] and out["failed"][0]["id"] == 6
+    assert "4096x2160" in out["failed"][0]["error"] and "64x36" in out["failed"][0]["error"]
+    assert [e["slug"] for e in A.Registry().entries] == ["pexels_5"]
+    assert (root / "footage" / "pexels_6.mp4").is_file()                                # the download stays
 
 
 def test_credits_count_footage_videos_and_photo_world_photos_by_slug_or_by_a_registered_file(tmp_path, monkeypatch):

@@ -697,12 +697,12 @@ class EraFx:
         colours = fx["maps"][k]
         if s <= 0.0 or colours is None:
             return img
-        key = (fx["index"], k)
-        if key not in self._era_luts:
-            self._era_luts[key] = lut(colours)
+        got = self._era_luts.get((fx["index"], k))
+        if got is None or got[0] != colours:                  # drawn again when its colours move (a breathing palette)
+            got = self._era_luts[fx["index"], k] = (colours, lut(colours))
         region = self._masked(fx, frame)
         a = np.float32(s) if region is None else (region * np.float32(s))[..., None]
-        return (img + (gradient_map(img, self._era_luts[key]) - img) * a).astype(np.float32)
+        return (img + (gradient_map(img, got[1]) - img) * a).astype(np.float32)
 
     def _invert(self, fx, frame, img):
         v = self._invert_level(fx, frame)
@@ -729,10 +729,11 @@ class EraFx:
 
         def draw(pic, box):
             x0, y0, x1, y1 = box
-            key = (fx["index"], box)
-            if key not in self._era_grounds:
-                self._era_grounds[key] = card_ground((x1 - x0, y1 - y0), fx)
-            return testcard(pic, fx, self._era_grounds[key], (c[0] - x0, c[1] - y0), share, font)
+            key, inks = (fx["index"], box), (fx["ground"], fx["line"], fx["inks"])
+            got = self._era_grounds.get(key)
+            if got is None or got[0] != inks:                 # drawn again when its colours move (a breathing palette)
+                got = self._era_grounds[key] = (inks, card_ground((x1 - x0, y1 - y0), fx))
+            return testcard(pic, fx, got[1], (c[0] - x0, c[1] - y0), share, font)
         return self._mix(fx, frame, img, self._region(fx, img, draw))
 
     def _cards(self, fx, frame, img):
@@ -742,6 +743,7 @@ class EraFx:
         flights = EC.cards_at(fx, t, self._on_frames(fx), w / h)
         if s <= 0.0 or not flights:
             return img
-        if fx["index"] not in self._era_faces:
-            self._era_faces[fx["index"]] = card_faces(fx["palette"], fx["style"])
-        return cards(img, fx, flights, self._era_faces[fx["index"]], CB.ends(fx["palette"])[0], s)
+        got = self._era_faces.get(fx["index"])
+        if got is None or got[0] != fx["palette"]:            # drawn again when its colours move (a breathing palette)
+            got = self._era_faces[fx["index"]] = (fx["palette"], card_faces(fx["palette"], fx["style"]))
+        return cards(img, fx, flights, got[1], CB.ends(fx["palette"])[0], s)

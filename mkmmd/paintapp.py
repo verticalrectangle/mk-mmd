@@ -471,9 +471,10 @@ def fill_cover(img, seed, tolerance, u, px, phase):
 
 # ================================================================================================= over a cut
 class PaintAppFx:
-    """The paint app's part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, px, fps, frame0, fxs, _t, _mix,
-    _reached, _seen, _point_of, _hits and _sprite_of, which `_mandala_init` sets). `_paintapp_init` is called once its
-    effects are known: their hits are picked, their history worked out and checked flash-safe, their sprites read."""
+    """The paint app's part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, px, fps, frame0, fxs, entry_at,
+    _t, _mix, _reached, _seen, _point_of, _hits and _sprite_of, which `_mandala_init` sets). `_paintapp_init` is called
+    once its effects are known: their hits are picked, their history worked out and checked flash-safe, their sprites
+    read."""
 
     def _paintapp_init(self):
         self._pa = {}
@@ -488,8 +489,8 @@ class PaintAppFx:
             PA.flash_check(fx, hist)
             clicks, tools, picked = PA.clicks(fx, hist)
             st = {"times": times, "hist": hist, "clicks": clicks, "tools": tools, "picked": picked,
-                  "lay": PA.layout(fx, self.size), "chrome": None, "buttons": {}, "icons": {}, "paths": {},
-                  "files": [], "eye_hits": ()}
+                  "lay": PA.layout(fx, self.size), "inks": None, "chrome": None, "buttons": {}, "icons": {},
+                  "paths": {}, "files": [], "eye_hits": ()}
             if fx["stamps"] is not None:
                 st["files"] = self._sprite_of(fx["stamps"]["refs"])
                 for f in st["files"] if self._preload else ():
@@ -502,6 +503,9 @@ class PaintAppFx:
     # ---------------------------------------------------------------- the frame
     def _paintapp(self, fx, frame, img):
         st = self._pa[fx["index"]]
+        inks = (fx["border"], fx["panel"], fx["ink"], fx["art"], fx["swatches"])
+        if st["inks"] != inks:                   # the chrome drawn again in the colours it has now (a breathing palette)
+            st.update(inks=inks, chrome=None, buttons={}, icons={})
         t = self._t(frame)
         for e in fx["eraser"]:                   # mk post keeps the frame an eraser will hold, as it reached the effect
             if frame == e["frame"] - 1:
@@ -520,14 +524,15 @@ class PaintAppFx:
         return self._mix(fx, frame, img, np.clip(out, 0.0, 1.0).astype(np.float32))
 
     def _pa_hold(self, fx, st, e, frame, img):
-        """The picture eraser `e` holds: the frame before it as it reached the effect, with the paint of that frame."""
+        """The picture eraser `e` holds: the frame before it as it reached the effect, with the paint of that frame (in
+        that frame's colours)."""
         key = (fx["index"], e["at"])
         if key not in self._pa_held:
             g = e["frame"] - 1
             pic = self._reached(fx, g, frame, img)
             pic = img if pic is None else pic
             self._seen.get(fx["index"], {}).pop(g, None)
-            self._pa_held[key] = self._pa_paint(fx, st, g, (g - self.frame0) / self.fps,
+            self._pa_held[key] = self._pa_paint(self.entry_at(fx, g), st, g, (g - self.frame0) / self.fps,
                                                 np.array(pic, np.float32, copy=True))
         return self._pa_held[key]
 

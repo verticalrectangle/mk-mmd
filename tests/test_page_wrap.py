@@ -198,8 +198,8 @@ def test_mk_look_draws_frame_0_beside_the_wrap_and_turns_onto_it_as_finished(tmp
 
     def look(frames, out):
         with pytest.raises(SystemExit) as e:
-            MAIN.main(["look", str(tmp_path / "scene.blend"), "--frames", frames, "--size", str(W), "--out",
-                       str(tmp_path / out), "--project", str(tmp_path)])
+            MAIN.main(["look", str(tmp_path / "scene.blend"), "--engine", "eevee", "--frames", frames, "--size", str(W),
+                       "--out", str(tmp_path / out), "--project", str(tmp_path)])
         rep = json.loads(capsys.readouterr().out)
         assert e.value.code == 0, rep
         return rep, {int(Path(p).stem.rsplit("_", 1)[1]): np.asarray(Image.open(p).convert("RGB")) for p in rep["images"]}

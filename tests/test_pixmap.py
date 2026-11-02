@@ -269,8 +269,8 @@ def test_the_map_of_a_render_shows_what_the_render_shows(tmp_path, capsys):
                        check=False)
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
     with pytest.raises(SystemExit) as e:
-        MAIN.main(["look", str(blend), "--frames", "1", "--cam", "Cam", "--view", "20:10", "--target", "(0, 0, 0.9)",
-                   "--dist", "5", "--size", "160", "--map", "--out", str(tmp_path / "look")])
+        MAIN.main(["look", str(blend), "--engine", "eevee", "--frames", "1", "--cam", "Cam", "--view", "20:10", "--target",
+                   "(0, 0, 0.9)", "--dist", "5", "--size", "160", "--map", "--out", str(tmp_path / "look")])
     res = json.loads(capsys.readouterr().out)
     assert e.value.code == 0, res
     assert len(res["maps"]) == 2 and not list((tmp_path / "look").glob(".map_geo_*"))

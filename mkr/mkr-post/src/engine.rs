@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 use crate::fx::{self, Ctx, Decoded, Drawn, Resources, STAMPS};
 use crate::gpu::{Gpu, tiles};
-use crate::job::{Job, Setup};
+use crate::job::{Grade, Job, Setup};
 use crate::pngio::{self, Kind};
 
 const UNPACK: &str = include_str!("shaders/unpack.wgsl");
@@ -340,7 +340,7 @@ impl Engine {
             }
         }
         if !plain {
-            self.grade(&mut enc, job.k, keep, cur);
+            self.grade(&mut enc, job.k, job.grade.as_ref().unwrap_or(&self.setup.grade), keep, cur);
             cur = 1 - cur;
             if !graded && inputs.layer.is_some() {
                 self.composite(&mut enc, cur, false);
@@ -427,8 +427,7 @@ impl Engine {
                       tiles(self.w, self.h));
     }
 
-    fn grade(&self, enc: &mut wgpu::CommandEncoder, k: u32, keep: bool, cur: usize) {
-        let g = &self.setup.grade;
+    fn grade(&self, enc: &mut wgpu::CommandEncoder, k: u32, g: &Grade, keep: bool, cur: usize) {
         let n = self.w * self.h;
         let mut p = GradeParams {
             w: self.w,

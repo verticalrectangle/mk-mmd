@@ -13,10 +13,12 @@ output.
                                 frame decoded, or taken from what an output before fitted for this one)
     Server(out, folder, sink=None)   `mkr-post serve` for `out`: send(job), receive() -> (k, darkest luma, rgb24 bytes);
                                 with a sink (the encoder's stdin) mkr-post writes the bytes there, receive() gives None
+    grade(g)                    a mkmmd.post.Grade as mkr-post's Grade: the setup's, or a frame's own
 
 A job (one JSON line) names the cut's frame (or a float RGB picture a worker wrote, `raw`), its screen layer and keep
 mask, and the ops still to draw, or carries a frame this side finished (`finished`: its bytes in a file and its darkest
-luma); mkr-post answers each with its clip index, the darkest luma and the frame's bytes, in the order the jobs came."""
+luma); with a breathing palette (`[look] breathe`) it carries its own `grade`, the setup's with that frame's colours.
+mkr-post answers each with its clip index, the darkest luma and the frame's bytes, in the order the jobs came."""
 import json
 import os
 import queue
@@ -129,31 +131,37 @@ def first(fx, ops):
     return bool(ops) and getattr(GFX.KINDS.get(fx["kind"]), "FIRST", False)
 
 
+def grade(g):
+    """Grade `g` (mkmmd.post.Grade) as mkr-post's Grade: the setup's, for every frame, or with a breathing palette a
+    frame's own (its colours that frame's: mkmmd.postframes.Output.graded)."""
+    s = g.spec
+    sat = float(s.get("saturation", 1.06))
+    out = {"saturation": sat, "keep_delta": g.keep_sat - sat, "pivot": float(s.get("pivot", 0.60)),
+           "contrast": float(s.get("contrast", 1.10)), "split": None, "floor": None}
+    if g.split:
+        sh, hi, amt = g.split
+        out["split"] = {"shadows": [float(v) for v in sh - 0.5], "highlights": [float(v) for v in hi - 0.5],
+                        "amount": amt}
+    if g.floor is not None:
+        yf = float(g.floor @ P.Y_W)
+        lim = yf + g.toe
+        out["floor"] = {"rgb": [float(v) for v in g.floor], "yf": yf, "lim": lim, "lim_yf": lim - yf, "lo": yf * 0.98}
+    return out
+
+
 def setup(out, folder, plain=False, floats=False):
     """Write the setup of `out` into `folder`: setup.json, the vignette and the grain as numpy made them; its path. With
     `plain` mkr-post lays no screen type and grades nothing: the picture the ops leave, quantised, or with `floats` as
     float32 RGBA (kernel tests)."""
     g, (w, h) = out.grade, out.size
-    s = g.spec
-    sat = float(s.get("saturation", 1.06))
     folder = Path(folder)
     np.ascontiguousarray(g.vig[..., 0], np.float32).tofile(folder / "vignette.f32")
     np.ascontiguousarray(np.stack(g.grain), np.float32).tofile(folder / "grain.f32")
-    grade = {"saturation": sat, "keep_delta": g.keep_sat - sat, "pivot": float(s.get("pivot", 0.60)),
-             "contrast": float(s.get("contrast", 1.10)), "split": None, "floor": None}
-    if g.split:
-        sh, hi, amt = g.split
-        grade["split"] = {"shadows": [float(v) for v in sh - 0.5], "highlights": [float(v) for v in hi - 0.5],
-                          "amount": amt}
-    if g.floor is not None:
-        yf = float(g.floor @ P.Y_W)
-        lim = yf + g.toe
-        grade["floor"] = {"rgb": [float(v) for v in g.floor], "yf": yf, "lim": lim, "lim_yf": lim - yf, "lo": yf * 0.98}
     data = {"size": [w, h], "screen": out.screen,
             "lut": [float(v) for v in np.arange(256).astype(np.float32) / 255.0],
             "vignette": str(folder / "vignette.f32"),
             "grain": {"file": str(folder / "grain.f32"), "count": len(g.grain), "amount": g.grain_amt},
-            "grade": grade, "plain": bool(plain or floats), "floats": bool(floats)}
+            "grade": grade(g), "plain": bool(plain or floats), "floats": bool(floats)}
     path = folder / "setup.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return path

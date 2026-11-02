@@ -589,10 +589,11 @@ class StackFx:
         return paint
 
     def _sk_wall(self, fx, i, band, t):
-        """Band `i`'s wallpaper tile on this frame: kept from frame to frame, its sprites' pupils drawn in at `t`."""
+        """Band `i`'s wallpaper tile on this frame: kept from frame to frame (by the band's colour too, which a breathing
+        palette moves), its sprites' pupils drawn in at `t`."""
         unit = float(min(self.size))
         size = max(band["size"] * unit, 4.0)
-        key = (fx["index"], i, round(size, 2))
+        key = (fx["index"], i, round(size, 2), tuple(band["color"]))
         got = self._sk_walls.get(key)
         if got is None:
             got = self._sk_walls[key] = wall_tile(self._sk_files[fx["index"], i], band, size, self.px,

@@ -54,7 +54,11 @@ swirling, dripping, wobbling) move the picture's pixels about (mkmmd.core.remap)
 `gradmap`, `invert`, `testcard` and `cards` are mkmmd.core.eralook's, and so are the `era` presets of a film and a
 camcorder. The toy paint app `paintapp` (its chrome, a cursor, stamps, bucket fills, an eraser across a cut, undo) is
 mkmmd.core.paintapp's. The paper world's `activity` (a workbook page and its exercises done on the hits) and `label`
-(tiny editorial type with dotted leaders) are mkmmd.core.activity's and mkmmd.core.labels'.
+(tiny editorial type with dotted leaders) are mkmmd.core.activity's and mkmmd.core.labels'. `lasers` (fans of festival
+laser beams sweeping on the hits from points of the frame or the scene) are mkmmd.core.lasers'. A video sticker `clip`
+(a clip cut out in a shape, a die-cut sticker laid over the picture, screened onto it for light trails) is
+mkmmd.core.videosticker's. `prints` (real photographs dealt over the picture as prints on cream cards, scattered, on a
+ring round a point or pinned over a base print) are mkmmd.core.prints'.
 
 Any entry may give `aspect.<output>` tables: its own keys for one output (the span, the figure and the frames it reads
 stay the entry's).
@@ -69,17 +73,22 @@ from . import eralook as ER
 from . import fields as FL
 from . import labels as LB
 from . import lanes as LN
+from . import lasers as LZ
 from . import mandala as MD
 from . import paintapp as PA
 from . import picturefx as PF
+from . import prints as PR
 from . import remap as RM
 from . import shotstyle as SS
 from . import stack as SK
 from . import tween as TW
+from . import videosticker as VS
 
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
-         "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS
+         "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS + \
+    LZ.KINDS + VS.KINDS + PR.KINDS
+CLIPS = ("footage",) + VS.KINDS                         # the kinds that show a video `clip` (mkmmd.footage reads it)
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 SILK = "silkscreen"                                     # a collage's fill: the figure printed in flat inks, Warhol's
 BLENDS = ("lighten", "darken")
@@ -118,7 +127,8 @@ KEYS.update({"pixelsort": _COMMON | _HITS | {"by", "lo", "hi", "axis", "reverse"
                                      "seed"},
              "doodle": _COMMON | {"marks", "fps", "width", "outline", "wobble", "seed"},
              "booth": _COMMON | _HITS | {"count", "flash", "drop", "border", "paper", "back", "tilt", "layout", "ratio",
-                                         "focus", "size", "doodles", "caption", "font", "color", "seed"}})
+                                         "focus", "size", "doodles", "caption", "font", "color", "seed", "look",
+                                         "purikura"}})
 _FIGURE_DEFAULTS = {"back": "base", "fill": PICTURE, "edge": None, "shadow": None, "keys": None, "pivot": "base",
                     "inks": None, "offset": [4.0, -3.0], "min_db": None, "every": 1, "shot": None, "at": None,
                     "height": None}
@@ -158,7 +168,7 @@ DEFAULTS.update({"pixelsort": {"by": "luma", "lo": 0.25, "hi": 0.8, "axis": "x",
                  "booth": {"count": 4, "flash": 0.15, "drop": 0.3, "border": 16.0, "paper": "#FFFFFF", "back": "rose",
                            "tilt": -4.0, "layout": None, "ratio": 0.8, "focus": [0.5, 0.42], "size": 0.86,
                            "doodles": 2, "caption": None, "font": None, "color": "text", "seed": 1, "min_db": None,
-                           "every": 1}})
+                           "every": 1, "look": "plain", "purikura": None}})
 KEYS.update({k: _COMMON | own for k, own in FL.KEYS.items()})
 DEFAULTS.update(FL.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in MD.KEYS.items()})
@@ -171,6 +181,12 @@ KEYS.update({k: _COMMON | own for k, own in ER.KEYS.items()})
 DEFAULTS.update(ER.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in PA.KEYS.items()})
 DEFAULTS.update(PA.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in LZ.KEYS.items()})
+DEFAULTS.update(LZ.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in VS.KEYS.items()})
+DEFAULTS.update(VS.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in PR.KEYS.items()})
+DEFAULTS.update(PR.DEFAULTS)
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
 AXES = ("x", "y", "xy")                                 # a mirror's fold: about a vertical line, a horizontal one, both
 FITS = ("cover", "contain")                             # how footage meets the frame: filled and cropped, or whole
@@ -385,6 +401,12 @@ def normalize(spec, palette, what="fx"):
         ER.normalize(spec, out, palette, what)
     elif kind in PA.KINDS:
         PA.normalize(spec, out, palette, what)
+    elif kind in LZ.KINDS:
+        LZ.normalize(spec, out, palette, what)
+    elif kind in VS.KINDS:
+        VS.normalize(spec, out, palette, what)
+    elif kind in PR.KINDS:
+        PR.normalize(spec, out, palette, what)
     out["aspect"] = _aspects(spec, palette, label, what)
     return out
 
@@ -639,18 +661,24 @@ def _figure(spec, out, palette, what):
     elif kind == "stack":
         SK.normalize(spec, out, palette, what)
     else:
-        if not isinstance(out.get("clip"), str) or not out["clip"].strip():
-            raise FxError(f"{what}: `clip` is required: a video file (project-relative or absolute) or an asset slug")
-        out["in"] = _num(out["in"], f"{what} in", lo=0.0)
-        out["rate"] = _num(out["rate"], f"{what} rate", 0.0, 16.0)
-        for k in ("loop", "mirror"):
-            if not isinstance(out[k], bool):
-                raise FxError(f"{what}: {k} is true or false")
+        _clip_keys(out, what)
         if out["fit"] not in FITS:
             raise FxError(f"{what}: fit {out['fit']!r} is none of {', '.join(FITS)}")
-        out["focus"] = _pair(out["focus"], f"{what} focus")
-        if not all(0.0 <= x <= 1.0 for x in out["focus"]):
-            raise FxError(f"{what}: focus = {out['focus']}: [x, y] in 0..1 of the video")
+
+
+def _clip_keys(out, what):
+    """A video's own keys, a footage collage's or a video sticker's (mkmmd.footage reads and fits it): the `clip` (a file
+    or an asset slug), its second `in` on the span's first frame, its `rate`, `loop`, `mirror` and `focus`."""
+    if not isinstance(out.get("clip"), str) or not out["clip"].strip():
+        raise FxError(f"{what}: `clip` is required: a video file (project-relative or absolute) or an asset slug")
+    out["in"] = _num(out["in"], f"{what} in", lo=0.0)
+    out["rate"] = _num(out["rate"], f"{what} rate", 0.0, 16.0)
+    for k in ("loop", "mirror"):
+        if not isinstance(out[k], bool):
+            raise FxError(f"{what}: {k} is true or false")
+    out["focus"] = _pair(out["focus"], f"{what} focus")
+    if not all(0.0 <= x <= 1.0 for x in out["focus"]):
+        raise FxError(f"{what}: focus = {out['focus']}: [x, y] in 0..1 of the video")
 
 
 def hit_times(fx, hits):
@@ -749,7 +777,8 @@ def point_key(fx):
 def points(fx):
     """[(key, expression)]: the scene points an effect needs projected through the camera of the shot in the cut on
     the frames of its span (point/<key>/): its `center` (key x<i>), a doodle's marks at a {point} (x<i>m<j>), the
-    points a label's leaders run to (x<i>l<j>) and a paint app's bucket fills' {point} seeds (x<i>b<j>)."""
+    points a label's leaders run to (x<i>l<j>), a paint app's bucket fills' {point} seeds (x<i>b<j>) and the {point}
+    origins of a lasers entry's fans (x<i>o<j>)."""
     out = []
     c = fx.get("center")
     if isinstance(c, dict) and c["mode"] == "point":
@@ -761,6 +790,8 @@ def points(fx):
         out += LB.points(fx)
     if fx["kind"] in PA.KINDS:
         out += PA.points(fx, point_key(fx))
+    if fx["kind"] in LZ.KINDS:
+        out += LZ.points(fx)
     return out
 
 

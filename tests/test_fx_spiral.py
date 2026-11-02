@@ -1,7 +1,9 @@
 """Op-art ([[fx]] kind "spiral", mkmmd.core.fields and mkmmd.fields) and the collages' pattern backs: the keys and what
 they refuse, each pattern's symmetry (a spiral's arms), antialiased edges and a too-fine middle drawn as the colours' mean,
 turning on `speed` and stepping on hits, smooth from frame to frame, the same in any order, kept behind her by a ground
-mask, and a grid's cells each on a pattern of its own that steps on the grid's hits."""
+mask, and a grid's cells each on a pattern of its own that steps on the grid's hits. The drift: its tones taken by luma,
+the darkest, dark, lightest, light steps the same way round every motif and the other way on the next ring or row, a
+whole number of motifs round a ring, its creep and its paced steps, and the GPU leaving it to the CPU."""
 import math
 import re
 
@@ -42,12 +44,17 @@ def grey():
 
 
 @pytest.mark.parametrize("spec, frag", [
-    (spiral(pattern="zigzag"), "pattern 'zigzag' is none of spiral, rings, moire, sunburst, checker"),
+    (spiral(pattern="zigzag"), "pattern 'zigzag' is none of spiral, rings, moire, sunburst, checker, drift"),
     (spiral(colors=["rose"]), "expected a list of 2 to 4 colours"),
     (spiral(colors=["rose", "gold", "pine", "foam", "iris"]), "2 to 4 colours"),
     (spiral(colors="rose"), "expected a list of 2 to 4 colours"),
     (spiral(pattern="rings", twist=2), "twist (a key of spiral) does not shape a rings: it takes size"),
-    (spiral(pattern="spiral", size=0.1), "size (a key of rings or moire or checker) does not shape a spiral"),
+    (spiral(pattern="spiral", size=0.1), "size (a key of rings or moire or checker or drift) does not shape a spiral"),
+    (spiral(pattern="drift", arms=3), "arms (a key of spiral or sunburst) does not shape a drift: it takes angle, "
+                                      "layout, motif, size"),
+    (spiral(pattern="drift", layout="grid"), "layout 'grid' is none of rings, rows"),
+    (spiral(pattern="drift", motif="egg"), "motif 'egg' is none of tie, wheel"),
+    (spiral(pattern="rings", motif="tie"), "motif (a key of drift) does not shape a rings: it takes size"),
     (spiral(arms=0), "arms = 0: expected 1..64"),
     (spiral(pattern="moire", moire="dots"), "moire 'dots' is none of rings, lines"),
     (spiral(blend="add"), "blend 'add' is none of over, screen, multiply, soft-light"),
@@ -121,14 +128,14 @@ def test_edges_are_antialiased_and_a_too_fine_middle_is_the_mean():
 
 @pytest.mark.parametrize("pattern", CF.PATTERNS)
 def test_every_pattern_paints_its_colours_in_every_aspect(pattern):
-    own = {"size": 0.06} if pattern in ("rings", "moire") else {}
+    own = {"size": 0.06} if pattern in ("rings", "moire") else {"size": 0.3} if pattern == "drift" else {}
     spec = FX.normalize(spiral(pattern=pattern, colors=["love", "base"], **own), DAWN)
     for size in ((192, 108), (108, 192), (120, 120)):
         pic = FL.pattern(spec, size, 0.0, (size[0] / 2 - 0.5, size[1] / 2 - 0.5), min(size))
         assert pic.shape == (size[1], size[0], 3) and pic.dtype == np.float32
-        cs = np.asarray(spec["colors"], np.float32)
+        cs = np.asarray(FL.drift_tones(spec["colors"]) if pattern == "drift" else spec["colors"], np.float32)
         near = np.min(np.abs(pic[:, :, None, :] - cs[None, None]).sum(-1), -1)
-        assert (near < 0.02).mean() > 0.4                       # mostly its own colours, not a wash
+        assert (near < 0.02).mean() > 0.4                       # mostly its own colours (a drift's tones), not a wash
         assert np.all((pic >= -1e-5) & (pic <= 1 + 1e-5))
 
 
@@ -181,6 +188,103 @@ def test_blend_modes():
     assert np.allclose(FL.blend(img, pic, 0.0, "screen"), img)
     a = np.array([[0.0, 1.0], [0.5, 0.25]], np.float32)
     assert np.allclose(FL.blend(img, pic, a, "over")[..., 0], 0.4 + 0.1 * a)
+
+
+# ---------------------------------------------------------------- the drift
+TONES = [BLACK, BLUE, [0.0, 1.0, 0.0], WHITE]       # darkest, dark, light, lightest: no mix of two looks like a third
+CYCLE = [2, 0, 1, 3]                                 # forward through a motif: the light ground, darkest, dark, lightest
+
+
+def _seq(vals):
+    """The tones (indices into TONES) of the px `vals` (n, 3), runs merged, px between tones (edges) left out."""
+    d = np.abs(np.asarray(vals)[:, None, :] - np.asarray(TONES, np.float32)[None]).sum(-1)
+    idx = np.argmin(d, 1)
+    out = []
+    for i in idx[d[np.arange(len(idx)), idx] < 0.02]:
+        if not out or out[-1] != i:
+            out.append(int(i))
+    return out
+
+
+def _cyclic(seq, cycle):
+    """Whether `seq` runs round `cycle` (each entry followed by the next of the cycle), at least twice round."""
+    return len(seq) >= 8 and all(cycle[(cycle.index(a) + 1) % 4] == b for a, b in zip(seq, seq[1:]))
+
+
+def test_drift_takes_its_tones_by_luma_whatever_their_order_and_palette():
+    want = [np.asarray(c, np.float32) for c in TONES]
+    for order in ([3, 0, 2, 1], [1, 2, 3, 0], [0, 1, 2, 3]):
+        got = FL.drift_tones([TONES[i] for i in order])
+        assert all(np.allclose(g, e) for g, e in zip(got, want))
+    two = FL.drift_tones([WHITE, BLACK])                                  # mixed between: 0.3 and 0.7 of the way
+    assert [round(float(t[0]), 3) for t in two] == [0.0, 0.3, 0.7, 1.0]
+    dark = FL.drift_tones([WHITE, [0.2] * 3, BLACK])                      # the middle one nearer black: the dark tone
+    assert np.allclose(dark[1], 0.2) and np.allclose(dark[2], 0.6)
+    light = FL.drift_tones([WHITE, [0.8] * 3, BLACK])                     # nearer white: the light one
+    assert np.allclose(light[2], 0.8) and np.allclose(light[1], 0.4)
+    for name in ("rose-pine-moon", "rose-pine-dawn"):                    # base and text trade places: still in order
+        spec = FX.normalize(spiral(pattern="drift"), PAL.get(name))
+        assert (spec["speed"], spec["step"], spec["layout"], spec["motif"]) == (0.0, 0.25, "rings", "tie")
+        lum = [float(np.asarray(t) @ FL.LUMA) for t in FL.drift_tones(spec["colors"])]
+        assert lum == sorted(lum) and len(spec["colors"]) == 4
+    other = FX.normalize(spiral(pattern="rings"), DAWN)
+    assert (other["speed"], other["step"]) == (0.5, 1.0)                  # the others keep the shared defaults
+
+
+@pytest.mark.parametrize("motif", CF.DRIFT_MOTIFS)
+def test_drift_steps_run_one_way_round_every_motif_and_the_other_way_on_the_next_row(motif):
+    spec = {"pattern": "drift", "colors": TONES, "layout": "rows", "motif": motif, "size": 0.1, "angle": 0.0}
+    pic = FL.pattern(spec, (600, 300), 0.0, (299.5, 149.5), 300)        # rows 30 px wide, row 0 about y = 149.5
+    row0, row1 = pic[149 + 5], pic[179 + 5]                              # 5 px off their middles: clear of a wheel's hub
+    assert _cyclic(_seq(row0), CYCLE)                                    # left to right: forward on row 0
+    assert _cyclic(_seq(row1), CYCLE[::-1])                              # backward on row 1
+    turned = FL.pattern({**spec, "angle": 90.0}, (300, 600), 0.0, (149.5, 299.5), 300)
+    assert _cyclic(_seq(turned[::-1, 149 + 5]), CYCLE)                   # rows turned up the frame: forward is up
+
+
+def test_drift_rings_hold_a_whole_number_of_motifs_turning_alternate_ways():
+    spec = {"pattern": "drift", "colors": TONES, "layout": "rings", "motif": "tie", "size": 0.1, "angle": 0.0}
+    pic = FL.pattern(spec, (401, 401), 0.0, (200.0, 200.0), 300)        # rings 30 px wide from a hub of 15 px
+    a = np.linspace(0.0, 2.0 * math.pi, 4000, endpoint=False)           # counter-clockwise on screen from the right
+    for k, cycle in ((1, CYCLE[::-1]), (2, CYCLE)):
+        rad = (k + 0.5 + FL.DRIFT_HUB) * 30.0 + 5.0
+        xs = np.rint(200.0 + rad * np.cos(a)).astype(int)
+        ys = np.rint(200.0 - rad * np.sin(a)).astype(int)
+        seq = _seq(pic[ys, xs])
+        assert _cyclic(seq, cycle)                                       # odd rings turn the other way
+        n = round(2.0 * math.pi * (k + 0.5 + FL.DRIFT_HUB) * 30.0 / (30.0 * FL.DRIFT["tie"]["pitch"]))
+        assert seq.count(0) in (n, n + 1)                                # a whole number round: no seam at the left
+    assert np.allclose(pic[195:206, 195:206], TONES[2])                  # the hub: the light ground
+
+
+def test_drift_creeps_each_row_its_own_way_and_steps_three_times_a_second_at_most():
+    spec = {"pattern": "drift", "colors": TONES, "layout": "rows", "motif": "tie", "size": 0.16, "angle": 0.0}
+    a = FL.pattern(spec, (600, 300), 0.0, (299.5, 149.5), 300)          # rows 48 px, ties every 24 px
+    b = FL.pattern(spec, (600, 300), 0.25, (299.5, 149.5), 300)         # a quarter of a cell on: 6 px
+    assert np.allclose(b[150, 100:500], a[150, 94:494], atol=1e-4)      # row 0 forward: right
+    assert np.allclose(b[198, 100:500], a[198, 106:506], atol=1e-4)     # row 1 forward: left
+    drift = FX.normalize(spiral(pattern="drift", step=1.0, times=[1.0]), DAWN)
+    assert CF.phase(drift, 2.0, 0.0, [1.0, 1.1, 1.2, 1.4]) == pytest.approx(2.0)   # 1.1 and 1.2 too soon
+    rings = FX.normalize(spiral(pattern="rings", speed=0.0, times=[1.0]), DAWN)
+    assert CF.phase(rings, 2.0, 0.0, [1.0, 1.1, 1.2, 1.4]) == pytest.approx(4.0)   # the others step on every hit
+    pl = plan(spiral(pattern="drift", colors=TONES, size=0.3, times=[1.0, 1.1]))
+    paced = plan(spiral(pattern="drift", colors=TONES, size=0.3, times=[1.0]))
+    assert np.array_equal(runner(pl).frame(F0 + 50, grey()), runner(paced).frame(F0 + 50, grey()))
+
+
+def test_a_drift_too_fine_for_its_pixels_is_its_tones_mean_and_the_gpu_leaves_it_to_the_cpu():
+    from mkmmd.gpufx import fields as GFL
+    from mkmmd.gpufx import spiral as GS
+    tiny = FL.pattern({"pattern": "drift", "colors": TONES, "layout": "rings", "motif": "wheel", "size": 0.004,
+                       "angle": 0.0}, (200, 200), 0.0, (99.5, 99.5), 200)
+    mean = sum(np.float32(s) * np.asarray(c, np.float32) for s, c in zip(FL.DRIFT_AREA, TONES))
+    assert np.abs(tiny[30:170, 30:170] - mean).max() < 0.02
+    pl = plan(spiral(pattern="drift"), spiral(pattern="checker"))
+    r = runner(pl)
+    assert GS.ops(r, r.fxs[0], F0 + 3) is None and GS.ops(r, r.fxs[1], F0 + 3)[0]["op"] == "spiral"
+    grid = FX.normalize({"kind": "stack", "from": 0, "to": 1, "objects": "R*",
+                         "back": ["love", {"pattern": "drift"}]}, DAWN)
+    assert not GFL.backs_drawable(grid) and GFL.backs_drawable({**grid, "back": grid["back"][:1]})
 
 
 # ---------------------------------------------------------------- pattern backs

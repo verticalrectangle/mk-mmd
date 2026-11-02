@@ -3,6 +3,7 @@
 (mkmmd.mandala.Tile) written once for mkr-post to read. Shared by the collage kinds' modules (footage, grid, stack,
 mandala ...)."""
 import hashlib
+import itertools
 import os
 from pathlib import Path
 
@@ -11,18 +12,25 @@ import numpy as np
 from .. import framefx as FF
 from ..core import framefx as FX
 
+_ONCE = itertools.count()                     # this process's tiles written for one frame alone
 
-def tile_files(ffx, t, key):
+
+def tile_files(ffx, t, key, once=None):
     """Sticker tile `t` (mkmmd.mandala.Tile) on disk for mkr-post, in the scratch folder of `ffx.paths`, written once by
     whichever process asks first (named by `key`, which says what it is): its picture and coverage as h x w vec4
-    float32 (rgb premultiplied, a) and its ring (in the first of four); mkr-post's Tile::File. None without a scratch
-    folder."""
+    float32 (rgb premultiplied, a) and its ring (in the first of four); mkr-post's Tile::File. With `once` (a frame:
+    the tile is in colours few frames show, a breathing palette's on its way: FrameFx.passing) it is written for that
+    frame alone, under a name of its own, and mkr-post removes it once read, so a breath leaves no trail of tiles behind
+    (forget_once removes it when the frame's ops are not sent). None without a scratch folder."""
     folder = getattr(ffx.paths, "scratch", None)
     if folder is None:
         return None
     name = hashlib.sha1(repr(key).encode()).hexdigest()[:24]
+    if once is not None:
+        name = f"{name}-{os.getpid()}-{next(_ONCE)}"
     h, w = t.a.shape
-    out = {"kind": "file", "rgba": str(Path(folder) / f"tile-{name}.rgba"), "ring": None, "size": [int(w), int(h)]}
+    out = {"kind": "file", "rgba": str(Path(folder) / f"tile-{name}.rgba"), "ring": None, "size": [int(w), int(h)],
+           "once": once is not None}
     planes = [("rgba", np.dstack([t.rgb, t.a]))]
     if t.ring is not None:
         out["ring"] = str(Path(folder) / f"tile-{name}.ring")
@@ -35,7 +43,21 @@ def tile_files(ffx, t, key):
             tmp = p.with_name(f"{p.name}.{os.getpid()}")
             np.ascontiguousarray(data, np.float32).tofile(tmp)
             os.replace(tmp, p)
+    if once is not None:
+        got = getattr(ffx, "_gpu_once", None)
+        if got is None or got[0] != once:
+            got = ffx._gpu_once = (once, [])
+        got[1].extend(p for p in (out["rgba"], out["ring"]) if p is not None)
     return out
+
+
+def forget_once(ffx, frame):
+    """The tiles written for `frame` alone (tile_files `once`) removed: its ops were not sent."""
+    got = getattr(ffx, "_gpu_once", None)
+    if got is not None and got[0] == frame:
+        for p in got[1]:
+            Path(p).unlink(missing_ok=True)
+        ffx._gpu_once = None
 
 
 def ink_list(inks, folder, tag):

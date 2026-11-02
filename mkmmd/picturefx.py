@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .core import framefx as FX
 from .core import picturefx as PC
+from .core import purikura as PK
 
 LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
 FONT_EXT = (".ttf", ".otf", ".ttc")
@@ -522,7 +523,8 @@ def booth(fx, size, px, t, photos, font=None):
     """A photo-booth strip at clip second `t` filling a frame (or a rect's part of one) of `size` (w, h): the strip of
     PC.booth_strip on `back`, turned `tilt` degrees, its shadow under it; `photos` [(capture second, picture at the
     photo's size)] the captures so far, each dropping into its cell, doodles popping round it once it has landed; the
-    `caption` in the strip's foot (`font` its file); the flash of a capture over all of it."""
+    `caption` in the strip's foot (`font` its file); the flash of a capture over all of it. The purikura look
+    (mkmmd.purikura) dots the paper, frames each photo through its beauty filter, stamps and writes on it."""
     w, h = size
     geo = PC.booth_strip(fx, size, px)
     pw, ph = geo["photo"]
@@ -531,14 +533,24 @@ def booth(fx, size, px, t, photos, font=None):
     paper = np.asarray(fx["paper"], np.float32)
     strip = np.empty((SH, SW, 3), np.float32)
     strip[:] = paper
+    look = None
+    if fx.get("purikura") is not None:
+        from . import purikura as look                           # it draws with this module's pens
+        look.paper(strip, fx, px)
     for cx, cy in geo["cells"]:
         x0, y0 = int(round(cx)), int(round(cy))
-        strip[y0:y0 + PH, x0:x0 + PW] = paper * np.float32(0.86)
+        if look is None:
+            strip[y0:y0 + PH, x0:x0 + PW] = paper * np.float32(0.86)
+        else:
+            look.slot(strip, (x0, y0), (PW, PH), paper)
     pen = PC.BOOTH_PEN
     for j, (tc, pic) in enumerate(photos):
         if j >= len(geo["cells"]) or t < tc:
             continue
         cell = geo["cells"][j]
+        if look is not None:
+            look.photo(strip, fx, j, pic, cell, t, tc, px)
+            continue
         s, lift = PC.drop(t - tc, fx["drop"])
         _card(strip, pic, cell, geo["border"], s, lift, paper, px)
         b = max(int(math.floor((t - fx["from"]) * pen["fps"] + 1e-9)), 0)
@@ -573,7 +585,7 @@ def booth(fx, size, px, t, photos, font=None):
                            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     out = out * (1.0 - 0.3 * shade)[..., None]
     out = out * (1.0 - cover_)[..., None] + colour
-    fl = max([PC.flash(t - tc, fx["flash"]) for tc, _ in photos] + [0.0])
+    fl = max([PC.flash(t - tc, fx["flash"]) for tc in PK.flashing(fx, [tc for tc, _ in photos])] + [0.0])
     if fl > 0:
         out = out + (1.0 - out) * np.float32(fl)
     return np.clip(out, 0.0, 1.0).astype(np.float32)
@@ -626,8 +638,8 @@ def font_source(root=None, registry=None):
 
 # ================================================================================================= over a cut
 class PictureFx:
-    """The picture effects' part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, px, fps, frame0, fxs, _t,
-    _get, _apply, _hit_times, _figure and _point_of). `_picture_init` is called once its effects are known."""
+    """The picture effects' part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, px, fps, frame0, fxs,
+    entries, _t, _get, _apply, _hit_times, _figure and _point_of). `_picture_init` is called once its effects are known."""
 
     def _picture_init(self, font_of):
         """The fonts of the camcorders and the booths' captions, found now: a missing one is an FX.FxError before any
@@ -635,14 +647,15 @@ class PictureFx:
         self._font_of = font_of or font_source()
         self._seen, self._cells, self._films, self._fonts = {}, {}, {}, {}   # _seen: pictures as they reached an fx
         for fx in self.fxs:
-            if fx["kind"] == "camcorder" or (fx["kind"] == "booth" and fx["caption"]):
+            if fx["kind"] == "camcorder" or (fx["kind"] == "booth" and fx["caption"]) or (fx["kind"] == "clip" and
+                                                                                          fx["shape"] == "text"):
                 self._fonts[fx["index"]] = self._font_of(fx["font"])
 
     def _reached(self, fx, g, frame, img):
         """The picture of clip frame `g` as it reached `fx` (a film's held frame, a booth's capture, the first frame a
         mosh with a flow holds): `img` on `g` itself, kept for the frames after (mk post goes through them in order);
-        else what was kept then; else the cut's frame `g` with the effects before `fx` in the table applied again (frames
-        asked out of order, as mk look asks them). None when the cut has no frame `g`."""
+        else what was kept then; else the cut's frame `g` with the effects before `fx` in the table applied again, as `g`
+        draws them (frames asked out of order, as mk look asks them). None when the cut has no frame `g`."""
         memo = self._seen.setdefault(fx["index"], {})
         if g == frame:
             memo[g] = img
@@ -651,7 +664,7 @@ class PictureFx:
             return memo[g]
         pic = self._get(g)
         if pic is not None:
-            for e in FX.at(self.fxs, g):
+            for e in self.entries(g):
                 if e["index"] >= fx["index"]:
                     break
                 pic = self._apply(e, g, pic)

@@ -65,7 +65,8 @@ pub struct Floor {
 }
 
 /// One frame: where its picture comes from, the frame effects still to draw on it (in table order), its screen type
-/// and its keep mask; `k` its index in the clip (the grain frame). Or a frame Python finished itself (`finished`),
+/// and its keep mask; `k` its index in the clip (the grain frame); `grade` its own grade when it is not the setup's (a
+/// breathing palette mixes the grade's colours frame by frame). Or a frame Python finished itself (`finished`),
 /// handed on as it is in the jobs' order.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Job {
@@ -83,6 +84,8 @@ pub struct Job {
     pub keep: Option<String>,
     #[serde(default)]
     pub ops: Vec<Op>,
+    #[serde(default)]
+    pub grade: Option<Grade>,
     #[serde(default)]
     pub finished: Option<Finished>,
 }

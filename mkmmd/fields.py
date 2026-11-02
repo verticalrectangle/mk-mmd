@@ -33,6 +33,14 @@ CELL_CUT = (0.78, 0.36)          # oil cells show where a patch noise is over 0.
 BULGE = (0.55, 0.42)             # a checkerboard's bulge at warp 1: how much it swells its middle, and how far (units)
 GRIDS = 24                       # coordinate grids kept (sizes and centres), at most
 GRID_BYTES = 200 * 2 ** 20       # and no more than this much of them (a full HD polar grid is 33 MB)
+LUMA = np.array([0.2126, 0.7152, 0.0722], np.float32)
+DRIFT_HUB = 0.5                  # a drift's rings start this many ring widths out from its centre (a still hub)
+DRIFT = {"tie": {"pitch": 0.5, "long": 0.86, "wide": 0.56, "round": 0.5, "rim": 0.27},
+         "wheel": {"pitch": 1.0, "radius": 0.43, "rim": 0.22, "hub": 0.3}}
+# a drift's motif in shares of its cell (a ring or row width across, `pitch` of it along): a tie `long` across and
+# `wide` along it, rounded by `round` of its half width, its dark and light sides `rim` of its width deep; a wheel of
+# `radius`, its sides `rim` of its diameter deep, a hub of `hub` of its radius in the light tone
+DRIFT_AREA = (0.1, 0.3, 0.5, 0.1)  # the shares of a drift's darkest, dark, light and lightest tones, roughly: its mean
 _M32 = np.uint64(0xFFFFFFFF)
 
 
@@ -174,10 +182,120 @@ def _parity(q, g):
     return v + (np.float32(0.5) - v) * _fine(g)
 
 
+def drift_tones(colors):
+    """The four tones of a drift, (darkest, dark, light, lightest) float32 rgb, from its 2 to 4 colours by their luma
+    (sorted on each call: a palette whose light and dark trade places keeps the illusion turning the same way). Two
+    colours are the darkest and the lightest, the others mixed between them (0.3, 0.7); of three the middle is the dark
+    tone when it lies nearer the darkest (the light tone mixed halfway to the lightest), else the light one."""
+    C = np.asarray(colors, np.float32)
+    S = C[np.argsort(C @ LUMA, kind="stable")]
+    if len(S) == 4:
+        return S[0], S[1], S[2], S[3]
+    if len(S) == 3:
+        b, m, w = S
+        if float((m - b) @ LUMA) <= float((w - m) @ LUMA):
+            return b, m, m + (w - m) * np.float32(0.5), w
+        return b, b + (m - b) * np.float32(0.5), m, w
+    b, w = S
+    return b, b + (w - b) * np.float32(0.3), b + (w - b) * np.float32(0.7), w
+
+
+def _drift_grid(spec, size, centre, unit, memo):
+    """What of a drift's cells is the same on every frame: (a, v, lu, out). `a` is how far along its ring or row each px
+    lies, in cells, counted the way that ring or row drifts; v across it and lu its cells' length along, in units (short
+    sides); `out` the px of no cell (a ring layout's hub) or None. Rings about `centre` each `size` wide, the motifs of
+    each a whole number round it, every other ring drifting the other way; rows `size` apart through `centre`, turned
+    `angle` degrees counter-clockwise, every other one drifting the other way and offset half a cell."""
+    def make():
+        s = np.float32(spec["size"])
+        pitch = np.float32(DRIFT[spec["motif"]]["pitch"])
+        dx, dy, r, th = polar(size, centre, unit, memo)
+        if spec["layout"] == "rings":
+            rr = r / s - np.float32(DRIFT_HUB)
+            k = np.floor(rr)
+            v = (rr - k - np.float32(0.5)) * s
+            rk = (k + np.float32(0.5 + DRIFT_HUB)) * s
+            n = np.maximum(np.round(np.float32(2.0 * math.pi) * rk / (s * pitch)), np.float32(3.0))
+            sign = np.float32(1.0) - np.float32(2.0) * np.mod(k, np.float32(2.0))
+            return th * (n / np.float32(2.0 * math.pi)) * sign, v, np.float32(2.0 * math.pi) * rk / n, rr < 0
+        ang = math.radians(spec["angle"])
+        ca, sa = np.float32(math.cos(ang)), np.float32(math.sin(ang))
+        x, y = dx * ca - dy * sa, dx * sa + dy * ca
+        k = np.floor(y / s + np.float32(0.5))
+        lu = s * pitch
+        odd = np.mod(k, np.float32(2.0))
+        a = (x / lu + np.float32(0.5) * odd) * (np.float32(1.0) - np.float32(2.0) * odd)
+        return a, y - k * s, np.full(y.shape, lu, np.float32), None
+    if memo is None:
+        return make()
+    key = ("drift", int(size[0]), int(size[1]), float(centre[0]), float(centre[1]), float(unit), spec["layout"],
+           spec["motif"], float(spec["size"]), float(spec["angle"]))
+    return memo.get_or(key, make)
+
+
+def _drift_cells(spec, size, q0, centre, unit, memo):
+    """Where each px of a drift lies in its motif's cell: (u, v, lu, out), u along the way the motif drifts (forward is
+    + u), 0 at the motif's middle, in units; the motifs moved on `q0` cells, each ring or row its own way (_drift_grid
+    has the rest)."""
+    a, v, lu, out = _drift_grid(spec, size, centre, unit, memo)
+    a = a - np.float32(q0)
+    return (a - np.floor(a) - np.float32(0.5)) * lu, v, lu, out
+
+
+def _box(u, v, hu, hv, rc):
+    """The signed distance (negative inside) of px (u, v) to a box of half sides hu, hv rounded by rc, about 0."""
+    qx = np.abs(u) - hu + rc
+    qy = np.abs(v) - hv + rc
+    return np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0)) + np.minimum(np.maximum(qx, qy), 0.0) - rc
+
+
+def drift(spec, size, q0, centre, unit, memo=None):
+    """A drift (`spec`: colors, layout, motif, size, angle) over a picture of `size` (w, h) about pixel `centre`, its
+    lengths in units of `unit` px, its motifs moved on `q0` cells: float32 RGB (h, w, 3). Each motif is the dark tone
+    with its back side (- u) the darkest and its front side (+ u) the lightest, on the light tone: darkest, dark,
+    lightest, light, the steps that make it seem to creep forward. Edges antialiased; where the motifs' sides run
+    thinner than a px the picture is its tones' mean."""
+    B, DG, LG, W = drift_tones(spec["colors"])
+    u, v, lu, out = _drift_cells(spec, size, q0, centre, unit, memo)
+    geo = DRIFT[spec["motif"]]
+    s, px = np.float32(spec["size"]), np.float32(unit)
+    if spec["motif"] == "tie":
+        hu, hv = np.float32(0.5 * geo["wide"]) * lu, np.float32(0.5 * geo["long"]) * s
+        rc = np.float32(geo["round"]) * np.minimum(hu, hv)
+        rim = np.float32(2.0 * geo["rim"]) * hu
+        dist = lambda du: _box(u - du, v, hu, hv, rc)                                      # noqa: E731
+        hub = None
+    else:
+        rad = np.float32(geo["radius"]) * np.minimum(lu, s)
+        rim = np.float32(2.0 * geo["rim"]) * rad
+        dist = lambda du: np.hypot(u - du, v) - rad                                      # noqa: E731
+        hub = np.clip(np.float32(0.5) - (np.hypot(u, v) - np.float32(geo["hub"]) * rad) * px, 0.0, 1.0)
+    cov = lambda d: np.clip(np.float32(0.5) - d * px, 0.0, 1.0)                          # noqa: E731
+    inside = cov(dist(0.0))
+    if out is not None:
+        inside[out] = 0.0
+    back = inside * (np.float32(1.0) - cov(dist(rim)))          # what the motif moved forward leaves: its back side
+    front = inside * (np.float32(1.0) - cov(dist(-rim)))        # and moved back: its front side
+    body = np.maximum(inside - back - front, 0.0)
+    if hub is not None:
+        hub = np.minimum(hub, body)
+        body = body - hub
+    D = np.stack([DG - LG, B - LG, W - LG]).astype(np.float32)
+    pic = np.stack([body, back, front], -1) @ D + LG
+    fine = _fine(np.float32(1.0) / np.maximum(rim * px, np.float32(1e-6)))
+    if out is not None:
+        fine[out] = 0.0
+    mean = sum(np.float32(a) * c for a, c in zip(DRIFT_AREA, (B, DG, LG, W)))
+    _mean(pic, mean[None], fine)
+    return pic.astype(np.float32)
+
+
 def pattern(spec, size, q0, centre, unit, memo=None):
     """A pattern (`spec`: pattern, colors and its own keys, mkmmd.core.fields) painted over a picture of `size` (w, h)
     about pixel `centre`, its lengths in units of `unit` px (the short side), moved on by `q0` stripes (fields.phase):
     float32 RGB (h, w, 3), every edge antialiased and a pattern too fine for its pixels its colours' mean."""
+    if spec["pattern"] == "drift":
+        return drift(spec, size, q0, centre, unit, memo)
     dx, dy, r, th = polar(size, centre, unit, memo)
     C = np.asarray(spec["colors"], np.float32)
     p, m, u, one = spec["pattern"], len(C), np.float32(unit), np.float32(1.0)

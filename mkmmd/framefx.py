@@ -14,11 +14,15 @@ from . import eralook as ERF
 from . import fields as FL
 from . import footage as FT
 from . import labels as LBF
+from . import lasers as LZF
 from . import mandala as MDF
 from . import paintapp as PAF
 from . import picturefx as PF
+from . import prints as PRF
 from . import remap as RMF
 from . import stack as SKF
+from . import videosticker as VSF
+from .core import breathe as BR
 from .core import framefx as FX
 from .core import lanes as LN
 from .core import picturefx as PC
@@ -859,29 +863,30 @@ def project_hits(root, data):
 
 
 def clip_of(fx, footage_of):
-    """A footage entry's clip (`footage_of(clip)`, mkmmd.footage.source) with its span checked against its length: a
-    FootageError naming the entry when the clip is missing or unreadable, or its span starts past its end without
-    `loop`."""
+    """The clip of an entry that shows one (a footage collage, a video sticker: FX.CLIPS; `footage_of(clip)`,
+    mkmmd.footage.source) with its span checked against its length: a FootageError naming the entry when the clip is
+    missing or unreadable, or its span starts past its end without `loop`."""
     try:
         clip = footage_of(fx["clip"])
         clip.index(0.0, fx["in"], fx["rate"], fx["loop"])
     except FT.FootageError as e:
-        raise FT.FootageError(f"fx {fx['index']} (footage): {e}") from None
+        raise FT.FootageError(f"fx {fx['index']} ({fx['kind']}): {e}") from None
     return clip
 
 
 def check_footage(fxs, footage_of):
-    """Every footage entry's clip (its `aspect.<output>` entries' too) opened and its span checked, before anything is
-    drawn (`mk post` calls it before it encodes): a FootageError says what is wrong."""
+    """Every clip the entries show (footage collages and video stickers, their `aspect.<output>` entries' too; a negative
+    sticker shows none) opened and its span checked, before anything is drawn (`mk post` calls it before it encodes): a
+    FootageError says what is wrong."""
     for fx in fxs:
         for e in [fx, *(fx.get("aspect") or {}).values()]:
-            if e["kind"] == "footage":
+            if e["kind"] in FX.CLIPS and e.get("clip") is not None:
                 clip_of(e, footage_of)
 
 
 # ================================================================================================= over a cut
 class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
-              SKF.StackFx, PAF.PaintAppFx):
+              SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
@@ -895,26 +900,37 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
     hits        the project's [audio] hits file ({lane: [...]}, mkmmd.core.lanes), for zooms, shocks and collages on a
                 lane
     output      the output's name: entries draw as their `aspect.<output>` tables say (FX.for_output)
-    footage_of  callable(clip) -> mkmmd.footage.Clip, for footage (mkmmd.footage.source(root); None: footage is an
-                error)
+    footage_of  callable(clip) -> mkmmd.footage.Clip, for footage and video stickers (mkmmd.footage.source(root); None:
+                those are an error)
     font_of     callable(font or None) -> a font file, for camcorders, booth captions, labels, an activity page's
                 numbers and a test card's labels (mkmmd.picturefx.font_source; None: the asset registry's, and files as
                 they are given)
     sprite_of   callable(refs) -> picture files, a mandala ring's sprites, a stack's bands', an activity page's and a
-                paint app's stamps (mkmmd.mandala.sprite_source(root); None: the asset registry's, and files as they are
-                given)
+                paint app's stamps, a prints entry's photographs (mkmmd.mandala.sprite_source(root); None: the asset
+                registry's, and files as they are given)
     plate_of    callable(shot, frame) -> picture or None: what `shot` shows at `frame` through its own camera and look
                 (its plate, or the cut's frame where it is the shot in the cut), for a collage whose figure comes from
                 its own `shot` (None: such a collage is an error)
     preload     read every sprite the effects use now, so a missing or unreadable one is an error before any frame is
                 drawn (False: found now, read when drawn: mk post's workers, after the parent checked them)
     paths       where the pictures `frame_of` and `figure_of` read are on disk, for mkr-post (mkmmd.gpufx.Paths; None:
-                the effects are drawn here only)"""
+                the effects are drawn here only)
+    breath      a breathing palette (mkmmd.post.Breath; None: the palette holds still): on each frame an entry is drawn
+                as `entry_at` gives it, its colours mixed by that frame's mix. What a kind keeps from frame to frame is
+                kept by the colours it was drawn in, never by the entry alone."""
 
     def __init__(self, fxs, size, *, fps, frame0, frame_of, point_of, figure_of=None, stem_of=None, hits=None,
-                 output=None, footage_of=None, font_of=None, sprite_of=None, plate_of=None, preload=True, paths=None):
+                 output=None, footage_of=None, font_of=None, sprite_of=None, plate_of=None, preload=True, paths=None,
+                 breath=None):
         self._preload = preload
         self.fxs = [FX.for_output(fx, output) for fx in fxs]
+        self._breath, self._pairs = breath, {}           # an entry's index -> its Pair for this output, where it breathes
+        for fx in fxs if breath is not None else ():
+            p = breath.pairs.get(("fx", fx["index"]))
+            if p is not None and not p.static:
+                p = BR.Pair(FX.for_output(p.a, output), FX.for_output(p.b, output), f"fx {fx['index']}")
+                if not p.static:
+                    self._pairs[fx["index"]] = p
         self.size, self.fps, self.frame0, self.output = (int(size[0]), int(size[1])), float(fps), int(frame0), output
         self._frame_of, self._point_of, self._figure_of, self._plate_of = frame_of, point_of, figure_of, plate_of
         self._stem_of, self._hits, self._footage_of = stem_of, hits, footage_of
@@ -934,6 +950,7 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         self._label_init()
         self._era_init()
         self._paintapp_init()
+        self._prints_init()
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))
@@ -958,9 +975,25 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
                 return False
         return True
 
+    def entry_at(self, fx, frame):
+        """Entry `fx` (one of `fxs`) as `frame` draws it: with a breathing palette its colours mixed by the frame's mix
+        (a copy only where they differ), else the entry itself."""
+        p = self._pairs.get(fx["index"])
+        return fx if p is None else p.at(self._breath.mix(frame))
+
+    def entries(self, frame):
+        """The effects on `frame`, in table order, each as `frame` draws it (entry_at)."""
+        on = FX.at(self.fxs, frame)
+        return [self.entry_at(fx, frame) for fx in on] if self._pairs else on
+
+    def passing(self, fx, frame):
+        """Whether entry `fx` is drawn on `frame` in colours strictly between its two palettes' (a breath on its way):
+        what is drawn in them is seen on few frames, so mkr-post gets it for that frame alone (gpufx.figure.tile_files)."""
+        return fx["index"] in self._pairs and 0.0 < self._breath.mix(frame) < 1.0
+
     def frame(self, frame, img):
         """`img` (the cut's frame `frame`, its cut effects composited) with every effect on that frame, in table order."""
-        for fx in FX.at(self.fxs, frame):
+        for fx in self.entries(frame):
             img = self._apply(fx, frame, img)
         return img
 

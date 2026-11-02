@@ -89,11 +89,12 @@ class CutFx:
     (width, height) of the frames being graded, `output` the aspect's name (for an insert's per-aspect geometry),
     `footage_of` a clip -> mkmmd.footage.Clip opener (mkmmd.footage.source) for a split's video half or an iris's video,
     `sprite_of` a sprite finder (mkmmd.mandala.sprite_source) for a plate portal's sprites and `hits_of` a callable
-    giving the [audio] hits file ({lane: [...]}, or None) for their googly eyes' lanes."""
+    giving the [audio] hits file ({lane: [...]}, or None) for their googly eyes' lanes. With `breath` (mkmmd.post.Breath)
+    each frame draws its effect with the colours of the breathing palette's mix there."""
 
-    def __init__(self, plan, frames_dir, size, output=None, footage_of=None, sprite_of=None, hits_of=None):
+    def __init__(self, plan, frames_dir, size, output=None, footage_of=None, sprite_of=None, hits_of=None, breath=None):
         self.plan, self.dir, self.size, self.output = plan, Path(frames_dir), (int(size[0]), int(size[1])), output
-        self.footage_of, self.sprite_of, self.hits_of = footage_of, sprite_of, hits_of
+        self.footage_of, self.sprite_of, self.hits_of, self.breath = footage_of, sprite_of, hits_of, breath
         self.px = min(self.size) / 1080.0                                  # widths are given at 1080 on the short side
         self.at = {}
         for tr in plan["transitions"]:
@@ -154,6 +155,8 @@ class CutFx:
         if hit is None:
             return main
         kind, spec = hit
+        if self.breath is not None:
+            spec = self.breath.at(kind, spec, frame)
         if kind == "insert":
             draw = {"split": self._split, "iris": self._iris}.get(spec["shape"], self._insert)
             return draw(spec, frame, main)

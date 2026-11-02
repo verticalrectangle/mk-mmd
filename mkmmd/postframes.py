@@ -88,14 +88,18 @@ class Output:
     error unless `allow_gaps`) and what they settle on the pictures is settled. With `gpu` (a folder for the pictures
     handed on) `plan` hands what mkr-post can do of a frame to it (mkmmd.postgpu). With `follow` (a
     mkmmd.core.progress.Follow: `files` holds the frames a running render promised) each frame is taken once the render
-    has its files (`wait`), and what the cut effects settle once it has their windows. A SetupError says what is wrong."""
+    has its files (`wait`), and what the cut effects settle once it has their windows. With `breath` (mkmmd.post.Breath:
+    `[look] breathe`) every colour taken from the palette is the breathing palette's on each frame: the cut effects',
+    the frame effects', the loop's wrap's, the streaks' and the grade's (mkmmd.post.Mixed). A SetupError says what is
+    wrong."""
 
     def __init__(self, proj, plan, name, src, files, frames, size, keep=None, verify=False, allow_gaps=False, gpu=None,
-                 follow=None):
+                 follow=None, breath=None):
         self.args = {"proj": proj, "plan": plan, "name": name, "src": src, "files": files, "frames": frames,
-                     "size": size, "keep": keep, "gpu": gpu}   # what a worker process builds its own from
+                     "size": size, "keep": keep, "gpu": gpu, "breath": breath}   # what a worker process builds its own from
         self.gpu = None if gpu is None else Path(gpu)
         self.follow = follow
+        self.breath = breath
         post = proj.data.get("post", {})
         look = proj.data.get("look", {})
         pal = PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots"))
@@ -110,9 +114,13 @@ class Output:
             self.streaks = P.Streaks({} if st is True else dict(st), pal, self.size) if st else None
         except (ValueError, KeyError) as e:
             raise SetupError(str(e).strip('"')) from None
+        other = None if breath is None else breath.palettes[1]
+        self._grades = None if other is None else P.Mixed(self.grade, other)
+        self._streaks = None if other is None or self.streaks is None else P.Mixed(self.streaks, other)
         footage = FT.source(proj.root)
         self.fx = CF.CutFx(plan, self.src, self.size, name, footage_of=footage, sprite_of=MDF.sprite_source(proj.root),
-                           hits_of=lambda: FF.project_hits(proj.root, proj.data)) if TR.has_effects(plan) else None
+                           hits_of=lambda: FF.project_hits(proj.root, proj.data),
+                           breath=breath) if TR.has_effects(plan) else None
         if self.fx and verify:
             if follow is None:
                 lacking = self.fx.missing(self.frames)
@@ -144,7 +152,7 @@ class Output:
                                       point_of=lambda key, g: CF.read_point(src, key, g, sz),
                                       figure_of=lambda key, g: CF.read_figure(src, key, g, sz),
                                       plate_of=plates(plan, src, files, sz), preload=verify,
-                                      paths=GFX.Paths(files, src, sz, plan))
+                                      paths=GFX.Paths(files, src, sz, plan), breath=breath)
             except FX.FxError as e:
                 raise SetupError(str(e)) from None
         self.wrap = TR.wrap_of(plan)                       # the loop's wrap; frame 0 as finished, under its page
@@ -181,6 +189,10 @@ class Output:
         """Following a render: whether it has every file of the clip's frames up to the one at index `k` now (`wait`
         says what is wrong when one never comes); always otherwise."""
         return self.follow is None or self.follow.ready(self.frames[k])
+
+    def graded(self, f):
+        """The grade of clip frame `f`: its colours the breathing palette's mix there (`breath`), else `grade`."""
+        return self.grade if self._grades is None else self._grades.at(self.breath.mix(f))
 
     # ---------------------------------------------------------------- one frame
     def _read(self, f):
@@ -221,7 +233,7 @@ class Output:
             except FileNotFoundError:                             # a point or a frame missing (allowed): left out there
                 bare += 1
         if self.streaks is not None:                              # lens streaks: from the picture's lights, not the type
-            img = self.streaks(img)
+            img = (self.streaks if self._streaks is None else self._streaks.at(self.breath.mix(f)))(img)
         if layer is not None and self.screen == "graded":        # screen type: over the cut and what its effects made of it
             img = SRT.composite(img, layer)
             typed += 1
@@ -242,8 +254,9 @@ class Output:
             if w["first"] <= f <= w["last"]:
                 if self._held is None:                            # frame 0 as the pass in order finishes it: first,
                     self._held = Output(**self.args)._before_grade(w["still"])[:3]     # with nothing drawn before
-                img, over, mask = PAGE.wrap(w, f, (img, over, mask), self._held)
-        g = self.grade(img, k, keep=mask)
+                wrap = w if self.breath is None else self.breath.at("transition", w, f)
+                img, over, mask = PAGE.wrap(wrap, f, (img, over, mask), self._held)
+        g = self.graded(f)(img, k, keep=mask)
         kept = mask is not None
         if over is not None:
             g = SRT.composite(g, over)
@@ -263,7 +276,7 @@ class Output:
         fx, ffx = self.fx, self.ffx
         if ffx is not None:
             ffx.paths.scratch = self.gpu                          # where sticker tiles are written for mkr-post
-        entries = FX.at(ffx.fxs, f) if ffx else []
+        entries = ffx.entries(f) if ffx else []
         img, bare, ops = None, 0, []
         if fx and fx.active(f):
             img = self._inputs(f)[0]
@@ -292,6 +305,8 @@ class Output:
                 img, ops, bare = before, [], bare + 1
                 PG.dropped(ffx, f)
         job = {"k": k, "ops": ops}
+        if self._grades is not None and not self._grades.pair.static:    # the grade's colours breathe: this frame's
+            job["grade"] = PG.grade(self.graded(f))
         if img is None:
             job["png"] = str(self.files[g] if g is not None else self.files[min(self.files)])
         else:
