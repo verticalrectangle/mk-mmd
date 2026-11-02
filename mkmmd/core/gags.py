@@ -325,24 +325,27 @@ def grip_point(hold, s):
     return hold["centre"] + hold["axis"] * (0.5 * hold["length"] - s)
 
 
-def fit(side, marks, target, part, m, grip, rel=None, roll=None, rounds=8):
+def fit(side, marks, target, part, m, grip, rel=None, roll=None, rounds=8, pole=None):
     """A held place: (wrist, dir, palm, prop rotation, prop origin, forearm, pole) of the hand `side` holding a prop so
     that its point `part` (prop frame) is at `target` (character frame), the grip's axis (toward the business end) along
     `m` out of the fist's thumb side. `grip` (shape, hole, point on the prop's axis, the axis in the prop's frame) says
     where the fist holds it. Without `rel` the prop's roll about its axis is set by `roll` ((its own vector, the way it
     should face), e.g. its front to the lens) and the hand then continues its forearm as far as the fist allows (moves.
     aimed); with `rel` (the prop in the hand's frame, (R, T): a grip already set) the hand continues its forearm and the
-    prop turns with it. The elbow is turned to keep the arm's twists in range (moves.arm_for); the wrist is moved until
-    the part is on its target."""
+    prop turns with it. The elbow is turned to keep the arm's twists in range (moves.arm_for), from `pole` (a point: the
+    elbow of the place before, so a swing keyed place by place keeps its elbow) while that keeps them, else each round
+    from the pose stage's own; the wrist is moved until the part is on its target."""
     MV = _mv()
     _, hole, G, axis = grip
     m = _unit(m)
     target = np.asarray(target, float)
     Rp = turned(axis, roll[0], m, roll[1]) if rel is None else None
     W = target - (Rp @ (np.asarray(part, float) - G) if Rp is not None else m * float(np.linalg.norm(part - G)))
-    d = p = pole = None
+    d = p = None
+    start = pole
     for _ in range(rounds):
-        d, p, _, pole = MV.arm_for(side, marks, W, lambda ff: MV.aimed(side, ff, m), None, MV.HELD, None)
+        d, p, _, pole = MV.arm_for(side, marks, W, lambda ff: MV.aimed(side, ff, m), start, MV.HELD, None)
+        start = pole if start is not None else None
         H = _hand_frame(d, p)
         off = MV._off(hole, d, p, side)
         if rel is None:

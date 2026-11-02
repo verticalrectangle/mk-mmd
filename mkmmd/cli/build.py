@@ -1,14 +1,21 @@
 """mk build: assemble the project's scene from mk.toml (docs/design.md: Building)."""
 import argparse
+import json
+import os
+import resource
+import shutil
 import time
 from pathlib import Path
 
 from .. import bridge
+from .. import memory as MEM
 from .common import add_project_arg, emit, get_project, UsageError
 
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
-          "keys", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
+          "keys", "breathe", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
 BUILDING = STAGES[:-3]                     # what --until names; clip, save and bake follow
+PEAK_FILE = "build_memory.json"            # in the project's cache: the last build's peak (one Blender's resident memory)
+MARGIN = 2e9                               # bytes to spare beyond two Blenders at that peak
 
 HELP = """Build the project's scene from mk.toml in one Blender session and save it to [project] blend.
 
@@ -28,6 +35,9 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   lights    [[light]], [look]         lights in palette colours, colour management
   text      [[text]]                  type on surfaces, lyric type, handwriting, screen type
   keys      [[key]]                   keys on set, prop and object properties
+  breathe   [look] breathe            every colour the build took from the palette driven between it and the other
+                                      palette over clip time (a probe Blender builds the stages above with that palette:
+                                      beside the build when the memory holds both, else first)
   sim       [sim.<cast>]              hair, ears, tails, skirts solved outside Blender and baked to keys
   folds     [folds.<cast>]            fold shapes a joint angle drives (rig.json folds), keyed from the final pose
   cloth     [cloth.<cast>]            garments' cloth copies (rig.json cloth) simulated with Blender's cloth, cached
@@ -75,8 +85,62 @@ def run(args):
         stages = STAGES[:STAGES.index(args.until) + 1] + ["clip", "save", "bake"] if args.until else list(STAGES)
         stages, blend = [s for s in stages if s not in args.skip], None
     t0 = time.time()
-    res = bridge.run("build", {"stages": stages, "out": out, "cache": str(proj.mk_dir / "cache")}, blend=blend,
-                     project=proj, timeout=3600 * 3)
+    cache = str(proj.mk_dir / "cache")
+    job = {"stages": stages, "out": out, "cache": cache}
+    memory = {}
+    if "breathe" in stages and (proj.data.get("look") or {}).get("breathe"):
+        peak, avail = _peak(proj), MEM.available()
+        if _beside(peak, avail):
+            memory["probe"] = "beside"
+        else:                              # the probe builds first, so the two Blenders never hold memory at once
+            memory["probe"] = "first"
+            job["probe_ready"] = _probe_first(proj, stages, cache)
+    try:
+        res = bridge.run("build", job, blend=blend, project=proj, timeout=3600 * 3)
+    finally:
+        ready = job.get("probe_ready")
+        if ready and not os.environ.get("MK_KEEP_JOBS"):   # the build's breathe stage removes it, unless it failed first
+            shutil.rmtree(ready["folder"], ignore_errors=True)
+    peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024     # the biggest Blender of the run
+    _record(proj, peak)
+    res["memory"] = {"peak_gb": round(peak / 1e9, 1), **memory}
     res["seconds"] = round(time.time() - t0, 1)
     emit(res)
     return 0
+
+
+def _peak(proj):
+    """The last build's peak (bytes of one Blender's resident memory), or None."""
+    try:
+        return float(json.loads((proj.mk_dir / "cache" / PEAK_FILE).read_text(encoding="utf-8"))["peak"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _record(proj, peak):
+    path = proj.mk_dir / "cache" / PEAK_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"peak": peak, "at": time.strftime("%Y-%m-%d %H:%M:%S")}), encoding="utf-8")
+
+
+def _beside(peak, avail):
+    """Whether the breathe probe may build beside the build: the memory available now holds two Blenders at the last
+    build's peak with MARGIN to spare. Without a record (or a reading) it may not: the probe builds first."""
+    return peak is not None and avail is not None and avail >= 2 * peak + MARGIN
+
+
+def _probe_first(proj, stages, cache):
+    """The breathe probe built now, before the build: the stages before `breathe` with the other palette, saved in the
+    project's cache, where the build's breathe stage takes it (build/breathe.py: Ready)."""
+    folder = Path(cache) / "breathe" / f"{time.strftime('%Y%m%d-%H%M%S')}-first"
+    folder.mkdir(parents=True, exist_ok=True)
+    blend = folder / "probe.blend"
+    probe_stages = [s for s in STAGES[:STAGES.index("breathe")] if s in stages]
+    t0 = time.time()
+    try:
+        bridge.run("build", {"stages": probe_stages, "cache": cache, "probe": str(blend)}, project=proj,
+                   timeout=3600 * 3)
+    except bridge.BlenderError:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return {"folder": str(folder), "blend": str(blend), "stages": probe_stages, "seconds": round(time.time() - t0, 1)}

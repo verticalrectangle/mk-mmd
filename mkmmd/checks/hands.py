@@ -12,6 +12,7 @@ frame in that frame): one setting off early for its next move is travelling, whi
 import numpy as np
 
 from ..core import gags as GG
+from ..core import mosh as MO
 from ..core import moves as MV
 from ..solvers import geom
 from . import CheckError, Metric, metric
@@ -50,8 +51,9 @@ def plays(ctx, args):
         m = MV.MOVES[e["name"]]
         t0 = float(e["t"])
         t1 = t0 + float(e.get("dur", 1.0))
-        if m.get("hand") == "gag":                     # a gag move's hands, at the places it names them by
-            for s, places, both in GG.rows(e, {sd: rest[sd] == "mic" for sd in SIDES}):
+        if m.get("hand") in ("gag", "mosh"):           # a gag or mosh move's hands, at the places it names them by
+            mic = {sd: rest[sd] == "mic" for sd in SIDES}
+            for s, places, both in (MO.rows if m["hand"] == "mosh" else GG.rows)(e, mic):
                 rows.append((t0, t1, s, e["name"], places, both))
             continue
         if m.get("hand") not in ("places", "beats"):

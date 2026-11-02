@@ -81,6 +81,8 @@ def _measure(ctx, prop, card):
         r = FM.analyse(V, T, owner, names, exempt=exempt)
         res = {"form": round(r["score"], 4), "worst": FM.headline(r)}
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
+        tmp = f"{path}.{os.getpid()}.tmp"                    # whole or not at all: a breathe probe may read it meanwhile
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(res, fh)
+        os.replace(tmp, path)
     return res

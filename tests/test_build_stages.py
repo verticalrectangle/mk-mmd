@@ -929,6 +929,39 @@ def test_a_motion_that_switches_the_leg_ik_off_leaves_the_member_s_ik_on(make, c
     assert np.linalg.norm(np.subtract(ankle, ik)) < 0.02                        # the swung thigh gave way to it
 
 
+def test_legs_fk_keys_the_leg_ik_bones_where_the_motion_s_own_legs_put_the_feet(make, capsys):
+    """`legs = "fk"`: a motion that keys the legs' rotations (FK, as a BVH conversion's) has the leg IK bones keyed where
+    its legs put the ankles, so the thigh it swings lifts the foot under the member's IK instead of giving way to it;
+    the other leg, keyed at rest, keeps its foot on the floor, so the body is not moved down. A motion with no leg keys
+    is an error."""
+    vmd = make.root / "fk.vmd"
+    swing, rest = (0.5, 0.0, 0.0, 0.866), (0.0, 0.0, 0.0, 1.0)                  # the left thigh swung 60 deg
+    _vmd(vmd, {"左足": [(0, swing), (60, swing)], "右足": [(0, rest), (60, rest)]})
+    code, out = make(f'[[motion.mq]]\nvmd = "{vmd}"\nstart = 0.0\nlegs = "fk"\n', until="motion")
+    assert code == 0, out.get("error")
+    legs = out["stages"]["motion"]["mq"][0]["legs"]
+    assert legs["fk"] == ["L", "R"] and abs(legs["lowered_m"]) < 0.01
+    rest_at = "list(arm().matrix_world @ arm().data.bones[bone('{}').name].head_local)"
+    expr = (f"[list(bone('ankle.L').head), list(bone('leg_ik.L').head), list(bone('leg.L').head), "
+            f"list(bone('knee.L').head), list(bone('ankle.R').head), {rest_at.format('ankle.L')}, "
+            f"{rest_at.format('ankle.R')}, [c.influence for pb in arm().pose.bones for c in pb.constraints "
+            f"if c.type == 'IK' and c.subtarget]]")
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "61", "--project", str(make.root)],
+                  capsys)
+    assert code == 0, q.get("error")
+    ankle, ik, hip, knee, ankle_r, rest_l, rest_r, influence = q["values"][0]
+    assert influence and min(influence) == 1.0                                  # the IK still on
+    assert np.linalg.norm(np.subtract(ankle, ik)) < 0.02                        # the ankle on its keyed IK bone
+    assert np.linalg.norm(np.subtract(ankle, rest_l)) > 0.15 and ankle[2] - rest_l[2] > 0.1   # lifted by the swing
+    thigh = np.subtract(knee, hip)
+    assert np.degrees(np.arccos(-thigh[2] / np.linalg.norm(thigh))) == pytest.approx(60.0, abs=6.0)
+    assert np.linalg.norm(np.subtract(ankle_r, rest_r)) < 0.01                  # the other foot stays down
+    arm_vmd = make.root / "arm.vmd"
+    _vmd(arm_vmd, {"左腕": [(0, swing), (60, swing)]})
+    code, out = make(f'[[motion.mq]]\nvmd = "{arm_vmd}"\nlegs = "fk"\n', until="motion")
+    assert code == 3 and "keys no leg rotation" in out["error"]
+
+
 def test_a_track_keyed_on_the_far_side_of_the_rest_blends_in_the_short_way(make, capsys):
     """q and -q are one rotation, but Blender blends quaternions component by component: a track keyed at w < 0 (as BVH
     conversions write whole tracks) swung the arm half a turn round on its way in over a blend. Turned to the near side
@@ -1294,8 +1327,9 @@ def test_a_flat_look_draws_what_keys_show_after_its_shot_starts_and_hides_what_i
     from PIL import Image
     code, out = make(APPEARS, with_cast=False)
     assert code == 0, out.get("error")
-    code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", "46,64,76", "--output", "16x9", "--size",
-                      "320", "--out", str(tmp_path / "look"), "--project", str(make.root)], capsys)
+    code, look = cli(["look", str(make.root / "build" / "t.blend"), "--engine", "eevee", "--frames", "46,64,76",
+                      "--output", "16x9", "--size", "320", "--out", str(tmp_path / "look"), "--project", str(make.root)],
+                     capsys)
     assert code == 0, look.get("error")                           # t 0.5 keyed hidden, 1.1 keyed shown, 1.5 shot b hides it
     navy = [int((np.abs(np.asarray(Image.open(p).convert("RGB"), int) - (27, 42, 107)).max(-1) < 40).sum())
             for p in look["images"]]
@@ -1338,9 +1372,9 @@ def test_a_glitch_breaks_up_the_objects_it_names_and_they_stay_gone_after_it(mak
     assert out["stages"]["keys"]["_glitch_hidden"] == {"0": 1}         # the mannequin's one mesh
 
     def navy(*extra):
-        code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", "40,53,60,70", "--output", "16x9",
-                          "--size", "320", "--out", str(tmp_path / ("look" + "".join(extra))), "--project", str(make.root),
-                          *extra], capsys)
+        code, look = cli(["look", str(make.root / "build" / "t.blend"), "--engine", "eevee", "--frames", "40,53,60,70",
+                          "--output", "16x9", "--size", "320", "--out", str(tmp_path / ("look" + "".join(extra))),
+                          "--project", str(make.root), *extra], capsys)
         assert code == 0, look.get("error")
         return [int((np.abs(np.asarray(Image.open(p).convert("RGB"), int) - (27, 42, 107)).max(-1) < 40).sum())
                 for p in look["images"]]
@@ -2593,8 +2627,9 @@ def test_a_medium_window_draws_the_lit_shot_in_its_own_look_over_its_frames_and_
     assert out["stages"]["shots"]["_medium"] == [{"index": 0, "frames": [46, 60], "looks": {"16x9": "vector", "9x16": None}}]
 
     def yellow(output, frames):
-        code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", frames, "--output", output, "--size",
-                          "200", "--out", str(tmp_path / output), "--project", str(make.root)], capsys)
+        code, look = cli(["look", str(make.root / "build" / "t.blend"), "--engine", "eevee", "--frames", frames,
+                          "--output", output, "--size", "200", "--out", str(tmp_path / output), "--project",
+                          str(make.root)], capsys)
         assert code == 0, look.get("error")
         return [float((np.abs(np.asarray(Image.open(p).convert("RGB"), int) - (255, 210, 31)).max(-1) < 30).mean())
                 for p in look["images"]]
@@ -2621,8 +2656,8 @@ def test_a_collage_cuts_her_figure_out_of_the_frame_and_folds_it_onto_flat_colou
     from PIL import Image
     code, out = make(COLLAGE)
     assert code == 0, out.get("error")
-    code, look = cli(["look", str(make.root / "build" / "t.blend"), "--frames", "50", "--output", "16x9", "--size", "320",
-                      "--out", str(tmp_path / "look"), "--project", str(make.root)], capsys)
+    code, look = cli(["look", str(make.root / "build" / "t.blend"), "--engine", "eevee", "--frames", "50", "--output",
+                      "16x9", "--size", "320", "--out", str(tmp_path / "look"), "--project", str(make.root)], capsys)
     assert code == 0, look.get("error")
     img = np.asarray(Image.open(look["images"][0]).convert("RGB"), int)                     # 320 x 180
     [layer] = (tmp_path / "look" / "layers" / "16x9" / "figure").rglob("00050.png")

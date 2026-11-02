@@ -6,6 +6,7 @@ import time
 
 from .. import bridge
 from .. import config as CFG
+from ..core import jobscope as JS
 from .common import emit, get_project, scene_path, UsageError, add_project_arg
 
 
@@ -41,7 +42,11 @@ def run(args):
     job = {"op": "__serve__", "args": {"socket": str(sock)}, "project": proj.to_job() if proj else None,
            "config": {"mmd_addon": cfg["mmd_addon"], "assets": cfg["assets"]}}
     job_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-    cmd = bridge.blender_command(job_path, ready_path, blend, cfg)
+    try:
+        cmd = JS.wrap(bridge.blender_command(job_path, ready_path, blend, cfg), "Blender serve",
+                      JS.share(cfg["blender_memory"]))
+    except JS.JobScopeError as e:
+        raise UsageError(str(e)) from None
     with open(jobdir / "blender.log", "w", encoding="utf-8") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ))
         for _ in range(600):

@@ -11,7 +11,6 @@ import numpy as np
 from mathutils import Matrix, Vector
 
 from ...core import place as PL
-from ...core import propcard as PC
 from . import BuildError, targets
 
 PLACE_KEYS = {"on", "at", "facing", "align", "clear", "avoid", "seed", "distance", "bearing"}
@@ -42,8 +41,8 @@ def local_bounds(root):
 
 def local_layers(root, step=0.05):
     """Height layers of the visible geometry under `root`, in its frame: [(z0, z1, x0, y0, x1, y1), ...], the plan
-    bounding box of the surface points in each slice (mkmmd.core.place.layers_of_points). Objects with modifiers add the
-    corners of their evaluated bounds, so generated geometry is covered too."""
+    bounding box of the surfaces in each slice, exact (mkmmd.core.place.layers_of_triangles). Objects with modifiers add
+    the corners of their evaluated bounds, so generated geometry is covered too."""
     bpy.context.view_layer.update()
     inv = np.array(root.matrix_world.inverted())
     dg = bpy.context.evaluated_depsgraph_get()
@@ -66,11 +65,11 @@ def local_layers(root, step=0.05):
         if o.modifiers or o.type != "MESH" or not len(o.data.polygons):
             ob = o.evaluated_get(dg)
             pts.append(np.array([M @ np.array([*c, 1.0]) for c in ob.bound_box])[:, :3])
-    cloud = [PC.sample_points(np.concatenate(tris), 0.03)] if tris else []
-    cloud += pts
-    if not cloud:
+    if not tris and not pts:
         return []
-    return [tuple(round(float(v), 5) for v in layer) for layer in PL.layers_of_points(np.concatenate(cloud), step)]
+    layers = PL.layers_of_triangles(np.concatenate(tris) if tris else np.zeros((0, 3, 3)),
+                                    np.concatenate(pts) if pts else None, step)
+    return [tuple(round(float(v), 5) for v in layer) for layer in layers]
 
 
 def bounds_of(prop):

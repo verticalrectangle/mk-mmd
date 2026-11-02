@@ -14,6 +14,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   lights   [[light]] rigs in palette colours (mounted, aimed, keyed) and the [look] colour pipeline
   text     [[text]] kinetic type on set and prop surfaces: fitted, palette-coloured, typewriter and keyed numbers
   keys     [[key]] keys on set, prop and object properties (fog, flashes, steam, visibility)
+  breathe  [look] breathe: every colour taken from the palette driven between it and another palette over clip time
   sim      secondary motion (hair, ears, tails, skirts) solved outside Blender, baked to keys
   folds    fold shapes a joint angle drives (rig.json folds), keyed from the final pose on every frame
   cloth    garments' cloth copies (rig.json cloth) simulated with Blender's cloth, their faces following it
@@ -33,7 +34,7 @@ from ..runtime import CTX, op
 
 TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
-          "keys", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
+          "keys", "breathe", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
 
 
 class BuildError(RuntimeError):
@@ -70,6 +71,7 @@ class Ctx:
         self.settle = int(sc.get("settle_frames", 24))           # rest -> base pose over these pre-roll frames
         self.cache = job["args"].get("cache") or os.path.join(self.root, ".mk", "cache")
         self.out = job["args"].get("out")                         # where the save stage writes the .blend
+        self.stages = list(job["args"].get("stages") or STAGES)   # what this build runs
         self.python = job["config"].get("python")
         self.assets = job["config"].get("assets")
         self.cast = {}
@@ -78,6 +80,12 @@ class Ctx:
         from ...core import palette as PAL
         look = self.data.get("look", {})
         self.palette = PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots"))
+        self.probe = job["args"].get("probe")   # a breathe probe (build/breathe.py): the other palette, saved there
+        if self.probe:
+            from ...core import breathe as BR
+            self.palette = BR.palettes(look)[1]
+        self.probe_ready = job["args"].get("probe_ready")   # a probe mk build ran first: {folder, blend, stages, seconds}
+        self.start_file = bpy.data.filepath      # the file the job's Blender started from (a probe starts from it too)
         self.log_lines = []
         self.before_save = []          # checks on the finished scene (a pattern that must match what later stages make)
         self.t0 = time.time()
@@ -156,16 +164,18 @@ class Ctx:
         else:
             if not self.python:
                 raise BuildError("no solver Python configured (the CLI passes its own interpreter)")
-            inp = os.path.join(d, f"{tag}-{key}.in.npz")
+            mine = f"{tag}-{key}.{os.getpid()}"        # this process's own files: a breathe probe may solve it beside us
+            inp, part = os.path.join(d, mine + ".in.npz"), os.path.join(d, mine + ".npz")
             np.savez(inp, **arrays)
             t0 = time.time()
             env = dict(os.environ)
             env.pop("PYTHONHOME", None)
             env.pop("PYTHONPATH", None)
-            r = subprocess.run([self.python, "-m", module, inp, out], capture_output=True, text=True, env=env)
+            r = subprocess.run([self.python, "-m", module, inp, part], capture_output=True, text=True, env=env)
             os.unlink(inp)
-            if r.returncode != 0 or not os.path.exists(out):
+            if r.returncode != 0 or not os.path.exists(part):
                 raise BuildError(f"{module} failed ({r.returncode}):\n{r.stderr[-3000:]}")
+            os.replace(part, out)                      # whole or not at all for a build that reads it meanwhile
             self.log(f"{module}: solved in {time.time() - t0:.1f}s")
         with np.load(out, allow_pickle=False) as z:
             res = {k: z[k] for k in z.files}
@@ -206,6 +216,8 @@ def build(args):
     ctx = Ctx(job)
     stages = args.get("stages") or STAGES
     report = {}
+    if "breathe" in stages and not ctx.probe:          # the other palette's build runs beside this one (breathe.py)
+        importlib.import_module(f"{__name__}.breathe").start(ctx)
     for st in STAGES:
         if st not in stages:
             continue
@@ -225,4 +237,6 @@ def build(args):
             report[st] = importlib.import_module(f"{__name__}.{st}").run(ctx) or {}
         report[st]["seconds"] = round(time.time() - t0, 2)
         ctx.log(st, "done")
+    if ctx.probe:                                      # a breathe probe: saved for the build that started it
+        importlib.import_module(f"{__name__}.breathe").save_probe(ctx)
     return {"stages": report, "log": ctx.log_lines, "frames": [ctx.start, ctx.end], "frame0": ctx.frame0}

@@ -56,6 +56,16 @@ def pick(hits, lane, min_db=None, every=1, t0=None, t1=None):
     return sorted(out)[::every]
 
 
+def pace(times, gap):
+    """`times` (clip seconds) in order, less every one sooner than `gap` seconds after the last one kept: what fires on
+    them flash-safely fires 1 / gap times a second at most."""
+    out = []
+    for t in sorted(float(x) for x in times):
+        if not out or t - out[-1] >= gap - 1e-9:
+            out.append(t)
+    return out
+
+
 def choice(spec, what):
     """The lane choice of a table that fires on hits (KEYS): {lane, min_db, every, t0, t1}, checked."""
     lane = spec.get("lane")
@@ -69,4 +79,29 @@ def choice(spec, what):
             raise LaneError(f"{what}: {'from' if k == 't0' else 'to' if k == 't1' else k} = {v!r}: a number")
     if isinstance(out["every"], bool) or not isinstance(out["every"], int) or out["every"] < 1:
         raise LaneError(f"{what}: every = {out['every']!r}: a whole number, at least 1")
+    return out
+
+
+STEP_LEAD = 1e-3      # s: the starting value is keyed this long before the first hit
+
+
+def steps(times, start, step, pulse=None):
+    """[[t, v], ...]: the keys of a property that counts hits: `start` before the first hit of `times` (clip seconds) and
+    `start + k * step` once the k-th has landed (k = 1, 2 ...), a track laid a tie per hit. Without `pulse` each hit is a
+    jump (key them CONSTANT); `pulse` = [[dt, share], ...] shapes every step instead: `share` (0 .. 1) of the step `dt`
+    seconds after its hit (keys LINEAR or BEZIER), the rest of a step cut short by the next hit, from which the next step
+    goes on, e.g. [[0, 0], [0.3, 1]] glides each step over 0.3 s."""
+    ts = sorted(float(t) for t in times)
+    start, step = float(start), float(step)
+    if not ts:
+        return []
+    out = [[ts[0] - STEP_LEAD, start]]
+    for k, (t, nxt) in enumerate(zip(ts, ts[1:] + [None])):
+        base = start + k * step
+        if pulse is None:
+            out.append([t, base + step])
+            continue
+        for dt, share in pulse:
+            if nxt is None or t + float(dt) < nxt - 1e-6:
+                out.append([t + float(dt), base + float(share) * step])
     return out

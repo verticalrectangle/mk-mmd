@@ -15,10 +15,10 @@
                                 at the end, hidden from the render with everything it carries (its headlight beams too)
   roll = 1.2, pitch = 0.8       body roll / pitch (deg per g of lateral / longitudinal acceleration: the nose rises under
                                 acceleration and dives under braking, the body leans out of a turn)
-  wheelbase = 2.6, steer_ratio = 14.0
+  wheelbase = 2.6, steer_ratio = 14.0     (defaults: the card's steering `wheelbase` and `ratio`)
 Card keys used: "wheels": [{object, radius, axis = [1, 0, 0] (local spin axis pointing to the car's left: the wheel
 rolls forward)}], "steering": {object, axis =
-[0, 0, 1] (local), ratio}. The steering object turns by atan(wheelbase * curvature) * ratio; the hands gripping it
+[0, 0, 1] (local), ratio, wheelbase}. The steering object turns by atan(wheelbase * curvature) * ratio; the hands gripping it
 follow when their IK targets ride on it (pose stage, grip on a ring with an object)."""
 import math
 
@@ -154,7 +154,7 @@ def run(ctx):
             q0 = ob.rotation_quaternion.copy()
             ax = Vector(sw.get("axis", (0, 0, 1))).normalized()
             ratio = float(spec.get("steer_ratio", sw.get("ratio", 14.0)))
-            delta = np.arctan(float(spec.get("wheelbase", 2.6)) * kappa) * ratio * sign
+            delta = np.arctan(float(spec.get("wheelbase", sw.get("wheelbase", 2.6))) * kappa) * ratio * sign
             K.key_vec(ob, "rotation_quaternion", frames,
                       K.continuous([tuple(q0 @ Quaternion(ax, d)) for d in delta]), interp="LINEAR")
             info["steer_deg_max"] = round(float(np.degrees(np.abs(delta)).max()), 1)

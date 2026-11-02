@@ -31,8 +31,9 @@ textures, never in a render. Compare a model with them side by side: `mk look ..
 Footage (the `footage` frame effect lays a figure over a video): `mk ref footage ID...` downloads each Pexels video's
 best rendition (the largest with a short side of at least --min-height under the 150 MB cap) into
 <project>/footage/pexels_<id>.mp4 and registers it in the asset registry as `pexels_<id>` (kind reference: author, their
-page, the video's page, the Pexels License and what it forbids, a credit line), so `[[fx]] clip = "pexels_<id>"` names it
-and `mk assets credits` credits it. Find the ids with `mk ref search`.
+page, the video's page, the Pexels License and what it forbids, a credit line, the file's own size, frame rate and
+length), so `[[fx]] clip = "pexels_<id>"` names it and `mk assets credits` credits it. A file smaller than --min-height
+(Pexels labelled it bigger) is not registered. Find the ids with `mk ref search`.
 
 Examples:
   mk ref search 'woman singing in car' --n 20
@@ -74,7 +75,8 @@ def add(sub):
     fo = s.add_parser("footage", help="Pexels videos into <project>/footage/, registered as assets for [[fx]] footage")
     fo.add_argument("ids", nargs="+", type=int, metavar="ID", help="Pexels video ids (mk ref search finds them)")
     fo.add_argument("--min-height", type=int, default=1080, help="smallest short side of the rendition, px (default "
-                    "1080; the largest rendition under the 150 MB cap is taken)")
+                    "1080; the largest rendition under the 150 MB cap is taken; a file smaller than Pexels labelled it "
+                    "and under this is not registered)")
     fo.add_argument("--orientation", choices=("landscape", "portrait", "square"),
                     help="refuse a video of another shape (default: any)")
     add_project_arg(fo)
@@ -154,8 +156,15 @@ def _footage(args):
         except FT.FootageError as e:
             failed.append({"id": g["id"], "error": f"the download does not play: {e}"})
             continue
+        if min(clip.size) < args.min_height:                  # Pexels labelled the rendition bigger than the file is
+            r = g["rendition"]
+            failed.append({"id": g["id"], "error": f"Pexels labels the rendition {r['width']}x{r['height']} but the file "
+                           f"is {clip.size[0]}x{clip.size[1]}, under --min-height {args.min_height}: not registered "
+                           f"({g['path'].relative_to(proj.root)} stays)"})
+            continue
         e = RF.entry(g["video"], g["path"], g["rendition"])
-        e["extra"].update(frames=clip.count, fps=round(clip.fps, 3), duration_s=round(clip.duration, 3))
+        e["extra"].update(size=list(clip.size), frames=clip.count, fps=round(clip.fps, 3),
+                          duration_s=round(clip.duration, 3))
         if any(x["slug"] == e["slug"] for x in reg.entries):            # again: fields added by hand stay, tags merge
             e["tags"] = list(dict.fromkeys((reg.get(e["slug"]).get("tags") or []) + e["tags"]))
             reg.update(e["slug"], **{k: v for k, v in e.items() if k != "slug"})

@@ -22,6 +22,7 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      except hands whose pose `ride` is a chest bone: they go with it)
   head_tilt = [[t, deg], ...]        the head rolls toward the model's left (on top of the gaze), keyed the same way
   head_turn = [[t, deg], ...]        the head turns toward the model's left (on top of the gaze): a look over the shoulder
+  head_nod = [[t, deg], ...]         the head nods forward and down (on top of the gaze), keyed the same way: a headbang
   rock = {deg, period = 4.0, phase = 0.0, hips = 0.0, from, to, ease = 0.4}, head_rock = {...}   a periodic sideways lean of
                                      the upper body (like `tilt`) and roll of the head (like `head_tilt`) toward the model's
                                      left: deg * sin(2 pi t / period + phase) of clip time, ADDED to the keyed tilts; unlike
@@ -950,7 +951,7 @@ def run(ctx):
             turn_x = turn_x + plan["chest"]                        # the chest leads a step_turn or a spin
         tilt_x = np.radians(PF.eased_keys(ts, spec.get("tilt", [])))
         head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
-        head_pitch_x = np.zeros(len(ts))
+        head_pitch_x = np.radians(PF.eased_keys(ts, spec.get("head_nod", [])))
         head_yaw_x = np.radians(PF.eased_keys(ts, spec.get("head_turn", [])))
         for key, table, win in [(k, r, w) for k in ("rock", "head_rock") for r, w in _rocks(spec, k, name)]:
             swing = PF.rock(ts, table.get("period", 4.0), table.get("deg", 0.0), table.get("phase", 0.0)) * win(ts)

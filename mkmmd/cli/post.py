@@ -26,7 +26,7 @@ from ..core import framefx as FX
 from ..core import keep as KP
 from ..core import progress as PR
 from ..gpufx import footage as GFT
-from .common import add_project_arg, cut_plan, emit, get_project, UsageError
+from .common import add_project_arg, cut_breath, cut_plan, emit, get_project, UsageError
 
 ENCODERS = ("x264", "vaapi")
 X264_PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo")
@@ -57,7 +57,9 @@ result's brightest lights; then screen type ([[text]] with
 `screen`, docs/design.md: Text) is laid over it: <frames>/screen/<frame>.png, drawn by mk render. A page turn at the
 clip's end, the loop's wrap, comes after all that: each frame of its window as finished turns over frame 0 as finished
 (its own effects and screen type on), held still, and the grade covers the result; screen type laid over the graded
-picture and the keep masks turn with the page.
+picture and the keep masks turn with the page. With [look] breathe every colour all that takes from the palette (the
+effects', the streaks', the grade's floor, split toning and halation) is each frame's mix of the two palettes' colours
+(docs/design.md: Post).
 
 The frames are finished by worker processes over chunks of consecutive frames and handed to the encoder in order: the
 same frames whatever their number, --jobs or [post] jobs (default: up to 4, fewer when half the memory available would
@@ -189,6 +191,7 @@ def run(args):
             audio = {"file": str(wav), "start": 0.0, "duration": proj.duration}
     frames = list(range(proj.frame0, proj.last_frame + 1))
     plan = None if args.no_transitions else cut_plan(proj)
+    breath = cut_breath(proj, plan)                            # [look] breathe: each frame's colours, its mix's
     od = proj.root / "out"
     od.mkdir(exist_ok=True)
     t0 = time.time()
@@ -204,8 +207,9 @@ def run(args):
     except FT.FootageError as e:
         raise UsageError(str(e)) from None
     todo = [frames_of(proj, o, args, frames, keep, still, od) for o in outs]
-    s = {"plan": plan, "keep": keep, "frames": frames, "audio": audio, "crf": args.crf, "encoder": encoder,
-         "x264_preset": x264_preset, "gpu": gpu, "jobs": jobs, "allow_gaps": args.allow_gaps, "still": still}
+    s = {"plan": plan, "breath": breath, "keep": keep, "frames": frames, "audio": audio, "crf": args.crf,
+         "encoder": encoder, "x264_preset": x264_preset, "gpu": gpu, "jobs": jobs, "allow_gaps": args.allow_gaps,
+         "still": still}
     post_cache = proj.mk_dir / "cache" / "post"
     MEM.sweep("mkpost", [SHM, tempfile.gettempdir(), post_cache])   # what runs killed outright left in memory, on disk
     pools = {}                                                 # worker processes, shared by the outputs in turn
@@ -338,7 +342,7 @@ def prepare(proj, t, s):
     size = size_of(t, still)
     try:
         job = PF.Output(proj, plan, t["name"], t["src"], t["files"], frames, size, s["keep"], verify=True,
-                        allow_gaps=s["allow_gaps"], follow=follow)
+                        allow_gaps=s["allow_gaps"], follow=follow, breath=s["breath"])
     except PF.SetupError as e:
         raise UsageError(str(e)) from None
     why_cpu = None if s["gpu"] else "not asked (--gpu, [post] gpu)"

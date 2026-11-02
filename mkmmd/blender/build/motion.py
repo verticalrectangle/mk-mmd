@@ -5,10 +5,14 @@
   start = 0.0          clip seconds where source frame `from` plays
   from, to             source frame range (default: the whole motion)
   scale = 1.0          time scale; or retime = "beats" with timeline = "audio/timeline.json" (the default): the motion's own beat
-                       (core.vmd.tempo_phase) is scaled to the song's beat period and its phase snapped to the nearest
-                       song beat after `start`
+                       (core.vmd.beat_fit: `bpm` when given, else core.vmd.tempo_phase's) is scaled to the song's beat
+                       period over `per_beat` (1; 2 puts the motion's beats on the song's 8ths) and its phase snapped to
+                       the nearest song beat (or 8th ...) after `start`
   bones = "all" | "upper" | "lower" | "arms" | [groups, semantic or Blender names]   which bones the motion drives
                        ("arms": shoulders, arms, elbows, wrists and their twist bones, not the fingers)
+  legs = "ik"          "ik": the member's leg IK holds the feet where the IK bones are (a motion with FK legs, a BVH
+                       conversion's, then keeps them planted); "fk": the IK bones are keyed where the motion's own legs
+                       put the ankles (follow_legs), so it steps, kicks, turns and jumps as it was made
   morphs = true        also play the VMD's facial keys
   blend_in, blend_out  seconds; influence ramps on the strip
   influence = 1.0      the share of the motion the strip plays (0..1, eased in and out over the blends): a torso strip
@@ -27,8 +31,9 @@ import os
 import tempfile
 
 import bpy
-import numpy as np
+from mathutils import Matrix, Quaternion, Vector
 
+from ...core import footplant as FP
 from ...core import timeline as TL
 from ...core import vmd as V
 from .. import scene as S
@@ -125,6 +130,99 @@ def near_rest(act):
             fc.update()
 
 
+def follow_legs(act, arm):
+    """Key the leg IK bones of `act` where its own legs put the ankles (`legs = "fk"`): a motion that keys the legs'
+    rotations and not their IK bones (FK legs, a BVH conversion's) then steps, kicks, turns and jumps as it was made,
+    under the member's IK, where the IK would hold the feet where the IK bones are. Per frame the chain from the root to
+    each ankle is posed from `act`'s keys (a bone it does not key at rest), and the IK bone goes with the ankle as one
+    rigid body, keyed linear on every frame, so its child the toe IK brings the ankle's pitch along. A motion made on a
+    body with other legs floats its feet above the floor or sinks them into it: when it keys both legs the whole body is
+    moved down (the centre bone and the IK bones together, so the knees bend as the motion bends them) by how far the
+    lower foot is above where it rests on the floor on the motion's lowest tenth of frames; and it slides a resting foot,
+    which is held where it landed (core.footplant.plant). Constraints on the chain (a waist cancel's) are not followed.
+    Returns (the sides keyed, metres moved down, the rests held per side); no sides when `act` keys no leg rotation."""
+    sem = S.semantic_map(arm)
+    fcs = {(fc.data_path, fc.array_index): fc for fc in act.fcurves}
+    bones = arm.data.bones
+
+    def keyed(name):
+        return any(len(fcs[k].keyframe_points) > 1 for k in fcs if k[0] == f'pose.bones["{name}"].rotation_quaternion')
+
+    def value(name, prop, i, f, rest):
+        fc = fcs.get((f'pose.bones["{name}"].{prop}', i))
+        return fc.evaluate(f) if fc else rest
+
+    def posed(bone, f, memo):                      # the bone's pose matrix in the armature's space at frame f
+        if bone is None:
+            return Matrix()
+        if bone.name not in memo:
+            q = Quaternion([value(bone.name, "rotation_quaternion", i, f, 1.0 if i == 0 else 0.0) for i in range(4)])
+            basis = Matrix.Translation(Vector([value(bone.name, "location", i, f, 0.0) for i in range(3)])) \
+                @ q.normalized().to_matrix().to_4x4()
+            memo[bone.name] = local_to_pose(bone, basis, posed(bone.parent, f, memo))
+        return memo[bone.name]
+
+    def local_to_pose(bone, m, parent_pose, invert=False):
+        if bone.parent is None:
+            return bone.convert_local_to_pose(m, bone.matrix_local, invert=invert)
+        return bone.convert_local_to_pose(m, bone.matrix_local, parent_matrix=parent_pose,
+                                          parent_matrix_local=bone.parent.matrix_local, invert=invert)
+
+    legs = {}
+    for side in ("L", "R"):
+        names = [sem.get(f"{s}.{side}") for s in ("leg", "knee", "ankle", "leg_ik")]
+        if None not in names and (keyed(names[0]) or keyed(names[1])):
+            ankle, ik = bones[names[2]], bones[names[3]]
+            legs[side] = (ankle, ik, ankle.matrix_local.inverted() @ ik.matrix_local)   # the IK bone on the ankle
+    if not legs:
+        return [], 0.0, {}
+    center = bones.get(sem.get("center", ""))
+    frames = range(int(act.frame_range[0]), int(act.frame_range[1] + 0.999) + 1)
+    goals = {side: [] for side in legs}
+    centers = []
+    for f in frames:
+        memo = {}
+        for side, (ankle, ik, rigid) in legs.items():
+            goals[side].append((posed(ankle, f, memo) @ rigid, posed(ik.parent, f, memo)))
+        if center is not None:
+            centers.append((posed(center, f, memo), posed(center.parent, f, memo)))
+    above = sorted(min(goals[s][k][0].translation.z - legs[s][1].matrix_local.translation.z for s in legs)
+                   for k in range(len(frames)))
+    drop = above[int(0.1 * (len(above) - 1))] if centers and len(legs) == 2 else 0.0   # a foot left on its IK bone stands
+    down = Matrix.Translation((0.0, 0.0, -drop))
+
+    def key(bone, prop, vals, n):
+        path = f'pose.bones["{bone.name}"].{prop}'
+        for i in range(n):
+            fc = fcs.get((path, i)) or act.fcurves.new(path, index=i, action_group=bone.name)
+            fc.keyframe_points.clear()
+            fc.keyframe_points.add(len(vals))
+            fc.keyframe_points.foreach_set("co", [c for f, v in zip(frames, vals) for c in (f, v[i])])
+            fc.keyframe_points.foreach_set("interpolation", [1] * len(vals))   # LINEAR
+            fc.update()
+
+    rests = {}
+    for side, (_, ik, _) in legs.items():
+        carried = center is not None and center in ik.parent_recursive   # moving the centre moves the IK bone's parent
+        moved = [down @ goal for goal, _ in goals[side]]
+        held, spans = FP.plant([m.translation for m in moved], ik.matrix_local.translation.z)
+        rests[side] = len(spans)
+        locs, quats, prev = [], [], None
+        for m, (_, parent_pose), at in zip(moved, goals[side], held):
+            m.translation = Vector(at)
+            loc, q, _ = local_to_pose(ik, m, down @ parent_pose if carried else parent_pose, invert=True).decompose()
+            if prev is not None and prev.dot(q) < 0.0:                   # the same hemisphere as the frame before
+                q.negate()
+            prev = q
+            locs.append(loc)
+            quats.append(q)
+        key(ik, "location", locs, 3)
+        key(ik, "rotation_quaternion", quats, 4)
+    if centers and drop:
+        key(center, "location", [local_to_pose(center, down @ m, p, invert=True).to_translation() for m, p in centers], 3)
+    return sorted(legs), drop, rests
+
+
 def _group(sem):
     """Body group stem of a semantic name: index2.L -> index, thumb_tip.R -> thumb, upper_body2 -> upper_body2."""
     stem = sem.split(".")[0]
@@ -192,24 +290,12 @@ def _mirrored(path):
     return out
 
 
-def beat_fit(path, timeline, fps, start_t, src_from):
-    """(scale, start frame relative to clip 0, info) so the motion's beats land on the song's beats."""
-    mo = V.read(path)
-    tp = V.tempo_phase(mo)
-    beats = np.asarray(TL.beats(timeline)[0], float)
-    if tp is None or len(beats) < 2:
-        raise BuildError(f"retime=beats: {'no beat in the motion' if tp is None else 'no beats in the timeline'}")
-    period_v, phase_v = tp[0], tp[1]
-    period_s = float(np.median(np.diff(beats))) * fps
-    scale = period_s / period_v
-    k = np.ceil((src_from - phase_v) / period_v)
-    src_beat = phase_v + k * period_v                     # first motion beat at or after `from`
-    want = start_t * fps + (src_beat - src_from) * scale   # where it would land unsnapped (frames from clip 0)
-    j = int(np.argmin(np.abs(beats * fps - want)))
-    land = beats[j] * fps
-    return scale, land - (src_beat - src_from) * scale, {"motion_bpm": round(V.MMD_FPS * 60 / period_v, 2),
-                                                        "song_bpm": round(fps * 60 / period_s, 2),
-                                                        "scale": round(scale, 4)}
+def beat_fit(path, timeline, fps, start_t, src_from, bpm=None, per_beat=1.0):
+    """(scale, start frame relative to clip 0, info) so the motion's beats land on the song's (core.vmd.beat_fit)."""
+    try:
+        return V.beat_fit(V.read(path), TL.beats(timeline)[0], fps, start_t, src_from, bpm=bpm, per_beat=per_beat)
+    except ValueError as e:
+        raise BuildError(f"retime=beats: {e}") from None
 
 
 def run(ctx):
@@ -234,14 +320,31 @@ def run(ctx):
             info = {"vmd": os.path.basename(path), "source": [src_from, src_to]}
             if it.get("mirror"):
                 info["mirror"] = True
+            fit = {k: it[k] for k in ("bpm", "per_beat") if k in it}
+            for k, v in fit.items():
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                    raise BuildError(f"motion.{name}[{i}] {k} = {v!r}: a positive number")
             if it.get("retime") == "beats":
                 tl = ctx.timeline(it, f"motion.{name}[{i}] retime = \"beats\"")
-                scale, start_rel, fit = beat_fit(path, tl, ctx.fps, float(it.get("start", 0.0)), src_from)
+                scale, start_rel, got = beat_fit(path, tl, ctx.fps, float(it.get("start", 0.0)), src_from,
+                                                 bpm=fit.get("bpm"), per_beat=fit.get("per_beat", 1.0))
                 start = ctx.frame0 + start_rel
-                info.update(fit)
+                info.update(got)
+            elif fit:
+                raise BuildError(f"motion.{name}[{i}] {' and '.join(fit)}: they fit the motion to the song's beats, "
+                                 f"with retime = \"beats\"")
             else:
                 scale = float(it.get("scale", 1.0))
                 start = ctx.frame(float(it.get("start", 0.0)))
+            legs = it.get("legs", "ik")
+            if legs not in ("ik", "fk"):
+                raise BuildError(f"motion.{name}[{i}] legs = {legs!r}: \"ik\" or \"fk\"")
+            if legs == "fk":
+                sides, drop, rests = follow_legs(act, m.arm)
+                if not sides:
+                    raise BuildError(f"motion.{name}[{i}] legs = \"fk\": {os.path.basename(path)} keys no leg rotation "
+                                     f"(its legs are its IK bones' already)")
+                info["legs"] = {"fk": sides, "lowered_m": round(drop, 3), "rests": rests}
             act_m = mask_action(act, m.arm, it.get("bones", "all"))
             extend = it.get("extend", "hold")
             if extend not in EXTEND:

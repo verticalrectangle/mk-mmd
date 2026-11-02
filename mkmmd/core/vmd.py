@@ -1,4 +1,5 @@
-"""VMD (MMD motion) files: reader and motion analysis (tempo, beat phase, energy, travel). numpy only.
+"""VMD (MMD motion) files: reader and motion analysis (tempo, beat phase, the fit to a song's beats, energy, travel).
+numpy only.
 
 Layout (little endian): 30-byte signature, 20-byte model name (cp932), then sections, each a u32 count followed by
 records: bone keys (15-byte name, u32 frame, 3 f32 position, 4 f32 quaternion xyzw, 64 bytes interpolation),
@@ -199,6 +200,37 @@ def tempo_phase(motion, lo_bpm=70.0, hi_bpm=180.0, step=0.25, segment=None):
         return None
     contrast = best[0] / (np.median(scores) + 1e-9)
     return best[1], best[2], best[0], contrast
+
+
+def beat_fit(motion, beats, fps, start_t, src_from, bpm=None, per_beat=1.0):
+    """How to play `motion` so that its beats land on a song's: (scale, start, info). `beats` are the song's beats in
+    clip seconds and `fps` the scene's frame rate. The motion's beat is `bpm` when given (the tempo of the song it was
+    made for: tempo_phase searches 70-180 bpm and can settle on half or twice the beat, or on a pattern of the moves
+    that is not the beat at all), else tempo_phase's; its phase is tempo_phase's at that period. `per_beat` motion
+    beats play to each song beat (2: on the 8ths, 0.5: one every other beat): the strip's scale stretches per_beat
+    motion beats over the song's median beat. The first motion beat at or after source frame `src_from` lands on the
+    song's beats (each cut into round(per_beat) parts when that is 2 or more) nearest to where it would fall with
+    `src_from` played at clip second `start_t`. `start` is the strip's first frame, in scene frames from clip 0.
+    Raises ValueError when the motion has no beat or the song fewer than two beats."""
+    tp = tempo_phase(motion) if bpm is None else tempo_phase(motion, lo_bpm=bpm, hi_bpm=bpm)
+    if tp is None:
+        raise ValueError("no beat in the motion")
+    b = np.asarray(beats, float)
+    if len(b) < 2:
+        raise ValueError("no beats in the timeline")
+    period_v, phase_v = tp[0], tp[1]
+    song_s = float(np.median(np.diff(b)))
+    scale = song_s * fps / per_beat / period_v
+    n = max(1, round(per_beat))
+    grid = b if n == 1 else np.append((b[:-1, None] + np.diff(b)[:, None] * (np.arange(n) / n)).ravel(), b[-1])
+    src_beat = phase_v + np.ceil((src_from - phase_v) / period_v) * period_v   # first motion beat at or after `from`
+    want = start_t * fps + (src_beat - src_from) * scale   # where it would land unsnapped (frames from clip 0)
+    land = grid[int(np.argmin(np.abs(grid * fps - want)))] * fps
+    info = {"motion_bpm": round(MMD_FPS * 60.0 / period_v, 2), "song_bpm": round(60.0 / song_s, 2),
+            "scale": round(scale, 4)}
+    if per_beat != 1:
+        info["per_beat"] = per_beat
+    return scale, land - (src_beat - src_from) * scale, info
 
 
 def travel(motion):

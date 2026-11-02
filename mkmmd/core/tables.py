@@ -32,7 +32,7 @@ PERFORM = {
     "glance": ("t", "at", "dur", "pitch", "rise", "fall", "blink"), "head_share": None,
     "head_limits": tuple(PF.HEAD_LIMITS), "neck_share": None, "eye_max": None, "breath": ("per_min", "deg"),
     "sway": ("deg", "period"), "nod": ("deg", "period"), "bob": ("deg", "timeline", "beats", "downbeat_accent"),
-    "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "head_turn": None,
+    "startle": None, "lean": None, "turn": None, "tilt": None, "head_tilt": None, "head_turn": None, "head_nod": None,
     "rock": ("deg", "period", "phase", "axis", "hips", "from", "to", "ease"),
     "head_rock": ("deg", "period", "phase", "axis", "from", "to", "ease"), "blink": ("per_min", "seed", "extra"), "lids": None,
     "sing": ("timeline", "lines", "words", "mouth", "lead", "voice"), "expressions": ("morph", "keys"), "mouth": None,

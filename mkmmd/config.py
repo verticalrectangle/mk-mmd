@@ -9,9 +9,10 @@ DEFAULTS = {
     "assets": "~/mk-assets",
     "player": "",                      # mk play's command line; empty: the system's opener
     "vaapi_device": "/dev/dri/renderD128",   # the GPU mk post's VAAPI encoder runs on
+    "blender_memory": 0.6,             # the share of the RAM a Blender job may hold (its own systemd scope); 0: no scope
 }
 ENV = {"blender": "MK_BLENDER", "mmd_addon": "MK_MMD_ADDON", "assets": "MK_ASSETS", "player": "MK_PLAYER",
-       "vaapi_device": "MK_VAAPI_DEVICE"}
+       "vaapi_device": "MK_VAAPI_DEVICE", "blender_memory": "MK_BLENDER_MEMORY"}
 
 
 def config_path() -> Path:

@@ -42,22 +42,23 @@ def drawn(path):
 
 
 def test_guides_draw_thirds_and_the_safe_area(tmp_path, capsys):
-    code, res = run_cli(["look", str(tmp_path / "scene.blend"), "--frames", "7", "--guides", "--out", str(tmp_path / "o")],
-                        capsys)
+    code, res = run_cli(["look", str(tmp_path / "scene.blend"), "--engine", "eevee", "--frames", "7", "--guides", "--out",
+                         str(tmp_path / "o")], capsys)
     assert code == 0
     third, safe, open_ = drawn(res["images"][0])
     assert near(third, THIRD) and near(safe, SAFE) and near(open_, FLAT)
 
 
 def test_no_guides_leaves_the_render_alone(tmp_path, capsys):
-    code, res = run_cli(["look", str(tmp_path / "scene.blend"), "--frames", "7", "--out", str(tmp_path / "o")], capsys)
+    code, res = run_cli(["look", str(tmp_path / "scene.blend"), "--engine", "eevee", "--frames", "7", "--out",
+                         str(tmp_path / "o")], capsys)
     assert code == 0
     assert all(near(px, FLAT) for px in drawn(res["images"][0]))
 
 
 def test_guides_reach_both_scenes_of_an_ab_pair(tmp_path, capsys):
-    code, res = run_cli(["look", str(tmp_path / "a.blend"), "--frames", "7", "--guides", "--ab", str(tmp_path / "b.blend"),
-                         "--out", str(tmp_path / "o")], capsys)
+    code, res = run_cli(["look", str(tmp_path / "a.blend"), "--engine", "eevee", "--frames", "7", "--guides", "--ab",
+                         str(tmp_path / "b.blend"), "--out", str(tmp_path / "o")], capsys)
     assert code == 0
     for path in res["images"] + res["images_b"]:
         assert near(drawn(path)[0], THIRD)

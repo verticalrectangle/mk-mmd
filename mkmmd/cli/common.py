@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+from .. import post as P
+from ..core import breathe as BR
 from ..core import frames as FR
 from ..core import jsonx
 from ..core import palette as PAL
@@ -42,6 +44,23 @@ def cut_plan(proj):
         return TR.plan(proj.data, proj.fps, proj.frame0, PAL.get(look.get("palette", "rose-pine-moon"), look.get("slots")))
     except TR.TransitionError as e:
         raise UsageError(str(e))
+
+
+def cut_breath(proj, plan):
+    """The project's `[look] breathe` as mk post and mk look take it (mkmmd.post.Breath: the cut's `plan`, None without
+    effects, made with the other palette too), or None when the project does not breathe; a UsageError says what is
+    wrong with it, or names the entry that is not the same thing with both palettes."""
+    look = proj.data.get("look", {})
+    try:
+        pals = BR.palettes(look)
+        if pals[1] is None:
+            return None
+        other = None if plan is None else TR.plan(proj.data, proj.fps, proj.frame0, pals[1])
+        return P.Breath(BR.spec(look), proj.fps, proj.frame0, pals, plan, other)
+    except BR.BreatheError as e:
+        raise UsageError(str(e)) from None
+    except TR.TransitionError as e:
+        raise UsageError(f"[look] breathe: with the other palette: {e}") from None
 
 
 def scene_path(arg, proj):

@@ -185,32 +185,82 @@ def prisms_of(name, lo, hi, world, flat=False, layers=()):
     return out
 
 
-def layers_of_points(points, step=0.05, max_layers=10, merge=0.005):
-    """Height layers of a point cloud (n, 3) in a prop's frame: [(z0, z1, x0, y0, x1, y1), ...]. The z range is cut into
-    slices of about `step` metres (at most `max_layers`) and every slice gets the plan bounding box of its points; empty
-    slices are skipped and neighbours whose boxes differ by less than `merge` are joined. Sample the surfaces densely
-    (mkmmd.core.propcard.sample_points) so a post that spans several slices is in each of them."""
-    P = np.asarray(points, float).reshape(-1, 3)
-    if not len(P):
-        return []
-    z0, z1 = float(P[:, 2].min()), float(P[:, 2].max())
+def _slices(zs, step, max_layers):
+    """The edges of the height slices of z values `zs`: (edges, n), about `step` metres each, at most `max_layers`."""
+    z0, z1 = float(zs.min()), float(zs.max())
     n = int(np.clip(math.ceil((z1 - z0) / step), 1, max_layers))
-    edges = np.linspace(z0, z1, n + 1)
-    idx = np.clip(np.searchsorted(edges, P[:, 2], side="right") - 1, 0, n - 1)
+    return np.linspace(z0, z1, n + 1), n
+
+
+def _joined(edges, boxes, merge):
+    """Layers from each slice's plan box (None: an empty slice, skipped): neighbours whose boxes differ by less than
+    `merge` are joined; the last layer reaches the top."""
     out = []
-    for i in range(n):
-        q = P[idx == i]
-        if not len(q):
+    for i, box in enumerate(boxes):
+        if box is None:
             continue
-        box = (*q[:, :2].min(0), *q[:, :2].max(0))
         if out and all(abs(a - b) < merge for a, b in zip(out[-1][2:], box)):
             lo_ = tuple(min(a, b) for a, b in zip(out[-1][2:4], box[:2]))
             hi_ = tuple(max(a, b) for a, b in zip(out[-1][4:6], box[2:]))
             out[-1] = (out[-1][0], float(edges[i + 1]), *lo_, *hi_)
         else:
             out.append((float(edges[i]), float(edges[i + 1]), *(float(v) for v in box)))
-    out[-1] = (*out[-1][:1], z1, *out[-1][2:])
+    out[-1] = (*out[-1][:1], float(edges[-1]), *out[-1][2:])
     return out
+
+
+def layers_of_points(points, step=0.05, max_layers=10, merge=0.005):
+    """Height layers of a point cloud (n, 3) in a prop's frame: [(z0, z1, x0, y0, x1, y1), ...]. The z range is cut into
+    slices of about `step` metres (at most `max_layers`) and every slice gets the plan bounding box of its points; empty
+    slices are skipped and neighbours whose boxes differ by less than `merge` are joined. Surfaces are better given as
+    triangles (layers_of_triangles): exact, and a post that spans several slices is in each of them."""
+    P = np.asarray(points, float).reshape(-1, 3)
+    if not len(P):
+        return []
+    edges, n = _slices(P[:, 2], step, max_layers)
+    idx = np.clip(np.searchsorted(edges, P[:, 2], side="right") - 1, 0, n - 1)
+    boxes = []
+    for i in range(n):
+        q = P[idx == i]
+        boxes.append((*q[:, :2].min(0), *q[:, :2].max(0)) if len(q) else None)
+    return _joined(edges, boxes, merge)
+
+
+def layers_of_triangles(tris, points=None, step=0.05, max_layers=10, merge=0.005):
+    """Height layers (as layers_of_points) of triangles (n, 3, 3) and loose points (m, 3), exact: every slice gets the
+    plan bounding box of the parts of the triangles inside it (each triangle clipped to the slice: its corners in it and
+    where its edges cross the slice's top and bottom) and of the points in it. No sampling, so a face many metres across
+    costs what a small one does."""
+    T = np.asarray(tris, float).reshape(-1, 3, 3)
+    P = np.zeros((0, 3)) if points is None else np.asarray(points, float).reshape(-1, 3)
+    zs = np.concatenate([T[:, :, 2].ravel(), P[:, 2]])
+    if not len(zs):
+        return []
+    edges, n = _slices(zs, step, max_layers)
+    pidx = np.clip(np.searchsorted(edges, P[:, 2], side="right") - 1, 0, n - 1)
+    E = T[:, [1, 2, 0]]                                  # each corner's edge runs from it to the next corner
+    lo_z, hi_z = T[:, :, 2].min(1), T[:, :, 2].max(1)
+    boxes = []
+    for i in range(n):
+        za, zb = edges[i], edges[i + 1]
+        live = (hi_z >= za) & (lo_z <= zb)               # the triangles that reach into the slice
+        xs, ys = [P[pidx == i, 0]], [P[pidx == i, 1]]
+        if live.any():
+            a, b = T[live], E[live]
+            inside = (a[:, :, 2] >= za) & (a[:, :, 2] <= zb)
+            xs.append(a[:, :, 0][inside])
+            ys.append(a[:, :, 1][inside])
+            dz = b[:, :, 2] - a[:, :, 2]
+            slope = dz != 0                              # a level edge crosses no plane: its corners are counted above
+            s_den = np.where(slope, dz, 1.0)
+            for zp in (za, zb):
+                s = (zp - a[:, :, 2]) / s_den
+                cross = slope & (s >= 0) & (s <= 1)
+                xs.append((a[:, :, 0] + s * (b[:, :, 0] - a[:, :, 0]))[cross])
+                ys.append((a[:, :, 1] + s * (b[:, :, 1] - a[:, :, 1]))[cross])
+        x, y = np.concatenate(xs), np.concatenate(ys)
+        boxes.append((x.min(), y.min(), x.max(), y.max()) if len(x) else None)
+    return _joined(edges, boxes, merge)
 
 
 # ------------------------------------------------------------------------------------------------------ surfaces

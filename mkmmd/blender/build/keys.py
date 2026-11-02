@@ -14,6 +14,12 @@
   min_db, every, from, to   at or above `min_db`, every n-th, inside from..to) the property takes the hit's own time
                             (CONSTANT by default: a prop's `start` goes off again on each hit) or, with
   pulse = [[dt, v], ...]    keys that many seconds after each hit (a flash on every kick), cut short by the next hit
+  step = 0.6, start = 0     with `lane`: the property counts the hits instead (mkmmd.core.lanes.steps): `start` (default
+                            its value as built) before the first, each hit adding `step`; a jump on the hit (CONSTANT)
+                            or, with `pulse` = [[dt, share], ...], each step shaped by shares 0..1 of it (LINEAR)
+  values = [v0, v1, ...]    with `lane`: on each hit the property takes the next value of the list instead (hit i the
+                            value i % len(values), cycling; CONSTANT by default: a penlight's colour index stepping
+                            through its colours on every accent); not with `pulse` or `step`
 
 The objects a [[glitch]] names (docs/design.md: Shots: Glitches) are hidden from its `to` on (a CONSTANT `hide_render` key
 added to what they already have), so they stay gone once it has broken them up.
@@ -21,7 +27,13 @@ added to what they already have), so they stay gone once it has broken them up.
 A prop card's `rates` = [{rate, into, per}] (a turntable's `rpm` into its `turns`): once the keys have animated the root's
 property `rate`, its property `into` is keyed on every frame with the running integral of rate / per over clip seconds,
 0 at clip second 0, so a driver that reads `into` turns a part at the keyed speed and a speed change never jumps it.
+
+A prop card's `deals` = [{from, into}] (confetti's `start` into its volleys' `start0`, `start1`, ...): once the keys have
+animated the root's property `from`, its keyframes are dealt out in time order, in turn, into the properties `into` as
+CONSTANT keys (keyframe i into into[i % len(into)]), so each volley falls its whole life while the next one goes off.
 """
+import math
+
 import bpy
 import numpy as np
 
@@ -33,8 +45,9 @@ from ..styles import object_records
 from . import BuildError
 
 
-def _lane_keys(ctx, spec, where):
-    """[[t, v], ...] and the default interpolation of a [[key]] that fires on a lane (`lane`, `pulse`)."""
+def _lane_keys(ctx, spec, where, base=None):
+    """[[t, v], ...] and the default interpolation of a [[key]] that fires on a lane (`lane`, `pulse`, `step`, `start`,
+    `values`); `base` is the property's value as built (a counting key's default `start`)."""
     if "keys" in spec:
         raise BuildError(f"{where}: give `keys` or `lane`, not both")
     hits_file = (ctx.data.get("audio") or {}).get("hits")
@@ -48,10 +61,33 @@ def _lane_keys(ctx, spec, where):
     if not ts:
         raise BuildError(f"{where}: lane {c['lane']!r} has no hit there (from, to, min_db)")
     pulse = spec.get("pulse")
+    if pulse is not None and not (isinstance(pulse, list) and pulse and all(
+            isinstance(k, list) and len(k) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in k)
+            for k in pulse)):
+        raise BuildError(f"{where}: pulse = [[dt, value], ...] (seconds after each hit)")
+    values = spec.get("values")
+    if values is not None and (pulse is not None or spec.get("step") is not None):
+        raise BuildError(f"{where}: give `values` or `{'pulse' if pulse is not None else 'step'}`, not both (`values`: "
+                         f"on each hit the property takes the next value of the list)")
+    if spec.get("step") is not None:
+        step, start = spec["step"], spec.get("start", base)
+        for k, v in (("step", step), ("start", start)):
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise BuildError(f"{where}: {k} = {v!r}: a number (a counting key: `start`, then `step` more per hit)")
+        if pulse is not None and any(dt < 0 for dt, _ in pulse):
+            raise BuildError(f"{where}: a counting key's pulse = [[dt, share], ...] with dt >= 0 (seconds after the hit)")
+        return LN.steps(ts, start, step, None if pulse is None else sorted(pulse)), \
+            "CONSTANT" if pulse is None else "LINEAR"
+    if "start" in spec:
+        raise BuildError(f"{where}: `start` goes with `step` (a counting key)")
+    if values is not None:
+        if not (isinstance(values, list) and values and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values)):
+            raise BuildError(f"{where}: values = [v0, v1, ...]: a list of numbers, the value the property takes on each "
+                             f"hit in turn (got {values!r})")
+        return [[t, float(values[i % len(values)])] for i, t in enumerate(ts)], "CONSTANT"
     if pulse is None:
         return [[t, t] for t in ts], "CONSTANT"
-    if not (isinstance(pulse, list) and pulse and all(isinstance(k, list) and len(k) == 2 for k in pulse)):
-        raise BuildError(f"{where}: pulse = [[dt, value], ...] (seconds after each hit)")
     out = []
     for t, nxt in zip(ts, ts[1:] + [None]):
         out += [[t + float(dt), float(v)] for dt, v in pulse if nxt is None or t + float(dt) < nxt - 1e-6]
@@ -96,8 +132,15 @@ def run(ctx):
             id_data, path = ob.data, prop[5:]
         interp = spec.get("interp", "BEZIER")
         if spec.get("lane") is not None:
-            pts, default = _lane_keys(ctx, spec, where)
+            base = None
+            if spec.get("step") is not None and "start" not in spec:
+                base = _base_values(id_data, path, int(spec.get("index", 0)), [ctx.frame(0.0)])[0]
+            pts, default = _lane_keys(ctx, spec, where, base)
             interp = spec.get("interp", default)
+        elif "step" in spec or "start" in spec:
+            raise BuildError(f"{where}: `step` and `start` count the hits of a `lane`")
+        elif "values" in spec:
+            raise BuildError(f"{where}: `values` steps through a list on the hits of a `lane` (or put the values in `keys`)")
         else:
             pts = sorted(spec.get("keys") or [])
         if not pts:
@@ -114,6 +157,7 @@ def run(ctx):
             raise BuildError(f"[[key]] {spec['target']}.{prop}: {e}")
         out[f"{spec['target']}.{prop}"] = len(pts)
     out.update(_rates(ctx))
+    out.update(_deals(ctx))
     if out:
         ctx.log("keys", len(out))
     hidden = _glitched(ctx)
@@ -140,6 +184,27 @@ def _rates(ctx):
             total -= np.interp(ctx.frame0, frames, total)
             K.key_prop(p.root, f'["{r["into"]}"]', frames, total, interp="LINEAR").extrapolation = "LINEAR"
             out[f"{name}.{r['into']}"] = len(frames)
+    return out
+
+
+def _deals(ctx):
+    """{"<prop>.<into>": keys dealt} for the props whose card has `deals` and whose `from` is animated (see the module
+    docstring): its keyframes in time order, keyframe i into into[i % len(into)] (same frame and value, CONSTANT); an
+    `into` that gets none keeps its value as built."""
+    out = {}
+    for name, p in ctx.props.items():
+        for d in p.card.get("deals") or []:
+            ad = p.root.animation_data
+            fc = ad.action.fcurves.find(f'["{d["from"]}"]') if ad and ad.action else None
+            if fc is None or not len(fc.keyframe_points):
+                continue
+            co = np.empty(2 * len(fc.keyframe_points))
+            fc.keyframe_points.foreach_get("co", co)
+            order = np.argsort(co[0::2], kind="stable")
+            f, v, into = co[0::2][order], co[1::2][order], list(d["into"])
+            for i, prop in enumerate(into[:len(f)]):
+                K.key_prop(p.root, f'["{prop}"]', f[i::len(into)], v[i::len(into)], interp="CONSTANT")
+                out[f"{name}.{prop}"] = len(f[i::len(into)])
     return out
 
 

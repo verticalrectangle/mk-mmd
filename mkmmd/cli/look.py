@@ -21,7 +21,7 @@ from ..core import framefx as FX
 from ..core import screentype as SRT
 from ..core import transition as TR
 from ..ref.photos import ascii_text
-from .common import add_project_arg, cut_plan, emit, get_project, parse_frames, scene_path, UsageError
+from .common import add_project_arg, cut_breath, cut_plan, emit, get_project, parse_frames, scene_path, UsageError
 
 PRESETS = {"front": (0, 8), "3q": (35, 12), "left": (90, 8), "back": (180, 10), "right": (-90, 8),
            "3q_right": (-35, 12), "3q_back": (145, 15), "top": (0, 80), "low": (0, -20)}
@@ -34,6 +34,10 @@ Views:
   --view LIST        preset directions around --target, relative to the cast member's facing:
                      """ + " ".join(PRESETS) + """
                      or yaw:elev pairs such as 20:15 (degrees; yaw 0 = in front, 90 = the model's left)
+  Engine: mkr (the default) draws the images from the scene's bake (`mk build` writes it), at --size's share of each
+  output: the cut, and a shot's camera with --cam <shot>@<output>. It refuses, before drawing anything, a bake older than
+  the scene and anything it cannot draw: nothing is rendered in Blender. Orbit views (--view), --hide, --ab, --map and a
+  SCENE.blend argument need a Blender engine (--engine eevee, workbench or cycles).
   Shots of the cut with a render-time look (`style = "silhouette"` or `"vector"`, `reflection = {...}` in [[shot]]) are
   drawn in it, as `mk render` draws them; --no-styles draws every shot as it is lit. Frames inside a [[transition]] /
   [[insert]] / [[glitch]] or an [[fx]], and frames with screen type are previewed composited, as `mk post` makes them (the
@@ -79,8 +83,9 @@ def add(sub):
     p.add_argument("--output", action="append", metavar="NAME", help="output(s) from mk.toml (default: all for the "
                    "cut and cameras, square for orbits)")
     p.add_argument("--size", type=int, default=640, help="longest image side in pixels (default 640)")
-    p.add_argument("--engine", choices=("eevee", "workbench", "cycles"), default="eevee",
-                   help="eevee (default), workbench (fast, flat) or cycles")
+    p.add_argument("--engine", choices=("mkr", "eevee", "workbench", "cycles"), default="mkr",
+                   help="mkr (default: mk's renderer, from the scene's bake), or Blender's eevee, workbench (fast, flat) "
+                   "or cycles")
     p.add_argument("--samples", type=int, default=16, help="render samples (default 16)")
     p.add_argument("--hide", action="append", default=[], metavar="OBJECT", help="hide an object (repeatable)")
     p.add_argument("--no-styles", action="store_true", help="draw every shot as it is lit, ignoring its silhouette / "
@@ -227,10 +232,10 @@ def write_maps(shots):
     return out
 
 
-def _frame_fx(plan, proj, size, layers_dir, stems, output):
+def _frame_fx(plan, proj, size, layers_dir, stems, output, breath=None):
     """The plan's frame effects over one output of a look: the cut's other frames come from the plates rendered beside
     the images (TR.fx_frames), the projected points and the collages' figures from the layers, a collage's own `shot`
-    from its plates there, footage from its clips."""
+    from its plates there, footage from its clips; with `breath` (mkmmd.post.Breath) each frame's colours its mix's."""
     def frame_of(g):
         shot = TR.cut_shot(plan["cuts"], g)
         if layers_dir is None or shot is None:
@@ -253,9 +258,112 @@ def _frame_fx(plan, proj, size, layers_dir, stems, output):
         return FF.FrameFx(plan["fx"], size, fps=proj.fps, frame0=proj.frame0, frame_of=frame_of, point_of=point_of,
                           figure_of=figure_of, stem_of=stems, hits=FF.project_hits(proj.root, proj.data), output=output,
                           footage_of=FT.source(proj.root), font_of=PFX.font_source(proj.root),
-                          sprite_of=MDF.sprite_source(proj.root), plate_of=plate_of)
+                          sprite_of=MDF.sprite_source(proj.root), plate_of=plate_of, breath=breath)
     except FX.FxError as e:
         raise UsageError(str(e)) from None
+
+
+def _one_each(frame, items):
+    """A frame's layer items, one per file they write (TR.rel_paths): two collages of the same figure ask for one layer,
+    and drawing it twice at once races on its file."""
+    seen, out = set(), []
+    for it in items:
+        key = tuple(TR.rel_paths(it, int(frame)))
+        if key not in seen:
+            seen.add(key)
+            out.append(it)
+    return out
+
+
+def _mkr_shots(args, proj, frames, held, dem, views, out):
+    """The images of a look drawn by mkr from the scene's bake, listed as the Blender job lists them ({view, size, frame,
+    path, screen}): the cut's frames (and `held`, frame 0 under the wrap's page) through each output's shot cameras with
+    the layers `dem` ({frame: [items]}: what the effects read) and the screen type beside them, and a shot camera's view
+    (`--cam <shot>@<output>`) as that shot's plates. Nothing is left to Blender: what mkr cannot draw is refused before
+    anything is drawn."""
+    from .. import gpulock as GL
+    from ..render import mkr as MKR
+    from ..render import plan as PL
+    from .render import mkr_bake
+    if proj is None:
+        raise UsageError("--engine mkr draws a project's scene from its bake: run mk look in a project")
+    for flag, given in (("--view", args.view), ("--hide", args.hide), ("--ab", args.ab), ("--map", args.map),
+                        ("a SCENE.blend argument", args.scene)):
+        if given:
+            raise UsageError(f"{flag} needs a Blender engine (--engine eevee): mkr draws the cut and shot cameras")
+    bake, doc = mkr_bake(proj)
+    cams = {cam: (sh["name"], o) for sh in doc.get("shots") or [] for o, cam in (sh.get("cameras") or {}).items()}
+    want = {}                                        # output: (the cut's frames, {frame: [layer items]}, [(camera, shot)])
+    if any(v["kind"] == "shot" for v in views):
+        for n in args.output or [o.name for o in proj.outputs]:
+            want[n] = (sorted({int(f) for f in frames} | set(held)), {int(f): _one_each(f, its) for f, its in dem.items()},
+                       [])
+    for v in views:
+        if v["kind"] != "camera":
+            continue
+        if v["camera"] not in cams:
+            raise UsageError(f"--cam {v['camera']}: mkr draws the shots' cameras, <shot>@<output> "
+                             f"({', '.join(sorted(cams)[:6])}{' ...' if len(cams) > 6 else ''})")
+        shot, n = cams[v["camera"]]
+        _, items, cs = want.setdefault(n, ([], {}, []))
+        cs.append((v["camera"], shot))
+        for f in frames:
+            bucket = items.setdefault(int(f), [])
+            if {"kind": "plate", "shot": shot} not in bucket:
+                bucket.append({"kind": "plate", "shot": shot})
+    jobs, problems, blob = [], [], None
+    for n, (main, items, cs) in want.items():
+        o = proj.output(n)
+        pct = max(1, min(100, round(100 * args.size / max(o.size))))
+        req = MKR.request(doc, items, None, main, outputs=() if args.no_styles else [n])
+        try:
+            got = MKR.plan(bake, [n], main or sorted(int(f) for f in frames), req)["outputs"][n]
+        except MKR.EngineError as e:
+            raise UsageError(f"mkr: {e}") from None
+        problems += [f"{n} frame {f}: {got['blender'][f]}" for f in main if f in got["blender"]]
+        for f, whys in (got.get("layers") or {}).items():
+            for it, why in zip(req["items"].get(str(f), []), whys):
+                if why:
+                    problems.append(f"{n} frame {f}, its {it['kind']}{' of ' + it['shot'] if it.get('shot') else ''}: {why}")
+        problems += [f"{n} frame {f}, its screen type: {why}"
+                     for f, why in ((got.get("screen") or {}).get("blender") or {}).items() if f in main]
+        d = out / "layers" / n
+        d.mkdir(parents=True, exist_ok=True)
+        mine, _ = MKR.split(req, got, d, n)
+        if not main:                                 # a camera's plates alone: none of the cut's frames, looks or type
+            mine["screen"] = None
+            for lk in ((mine.get("looks") or {}).get("outputs") or {}).values():
+                lk["frames"] = {}
+        ids = MKR.look_ids(mine, n)
+        looks = None
+        if ids:
+            blob = PL.load(bake)[1] if blob is None else blob
+            looks = MKR.compose_jobs(doc, blob, n, mine["looks"]["outputs"][n], o.size, pct, d, ids)
+        jobs.append((n, main, cs, d, pct, mine, looks))
+    if problems:
+        raise UsageError(f"mkr cannot draw {len(problems)} of the things asked for, and mk look leaves nothing to "
+                         f"Blender:\n  " + "\n  ".join(problems[:12]) + ("\n  ..." if len(problems) > 12 else ""))
+    with GL.held("mk look"):
+        for n, main, _, d, pct, mine, looks in jobs:
+            try:
+                MKR.draw(bake, n, main, d, {"samples": args.samples, "percent": pct}, mine, looks=looks)
+            except MKR.EngineError as e:
+                raise UsageError(f"mkr: {e}") from None
+    shots = []
+    for n, main, cs, d, _, _, _ in jobs:
+        for f in main:
+            png, path = d / f"{f:05d}.png", out / f"cut_{n}_{f:05d}.jpg"
+            Image.open(png).convert("RGB").save(path, quality=90)
+            png.unlink()
+            screen = d / SRT.layer_rel(f)
+            shots.append({"view": "cut", "size": n, "frame": f, "path": str(path),
+                          "screen": str(screen) if screen.exists() else None})
+        for cam, shot in cs:
+            for f in frames:
+                path = out / f"{cam}_{n}_{int(f):05d}.jpg"
+                Image.open(d / TR.plate_rel(shot, int(f))).convert("RGB").save(path, quality=90)
+                shots.append({"view": cam, "size": n, "frame": int(f), "path": str(path)})
+    return shots
 
 
 def _rgb(path):
@@ -295,9 +403,11 @@ def run(args):
     layers = None                                   # what the cut's transitions, inserts and glitches need for these frames
     plan = cut_plan(proj) if proj and not args.no_styles and not args.no_transitions and any(
         v["kind"] == "shot" for v in views) else None
+    breath = cut_breath(proj, plan) if plan is not None else None   # [look] breathe: each frame's colours, its mix's
     wrap = TR.wrap_of(plan)                         # the loop's wrap: its frames turn over frame 0 as finished, which the
     held = [wrap["still"]] if wrap is not None and wrap["still"] not in frames and any(   # cut draws beside them when
         wrap["first"] <= f <= wrap["last"] for f in frames) else []                       # it is not asked for
+    dem = {}
     if TR.has_effects(plan):
         want = {int(f) for f in frames} | set(held)
         for tr in plan["transitions"]:               # an expand / collapse also needs the frame where it fills the frame
@@ -310,17 +420,20 @@ def run(args):
             bucket += [it for it in items if it not in bucket]
         if dem:
             layers = {"dir": str(out / "layers"), "demands": {str(f): items for f, items in dem.items()}}
-    job = {"frames": frames, "views": views, "sizes": sizes, "engine": args.engine, "samples": args.samples,
-           "hide": args.hide, "armature": cast_arm, "styles": not args.no_styles, "map": args.map}
     t0 = time.time()
-    scenes = [("a", blend)] + ([("b", Path(args.ab).expanduser().resolve())] if args.ab else [])
-    shots = {}
-    for tag, sc in scenes:
-        extra = {"layers": layers} if layers and tag == "a" else {}
-        if held and tag == "a":                      # the cut draws frame 0 too, for under the wrap's page
-            extra["views"] = [dict(v, frames=list(frames) + held) if v["kind"] == "shot" else v for v in views]
-        shots[tag] = bridge.run("look", {**job, **extra, "out": str(out / tag if args.ab else out)}, blend=sc, project=proj,
-                                timeout=3600)
+    if args.engine == "mkr":                          # mk's renderer: the images from the scene's bake, none in Blender
+        shots = {"a": _mkr_shots(args, proj, frames, held, dem, views, out)}
+    else:
+        job = {"frames": frames, "views": views, "sizes": sizes, "engine": args.engine, "samples": args.samples,
+               "hide": args.hide, "armature": cast_arm, "styles": not args.no_styles, "map": args.map}
+        scenes = [("a", blend)] + ([("b", Path(args.ab).expanduser().resolve())] if args.ab else [])
+        shots = {}
+        for tag, sc in scenes:
+            extra = {"layers": layers} if layers and tag == "a" else {}
+            if held and tag == "a":                  # the cut draws frame 0 too, for under the wrap's page
+                extra["views"] = [dict(v, frames=list(frames) + held) if v["kind"] == "shot" else v for v in views]
+            shots[tag] = bridge.run("look", {**job, **extra, "out": str(out / tag if args.ab else out)}, blend=sc,
+                                    project=proj, timeout=3600)
     fxs, ffxs, done = {}, {}, {}
     stems = FF.stem_source(proj.root, proj.mk_dir / "cache" / "timeline") if plan and plan.get("fx") else None
 
@@ -336,12 +449,12 @@ def run(args):
             if fx is None:
                 fx = fxs[s["size"]] = CF.CutFx(plan, out / "layers" / s["size"], size, s["size"],
                                                footage_of=FT.source(proj.root), sprite_of=MDF.sprite_source(proj.root),
-                                               hits_of=lambda: FF.project_hits(proj.root, proj.data))
+                                               hits_of=lambda: FF.project_hits(proj.root, proj.data), breath=breath)
         if stems is not None and tag == "a":
             ffx = ffxs.get(s["size"])
             if ffx is None:
                 ffx = ffxs[s["size"]] = _frame_fx(plan, proj, size, Path(layers["dir"]) / s["size"] if layers else None,
-                                                  stems, s["size"])
+                                                  stems, s["size"], breath)
         has_fx = fx is not None and fx.active(f)
         has_ffx = ffx is not None and ffx.active(f)
         layer = P.read_rgba(s["screen"], size) if s.get("screen") else None
@@ -375,7 +488,8 @@ def run(args):
             im, drew, has_type = finish(tag, s)
             if tag == "a" and wrap is not None and wrap["first"] <= f <= wrap["last"]:
                 below = finish(tag, under[s["size"]])[0]   # the loop's wrap: this frame turned over frame 0, both finished
-                im = PAGE.frame(wrap, f, _rgb(s["path"]) if im is None else im,
+                im = PAGE.frame(wrap if breath is None else breath.at("transition", wrap, f), f,
+                                _rgb(s["path"]) if im is None else im,
                                 _rgb(under[s["size"]]["path"]) if below is None else below)
                 drew = True
             if drew:

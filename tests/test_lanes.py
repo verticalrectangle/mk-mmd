@@ -33,3 +33,21 @@ def test_a_lane_that_cannot_be_picked_says_what_is_wrong(tmp_path):
     assert LN.load(tmp_path / "hits.json") == HITS
     with pytest.raises(LN.LaneError, match="hits file"):
         LN.load(tmp_path / "missing.json")
+
+
+def test_a_counting_key_steps_on_every_hit_from_its_start():
+    """lanes.steps: `start` before the first hit, `step` more on each (a track laid a tie per hit)."""
+    ts = [1.0, 1.5, 2.25]
+    assert LN.steps(ts, 0.0, 0.6) == [[1.0 - LN.STEP_LEAD, 0.0], [1.0, 0.6], [1.5, 1.2], [2.25, pytest.approx(1.8)]]
+    assert LN.steps([], 3.0, 1.0) == []
+    assert LN.steps([2.0, 1.0], 5.0, -1.0)[1:] == [[1.0, 4.0], [2.0, 3.0]]                 # in time order; counting down
+
+
+def test_a_counting_key_shapes_each_step_with_a_pulse_cut_short_by_the_next_hit():
+    keys = LN.steps([1.0, 1.2, 2.0], 10.0, 2.0, [[0.0, 0.0], [0.15, 0.8], [0.3, 1.0]])
+    assert keys[0] == [1.0 - LN.STEP_LEAD, 10.0]
+    assert keys[1:4] == [[1.0, 10.0], [1.15, pytest.approx(11.6)]] + [[1.2, 12.0]]   # 0.3 s would pass the next hit
+    assert keys[4:] == [[pytest.approx(1.35), pytest.approx(13.6)], [1.5, 14.0], [2.0, 14.0],
+                        [pytest.approx(2.15), pytest.approx(15.6)], [2.3, 16.0]]
+    times = [t for t, _ in keys]
+    assert times == sorted(times)

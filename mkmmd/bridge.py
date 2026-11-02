@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import config as CFG
 from . import gpulock as GL
+from .core import jobscope as JS
 
 ROOT = Path(__file__).resolve().parent.parent          # the folder that contains the mkmmd package
 # ops that leave the scene as they found it: safe on `mk serve`
@@ -102,7 +103,8 @@ def run(op, args=None, blend=None, project=None, timeout=None, use_serve=True):
         if not blend.exists():
             raise BlenderError(f"{blend} does not exist")
     job = {"op": op, "args": args or {}, "project": project.to_job() if project else None,
-           "config": {"mmd_addon": cfg["mmd_addon"], "assets": cfg["assets"], "python": sys.executable}}
+           "config": {"mmd_addon": cfg["mmd_addon"], "assets": cfg["assets"], "python": sys.executable,
+                      "blender_memory": cfg["blender_memory"]}}
     if use_serve and blend is not None and op in READONLY_OPS:
         sock = serve_socket(blend)
         if sock.exists():
@@ -115,7 +117,11 @@ def run(op, args=None, blend=None, project=None, timeout=None, use_serve=True):
     jobdir.mkdir(parents=True)
     job_path, result_path, log_path = jobdir / "job.json", jobdir / "result.json", jobdir / "blender.log"
     job_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-    cmd = blender_command(job_path, result_path, blend, cfg)
+    try:
+        mem = JS.share(cfg["blender_memory"])
+    except JS.JobScopeError as e:
+        raise BlenderError(str(e)) from None
+    cmd = JS.wrap(blender_command(job_path, result_path, blend, cfg), f"Blender {op}", mem)
     with open(log_path, "w", encoding="utf-8") as log, \
             (GL.held(f"Blender {op}") if op in GPU_OPS else contextlib.nullcontext()):
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
@@ -124,8 +130,9 @@ def run(op, args=None, blend=None, project=None, timeout=None, use_serve=True):
         except subprocess.TimeoutExpired:
             raise BlenderError(f"Blender job {op!r} timed out after {timeout} s", log=str(log_path))
     if not result_path.exists():
-        raise BlenderError(f"Blender exited (code {proc.returncode}) without a result for {op!r}\n"
-                           f"{_tail(log_path)}", log=str(log_path))
+        why = JS.killed_message(proc.returncode, repr(op), mem)
+        raise BlenderError((why + "\n" if why else f"Blender exited (code {proc.returncode}) without a result for {op!r}\n")
+                           + _tail(log_path), log=str(log_path))
     res = json.loads(result_path.read_text(encoding="utf-8"))
     data = _unwrap(res, log_path)
     if not os.environ.get("MK_KEEP_JOBS"):

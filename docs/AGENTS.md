@@ -138,6 +138,14 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   the teeth), `wag`, `wink_point` and mimed `chores` (`chore = "sweep" | "stir" | "water"`); a held prop is placed by the move (no
   `attach` of its own: key its `scale` to show it). `[perform.<cast>] squash = { lane = "sub" }` squashes and stretches the whole body
   on a lane's hits, keeping its volume.
+  The mosh moves of a pit (`mkmmd/core/mosh.py`): `pound` (a mallet, `library:spike_mallet`, in both fists, swung down on the
+  hits onto `target`, a stake or a bowl; start it a little before the first hit and key the mallet's `scale` to show it; a
+  target out of reach is refused with where the face can land), `headbang` (`depth`, `hands = "hips"`; list the hair in
+  `[sim.<cast>]` so it whips), `pogo` (a jump on every hit, as high as the time allows; `bounce` only hops on accents),
+  `wotagei` (`props = { L = "pen_l", R = "pen_r" }`, two `library:penlight`s, `routine = "arcs" | "eights" | "punch" |
+  "circle"`; key the penlights' `color` on a lane with `values`), `whistle` (a conductor's cord pulled on the hits) and
+  `bass_face` (`style = "scowl" | "pout"` with a nod on the hits; it keys only the head's nod, so it plays over a `pound` or a
+  `wotagei`). Check `hand_room`, `wrist_bend` and `joint_limits` after every change to the pit's moves.
   The poses `hair_flip`, `over_shoulder`, `hand_hip` and `finger_gun` hold a body and head attitude too (mirrored for the right hand): put
   one on a dead stop of the music, between two walks, and shoot it from the side it reads from. A `hair_flip`'s hand runs
   through the hair: with long simulated hair watch it in motion before keeping it (a lock can fly out like a whip). The hands
@@ -235,7 +243,8 @@ fingertip bone's `.tail` and the prop.
   share her set (a guitarist beside a dancer, nobody in front of anybody) comes from a `plate = true` shot of its own: `shot = "..."`
   takes the collage's figure from that shot's render, `at` and `height` set it into the frame. Give a collage a medium or close
   framing (a far one leaves tiny clones; an orbit's `scale` brings her near) and put it first in the table, before a zoom or a
-  shock that should move it.
+  shock that should move it. A `clip` turns footage round: the video itself as a die-cut sticker over the picture (a rounded
+  `rect`, a `circle`, a `heart` or a `star`, moved by `keys`; `blend = "screen"` for night light trails, the clip's black gone).
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
   transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round
@@ -252,7 +261,9 @@ fingertip bone's `.tail` and the prop.
   she moves. The colour fields
   ([Colour fields](design.md#colour-fields-liquid-light-op-art-floods)) paint the picture, `mask = "ground"` behind her: `liquid` (a
   60s oil-and-water light show in the palette's `inks`, swelling on a `lane`; `mask = "figure"` with `blend = "multiply"` projects it
-  on her), `spiral` (op-art: a spiral, rings, a moire, a sunburst or a bulging checkerboard, turning and stepping on the hits) and
+  on her), `spiral` (op-art: a spiral, rings, a moire, a sunburst or a bulging checkerboard, turning and stepping on the hits, or
+  `pattern = "drift"`: still rings or rows of rail ties or wheels whose luminance steps make them seem to turn by themselves, every
+  other ring the other way, the same way through a palette breath) and
   `flood` (ink dropped from a point, her head's `{point}`, filling the frame on a downbeat and drawing back); any collage's `back` may
   be such a pattern (`{pattern = "spiral", colors = [...]}`: a grid of hypnotic spirals). The remaps
   ([Remaps](design.md#remaps-kaleidoscope-tunnel-melt)) move the picture itself: `kaleido` (a kaleidoscope of `segments` mirrored
@@ -274,7 +285,13 @@ fingertip bone's `.tail` and the prop.
   two shots ping-pong), `invert` flips the world for a window or on hits (eased, three flashes a second at most; `hue = 180` keeps Dawn's
   hues), `testcard` frames the scene in a 1967 test card's circle (`center = {point}` on her face, `open` to blow it open into the next
   shot) and `cards` tumbles TV colour-bar cards through the frame on a lane. Look at each on a light and a dark shot: a gradmap's lights go
-  to its cream, so a bright set reads as its light colour.
+  to its cream, so a bright set reads as its light colour. `lasers` ([Lasers](design.md#lasers)) lays a festival's laser fans over
+  the picture, from frame points or scene points (`origin = {point = "obj('car_headlamp_L').loc"}`: they ride the headlamps),
+  swinging over, thrown open and lit on a `lane` (three times a second at most), glowing in haze, `mask = "ground"` behind her.
+  A photo `booth` with `look = "purikura"` ([Picture effects](design.md#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)) is a
+  purikura strip: captures on a `lane` through a beauty filter, pastel frames on dotted paper, sticker stamps (the doodle shapes, now with
+  `bow`, `flower`, `twinkle`, `bubble`, `note`, `bunny_ears`, `whiskers`, `blush`), `purikura.marks` (ears on her head) and a date or a word
+  per photo written by a gel pen (`purikura.write`, never lyrics); its flash fires three times a second at most.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
   nib, and screen type laid over the picture. Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
   Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with

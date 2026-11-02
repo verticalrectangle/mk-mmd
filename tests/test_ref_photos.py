@@ -410,13 +410,15 @@ def test_cli_look_writes_ref_jpg_next_to_the_renders(tmp_path, capsys, monkeypat
         return shots_in(tmp_path, [v["name"] for v in args["views"]], size=(120, 120), frames=args["frames"])
     monkeypatch.setattr(bridge, "run", fake_look)
     a, b = solid(tmp_path / "a.jpg", (255, 0, 0), (240, 160)), solid(tmp_path / "b.jpg", (255, 0, 255), (160, 240))
-    code, out = run_cli(["look", str(tmp_path / "scene.blend"), "--frames", "7", "--view", "35:12,left", "--ref", f"{a},{b}",
-                         "--out", str(tmp_path / "look")], capsys)
+    code, out = run_cli(["look", str(tmp_path / "scene.blend"), "--engine", "eevee", "--frames", "7", "--view",
+                         "35:12,left", "--ref", f"{a},{b}", "--out", str(tmp_path / "look")], capsys)
     assert code == 0 and calls[0][0] == "look" and out["ref"] == str(tmp_path / "look" / "ref.jpg")
     assert [(Path(p["photo"]).name, p["view"], p["frame"]) for p in out["ref_pairs"]] == [("a.jpg", "35_12", 7), ("b.jpg", "left", 7)]
     sheet = Image.open(out["ref"])
     assert sheet.height == 2 * (120 + 22 + 8) + 8 and sheet.width == 180 + 120 + 24     # photo b is 80 x 120 ... a is 180 wide
-    code, out = run_cli(["look", str(tmp_path / "scene.blend"), "--frames", "7", "--view", "3q", "--ref", "nothing.jpg"], capsys)
+    code, out = run_cli(["look", str(tmp_path / "scene.blend"), "--engine", "eevee", "--frames", "7", "--view", "3q",
+                         "--ref", "nothing.jpg"], capsys)
     assert code == 2 and "no such image" in out["error"] and len(calls) == 1             # refused before any rendering
-    code, out = run_cli(["look", str(tmp_path / "scene.blend"), "--frames", "7", "--view", "3q", "--out", str(tmp_path / "plain")], capsys)
+    code, out = run_cli(["look", str(tmp_path / "scene.blend"), "--engine", "eevee", "--frames", "7", "--view", "3q",
+                         "--out", str(tmp_path / "plain")], capsys)
     assert code == 0 and "ref" not in out

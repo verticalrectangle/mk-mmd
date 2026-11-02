@@ -72,6 +72,7 @@ from . import armreach as AR
 from . import armtwist as AT
 from . import fingers as FG
 from . import gags as GG
+from . import mosh as MO
 
 
 class MoveError(ValueError):
@@ -107,6 +108,8 @@ POLE_TURN = 60.0                 # degrees: two keys' elbow poles further apart 
 REACH = 0.37                     # m: the arm (arm joint to wrist) the places' own poles (POLES) are written for
 TWIST_STEP = 120.0               # degrees: a key halfway through a trip keeps the arm's twists less than this from the
                                  # keys about it, so the forearm turns between them the short way (`_midway`)
+SHOULDER_ROOM = 0.6             # a trip whose straight line passes closer to the shoulder than this share of its nearer
+                                 # end's distance from it passes a key halfway round the shoulder (`_midway`)
 POLES = {  # places that hold the elbow their own way: its pole from the arm joint, (out, behind, below) as AR.POLE
     "dainty_one": (0.45, 0.0, 0.10),                  # alone on the skirt: the elbow out
     "peek": (0.3, -0.35, -0.05),                      # at the eye: the elbow out at about the shoulder's height, the
@@ -219,9 +222,10 @@ TOUCH = {  # a place on the body: the way the hand comes in to it, for the left 
 }
 SHAPED = ("heart_push", "butterfly", "butterfly_shut")   # two hands that meet in one shape: kept as written (`gesture`)
 CLOTH = ("skirt", "behind", "behind_one")   # places on a skirt even where the sim moves it (`cloth`): they end on it
-for _table, _gags in ((OUT, GG.OUT), (AIM, GG.AIM), (POLES, GG.POLES), (SHAPES, GG.SHAPES), (BOX, GG.BOX),
-                      (STRAIGHT, GG.STRAIGHT)):
-    _table.update(_gags)                    # the gag moves' places (mkmmd.core.gags) are places like these
+for _table, _gags, _mosh in ((OUT, GG.OUT, MO.OUT), (AIM, GG.AIM, MO.AIM), (POLES, GG.POLES, MO.POLES),
+                             (SHAPES, GG.SHAPES, MO.SHAPES), (BOX, GG.BOX, MO.BOX), (STRAIGHT, GG.STRAIGHT, MO.STRAIGHT)):
+    _table.update(_gags)                    # the gag moves' places (mkmmd.core.gags) are places like these ...
+    _table.update(_mosh)                    # ... and the mosh moves' (mkmmd.core.mosh)
 
 
 def _v(*a):
@@ -297,8 +301,11 @@ def place(name, side, marks):
         return gesture(name, side, marks)
     if name in GG.PLACES:
         return GG.place(name, side, marks)
+    if name in MO.PLACES:
+        return MO.place(name, side, marks)
     if name not in P:
-        raise MoveError(f"no hand place {name!r} (have {', '.join(sorted(set(P) | set(GESTURES) | set(GG.PLACES)))})")
+        raise MoveError(f"no hand place {name!r} (have "
+                        f"{', '.join(sorted(set(P) | set(GESTURES) | set(GG.PLACES) | set(MO.PLACES)))})")
     return P[name]
 
 
@@ -761,9 +768,10 @@ MOVES = {
     "face": {},
 }
 MOVES.update(GG.MOVES)                                          # the gag moves (mkmmd.core.gags), played by `compile` too
-BODY = ("lean", "tilt", "turn", "head_tilt", "head_turn")       # perform keys a move holds, degrees
+MOVES.update(MO.MOVES)                                          # ... and the mosh moves (mkmmd.core.mosh)
+BODY = ("lean", "tilt", "turn", "head_tilt", "head_turn", "head_nod")   # perform keys a move holds, degrees
 MIRRORED = ("tilt", "turn", "head_tilt", "head_turn")           # ... those that a mirrored move turns the other way
-KEYS = {"name", "t", "dur", "hand", "morph", "value", "hits", "prop", "chore", "accents"}
+KEYS = {"name", "t", "dur", "hand", "morph", "value", "hits", "prop", "chore", "accents"} | set(MO.KEYS)
 REST_PLACES = ("rest", "dainty", "mic", "behind", "clasp", "skirt")
 LONE = {"dainty": "dainty_one", "behind": "behind_one", "clasp": "clasp_one"}   # a pose for two: a hand there alone
 STRIP = "strip"                  # the place of a hand on a strip: (STRIP, i) is its i-th sample
@@ -773,13 +781,13 @@ SIDES = ("L", "R")
 
 def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=None, winks=None, downbeats=(), props=None):
     """The keys of one cast member's moves: {"hands": {side: [key]}, "ik": {side: [[t, share]]} (only the hands a `free`
-    move lets go), "lean", "tilt", "turn", "head_tilt", "head_turn": [[t, deg]] (BODY), "twitch": [...], "expressions":
-    [{morph, keys}], "places": {side: {place: {moved_mm, wrist_deg, twist_deg}}}} (`twist_deg`: the forearm's and the
-    upper arm's twists there, `twisted`). `entries` are its `[[move]]` tables {name, t, dur = 1, hand = "R", morph,
-    value, hits}, and `{name = "rest", hand, place, t}` where that hand waits from clip time t on (REST_PLACES; default
-    "rest"; without `t` from the start); `marks` its landmarks (MARKS); `beats` clip seconds (a beat move pats on each
-    inside it, or on its entry's `hits`: clip seconds inside it); `yaw` the member's (degrees: hand directions are turned
-    into the world);
+    move lets go), "lean", "tilt", "turn", "head_tilt", "head_turn", "head_nod": [[t, deg]] (BODY), "twitch": [...],
+    "expressions": [{morph, keys}], "places": {side: {place: {moved_mm, wrist_deg, twist_deg}}}} (`twist_deg`: the
+    forearm's and the upper arm's twists there, `twisted`). `entries` are its `[[move]]` tables {name, t, dur = 1, hand =
+    "R", morph, value, hits}, and `{name = "rest", hand, place, t}` where that hand waits from clip time t on
+    (REST_PLACES; default "rest"; without `t` from the start); `marks` its landmarks (MARKS); `beats` clip seconds (a beat
+    move pats on each inside it, or on its entry's `hits`: clip seconds inside it); `yaw` the member's (degrees: hand
+    directions are turned into the world);
     `clear(points)` the smallest distance from points (n, 3) in the character's frame to what a hand stays off, its body
     and clothes (None: hands are not kept off anything), and `cloth(points)` the same with a skirt the sim moves (CLOTH
     places rest on it; None: on what `clear` measures). `strip` {side: {"t", "at", "dir", "palm"}}: where a motion strip
@@ -787,13 +795,14 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
     and the way its palm faces, in the character's frame): its goal follows them there (module docstring). A key on the
     strip has `"strip": True` and no fingers (the strip's own play). `winks` {"L": morph, "R": morph}: the semantic wink
     that shuts the member's left eye and its right (WINKS when None; models name them from either side).
-    A gag move (mkmmd.core.gags) also gives "perform": the keys of its legs and its mouth ({"bounce": {beats, depth,
-    attack, decay}, "rise", "crouch": [[t, m]], "air": [span], "walk": {steps, ...}, "mouth": [[t0, t1]]}), "held":
-    {prop: {"bone": "wrist" | "chest", "side", "rel" | "pose"}} (the props it holds: where each rides the hand that holds
-    it, (rotation, offset) in the hand's frame, columns its direction, its palm and their cross, or the hugged one's pose
-    in the character's frame) and "props": {prop: {root property: value}} (a carrot's `bite<k>` clip seconds), with
-    `downbeats` (clip seconds: a bounce's accents by default) and `props` {name: {"use", "bounds", "scale"}}: the cards of
-    the props its moves hold."""
+    A gag move (mkmmd.core.gags) or a mosh move (mkmmd.core.mosh) also gives "perform": the keys of its legs and its
+    mouth ({"bounce": {beats, depth, attack, decay}, "rise", "crouch": [[t, m]], "air": [span], "walk": {steps, ...},
+    "mouth": [[t0, t1]]}), "held": {prop: {"bone": "wrist" | "chest", "side", "rel" | "pose"}} (the props it holds: where
+    each rides the hand that holds it, (rotation, offset) in the hand's frame, columns its direction, its palm and their
+    cross, or the hugged one's pose in the character's frame) and "props": {prop: {root property: value}} (a carrot's
+    `bite<k>` clip seconds), with `downbeats` (clip seconds: a bounce's accents by default) and `props` {name: {"use",
+    "bounds", "scale"}}: the cards of the props its moves hold. A mosh move's body keys are curves of its own (a
+    headbang's nods); two moves that key the same one of BODY at once are refused."""
     rests, told = _rests(entries)                                     # told: hands given a rest place of their own
     mic = {sd: rests[sd][0][1] == "mic" for sd in SIDES}              # a hand at the mic holds it all clip long
     homes = _homes(rests)                                             # where each hand waits, a pair's lone places too
@@ -813,7 +822,8 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
     for i, e in enumerate(entries):
         what = f"move {i} ({e.get('name')!r})" if isinstance(e, dict) else f"move {i}"
         if not isinstance(e, dict) or set(e) - KEYS or "name" not in e or "t" not in e:
-            raise MoveError(f"{what}: expected {{name, t, dur, hand, morph, value, hits, prop, chore, accents}}")
+            raise MoveError(f"{what}: expected {{name, t, dur, hand, morph, value, hits, prop, chore, accents, "
+                            f"{', '.join(MO.KEYS)}}}")
         if e["name"] not in MOVES:
             raise MoveError(f"{what}: no such move (have {', '.join(sorted(MOVES))})")
         m, t0, dur = MOVES[e["name"]], float(e["t"]), float(e.get("dur", 1.0))
@@ -832,8 +842,11 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
             raise MoveError(f"{what}: hits are for a move played on beats "
                             f"({', '.join(k for k, v in MOVES.items() if v.get('hand') == 'beats' or v.get('hits'))})")
         for k in ("prop", "chore", "accents"):
-            if k in e and m.get("hand") != "gag":
+            if k in e and m.get("hand") != "gag" and k not in m.get("keys", ()):
                 raise MoveError(f"{what}: `{k}` is for a gag move ({', '.join(sorted(GG.MOVES))})")
+        for k in MO.KEYS:
+            if k in e and k not in m.get("keys", ()):
+                raise MoveError(f"{what}: `{k}` is for {', '.join(n for n, v in MOVES.items() if k in v.get('keys', ()))}")
         react = bool(m.get("react"))
         if m.get("hand") == "free":
             if mic[hand]:
@@ -862,9 +875,10 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
                 for b, nb in zip(bs, bs[1:] + [t1]):
                     seq += [(b, on, m["on"]), (0.5 * (b + nb), off, m["off"])]
                 plays[side].append((t0, t1, seq, react))
-        elif m.get("hand") == "gag":
+        elif m.get("hand") in ("gag", "mosh"):
             try:
-                got = GG.plan(e, m, t0, t1, beats, downbeats, hand, mic, marks, props or {}, clear, bites, grips)
+                got = (MO.plan if m["hand"] == "mosh" else GG.plan)(e, m, t0, t1, beats, downbeats, hand, mic, marks,
+                                                                     props or {}, clear, bites, grips)
             except GG.GagError as ex:
                 raise MoveError(f"{what}: {ex}") from None
             for side, seq in got["plays"].items():
@@ -878,6 +892,8 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
             mouths += got["mouth"]
             for prop, vals in got["values"].items():
                 out["props"].setdefault(prop, {}).update(vals)
+            if got.get("body"):
+                body.append((t0, t1, got["body"], what))         # its own curves (a headbang's nods)
         flip = -1.0 if m.get("mirror") and hand == "R" else 1.0
         if any(k in m for k in BODY):
             body.append((t0, t1, {k: float(m.get(k, 0.0)) * (flip if k in MIRRORED else 1.0) for k in BODY}, what))
@@ -916,12 +932,16 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
         if any(t1 - t0 > 1e-3 for t0, t1 in spans):
             out["ik"][side] = ik_keys([(t0, t1) for t0, t1 in spans if t1 - t0 > 1e-3])
     body.sort(key=lambda b: b[0])
-    for (a0, a1, _, wa), (b0, _, _, wb) in zip(body, body[1:]):
-        if b0 < a1 - 1e-6:
-            raise MoveError(f"{wa} and {wb} both move the body at {b0} s")
+    for key in BODY:
+        on = [(t0, t1, w) for t0, t1, vals, w in body if vals.get(key)]
+        for (a0, a1, wa), (b0, _, wb) in zip(on, on[1:]):
+            if b0 < a1 - 1e-6:
+                raise MoveError(f"{wa} and {wb} both move the body ({key}) at {b0} s")
     for t0, t1, vals, _ in body:
         for key, v in vals.items():
-            if v:
+            if isinstance(v, list):
+                out[key] += [list(k) for k in v]                     # a move's own curve, from 0 back to 0
+            elif v:
                 out[key] += [[t0, 0.0], [min(t0 + EASE, 0.5 * (t0 + t1)), v], [max(t1 - EASE, 0.5 * (t0 + t1)), v], [t1, 0.0]]
     for morph in list(faces) + [k for k in curves if k not in faces]:
         merged = []
@@ -1145,6 +1165,8 @@ def _hand(spans, side, homes, world, at, told=False, mid=None, left=None, mic=Fa
             k["fingers"] = grip if grip is not None else SHAPES[shape] if isinstance(shape, str) else shape
         if name in SIGHTED:
             k["sight"] = True                                        # held with the head (the pose stage)
+        if isinstance(name, str) and MO.rigid(name):
+            k["_rigid"] = True                                       # one of two fists on one handle (`_via`)
         if len(more) > 2 and more[2] is not None:
             k["pole"] = [round(float(v), 4) for v in more[2]]        # the elbow held its own way there (POLES)
         keys.append(k)
@@ -1286,10 +1308,12 @@ def _via(keys, world, mid, depth=2):
     them folds the hand over its wrist on the way (a hand going up to the hair from beside the hip) or wrings the
     forearm, and a pole keyed straight across from behind the back to in front passes by the shoulder, where the IK's
     elbow flips round. A hand holding its place needs none; a trip to or from a strip is checked for the bend only (the
-    pose stage turns the elbow's pole to the strip's elbow there)."""
+    pose stage turns the elbow's pole to the strip's elbow there); a trip between two keys of a hand that holds one
+    handle with the other (`_rigid`: a mallet's swing, keyed close enough by its move) gets none, so both fists stay on
+    the handle."""
     out = []
     for a, b in zip(keys, keys[1:] + [None]):
-        out.append({k: v for k, v in a.items() if k not in ("_d", "_p")})
+        out.append({k: v for k, v in a.items() if k not in ("_d", "_p", "_rigid")})
         if b is not None:
             out += _halfway_keys(a, b, world, mid, depth)
     return out
@@ -1298,6 +1322,7 @@ def _via(keys, world, mid, depth=2):
 def _halfway_keys(a, b, world, mid, depth):
     """The keys `_via` puts between keys a and b (none, one halfway, or more about it in its halves)."""
     if mid is None or depth <= 0 or b["t"] - a["t"] < 1e-3 or (a.get("strip") and b.get("strip")) or (
+            a.get("_rigid") and b.get("_rigid")) or (
             a["at"] == b["at"] and a["dir"] == b["dir"] and a["palm"] == b["palm"]):
         return []                                                    # (along a strip the hand is the strip's)
     got = mid(a, b, not (a.get("strip") or b.get("strip")))
@@ -1325,7 +1350,9 @@ def _midway(side, marks):
     are TWIST_STEP or more apart get the halfway key even when it is fine too, so the IK turns the arm through it. The
     wrist goes round the shoulder as an arm swings, not on the straight line between the two places, which passes by the
     shoulder on a trip from the hip up behind the head: an arm folded that far wrings the upper arm past its range
-    whichever way the elbow points."""
+    whichever way the elbow points; so a trip whose straight line passes closer to the shoulder than SHOULDER_ROOM of
+    the nearer end's distance from it (from the hip up over the head) gets the halfway key round it even when the hand is
+    fine there too."""
     S, home = np.asarray(marks[f"arm.{side}"], float), pole_point(side, marks)
     out = _v(1.0 if side == "L" else -1.0, 0.0, 0.0)
 
@@ -1335,6 +1362,9 @@ def _midway(side, marks):
     def mid(a, b, twist=True):
         ra, rb = np.asarray(a["at"], float) - S, np.asarray(b["at"], float) - S
         la, lb = float(np.linalg.norm(ra)), float(np.linalg.norm(rb))
+        g = rb - ra
+        k = min(max(-float(ra @ g) / max(float(g @ g), 1e-12), 0.0), 1.0)
+        close = float(np.linalg.norm(ra + k * g)) < SHOULDER_ROOM * min(la, lb)   # the straight way by the shoulder
         m = (ra / la if la > 1e-6 else 0.0) + (rb / lb if lb > 1e-6 else 0.0)
         w = S + 0.5 * (la + lb) * _unit(m if float(np.linalg.norm(m)) > 1e-6 else out)
         d, p = halfway((a["_d"], a["_p"]), (b["_d"], b["_p"]))
@@ -1356,13 +1386,13 @@ def _midway(side, marks):
         f = forearm(side, marks, w, pole)
         if not twist:
             if bend(d, f) <= HELD:
-                return (w, d, p, pole) if turned else None
+                return (w, d, p, pole) if turned or close else None
             return (w,) + natural(d, p, f) + (pole,)
         ta, tb, tw = twists(a), twists(b), twisted(side, marks, w, d, p, pole)
         if bend(d, f) <= HELD and overtwist(tw, 0.0) <= 0.0 and all(
                 abs(tw[i] - t[i]) < TWIST_STEP for t in (ta, tb) for i in (0, 1)):
             far = any(abs(ta[i] - tb[i]) >= TWIST_STEP for i in (0, 1))      # the ends far apart: keyed through the
-            return (w, d, p, pole) if turned or far else None             # middle, as the IK might take the other way
+            return (w, d, p, pole) if turned or far or close else None    # middle, as the IK might take the other way
         dd, pp, _, pole = arm_for(side, marks, w, lambda f: natural(d, p, f), pole, HELD, d,
                                   toward=(None, 0.5 * (ta[1] + tb[1])))
         return (w,) + rolled(side, marks, w, dd, pp, pole, 0.5 * (ta[0] + tb[0])) + (pole,)

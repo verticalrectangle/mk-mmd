@@ -754,18 +754,22 @@ def _figure_reads(pl, fx, frame):
     return out
 
 
-def fx_frames(pl, frames, hits=None):
+def fx_frames(pl, frames, hits=None, before=None):
     """{frame: [items]}: the cut's own frames that the frame effects on `frames` read (an echo's copies, a slitscan's
     ages, a push's inside, a collage's poses before, a film's held frame, a booth's captures: those on a lane only with
     `hits`, the [audio] hits file), as plates of the shot in the cut there, with a collage's figure on them, and on a held
     frame or a capture the points and figures the effects before it in the table read there (they are applied to it
     again) and the holder's own points (a paint app paints that frame's fills on the frame its eraser holds). A collage
     whose figure comes from its own `shot` reads that shot's plates and its figure through it instead.
-    `mk post` has them all already; `mk look`, which draws only the frames asked for, renders these beside them."""
+    `mk post` has them all already; `mk look`, which draws only the frames asked for, renders these beside them. A held
+    frame is finished again by the effects before its holder, so what those read from other frames (a stack's poses
+    before, an echo's copies) is read too (`before`: only the effects ahead of that table index)."""
     out = {}
     fxs = pl.get("fx") or []
     for f in sorted(set(int(x) for x in frames)):
         for fx in FX.at(fxs, f):
+            if before is not None and fx["index"] >= before:
+                continue
             for g in FX.sources(fx, f, pl["frame0"], hits):
                 shot = cut_shot(pl["cuts"], g)
                 if g == f or (shot is None and not fx.get("shot")):
@@ -780,6 +784,10 @@ def fx_frames(pl, frames, hits=None):
                 if FX.holds(fx):
                     items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(fx)]
                 bucket += [it for it in items if it not in bucket]
+                if FX.holds(fx):                         # the held frame is drawn again: what its effects read too
+                    for g2, more in fx_frames(pl, [g], hits, before=fx["index"]).items():
+                        b2 = out.setdefault(g2, [])
+                        b2 += [it for it in more if it not in b2]
     return out
 
 

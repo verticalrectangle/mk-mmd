@@ -7,7 +7,9 @@
   numpy-2-only API, no scipy there. scipy and numba belong in `mkmmd/solvers`.
 - No model, prop or project names in library code; use semantic bone names and prop cards. Characters live as spec files in
   `mkmmd/model/bases/` (the girl base and the rin example) and in projects.
-- Never print or quote lyric text, in code, logs, commit messages or briefs. Refer to words by `(line, word)`.
+- Lyric text lives in a project's local files (lyrics, timelines, mk.toml): the tools may read, align and render it, and it
+  may show in logs and work notes. Keep it out of the repository (code, tests, docs examples, commit messages): refer to
+  words there by `(line, word)`.
 - Never commit models, motions, audio, lyrics, reference clips or renders (`.gitignore` enforces most of it). The committed
   meshes are the girl base's CC0 hand and body, `mkmmd/model/bases/girl/hand.npz` and `body.npz` (their `make_hand.py` and
   `make_body.py` rebuild them).

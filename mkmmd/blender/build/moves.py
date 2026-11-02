@@ -48,7 +48,7 @@ def marks(m):
         b = S.resolve_bone(arm, sem)
         return inv @ (arm.matrix_world @ arm.data.bones[b].tail_local)
 
-    out = {"arm.L": head("arm.L"), "arm.R": head("arm.R"), "chest": head("upper_body2")}
+    out = {"arm.L": head("arm.L"), "arm.R": head("arm.R"), "chest": head("upper_body2"), "waist": head("upper_body")}
     h = head("head")
     out["mouth"] = h + Vector(MOUTH)
     try:
@@ -295,23 +295,41 @@ def _lanes(ctx, name, i, e):
 
 
 def _held_props(ctx, name, entries):
-    """{prop: {"use", "bounds", "scale"}} of the props member `name`'s gag moves hold (`prop`), as mkmmd.core.moves.compile
-    reads them; a held prop rides the member, so it is placed by no `attach`, `wear`, `anchor_to` or `place` of its own."""
+    """{prop: {"use", "bounds", "scale"}} of the props member `name`'s gag and mosh moves hold (`prop`, a wotagei's
+    `props = {L, R}`), as mkmmd.core.moves.compile reads them; a held prop rides the member, so it is placed by no
+    `attach`, `wear`, `anchor_to` or `place` of its own."""
     out = {}
     specs = {p.get("name"): p for p in ctx.data.get("prop", [])}
     for e in entries:
-        prop = e.get("prop") if isinstance(e, dict) else None
-        if not isinstance(prop, str) or prop in out:
+        if not isinstance(e, dict):
             continue
-        p = ctx.props.get(prop)
-        if p is None:
-            raise BuildError(f"move.{name}: prop {prop!r} is no [[prop]] (props: {', '.join(sorted(ctx.props)) or 'none'})")
-        own = [k for k in ("attach", "wear", "anchor_to", "place") if (specs.get(prop) or {}).get(k)]
-        if own:
-            raise BuildError(f"move.{name}: prop {prop!r} is held by a move and has `{own[0]}` of its own: the move puts "
-                             f"it in her hand (or on her chest)")
-        out[prop] = {"use": p.card.get("use") or {}, "bounds": p.card.get("bounds"), "scale": float(p.root.scale[0])}
+        both = e.get("props")
+        for prop in [e.get("prop")] + (list(both.values()) if isinstance(both, dict) else []):
+            if not isinstance(prop, str) or prop in out:
+                continue
+            p = ctx.props.get(prop)
+            if p is None:
+                raise BuildError(f"move.{name}: prop {prop!r} is no [[prop]] (props: "
+                                 f"{', '.join(sorted(ctx.props)) or 'none'})")
+            own = [k for k in ("attach", "wear", "anchor_to", "place") if (specs.get(prop) or {}).get(k)]
+            if own:
+                raise BuildError(f"move.{name}: prop {prop!r} is held by a move and has `{own[0]}` of its own: the move "
+                                 f"puts it in her hand (or on her chest)")
+            out[prop] = {"use": p.card.get("use") or {}, "bounds": p.card.get("bounds"), "scale": float(p.root.scale[0])}
     return out
+
+
+def _targets(ctx, name, m, i, e):
+    """The entry `e` with its `target` (a pound's: any target, docs/design.md: Targets) read into member `name`'s own
+    frame, where mkmmd.core.moves.compile takes it, as it stands when the moves are compiled."""
+    if not isinstance(e, dict) or e.get("target") is None:
+        return e
+    from . import targets
+    try:
+        p = m.root.matrix_world.inverted() @ targets.point(ctx, e["target"])
+    except BuildError as ex:
+        raise BuildError(f"move.{name}[{i}] ({e.get('name')!r}) target: {ex}") from None
+    return dict(e, target=[round(float(v), 4) for v in p])
 
 
 def hand_keys(name, keys):
@@ -337,7 +355,7 @@ def apply(ctx):
         yaw = math.degrees(m.root.matrix_world.to_euler().z)
         soft, rigid = soft_bones(ctx, name, m), soft_bones(ctx, name, m, YIELD - {"skirt"})
         clear = body_clearance(m, soft)
-        entries = [_lanes(ctx, name, i, e) for i, e in enumerate(entries)]
+        entries = [_targets(ctx, name, m, i, _lanes(ctx, name, i, e)) for i, e in enumerate(entries)]
         plan = {"entries": entries, "marks": marks(m), "beats": beats, "downbeats": downbeats, "yaw": yaw,
                 "clear": clear, "cloth": clear if rigid == soft else body_clearance(m, rigid), "winks": wink_sides(m),
                 "props": _held_props(ctx, name, entries)}
@@ -372,13 +390,13 @@ def apply(ctx):
         for key in ("twitch", "expressions"):
             if res[key]:
                 perf[key] = list(perf.get(key) or []) + res[key]
-        for key, v in res["perform"].items():            # a gag's legs (a bounce's pump and hops, a run) and its mouth
-            if key in ("air", "mouth"):
+        for key, v in res["perform"].items():            # a gag's or mosh move's legs (a bounce's pump and hops, a run,
+            if key in ("air", "mouth"):                  # a pogo's jumps, a pound's knees) and its mouth
                 own = perf.get(key) or []
                 perf[key] = (own if isinstance(own, list) else [own]) + v
             elif perf.get(key):
-                raise BuildError(f"[perform.{name}] {key} and [[move.{name}]] both key it (a "
-                                 f"{'run_in_place' if key == 'walk' else 'bounce'})")
+                users = {"walk": "run_in_place", "bounce": "bounce"}.get(key, "bounce, pogo, pound")
+                raise BuildError(f"[perform.{name}] {key} and [[move.{name}]] both key it (a {users})")
             else:
                 perf[key] = v
         for prop, vals in res["props"].items():          # a carrot's bites: the clip second each is bitten

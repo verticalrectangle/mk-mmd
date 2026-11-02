@@ -18,8 +18,8 @@ the author's readme files; read them (`mk assets show SLUG --terms` prints the l
 license, restrictions and credit with `mk assets set`. `mk assets credits` fails (exit 1) while anything used is
 unreviewed or has neither an author nor a credit line. Kinds: model, motion, prop, vehicle, audio, reference,
 texture, font, other. Registry slugs are what mk.toml refers to: [[cast]] asset, [[motion.<cast>]] vmd, [[prop]] card,
-[[text]] font, [[fx]] clip (footage; `mk ref footage` registers Pexels videos), [[set]] image (a photo_world's photo),
-[credits] assets.
+[[text]] font, [[fx]] clip (footage and video stickers; `mk ref footage` registers Pexels videos), [[set]] image (a
+photo_world's photo), [credits] assets.
 
 Examples:
   mk assets add ~/models/my_model/my_model.pmx --kind model --slug my_model --author NAME
@@ -211,13 +211,15 @@ def _extra(old, text):
 
 
 def project_credits(proj, reg=None):
-    """The assets a project credits (its cast's, the videos its footage frame effects and split inserts show, the photos
-    its photo_world sets are made of, the sprites its mandalas show, then its [credits] assets, each once) and its own
-    [credits] lines. A clip, a photo or a sprite given as a file (or a glob) counts when the registry (`reg`, default the
-    configured one) has an entry with its path; credit any other in [credits] lines."""
+    """The assets a project credits (its cast's, the videos its footage frame effects, video stickers and split inserts
+    show, the photos its photo_world sets are made of, the sprites its mandalas show, the photographs its prints show,
+    then its [credits] assets, each once) and its own [credits] lines. A clip, a photo, a sprite or a photograph given as
+    a file (or a glob) counts when the registry (`reg`, default the configured one) has an entry with its path; credit
+    any other in [credits] lines."""
     from ..core.photoworld import is_file as is_image
     from ..footage import is_file
     from ..mandala import sprite_slugs
+    from ..prints import photo_slugs
     slugs = list(dict.fromkeys(c["asset"] for c in proj.cast if c.get("asset")))
     refs = [(c, is_file(c)) for c in footage_clips(proj.data)] + [(p, is_image(p)) for p in world_images(proj.data)]
     for ref, as_file in refs:
@@ -229,13 +231,16 @@ def project_credits(proj, reg=None):
         if ref and ref not in slugs:
             slugs.append(ref)
     slugs += [s for s in sprite_slugs(proj.data, proj.root, reg) if s not in slugs]
+    slugs += [s for s in photo_slugs(proj.data, proj.root, reg) if s not in slugs]
     slugs += [s for s in proj.data.get("credits", {}).get("assets", []) if s not in slugs]
     return slugs, proj.data.get("credits", {}).get("lines", [])
 
 
 def footage_clips(data):
-    """The videos a project's frames show (mk.toml `data`), each once: the clips of its [[fx]] footage entries (their
-    aspect.<output> tables' too), then those of its [[insert]] splits (`clip`, a video or {src, ...})."""
+    """The videos a project's frames show (mk.toml `data`), each once: the clips of its [[fx]] entries that show one
+    (footage collages and video stickers, mkmmd.core.framefx.CLIPS; their aspect.<output> tables' too), then those of its
+    [[insert]] splits (`clip`, a video or {src, ...})."""
+    from ..core.framefx import CLIPS
     out = []
 
     def add(c):
@@ -244,7 +249,7 @@ def footage_clips(data):
 
     specs = data.get("fx") or []
     for spec in [specs] if isinstance(specs, dict) else specs:
-        if not isinstance(spec, dict) or spec.get("kind") != "footage":
+        if not isinstance(spec, dict) or spec.get("kind") not in CLIPS:
             continue
         for c in [spec.get("clip")] + [o.get("clip") for o in (spec.get("aspect") or {}).values() if isinstance(o, dict)]:
             add(c)

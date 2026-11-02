@@ -1,6 +1,7 @@
 import struct
 
 import numpy as np
+import pytest
 
 from mkmmd.core import families, vmd
 
@@ -52,6 +53,50 @@ def test_vmd_tempo_finds_a_clear_beat(tmp_path):
     p.write_bytes(_vmd_bytes(bones=keys))
     period_f, phase, score, contrast = vmd.tempo_phase(vmd.read(p), lo_bpm=80, hi_bpm=160)
     assert abs(period_f - period) < 0.5 and contrast > 1.2
+
+
+def _bounce(tmp_path, bpm, frames=600):
+    """A VMD whose centre lands sharply every beat of `bpm` (at 30 fps), from frame 0."""
+    period = vmd.MMD_FPS * 60.0 / bpm
+    keys = [("センター", f, (0, -abs(np.sin(np.pi * f / period)) * 2.0, 0), (0, 0, 0, 1)) for f in range(frames)]
+    p = tmp_path / f"bounce{bpm}.vmd"
+    p.write_bytes(_vmd_bytes(bones=keys))
+    return vmd.read(p)
+
+
+def test_beat_fit_lays_per_beat_motion_beats_on_each_song_beat(tmp_path):
+    """`[[motion]] retime = "beats"` with `per_beat` (vmd.beat_fit): per_beat motion beats stretch over each song beat
+    and the first motion beat lands on the song's beats cut into per_beat parts (2: its 8ths)."""
+    mo = _bounce(tmp_path, 120)                                   # a beat every 15 frames
+    beat = 0.8225                                                 # a song at 72.95 bpm
+    beats = [beat * k for k in range(37)]
+    period, src_beat = vmd.tempo_phase(mo)[:2]                    # ~15 frames; the first motion beat after frame 0
+    assert period == pytest.approx(15.0, abs=0.05)
+    for per_beat, lands in ((1, 1.0), (2, 1.5)):                  # unsnapped 1.4 beats in: beat 1, or the 8th after it
+        expect = beat * 30.0 / per_beat / period
+        start_t = 1.4 * beat - src_beat * expect / 30.0           # where source frame 0 plays, so the beat falls at 1.4
+        scale, start, info = vmd.beat_fit(mo, beats, 30.0, start_t, 0.0, per_beat=per_beat)
+        assert scale == pytest.approx(expect, rel=1e-6)
+        assert (start + src_beat * scale) / 30.0 == pytest.approx(lands * beat, abs=1e-6)
+        assert info["song_bpm"] == 72.95 and info["motion_bpm"] == round(1800.0 / period, 2)
+        assert info.get("per_beat", 1) == per_beat
+
+
+def test_beat_fit_takes_the_motion_s_own_tempo_when_given(tmp_path):
+    """A motion faster than the comb filter's 70-180 bpm (a 204 bpm routine): the search settles elsewhere, `bpm`
+    gives the beat it was made on."""
+    mo = _bounce(tmp_path, 204)
+    beats = [0.8225 * k for k in range(37)]
+    found = vmd.beat_fit(mo, beats, 30.0, 0.0, 0.0)[2]["motion_bpm"]
+    assert abs(found - 204.0) > 20.0
+    scale, _, info = vmd.beat_fit(mo, beats, 30.0, 0.0, 0.0, bpm=204, per_beat=2)
+    assert info["motion_bpm"] == 204.0
+    assert scale == pytest.approx(0.8225 * 30.0 / 2 / (30.0 * 60.0 / 204), rel=1e-6)
+
+
+def test_beat_fit_needs_two_song_beats(tmp_path):
+    with pytest.raises(ValueError, match="no beats"):
+        vmd.beat_fit(_bounce(tmp_path, 120), [1.0], 30.0, 0.0, 0.0)
 
 
 def test_a_mirrored_vmd_plays_each_side_s_keys_on_the_other_reflected_through_the_middle(tmp_path):
