@@ -64,7 +64,9 @@ from . import mirror as MR
 from .ops_core import _namespace
 
 WORKBENCH = "BLENDER_WORKBENCH"
-EEVEE = "BLENDER_EEVEE_NEXT"
+import bpy as _bpy
+EEVEE = ("BLENDER_EEVEE_NEXT" if "BLENDER_EEVEE_NEXT"
+         in _bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items else "BLENDER_EEVEE")
 CYCLES = "CYCLES"
 MASK_SAMPLES = 16                        # Cycles samples of a coverage pass through a fisheye (Workbench's 16 for the others)
 FLAT_TYPES = {"MESH", "CURVE", "SURFACE", "FONT", "META", "CURVES", "POINTCLOUD"}

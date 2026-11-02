@@ -150,5 +150,5 @@ def render_frames(args):
             looks.close()
     return {"rendered": done, "skipped": skipped, "seconds": round(time.time() - t0, 1),
             "s_per_frame": round((time.time() - t0) / max(done, 1), 2), "aspect_bound": bound,
-            "engine": r.engine, "samples": sc.eevee.taa_render_samples if r.engine == "BLENDER_EEVEE_NEXT" else None,
+            "engine": r.engine, "samples": sc.eevee.taa_render_samples if r.engine in ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE") else None,
             "looks": kinds, "layers": drawn, "screen_layers": screens, "keep_layers": masks}
