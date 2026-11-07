@@ -1831,6 +1831,7 @@ all of the turn (they spot where she faced, [Body](#body)).
 
 | Key | Meaning |
 |---|---|
+| `body` | `false`: the face alone (`blink`, `lids`, `expressions`, `sing`, `mouth`, `twitch` and a `squash`): the spine, neck, head and eyes are not keyed, so a member's motion plays them as it was made (a dancer's face alive under her dance: perform keys those bones on every frame otherwise, over the motion's). Any other key beside it is an error; the report says `body` |
 | `breath` | `{per_min = 16.5, deg = 0.6}`: chest pitch on `upper_body2` |
 | `sway` | `{deg = 0.37, period = 2.5}`: a slow turn of the upper body about the vertical |
 | `nod` | `{deg = 0.48, period = 2.3}`: a slow nod of the head, fading while a gaze event holds the head away |

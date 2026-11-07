@@ -28,7 +28,7 @@ POSE = {
 }
 
 PERFORM = {
-    "look": None, "gaze": ("t", "at", "hold", "back", "rise", "blink"),
+    "body": None, "look": None, "gaze": ("t", "at", "hold", "back", "rise", "blink"),
     "glance": ("t", "at", "dur", "pitch", "rise", "fall", "blink"), "head_share": None,
     "head_limits": tuple(PF.HEAD_LIMITS), "neck_share": None, "eye_max": None, "breath": ("per_min", "deg"),
     "sway": ("deg", "period"), "nod": ("deg", "period"), "bob": ("deg", "timeline", "beats", "downbeat_accent"),

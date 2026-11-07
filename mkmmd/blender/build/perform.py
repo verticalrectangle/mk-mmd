@@ -95,6 +95,7 @@ from . import BuildError, targets
 from . import strings as STRINGS
 
 SPINE = ("upper_body", "upper_body2", "neck", "head")
+FACE = {"body", "blink", "lids", "expressions", "sing", "mouth", "twitch", "squash"}   # what `body = false` keeps
 
 
 def _morph(m, name):
@@ -886,6 +887,13 @@ def run(ctx):
         arm = m.arm
         smap = S.semantic_map(arm)
         base = m.base.get("spine") or {}
+        body = spec.get("body", True)                 # false: the face alone, the spine and head left to a motion
+        if not isinstance(body, bool):
+            raise BuildError(f"perform.{name}.body: true or false (false: the face alone, the body left to its motion)")
+        moving = [] if body else sorted(set(spec) - FACE)
+        if moving:
+            raise BuildError(f"perform.{name}: body = false leaves the spine, head and eyes to the member's motion: drop "
+                             f"{', '.join(moving)} (the face's keys stay: {', '.join(sorted(FACE - {'body'}))})")
         plan, turn_info = _turn(ctx, name, m, spec, ts, frames)  # the root turns before the gaze is sampled
         wplan, walk_info = _walk(ctx, name, m, spec, ts, frames, plan)    # and walks, hops and tumbles
         lat, back, up = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))     # armature axes (faces -Y)
@@ -1009,7 +1017,7 @@ def run(ctx):
                   "head": Dn.inverted() @ Dh, "eye": Dh.inverted() @ (R_eye @ Dh)}
             for k in keys:
                 keys[k].append(qs[k])
-        for k, qs in keys.items():
+        for k, qs in (keys.items() if body else ()):
             bones = [smap[f"eye.{s}"] for s in ("L", "R") if f"eye.{s}" in smap] if k == "eye" else [smap[k]]
             for b in bones:
                 R = arm.data.bones[b].matrix_local.to_3x3().normalized()     # armature-space rest rotation
@@ -1017,7 +1025,9 @@ def run(ctx):
                 loc = [tuple((Ri @ q.to_matrix() @ R).to_quaternion()) for q in qs]
                 K.key_bone_quats(arm, b, frames, loc, interp="LINEAR")
         info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames), **turn_info, **walk_info}
-        info.update(_body(ctx, name, m, spec, ts, frames, settle, plan, wplan))
+        if body:
+            info.update(_body(ctx, name, m, spec, ts, frames, settle, plan, wplan))
+        info["body"] = body
         # ---- face: blinks + lids
         bl = spec.get("blink", {})
         blink_m = _morph(m, "blink")
