@@ -3,7 +3,8 @@
 //! a copy with googly eyes (fx/inks.rs) (shaders/fx_mandala.wgsl). Python (mkmmd.gpufx.mandala) lays the rings out
 //! (mkmmd.core.mandala.copies), works out each sticker's box and map and its pupils' coverages, and writes the tiles of
 //! sprites and drawn shapes (kept from frame to frame) to files; the figure's own tiles are cut here from the figure
-//! layer and the picture as it reaches the op.
+//! layer and the picture as it reaches the op. The stamps of a paint app (mkmmd.gpufx.paintapp) are laid the same way,
+//! each at its own opacity and with its sparkles as inks.
 
 use std::sync::Arc;
 
@@ -59,16 +60,26 @@ pub enum Tile {
     },
 }
 
-/// One copy laid: its tile, the box it covers (x0, y0, x1, y1), the warp from the tile into the box, and what is laid
-/// over it after (its pupils and glints).
+/// One copy laid: its tile, the box it covers (x0, y0, x1, y1), the warp from the tile into the box, its opacity (a
+/// paint app's stamp fading: the picture, its edge and its shadow all that much there) and what is laid over it after
+/// (its pupils and glints, a stamp's sparkles). Without a tile (None: a stamp whose sticker is off the picture) only its
+/// inks are laid.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Sticker {
-    pub tile: usize,
-    #[serde(rename = "box")]
+    #[serde(default)]
+    pub tile: Option<usize>,
+    #[serde(rename = "box", default)]
     pub area: [u32; 4],
-    pub warp: WarpSpec,
+    #[serde(default)]
+    pub warp: Option<WarpSpec>,
+    #[serde(default = "opaque")]
+    pub opacity: f64,
     #[serde(default)]
     pub inks: Vec<Ink>,
+}
+
+fn opaque() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,7 +114,7 @@ struct Params {
     pad0: u32,
     pad1: u32,
     alpha: f32,
-    pad2: f32,
+    opacity: f32,
     pad3: f32,
     pad4: f32,
     edge: [f32; 4],
@@ -195,8 +206,9 @@ impl Mandala {
         figure::resize_linear(cx, &half, (hw, hh), x, (bw, bh));
     }
 
-    /// One sticker laid on `out` (mkmmd.mandala.lay).
-    fn lay(&self, cx: &mut Ctx, out: &wgpu::Buffer, t: &Laid, s: &Sticker) {
+    /// One sticker laid on `out` (mkmmd.mandala.lay), its tile carried into its box by `warp`, its picture, edge and
+    /// shadow at the sticker's opacity.
+    fn lay(&self, cx: &mut Ctx, out: &wgpu::Buffer, t: &Laid, s: &Sticker, warp: &WarpSpec) {
         let (w, h) = (cx.w, cx.h);
         let [x0, y0, x1, y1] = s.area;
         let (bw, bh) = (x1 - x0, y1 - y0);
@@ -206,19 +218,20 @@ impl Mandala {
         let a1 = cx.scratch("mandala.a1", n);
         let s1 = cx.scratch("mandala.s1", n);
         let tmp = cx.scratch("mandala.t", plane_bytes(t.w, t.h));
-        figure::affine(cx, &t.rgba, (t.w, t.h), &b1, (bw, bh), &tmp, &s.warp);
+        figure::affine(cx, &t.rgba, (t.w, t.h), &b1, (bw, bh), &tmp, warp);
         let edged = t.ring.is_some() && self.edge.is_some();
         if let (true, Some(ring)) = (edged, &t.ring) {
-            figure::affine(cx, ring, (t.w, t.h), &b2, (bw, bh), &tmp, &s.warp);
+            figure::affine(cx, ring, (t.w, t.h), &b2, (bw, bh), &tmp, warp);
         }
         let e = self.edge.unwrap_or([0.0; 3]);
-        let mut p = Params { bw, bh, x0, y0, w, h, edged: edged as u32, edge: [e[0], e[1], e[2], 0.0], ..Default::default() };
+        let mut p = Params { bw, bh, x0, y0, w, h, edged: edged as u32, opacity: s.opacity as f32,
+                             edge: [e[0], e[1], e[2], 0.0], ..Default::default() };
         Self::run(cx, "lay_merge", p, &[(2, &b1), (3, &b2), (4, &a1)], (bw, bh));
-        if let Some(sh) = self.shadow.as_ref().filter(|sh| sh.alpha > 0.0) {
+        if let Some(sh) = self.shadow.as_ref().filter(|sh| sh.alpha * s.opacity > 0.0) {
             figure::shift(cx, &a1, &s1, bw, bh, sh.offset[0], sh.offset[1]);
             Self::soft(cx, &s1, (bw, bh), sh.blur);
             p.shadow = 1;
-            p.alpha = sh.alpha as f32;
+            p.alpha = (sh.alpha * s.opacity) as f32;
             p.shade = [sh.color[0], sh.color[1], sh.color[2], 0.0];
         }
         Self::run(cx, "lay_put", p, &[(1, &b1), (2, out), (3, &s1)], (bw, bh));
@@ -279,8 +292,11 @@ impl Effect for Mandala {
             });
         }
         for s in &self.stickers {
-            let Some(t) = laid.get(s.tile) else { bail!("sticker of tile {} (of {})", s.tile, laid.len()) };
-            self.lay(cx, &dst, t, s);
+            if let Some(i) = s.tile {
+                let Some(t) = laid.get(i) else { bail!("sticker of tile {} (of {})", i, laid.len()) };
+                let Some(warp) = &s.warp else { bail!("sticker of tile {} without its warp", i) };
+                self.lay(cx, &dst, t, s, warp);
+            }
             if !s.inks.is_empty() {
                 let n = s.inks.iter().filter(|i| i.mask.is_some()).count();
                 inks::lay(cx, &dst, &s.inks, &files[next..next + n]);

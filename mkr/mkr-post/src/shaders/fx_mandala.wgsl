@@ -17,7 +17,7 @@ struct Params {
     pad0: u32,
     pad1: u32,
     alpha: f32,         // the shadow's opacity
-    pad2: f32,
+    opacity: f32,       // lay_merge: the sticker's (the tile's picture and ring times it)
     pad3: f32,
     pad4: f32,
     edge: vec4<f32>,    // the edge's colour (or a figure tile's flat fill)
@@ -37,11 +37,12 @@ fn lay_merge(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let i = id.y * P.bw + id.x;
-    let g = dst[i];
+    let k = P.opacity;
+    let g = dst[i] * k;
     var a = clamp(g.w, 0.0, 1.0);
     var rgb = g.xyz;
     if (P.edged == 1u) {
-        let ring = clamp(aux[i].x, 0.0, 1.0);
+        let ring = clamp(aux[i].x * k, 0.0, 1.0);
         rgb = rgb + P.edge.xyz * (ring * (1.0 - a));
         a = a + ring - a * ring;
     }

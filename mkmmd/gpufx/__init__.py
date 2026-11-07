@@ -12,14 +12,15 @@ from PIL import Image
 
 from ..core import transition as TR
 from . import (camcorder, doodle, echo, film, flood, footage, grid, halftone, invert, kaleido, key, label, lens, liquid,
-               mandala, melt, mosh, pixelsort, push, scope, shapes, shock, slab, slitscan, spiral, split, stack, tint,
-               trails, tunnel, zoom)
+               mandala, melt, mosh, paintapp, pixelsort, push, scope, shapes, shock, slab, slitscan, spiral, split, stack,
+               tint, trails, tunnel, zoom)
 
 KINDS = {"zoom": zoom, "footage": footage, "echo": echo, "slitscan": slitscan, "lens": lens, "shock": shock,
          "push": push, "slab": slab, "split": split, "melt": melt, "flood": flood, "spiral": spiral, "kaleido": kaleido,
          "liquid": liquid, "tunnel": tunnel, "mandala": mandala, "trails": trails, "scope": scope, "grid": grid,
          "stack": stack, "pixelsort": pixelsort, "doodle": doodle, "mosh": mosh, "film": film, "tint": tint,
-         "halftone": halftone, "invert": invert, "label": label, "camcorder": camcorder, "shapes": shapes, "key": key}
+         "halftone": halftone, "invert": invert, "label": label, "camcorder": camcorder, "shapes": shapes, "key": key,
+         "paintapp": paintapp}
 
 
 class Paths:

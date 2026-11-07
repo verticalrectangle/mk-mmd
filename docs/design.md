@@ -4663,7 +4663,10 @@ spreads over at least 0.1 s and an eraser takes at least 0.2. `strength` mixes e
 The frame an eraser holds is read as a film's held frame is: `mk post` keeps it as it goes through the frames, `mk look`
 renders it beside the frames asked for (with the points of the fills on it). A paint app's stamps count for `mk assets
 credits` and `mk export web` as a mandala's sprites do. A 1080p frame takes about 0.05 s, up to 0.3 s with fills and the
-confetti.
+confetti. `--gpu` draws a paint app that is only stamps (`ui = false`, `cursor = false`, no `bucket`, `eraser` or `undo`)
+on mkr-post, each stamp a sticker as a mandala's are ([Post](#post)); a 1080p frame with a dozen stamps is about 20 ms
+there for 60 ms on the CPU, the eyes' pupils (the wobble of each worked out per frame by the workers, as the CPU does)
+adding 80 ms to either.
 
 ```toml
 [[fx]]                        # the paint app over the drop: veggies stamped on the kicks, the wall filled, undo, an eraser
@@ -6264,6 +6267,7 @@ the CPU:
 | `liquid`, `flood`, `spiral`, `tint`, `invert`, `halftone` | |
 | `shapes` (the cells, their deal and each pixel's cell worked out by the workers, the box blur at each cell's middle and the shapes drawn by mkr-post; the layout before too while a new one pops in), `key` (a `burn`'s frames read from the cut's PNGs and keyed again at their own tolerance, a `clip` back decoded and fitted as `footage`'s is, a `delay` frame read as an echo's) | a figure layer, or a cut frame a `burn` or `delay` reads, that is not an 8-bit PNG of the output's size |
 | `mandala` (sprite, shape and figure rings, the centre figure, pattern backs, googly eyes and smiles) | a figure moved by `keys`, `at` or `height`; a silkscreen fill |
+| `paintapp` that is only stamps (`ui = false`, `cursor = false`, no `bucket`, `eraser` or `undo`: each stamp a sticker in the order it landed, popping, turning, drifting and fading, with its die-cut edge, shadow, googly eyes and smile; the pupils' and sparkles' coverages drawn by the workers, as the CPU path draws them; an `aspect` table's own `at` too) | a paint app with the chrome, a cursor, a `bucket`, an `eraser` or an `undo` (the entry stays on the CPU, every frame of it) |
 | `grid` (colour and picture backs, silkscreen fills) | pattern backs |
 | `stack` | wallpaper bands, era looks, squash, silkscreen and copies under 0.75 |
 | `doodle`, `label`, `camcorder` (strokes, text, leaders, the tape's random parts and its stamp drawn by the workers), `film` (in a `rect` too: its box printed as a picture of its own) | |

@@ -284,6 +284,26 @@ def _cov(d):
     return np.clip(0.5 - d, 0.0, 1.0).astype(np.float32)
 
 
+def poly_cover(shape, pts, line=0.0):
+    """The coverage (uint8, 0..255, OpenCV's antialiased fill at SHIFT bits) of polygon `pts` (px) on a picture of `shape`
+    (h, w), with the coverage of an outline `line` px out from it (None: `line` 0): (x0, y0, outline, fill), the two
+    covering the same box whose top left is pixel (x0, y0); None when the box misses the picture."""
+    h, w = shape
+    pad = line + 2.0
+    x0, y0 = max(int(math.floor(pts[:, 0].min() - pad)), 0), max(int(math.floor(pts[:, 1].min() - pad)), 0)
+    x1, y1 = min(int(math.ceil(pts[:, 0].max() + pad)) + 1, w), min(int(math.ceil(pts[:, 1].max() + pad)) + 1, h)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    q = np.rint((pts - (x0, y0)) * (1 << SHIFT)).astype(np.int32)
+    outline = None
+    if line > 0.0:
+        outline = np.zeros((y1 - y0, x1 - x0), np.uint8)
+        cv2.polylines(outline, [q], True, 255, max(int(round(2.0 * line)), 1), cv2.LINE_AA, SHIFT)
+    fill = np.zeros((y1 - y0, x1 - x0), np.uint8)
+    cv2.fillPoly(fill, [q], 255, cv2.LINE_AA, SHIFT)
+    return x0, y0, outline, fill
+
+
 def _between(a, b, mask):
     """A new picture: `a` where `mask` (uint8 coverage, 0..255) is 0, `b` where it is 255, mixed between."""
     if not mask.any():
@@ -597,13 +617,13 @@ class PaintAppFx:
         scale, turn, age = (1e-3, PA.SETTLE, 0.0) if s is None else (max(s[0], 1e-3), s[1], s[3])
         return MDF.placed(tile, self._pa_at(fx, st, it, age), PA.stamp_angle(fx, it["j"]) + turn, scale)
 
-    def _pa_stamp(self, fx, st, it, t, state, canvas):
+    def _pa_pose(self, fx, st, it, t, state):
+        """(tile, map, pupils, shadow) of stamp `it` at clip second `t` (`state` its stamp_state): its sticker tile, the
+        affine map that lays it, its pupils' offsets (None: at rest or no eyes) and its drop shadow (mkmmd.mandala.lay's
+        argument: its alpha faded with the stamp; None for none)."""
         sp = fx["stamps"]
         tile = self._pa_tile(fx, st, it["j"])
         M = self._pa_map(fx, st, it, tile, t)
-        if state[2] < 1.0:
-            k = np.float32(state[2])
-            tile = tile._replace(rgb=tile.rgb * k, a=tile.a * k, ring=None if tile.ring is None else tile.ring * k)
         pupils = None
         face = sp["face"]
         if face is not None and face["eyes"]:
@@ -614,39 +634,48 @@ class PaintAppFx:
         sh = sp["shadow"]
         shadow = None if sh is None else (sh["color"], (sh["offset"][0] * self.size[1], sh["offset"][1] * self.size[1]),
                                           sh["blur"] * self.px, sh["alpha"] * state[2])
+        return tile, M, pupils, shadow
+
+    def _pa_stamp(self, fx, st, it, t, state, canvas):
+        sp = fx["stamps"]
+        tile, M, pupils, shadow = self._pa_pose(fx, st, it, t, state)
+        if state[2] < 1.0:
+            k = np.float32(state[2])
+            tile = tile._replace(rgb=tile.rgb * k, a=tile.a * k, ring=None if tile.ring is None else tile.ring * k)
         MDF.lay(canvas, tile, M, None if sp["edge"] is None else sp["edge"]["color"], shadow, pupils=pupils)
         self._pa_sparkles(fx, it["j"], state[3], self._pa_at(fx, st, it, state[3]), canvas)
 
-    def _pa_sparkles(self, fx, j, age, centre, canvas):
-        """The sparkles round stamp j (its middle at `centre` px) `age` s after it lands."""
+    def _pa_sparks(self, fx, j, age, centre):
+        """The sparkles round stamp j (its middle at `centre` px) `age` s after it lands: [(points px, accent colour,
+        alpha)], those big enough to show."""
         size = fx["stamps"]["size"] * min(self.size)
+        out = []
         for dx, dy, s, ang, k, alpha in PA.sparkles(fx, j, age):
             r = s * size
             if r < 0.5 or alpha <= 0.0:
                 continue
             pts = MD._turned(_star(r), ang) + (centre[0] + dx * size, centre[1] + dy * size)
-            self._pa_poly(canvas, pts, fx["art"][PA.ACCENTS[k]], alpha, fx["ink"], max(1.5 * self.px, 0.8))
+            out.append((pts, fx["art"][PA.ACCENTS[k]], alpha))
+        return out
+
+    def _pa_sparkles(self, fx, j, age, centre, canvas):
+        """The sparkles round stamp j (its middle at `centre` px) `age` s after it lands."""
+        for pts, colour, alpha in self._pa_sparks(fx, j, age, centre):
+            self._pa_poly(canvas, pts, colour, alpha, fx["ink"], max(1.5 * self.px, 0.8))
 
     @staticmethod
     def _pa_poly(canvas, pts, colour, alpha, ink=None, line=0.0):
         """`canvas` (in place) with the polygon `pts` (px) filled in `colour` at `alpha`, with an `ink` line round it."""
-        h, w = canvas.shape[:2]
-        pad = line + 2.0
-        x0, y0 = max(int(math.floor(pts[:, 0].min() - pad)), 0), max(int(math.floor(pts[:, 1].min() - pad)), 0)
-        x1, y1 = min(int(math.ceil(pts[:, 0].max() + pad)) + 1, w), min(int(math.ceil(pts[:, 1].max() + pad)) + 1, h)
-        if x1 <= x0 or y1 <= y0:
+        got = poly_cover(canvas.shape[:2], pts, line)
+        if got is None:
             return
-        q = np.rint((pts - (x0, y0)) * (1 << SHIFT)).astype(np.int32)
-        cov = np.zeros((y1 - y0, x1 - x0), np.uint8)
-        region = canvas[y0:y1, x0:x1]
-        if ink is not None and line > 0.0:
-            cv2.polylines(cov, [q], True, 255, max(int(round(2.0 * line)), 1), cv2.LINE_AA, SHIFT)
-            c = (cov.astype(np.float32) / np.float32(255.0) * np.float32(alpha))[..., None]
+        x0, y0, outline, fill = got
+        region = canvas[y0:y0 + fill.shape[0], x0:x0 + fill.shape[1]]
+        if ink is not None and outline is not None:
+            c = (outline.astype(np.float32) / np.float32(255.0) * np.float32(alpha))[..., None]
             region *= 1.0 - c
             region += np.asarray(ink, np.float32) * c
-            cov[:] = 0
-        cv2.fillPoly(cov, [q], 255, cv2.LINE_AA, SHIFT)
-        c = (cov.astype(np.float32) / np.float32(255.0) * np.float32(alpha))[..., None]
+        c = (fill.astype(np.float32) / np.float32(255.0) * np.float32(alpha))[..., None]
         region *= 1.0 - c
         region += np.asarray(colour, np.float32) * c
 
