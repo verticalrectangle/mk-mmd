@@ -58,7 +58,10 @@ mkmmd.core.paintapp's. The paper world's `activity` (a workbook page and its exe
 laser beams sweeping on the hits from points of the frame or the scene) are mkmmd.core.lasers'. A video sticker `clip`
 (a clip cut out in a shape, a die-cut sticker laid over the picture, screened onto it for light trails) is
 mkmmd.core.videosticker's. `prints` (real photographs dealt over the picture as prints on cream cards, scattered, on a
-ring round a point or pinned over a base print) are mkmmd.core.prints'.
+ring round a point or pinned over a base print) are mkmmd.core.prints'. `key` (a colour of the picture keyed out and
+pushed too far: a video, a colour or the frame before burning through in colour fringes and crushed steps) is
+mkmmd.core.colorkey's, and `shapes` (the picture as flat circles, squares, triangles and diamonds, a cell each,
+refining on the hits) is mkmmd.core.shapes'.
 
 Any entry may give `aspect.<output>` tables: its own keys for one output (the span, the figure and the frames it reads
 stay the entry's).
@@ -69,6 +72,7 @@ import math
 import numpy as np
 
 from . import activity as AC
+from . import colorkey as CK
 from . import eralook as ER
 from . import fields as FL
 from . import labels as LB
@@ -79,6 +83,7 @@ from . import paintapp as PA
 from . import picturefx as PF
 from . import prints as PR
 from . import remap as RM
+from . import shapes as SH
 from . import shotstyle as SS
 from . import stack as SK
 from . import tween as TW
@@ -87,8 +92,8 @@ from . import videosticker as VS
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
          "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS + \
-    LZ.KINDS + VS.KINDS + PR.KINDS
-CLIPS = ("footage",) + VS.KINDS                         # the kinds that show a video `clip` (mkmmd.footage reads it)
+    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS
+CLIPS = ("footage",) + VS.KINDS + CK.KINDS              # the kinds that show a video `clip` (mkmmd.footage reads it)
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 SILK = "silkscreen"                                     # a collage's fill: the figure printed in flat inks, Warhol's
 BLENDS = ("lighten", "darken")
@@ -187,6 +192,8 @@ KEYS.update({k: _COMMON | own for k, own in VS.KEYS.items()})
 DEFAULTS.update(VS.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in PR.KEYS.items()})
 DEFAULTS.update(PR.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in {**CK.KEYS, **SH.KEYS}.items()})
+DEFAULTS.update({**CK.DEFAULTS, **SH.DEFAULTS})
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
 AXES = ("x", "y", "xy")                                 # a mirror's fold: about a vertical line, a horizontal one, both
 FITS = ("cover", "contain")                             # how footage meets the frame: filled and cropped, or whole
@@ -407,6 +414,10 @@ def normalize(spec, palette, what="fx"):
         VS.normalize(spec, out, palette, what)
     elif kind in PR.KINDS:
         PR.normalize(spec, out, palette, what)
+    elif kind in CK.KINDS:
+        CK.normalize(spec, out, palette, what)
+    elif kind in SH.KINDS:
+        SH.normalize(spec, out, palette, what)
     out["aspect"] = _aspects(spec, palette, label, what)
     return out
 
@@ -860,6 +871,8 @@ def sources(fx, frame, frame0, hits=None):
         out = [g for _, g in PF.captures(fx, times, fx["frame_rate"], frame0) if g <= frame]
     elif k in PA.KINDS:
         out = PA.sources(fx, frame)
+    elif k in CK.KINDS:
+        out = CK.sources(fx, frame)
     else:
         out = []
     if k in FIGURES and _found_pivot(fx) and frame != fx["f0"] and fx["f0"] not in out:

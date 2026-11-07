@@ -3837,7 +3837,7 @@ entry in its palette colours mixed by that frame's mix, in `mk post` and `mk loo
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)) (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)) (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
 | `aspect` | any entry: `[fx.aspect.<output>]`, its own keys for one output ([Each output its own: aspect](#each-output-its-own-aspect)) |
 | `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears, the lasers' light, the prints' mix. A push has none |
@@ -4903,6 +4903,97 @@ photos = { tag = ["photo", "crew"] }
 order = "shuffle"
 lane = "chug"
 every = 3
+```
+
+#### Keys pushed too far
+
+`kind = "key"` keys a colour out of the picture and pushes the key past clean, so what lies behind burns through in
+colour fringes and crushed steps, as a video key turned up until it breaks and its planes pushed about. `mkmmd/core/colorkey.py`
+checks it and times its tolerance (tested), `mkmmd/colorkey.py` draws it per pixel: how far each pixel's colour lies from
+the key colour, a matte for each of the red, green and blue planes at its own tolerance, crushed into steps, the trail of
+the frames before, and what shows through laid in plane by plane. What shows through is one of a video (`clip`, read and
+fitted to cover the frame by `mkmmd/footage.py` as footage's, credited as footage is), a flat colour (`back`) or the cut's
+own frame `delay` frames before. A pixel within `tolerance` of the colour is keyed fully, one past `tolerance` + `soft`
+not at all; with `split` the red plane keys wider and the blue narrower (or each plane by its own offset), so the edge of
+the key comes apart into fringes of the picture's own planes, and `bands` crushes the matte into hard steps. A `burn`
+keeps the key of the cut's frames before (keyed at their own tolerance, as an echo reads them: without the effects
+before it in the table), frame j back weighing `fade` ** j: moving edges smear into one another. The tolerance moves
+with its keys, with a stem's loudness (`follow`: the world pouring in while the voice sings) and on the hits (`pump`).
+About 0.1 s a 1080p frame, 0.25 s with a spill, a mask and a trail on the CPU; `--gpu` draws it on mkr-post
+([Post](#post)), a pass a frame of the trail more.
+
+| Key | Meaning |
+|---|---|
+| `color`, `space` | the colour keyed out (`base`) and how a pixel's distance from it is measured: `rgb` (default: the Euclidean distance over sqrt 3, 0..1), `chroma` (in the BT.709 Cb Cr plane alone, brightness left out, as a chroma keyer: a lit and a shaded green key alike) or `luma` (brightness alone: key the dark and only the lights are left) |
+| `tolerance`, `soft` | keyed fully within `tolerance` (0.15; a number or `[[t, v], ...]` keys over clip seconds, as a `strength`), not at all past `soft` (0.1) further, a hard step with 0 |
+| `split`, `bands` | each plane its own tolerance: a number s (0) keys red s wider and blue s narrower, `[r, g, b]` an offset each (-1 .. 1); `bands` crushes each plane's matte into that many equal steps (0: smooth, up to 64) |
+| `clip`, `in`, `rate`, `loop`, `focus`, `mirror` | what shows through: a video (a file or an asset slug), as footage's keys, always fitted to cover the frame |
+| `back`, `delay` | or a flat colour, or the cut's frame `delay` frames before (1 .. 600; the clip's first frame stands in before it): one of `clip`, `back`, `delay` (required) |
+| `gain` | `[r, g, b]` multipliers (0 .. 8, `[1, 1, 1]`) on what shows through before it is laid in: push a plane and the burn takes a cast |
+| `spill` | a colour, or `{color, amount, reach}`: what is left of the picture near the key colour stained toward it, by `amount` (0.5) where it all but keys, nothing `reach` (0.15) past `tolerance` + `soft` |
+| `burn`, `fade` | the key of the `burn` (0 .. 60, 0) cut frames before kept as a trail, frame j back at `fade` ** j (0.7) |
+| `follow` | `true` or `{stem, amount, smooth, range, timeline}`: the tolerance grows by `amount` (0.2) times a stem's loudness (`vocals`; `drums`, `bass`, `other`, `mix`, from the stems cached when `timeline`, `audio/timeline.json`, was analysed), 1 at the span's loud passages (their 95th percentile) and 0 `range` dB (24) under them, smoothed over `smooth` s (0.12) |
+| `pump`, `decay`, `times`, `lane`, `min_db`, `every` | the tolerance grows by `pump` (-2 .. 2) on each hit, rising over 0.02 s and dying as exp(-age / `decay`) (0.25 s), the strongest counting; a pump needs hits and hits need a pump |
+| `mask`, `objects` | `ground` keeps the key off the figure (its coverage: the figure is left exactly as it was, though it wears the key colour), `figure` keys inside it alone |
+| `spread`, `center` | the key opens from a point: each pixel's tolerance is `spread` (0 .. 20, 0: none) lower for every frame height it lies from `center` (`[x, y]` frame fractions or `{point = "<expression>"}`, projected on every frame as an effect's centre is; the middle by default; only with a spread), so a flat ground keys first round the point and the burn grows out from it as the tolerance rises, its front coming apart in the `split` and the `bands` |
+
+```toml
+[[fx]]                        # the cream fails round her head: the jungle opens out from it, wider on every downbeat
+kind = "key"
+from = 7.38
+to = 14.77
+color = "base"
+clip = "pexels_29780524"
+tolerance = [[7.38, 0.0], [9.23, 0.07], [11.08, 0.14], [12.92, 0.22], [14.5, 0.34]]
+spread = 0.3
+center = { point = "bone('head', 'Rin_arm').center" }
+soft = 0.025
+split = 0.012
+bands = 4
+burn = 5
+gain = [1.12, 1.0, 1.18]
+follow = { stem = "vocals", amount = 0.02 }
+pump = 0.05
+times = [7.38, 9.23, 11.08, 12.92]
+mask = "ground"
+objects = "Rin*"
+```
+
+#### Shapes
+
+`kind = "shapes"` redraws the picture as flat shapes, a circle, square, triangle or diamond in each cell of a lattice,
+each in the colour of the picture under its cell: a figure comes apart into a mosaic of shapes, and with the cell
+shrinking on the hits it assembles out of them. `mkmmd/core/shapes.py` checks it, times the cell and deals the shapes
+(tested), `mkmmd/shapes.py` draws it: each pixel finds its cell in closed form and draws that cell's shape as a signed
+distance antialiased over a pixel, a shape never past the circle its cell's shorter side holds (whatever its turn, and
+while it pops). The cells are `cell` short sides apart in offset rows (`hex`) or a square `grid`, centred on the
+frame's middle; each shape's colour is the picture averaged over about a cell at its middle, or one of `inks`. On a
+flat `back` a cell of the back's own colour draws nothing (`skip`), so a figure on a plain ground comes apart and the
+ground stays empty; over the picture (`back = "picture"`) the picture shows between the shapes. Everything is a
+function of the clip second, the hits and the `seed`: any frame comes out the same in any order. About 0.05 to 0.2 s a
+1080p frame on the CPU; `--gpu` draws it on mkr-post ([Post](#post)).
+
+| Key | Meaning |
+|---|---|
+| `cell`, `layout` | the cells' spacing, short sides (0.05, 0.004 .. 1; a number or `[[t, v], ...]` keys over clip seconds); `hex` (default: offset rows sqrt 3 / 2 of a cell apart) or `grid` |
+| `times`, `lane`, `min_db`, `every` | with hits the cell changes only on them (its keys read at the last hit, held until the next): the picture refines or coarsens on the beat, each layout a new deal; without them it follows its keys on every frame |
+| `shape`, `size`, `turn`, `spin`, `seed` | `circle`, `square`, `triangle` (a point up), `diamond` or a list to deal from (`["circle", "triangle", "square"]`); a shape's size, a share of its cell's inscribed circle (0.92); turned at random within ± `turn` degrees (0) and spinning `spin` degrees a second (0); the deal (1) |
+| `inks`, `pick` | colours the shapes take instead of the picture's: `nearest` (default: each cell's colour snapped to the nearest ink), `shape` (shape j of `shape` in ink j, round and round) or `deal` (dealt at random) |
+| `back`, `skip` | what lies between the shapes: `"picture"` (default) or a colour, a cell within `skip` (0.06, RGB distance over sqrt 3) of whose colour draws nothing |
+| `pop`, `stagger` | each layout's shapes pop in over `pop` s (0.15; 0: there at once), out of nothing and 15 % past their size, cell by cell up to `stagger` s (0.1) apart |
+| `mask`, `objects` | `figure` keeps the shapes to the figure, `ground` to what is round it: the rest of the picture stays exactly |
+
+```toml
+[[fx]]                        # her silhouette assembles out of shapes, finer on every kick: plum circles, rose triangles, pine squares
+kind = "shapes"
+from = 0.0
+to = 7.38
+cell = [[0.0, 0.45], [7.38, 0.012]]
+lane = "kick"
+back = "base"
+inks = ["text", "love", "pine"]
+pick = "shape"
+turn = 25
 ```
 
 #### Each output its own: aspect
@@ -6171,6 +6262,7 @@ the CPU:
 | `pixelsort` | lines over 4096 px; and it is always the first op of its frame (below) |
 | `footage` (the clip decoded and fitted by OpenCV as the CPU path reads it, in the planning process, and handed over as rgb24: an enlarging fit's bicubic is IPP's, which no kernel would match) | a pattern round a contained clip |
 | `liquid`, `flood`, `spiral`, `tint`, `invert`, `halftone` | |
+| `shapes` (the cells, their deal and each pixel's cell worked out by the workers, the box blur at each cell's middle and the shapes drawn by mkr-post; the layout before too while a new one pops in), `key` (a `burn`'s frames read from the cut's PNGs and keyed again at their own tolerance, a `clip` back decoded and fitted as `footage`'s is, a `delay` frame read as an echo's) | a figure layer, or a cut frame a `burn` or `delay` reads, that is not an 8-bit PNG of the output's size |
 | `mandala` (sprite, shape and figure rings, the centre figure, pattern backs, googly eyes and smiles) | a figure moved by `keys`, `at` or `height`; a silkscreen fill |
 | `grid` (colour and picture backs, silkscreen fills) | pattern backs |
 | `stack` | wallpaper bands, era looks, squash, silkscreen and copies under 0.75 |

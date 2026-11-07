@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from . import activity as ACF
+from . import colorkey as CKF
 from . import eralook as ERF
 from . import fields as FL
 from . import footage as FT
@@ -20,6 +21,7 @@ from . import paintapp as PAF
 from . import picturefx as PF
 from . import prints as PRF
 from . import remap as RMF
+from . import shapes as SHF
 from . import stack as SKF
 from . import videosticker as VSF
 from .core import breathe as BR
@@ -886,7 +888,7 @@ def check_footage(fxs, footage_of):
 
 # ================================================================================================= over a cut
 class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
-              SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx):
+              SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx, CKF.KeyFx, SHF.ShapesFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
@@ -951,6 +953,7 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         self._era_init()
         self._paintapp_init()
         self._prints_init()
+        self._key_init()
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))

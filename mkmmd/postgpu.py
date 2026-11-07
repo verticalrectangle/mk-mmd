@@ -114,12 +114,12 @@ def dropped(ffx, frame):
 
 def hand(ffx, ops, folder=None, footage_of=None, kept=None):
     """`ops` (from ops, for a frame of `ffx`) made ready for mkr-post in place, by the process that sends them, the files
-    they need written into `folder` (default `ffx.paths.scratch`): a footage op's clip frame decoded and fitted
-    (mkmmd.gpufx.footage.hand: one decoder per clip, read in order) from `footage_of` (mkmmd.footage.source; default
-    the FrameFx's own clips), or taken from `kept` (mkmmd.gpufx.footage.Kept: fitted for this output by the run's
-    output before that decoded it); `ops`."""
+    they need written into `folder` (default `ffx.paths.scratch`): a footage op's (or a key's) clip frame decoded and
+    fitted (mkmmd.gpufx.footage.hand: one decoder per clip, read in order) from `footage_of` (mkmmd.footage.source;
+    default the FrameFx's own clips), or taken from `kept` (mkmmd.gpufx.footage.Kept: fitted for this output by the
+    run's output before that decoded it); `ops`."""
     for op in ops:
-        if op["op"] == "footage" and "name" in op["clip"]:
+        if op["op"] in ("footage", "key") and isinstance(op.get("clip"), dict) and "name" in op["clip"]:
             GFX.footage.hand(ffx, op, folder or ffx.paths.scratch, footage_of, kept)
     return ops
 

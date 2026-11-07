@@ -54,11 +54,14 @@ pub mod invert;
 pub mod inks;
 pub mod camcorder;
 pub mod silk;
+pub mod shapes;
+pub mod key;
 
 /// The ops mkr-post draws (`mkr-post info`).
 pub const OPS: &[&str] = &["warp", "echo", "slitscan", "lens", "shock", "push", "slab", "split", "melt", "footage", "flood",
                            "spiral", "kaleido", "liquid", "tunnel", "mandala", "trails", "scope", "grid", "stack",
-                           "pixelsort", "doodle", "mosh", "film", "tint", "halftone", "invert", "inks", "camcorder"];
+                           "pixelsort", "doodle", "mosh", "film", "tint", "halftone", "invert", "inks", "camcorder",
+                           "shapes", "key"];
 
 /// One frame effect's picture work.
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +96,8 @@ pub enum Op {
     Invert(invert::Invert),
     Inks(inks::Inks),
     Camcorder(camcorder::Camcorder),
+    Shapes(shapes::Shapes),
+    Key(key::Key),
 }
 
 impl Op {
@@ -127,6 +132,8 @@ impl Op {
             Op::Invert(o) => o,
             Op::Inks(o) => o,
             Op::Camcorder(o) => o,
+            Op::Shapes(o) => o,
+            Op::Key(o) => o,
         }
     }
 }

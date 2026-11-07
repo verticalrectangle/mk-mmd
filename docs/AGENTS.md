@@ -291,7 +291,14 @@ fingertip bone's `.tail` and the prop.
   A photo `booth` with `look = "purikura"` ([Picture effects](design.md#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)) is a
   purikura strip: captures on a `lane` through a beauty filter, pastel frames on dotted paper, sticker stamps (the doodle shapes, now with
   `bow`, `flower`, `twinkle`, `bubble`, `note`, `bunny_ears`, `whiskers`, `blush`), `purikura.marks` (ears on her head) and a date or a word
-  per photo written by a gel pen (`purikura.write`, never lyrics); its flash fires three times a second at most.
+  per photo written by a gel pen (`purikura.write`, never lyrics); its flash fires three times a second at most. A `key`
+  ([Keys pushed too far](design.md#keys-pushed-too-far)) keys a colour out (the silhouette's flat ground, a sky, a leaf green) and pushes
+  it past clean: a clip, a colour or the frame before burns through in fringes (`split`: each plane its own tolerance) and crushed
+  steps (`bands`), leaving a trail (`burn`), widening while a stem sings (`follow`) or on the hits (`pump`), opening out from a point
+  such as her head (`spread`, `center`), `mask = "ground"` off her.
+  `shapes` ([Shapes](design.md#shapes)) redraws the picture as flat circles, squares, triangles and diamonds, a cell each in the colour
+  under it (or `inks`, one per shape kind with `pick = "shape"`); on a flat `back` the ground stays empty, so a silhouette comes
+  apart, and a `cell` keyed down on a `lane` assembles her out of shapes, finer on every hit.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
   nib, and screen type laid over the picture. Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
   Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
