@@ -781,7 +781,7 @@ def fx_frames(pl, frames, hits=None, before=None):
                         break
                     items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(e)]
                     items += _figure_reads(pl, e, g)
-                if FX.holds(fx):
+                if FX.holds(fx) or FX.points_before(fx):
                     items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(fx)]
                 bucket += [it for it in items if it not in bucket]
                 if FX.holds(fx):                         # the held frame is drawn again: what its effects read too

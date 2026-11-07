@@ -44,6 +44,15 @@ def halves():
     return img
 
 
+def test_mk_look_renders_the_opening_point_on_every_frame_a_trail_keys_again():
+    proj = {"project": {"duration": 4.0}, "output": [{"name": "o", "size": [W, H]}],
+            "shot": [{"name": "a", "from": 0.0, "to": 4.0}],
+            "fx": [key(burn=2, spread=0.5, center={"point": "obj('o').loc"})]}
+    point = {"kind": "point", "key": "x0", "expr": "obj('o').loc", "shot": "a"}
+    reads = TR.fx_frames(TR.plan(proj, FPS, F0, DAWN), [F0 + 30])
+    assert point in reads[F0 + 29] and point in reads[F0 + 28]
+
+
 def test_the_key_colour_shows_what_lies_behind_and_the_rest_stays_exactly():
     fx = entries(key(tolerance=0.05, gain=[1.0, 1.0, 1.0]))
     out = runner(fx).frame(F0 + 3, halves())

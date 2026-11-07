@@ -822,6 +822,12 @@ def holds(fx):
         fx["kind"] in PA.KINDS and PA.holds(fx))
 
 
+def points_before(fx):
+    """Whether an effect reads its own scene points on the frames before that it reads, besides its own frame: a key
+    whose `spread` opens from a point keys each frame of its `burn` trail about that point there."""
+    return fx["kind"] in CK.KINDS and fx["spread"] > 0 and fx["burn"] > 0
+
+
 def at(fxs, frame):
     """The effects on `frame`, in table order."""
     return [fx for fx in fxs if fx["f0"] <= frame < fx["f1"]]
