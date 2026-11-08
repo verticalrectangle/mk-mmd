@@ -11,8 +11,9 @@ from .common import add_project_arg, emit, get_project, UsageError
 HELP = """Analyse a song span into a timeline JSON (docs/design.md: Timeline): beats and downbeats (Demucs drum stem,
 dynamic-programming beat tracker, constant grid when steady), per-frame vocal / mix / drum loudness, note onsets (when
 each pluck or strum of the `other` stem starts, in clip seconds), and word timings (Whisper transcription or a lyrics
-file you provide, aligned on the vocal stem with wav2vec2 CTC and snapped to the sung onsets). Lines are numbered from
-1, words from 1 within a line; the printed summary never contains lyric text.
+file you provide, aligned on the vocal stem with wav2vec2 CTC and snapped to the sung onsets; `--align tokens` places
+them on Whisper's own words instead, see `words` below). Lines are numbered from 1, words from 1 within a line; the
+printed summary never contains lyric text.
 
 Needs the timeline extra (torch, demucs, faster-whisper). In a project, defaults come from [audio] (file, start) and
 [project] (duration, fps), and the result goes to audio/timeline.json.
@@ -23,6 +24,14 @@ hits. It sets `onsets` and `onsets_meta` for that stem and nothing else in the f
 count, onsets per beat and how they sit on the 8th-note grid of the beats (median offset and spread in ms, empty 8ths,
 onsets between 8ths). --lo/--hi (Hz) is the band whose energy rises are the onsets (default 800-6000: pick noise and
 string harmonics).
+
+`words` re-times the words of an EXISTING timeline (mkmmd.timeline.tokens) and leaves every other key as it was: the
+known lines (--lyrics, default the timeline's own) are matched to Whisper's tokens by a monotone alignment and each word
+is put on a sung onset of the vocal stem near its token (Whisper's word ends sit on the next sung onset, its starts
+drift), no word of a line after a pause, a delay's echo not taken for a new word. It is the way out when CTC put a
+repeated line on the wrong repeat or a line in a vocal gap. Tokens come from --tokens (a timeline that `analyze`
+wrote WITHOUT --lyrics, words_source "whisper", over any span holding the clip: it is shifted by the two audio
+starts) or from a fresh Whisper run on the clip. Prints numbers only.
 
 `hits` writes the hit lanes of a timeline's song span, from the same cached stems, to a hits file (`[audio] hits`,
 default audio/hits.json): when the drums are struck (kick, snare, hat: {t, db}), when the mix or the bass falls silent
@@ -39,6 +48,7 @@ Examples:
   mk timeline onsets --timeline /tmp/tl.json --stem other --lo 1000 --hi 5000
   mk timeline hits                                   # audio/hits.json: kick, snare, hat, stop, bass_out, notes
   mk timeline hits --lane clap=drums:1000-4000 --gap breath=vocals:12:0.15
+  mk timeline words --lyrics lyrics.txt --tokens audio/whisper_tl.json --out audio/timeline_lyrics.json
 """
 STEMS = ("drums", "bass", "other", "vocals")
 
@@ -55,6 +65,9 @@ def add(sub):
                    "project's, else 30)")
     a.add_argument("--lyrics", help="text file, one sung line per line (never printed)")
     a.add_argument("--no-words", action="store_true", help="beats and loudness only: no transcription, no word timings")
+    a.add_argument("--align", choices=("ctc", "tokens"), default="ctc",
+                   help="how the words are placed: wav2vec2 CTC forced alignment (default) or on Whisper's tokens "
+                   "(mkmmd.timeline.tokens, the same as `words`)")
     a.add_argument("--model", default="large-v3", help="faster-whisper model for the transcription (default large-v3)")
     a.add_argument("--language", default="en", help="language of the words (default en)")
     a.add_argument("--context", type=float, default=20.0,
@@ -84,6 +97,18 @@ def add(sub):
     hi.add_argument("--context", type=float, default=20.0,
                     help="the --context given to analyze: the stem cache is keyed by the song span (default 20)")
     add_project_arg(hi)
+    wo = s.add_parser("words", help="re-time the words of an existing timeline on Whisper's tokens")
+    wo.add_argument("--timeline", help="timeline JSON (default: the project's audio/timeline.json)")
+    wo.add_argument("--lyrics", help="text file, one sung line per line (default: the timeline's own lines; never "
+                    "printed)")
+    wo.add_argument("--tokens", help="a timeline JSON with words_source \"whisper\" to take Whisper's words from "
+                    "(default: transcribe the clip's vocal now)")
+    wo.add_argument("--model", default="large-v3", help="faster-whisper model without --tokens (default large-v3)")
+    wo.add_argument("--language", default="en", help="language of the words (default en)")
+    wo.add_argument("--context", type=float, default=20.0,
+                    help="the --context given to analyze: the stem cache is keyed by the song span (default 20)")
+    wo.add_argument("--out", help="timeline JSON to write (default: --timeline itself)")
+    add_project_arg(wo)
     p.set_defaults(func=run)
 
 
@@ -151,6 +176,43 @@ def hits(args, proj):
     return 0
 
 
+def words(args, proj):
+    """Re-time the words of an existing timeline on Whisper's tokens (mkmmd.timeline.tokens); every other key stays."""
+    path = args.timeline or (proj.root / "audio" / "timeline.json" if proj else None)
+    path = Path(path).expanduser() if path else None
+    if not path or not path.exists():
+        raise UsageError("no timeline file: pass --timeline (or run inside a project with audio/timeline.json)")
+    tl = json.loads(path.read_text(encoding="utf-8"))
+    audio = (tl.get("audio") or {}).get("file")
+    if not audio or not Path(audio).expanduser().exists():
+        raise UsageError(f"{audio or 'no audio block'}: the audio the timeline was analysed from is not there")
+    from ..timeline import analyze as A
+    tokens = None
+    if args.tokens:
+        tk = json.loads(Path(args.tokens).expanduser().read_text(encoding="utf-8"))
+        try:
+            tokens = A.whisper_tokens(tk, tl)
+        except ValueError as e:
+            raise UsageError(f"{args.tokens}: {e}")
+    if args.lyrics:
+        from ..timeline.words import lines_from_file
+        lines = lines_from_file(args.lyrics)
+    else:
+        lines = [[w["text"] for w in ln["words"]] for ln in tl.get("lines", [])]
+    if not any(lines):
+        raise UsageError("no words to place: give --lyrics (the timeline has no lines)")
+    cache = (proj.mk_dir / "cache" / "timeline") if proj else CFG.cache_dir() / "timeline"
+    try:
+        new = A.timeline_words(tl, str(cache), lines, tokens, args.model, args.language, args.context, log=stage)
+    except ValueError as e:
+        raise UsageError(str(e))
+    out = Path(args.out).expanduser() if args.out else path
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(new, ensure_ascii=False, indent=1), encoding="utf-8")
+    emit({"out": str(out), **A.summary(new)})
+    return 0
+
+
 def stage(*what):
     """The analysis's stages (stems, whisper, align) on stderr as `timeline: NAME` lines: the Brief tab shows them while
     it waits. Never lyric text."""
@@ -170,6 +232,8 @@ def run(args):
         return onsets(args, proj)
     if args.action == "hits":
         return hits(args, proj)
+    if args.action == "words":
+        return words(args, proj)
     au = proj.data.get("audio", {}) if proj else {}
     audio = args.audio or au.get("file")
     if not audio:
@@ -188,7 +252,7 @@ def run(args):
     from ..timeline.analyze import analyse, summary
     cache = (proj.mk_dir / "cache" / "timeline") if proj else CFG.cache_dir() / "timeline"
     tl = analyse(audio, start, duration, fps, str(cache), words=not args.no_words, lyrics=args.lyrics,
-                 whisper_model=args.model, language=args.language, context=args.context, log=stage)
+                 whisper_model=args.model, language=args.language, context=args.context, align=args.align, log=stage)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(tl, ensure_ascii=False, indent=1), encoding="utf-8")
     emit({"out": str(out), **summary(tl)})

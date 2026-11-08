@@ -190,7 +190,7 @@ def vocal_onsets(voc, rel_db_fn, sr=SR, hop_s=0.005):
     out = []
     for i in range(8, len(nov) - 8):
         if nov[i] == nov[i - 8:i + 9].max() and nov[i] > med + 2.0 * mad and e[min(len(e) - 1, i + 6)] > -35:
-            out.append((i * hop_s, float((nov[i] - med) / mad)))
+            out.append((i * hop / sr, float((nov[i] - med) / mad)))     # the hop as sampled: int(hop_s * sr) samples
     return out
 
 

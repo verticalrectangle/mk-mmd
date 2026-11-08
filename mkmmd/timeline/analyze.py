@@ -42,9 +42,12 @@ def _shift_words(lines, dt, duration, tol=0.02):
 
 
 def analyse(audio, start=0.0, duration=30.0, fps=30, cache_dir=None, words=True, lyrics=None,
-            whisper_model="large-v3", language="en", context=20.0, log=print):
+            whisper_model="large-v3", language="en", context=20.0, align="ctc", log=print):
     """The timeline of a song span (see the module docstring). `cache_dir` holds the cached Demucs stems (default:
-    `timeline` in the user cache, `MK_CACHE`)."""
+    `timeline` in the user cache, `MK_CACHE`). `align`: how the words are placed, "ctc" (wav2vec2 forced alignment,
+    `words.word_timeline`) or "tokens" (on Whisper's own words, `tokens.word_lines`)."""
+    if align not in ("ctc", "tokens"):
+        raise ValueError(f"align {align!r}: ctc or tokens")
     cache_dir = CFG.cache_dir() / "timeline" if cache_dir is None else cache_dir
     mix, pre, span = load_window(audio, start, duration, context)     # span: the window read (short at the file's end)
     post = max(0.0, span - pre - duration)
@@ -110,11 +113,17 @@ def analyse(audio, start=0.0, duration=30.0, fps=30, cache_dir=None, words=True,
         segs = W.transcribe(v16, whisper_model, language)
         lines = W.lines_from_file(lyrics) if lyrics else W.lines_from_whisper(segs)
         log("align")
-        tl_lines, _, stats = W.word_timeline(v_al, S.SR, lines, length, whisper=segs)
+        if align == "tokens":
+            from . import tokens as T
+            toks = [(w, s, e) for seg in segs for (w, s, e) in seg["words"]]
+            tl_lines, stats = T.word_lines(lines, toks, T.evidence(v_al), length)
+        else:
+            tl_lines, _, stats = W.word_timeline(v_al, S.SR, lines, length, whisper=segs)
         if not lyrics:
             tl_lines = W.resplit_periodic(tl_lines)
         out["lines"] = _shift_words(tl_lines, t0, duration)
-        out["words_source"] = "lyrics file" if lyrics else "whisper"
+        out["words_source"] = ("lyrics file" if lyrics else "whisper") + (", placed on whisper tokens"
+                                                                         if align == "tokens" else "")
         out["word_stats"] = stats
     out["onsets"], out["onsets_meta"] = stem_onsets(st, pre, duration)
     return out
@@ -156,6 +165,52 @@ def timeline_onsets(tl, cache_dir, names=ONSET_STEMS, lo=S.ONSET_LO, hi=S.ONSET_
     from .words import stems
     log("stems")
     return stem_onsets(stems(mix, cache_dir), pre, au["duration"], names, lo, hi)
+
+
+def whisper_tokens(src, tl):
+    """Whisper's words [(text, start, end)] in `tl`'s clip seconds from `src`, a timeline `analyse` wrote without a
+    lyrics file (words_source "whisper": its words are what Whisper heard, its `whisper` times Whisper's own) over any
+    span of the same song: its times are shifted by the difference of the two audio starts."""
+    if src.get("words_source") != "whisper":
+        raise ValueError("its words are not Whisper's (words_source is not \"whisper\"): analyse without --lyrics")
+    if (src.get("audio") or {}).get("start") is None or (tl.get("audio") or {}).get("start") is None:
+        raise ValueError("no audio.start to put its times on the clip's")
+    off = float(src["audio"]["start"]) - float(tl["audio"]["start"])
+    out = []
+    for ln in src.get("lines", []):
+        for w in ln["words"]:
+            s, e = (w.get("whisper") or [w["start"], w["end"]])[:2]
+            out.append((w["text"], float(s) + off, float(e) + off))
+    return sorted(out, key=lambda t: t[1])
+
+
+def timeline_words(tl, cache_dir, lines, tokens=None, whisper_model="large-v3", language="en", context=20.0, log=print):
+    """A copy of the timeline `tl` with its `lines` re-timed on Whisper's tokens (mkmmd.timeline.tokens): `lines` the
+    known words (lists of strings), `tokens` [(text, start, end)] in clip seconds, or None to transcribe the clip's
+    vocal. The stems are read as `timeline_onsets` reads them."""
+    from . import tokens as T
+    from .words import stems, transcribe
+    au = tl.get("audio") or {}
+    missing = [k for k in ("file", "start", "duration", "context") if k not in au]
+    if missing:
+        raise ValueError(f"the timeline has no audio.{' / audio.'.join(missing)}: run `mk timeline analyze`")
+    mix, pre, span = load_window(au["file"], au["start"], au["duration"], context)
+    if abs(pre - au["context"][0]) > 0.002:
+        raise ValueError(f"--context {context:g} is not the one the timeline was analysed with ({au['context']})")
+    log("stems")
+    voc = stems(mix, cache_dir)["vocals"].mean(0)
+    voc = voc[int(pre * S.SR):int((pre + au["duration"]) * S.SR)]          # the clip, cut as `analyse` cuts it
+    if tokens is None:
+        import torch
+        import torchaudio
+        log("whisper")
+        v16 = torchaudio.functional.resample(torch.from_numpy(np.ascontiguousarray(voc))[None], S.SR, 16000)[0].numpy()
+        tokens = [(w, s, e) for seg in transcribe(v16, whisper_model, language) for (w, s, e) in seg["words"]]
+    tokens = [t for t in tokens if -1.0 <= t[1] <= au["duration"] + 1.0]
+    log("align")
+    out_lines, stats = T.word_lines(lines, tokens, T.evidence(voc), au["duration"])
+    return {**tl, "lines": out_lines, "words_source": "lyrics file, placed on whisper tokens", "word_stats": stats}
+
 
 
 def eighths(beats):

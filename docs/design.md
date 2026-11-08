@@ -6606,6 +6606,30 @@ English, words reduced to a-z) times English words; for a song in another langua
 bars only. While it runs, `analyze` names its stages on stderr (`timeline: stems`, `whisper`, `align`): the Brief tab
 shows them.
 
+**When CTC picks the wrong place.** Forced alignment of a known lyric finds the best fit of the words to the whole
+window: a line sung twice in it can land on the earlier repeat, and a line can end up in a vocal gap. Whisper hears
+the words where they are sung, so the token aligner (`mkmmd/timeline/tokens.py`, numpy only) places the known words on
+Whisper's own: a semi-global Needleman-Wunsch matches Whisper's tokens to the words by text similarity (tokens before
+the first and after the last word are free, so the occurrence that holds every line in order wins over a partial
+repeat; a token whose span is not sung scores less, so a repeat heard in silence loses), then a monotone dynamic
+programme puts each word on a sung onset of the vocal stem (a spectral-flux peak, or the voice starting again after a
+stop; a Whisper word boundary where the voice sings as a weak one): near its token's start and, within a line, near
+the previous token's end (Whisper's word ends sit on the next sung onset within tens of ms, its starts drift, by up to
+0.6 s at a phrase start, so a line's first word leans on its token least), strong onsets preferred, at least 0.12 s
+apart, and no word of a line after a pause of 0.35 s or more since the one before. "Sung" is voiced and within 24 dB
+of the vocal's peak, less a delay's echo: a run that comes back after a stop on the pitch of the previous run's last
+second and at least 6 dB under it. A word no token was matched to falls where the onsets and its neighbours put it;
+when the onsets cannot hold every word a 50 ms grid of sung frames is added. Each word ends where the next starts, a
+line's last word when the singing stops. `analyze --align tokens` uses it instead of CTC on the transcription it has
+just made. `mk timeline words [--timeline FILE] [--lyrics FILE] [--tokens FILE] [--out FILE] [--context 20]`
+re-times the words of an existing timeline and changes nothing else (default in place; write a separate file to keep
+the analysis): the lines are `--lyrics`, else the timeline's own; the tokens are those of `--tokens`, a timeline that
+`analyze` wrote without `--lyrics` (`words_source` `"whisper"`) over any span of the same song (its times are moved by
+the difference of the two `audio.start`), else a fresh Whisper run on the clip. The stems are read as `onsets` reads
+them. The words get `ctc_start` null and `whisper` their token's span; `word_stats` counts the words matched exactly
+(`anchored`), loosely (`fuzzy`) and not at all (`unanchored`) and the median distance of an anchored word from its
+token's start. It prints numbers only.
+
 `onsets` (`{"other": [t, ...]}`, clip seconds, sorted) are the moments notes are plucked or strummed in a Demucs stem,
 `onsets_meta` its `band`, `latency_ms` and per-onset `strength` (dB). `analyze` stores the `other` stem (guitars and keys).
 The detector (`signal.band_onsets`, numpy only) is the spectral flux of the stem in 800-6000 Hz (pick noise and string
