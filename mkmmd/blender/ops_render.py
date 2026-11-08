@@ -6,8 +6,10 @@ args["styles"] = false renders every shot as it is lit. args["demands"] ({frame:
 mkmmd.core.transition.demands) are the layers the transitions and inserts of the project need next to those frames
 (plates, mattes, projected points: see mkmmd.blender.transition), drawn on the same terms. Screen type (docs/design.md:
 Text, Screen type) is kept off the frame: `screen/<frame>.png` (RGBA, written before the frame) holds it, for `mk post`
-to lay over the cut's frame and its effects. args["keep"] ({armature, materials}: `[post] keep`, mkmmd.core.keep) adds
-`keep/<frame>.png`, the mask of where those materials are seen (written before the frame; a frame on disk without one
+to lay over the cut's frame and its effects (`negative = true` type is its coverage alone, in `negative/<frame>.png`,
+written before the screen layer: `mk post` inverts the picture under it). args["keep"] ({armature, materials}: `[post] keep`,
+mkmmd.core.keep) adds `keep/<frame>.png`, the mask of where those materials are seen (written before the frame; a frame on
+disk without one
 gets it). args["mk"] lists frames mk's own renderer draws (mkmmd.render): this job leaves them alone and draws only the
 layers of those in args["mk_layers"] (its share), the screen type first, but for the screen type of args["mk_screen"]
 and the keep masks of args["mk_keep"] (frames whose layer that renderer draws itself: mkmmd.render.mkr). A frame or
@@ -106,7 +108,7 @@ def render_frames(args):
                         masks += keep_layer(kpath)
                     if screen:
                         looks.prepare(f, args.get("aspect"))
-                        screens += looks.screen_layer(layer)
+                        screens += looks.screen_layer(layer, os.path.join(out_dir, SRT.negative_rel(f)))
                     if layers:
                         drawn += layers.run(f)
                 continue
@@ -129,7 +131,8 @@ def render_frames(args):
                 kind = looks.prepare(f, args.get("aspect")) if looks else None
                 if kind:
                     kinds[kind] = kinds.get(kind, 0) + 1
-                    looks.render(path, layer=os.path.join(out_dir, SRT.layer_rel(f)))
+                    looks.render(path, layer=os.path.join(out_dir, SRT.layer_rel(f)),
+                                 negative=os.path.join(out_dir, SRT.negative_rel(f)))
                 else:
                     bpy.ops.render.render(write_still=True)
                 done += 1

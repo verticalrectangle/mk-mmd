@@ -368,7 +368,8 @@ def split(req, out_plan, frames_dir, output=None):
     """(mine, theirs) for one output: `mine` the request mkr draws (`draw`), every layer not on disk that `plan` gave it
     and, with `output`, the look jobs of its frames and layers; `theirs` what Blender's job draws: "demands" {frame:
     [items]}, "keep" and "screen" (mkr's frames whose keep mask or screen type mkr cannot draw), with "mk_keep" /
-    "mk_screen" the frames whose own mkr draws."""
+    "mk_screen" the frames whose own mkr draws. A frame's screen type is on disk with its screen layer and, where
+    `plan` says it has negative type ("negative"), its negative layer."""
     root = Path(frames_dir)
     verdicts = out_plan.get("layers") or {}
     mine = {"items": {}, "keep": None, "screen": None}
@@ -383,12 +384,19 @@ def split(req, out_plan, frames_dir, output=None):
             else:
                 theirs["demands"].setdefault(int(f), []).append({k: v for k, v in item.items()
                                                                   if k not in ("names", "looks", "look_names")})
-    for kind, rel in (("keep", KP.rel), ("screen", SRT.layer_rel)):
+    negative = set((out_plan.get("screen") or {}).get("negative") or ())
+
+    def done(kind, f):
+        if kind == "keep":
+            return _done(root / KP.rel(f))
+        return _done(root / SRT.layer_rel(f)) and (f not in negative or _done(root / SRT.negative_rel(f)))
+
+    for kind in ("keep", "screen"):
         sorted_ = out_plan.get(kind) or {}
         ours = sorted(sorted_.get("draw", []))
-        todo = [f for f in ours if not _done(root / rel(f))]
+        todo = [f for f in ours if not done(kind, f)]
         theirs["mk_" + kind] = ours
-        theirs[kind] = sorted(f for f in (sorted_.get("blender") or {}) if not _done(root / rel(f)))
+        theirs[kind] = sorted(f for f in (sorted_.get("blender") or {}) if not done(kind, f))
         if kind == "keep" and req["keep"] and todo:
             mine["keep"] = {"materials": req["keep"]["materials"], "frames": todo}
         elif kind == "screen" and todo:
@@ -425,7 +433,8 @@ def plan(bake, outputs, frames, layers=None):
     """{output: {"draw": [frames mkr draws], "blender": {frame: why}}} for these outputs and frames, plus what mkr
     cannot draw at all (`unsupported`). With `layers` (a `request`) each output also has "layers" {frame: [None (mkr
     draws it) or why Blender must, per item]}, "keep" and "screen" {"draw": [mkr's frames whose layer mkr draws],
-    "blender": {frame: why}} (screen: only the frames with screen type)."""
+    "blender": {frame: why}} (screen: only the frames with screen type, and "negative": those of "draw" with negative
+    type on screen, whose negative layer mkr draws too)."""
     argv = ["info", "--bake", str(bake), "--frames", spec(frames)]
     for name in outputs:
         argv += ["--output", name]
@@ -445,6 +454,7 @@ def plan(bake, outputs, frames, layers=None):
                 s = o.get(kind) or {}
                 res[n][kind] = {"draw": sorted(int(f) for f in s.get("draw", [])),
                                 "blender": {int(k): v for k, v in (s.get("blender") or {}).items()}}
+            res[n]["screen"]["negative"] = sorted(int(f) for f in (o.get("screen") or {}).get("negative") or ())
     return {"outputs": res, "unsupported": doc.get("unsupported") or {}}
 
 

@@ -1,5 +1,6 @@
 """mk render's layer request for mkr (mkmmd.render.mkr): patterns resolved on the bake's records, the keep table's PMX
-names found on the cast member's meshes, the split of one output's layers between mkr and Blender, and the looks: the
+names found on the cast member's meshes, the split of one output's layers between mkr and Blender (a frame with
+negative screen type done with both its layers, as the plan lists them and a render promises them), and the looks: the
 objects sorted as styles.Looks sorts them, the look jobs of frames and layers, and their passes composed."""
 import json
 
@@ -61,6 +62,43 @@ def test_split_gives_blender_what_mkr_cannot_draw_and_skips_what_is_done(tmp_pat
     assert mine["keep"] == {"materials": ["eye"], "frames": [120]} and mine["screen"] == [121]
     assert theirs["mk_keep"] == [120] and theirs["keep"] == [121]
     assert theirs["mk_screen"] == [121] and theirs["screen"] == [120]
+
+
+def test_a_frame_with_negative_type_is_done_with_both_its_layers(tmp_path):
+    for rel in ("screen/00121.png", "screen/00122.png", "negative/00122.png", "screen/00123.png"):
+        (tmp_path / rel).parent.mkdir(exist_ok=True)
+        (tmp_path / rel).write_bytes(b"png")
+    req = {"items": {}, "keep": None, "screen": [120, 121, 122, 123, 124]}
+    plan = {"screen": {"draw": [120, 121, 122, 123], "blender": {124: "why"}, "negative": [121, 122]}}
+    mine, theirs = MKR.split(req, plan, tmp_path)
+    assert mine["screen"] == [120, 121]                      # 121: its screen layer is there, its negative one is not
+    assert theirs["mk_screen"] == [120, 121, 122, 123] and theirs["screen"] == [124]
+    # a plan without negative frames (an mkr from before them): the screen layer is all a frame has
+    mine, _ = MKR.split(req, {"screen": {"draw": [121, 122], "blender": {}}}, tmp_path)
+    assert mine["screen"] is None
+
+
+def test_the_plan_lists_mkrs_frames_with_negative_type(monkeypatch):
+    def output(screen):
+        return {"draw": [120, 121], "blender": {}, "layers": {}, "keep": {"draw": [], "blender": {}}, "screen": screen}
+    doc = {"outputs": {"16x9": output({"draw": ["120", 121], "blender": {}, "negative": [121]}),
+                       "9x16": output({"draw": [120], "blender": {"121": "why"}})},     # no "negative": none
+           "unsupported": {}}
+    monkeypatch.setattr(MKR, "_call", lambda argv, timeout, layers=None: doc)
+    pl = MKR.plan("bake", ["16x9", "9x16"], [120, 121], {"items": {}, "keep": None, "screen": [120, 121]})
+    assert pl["outputs"]["16x9"]["screen"] == {"draw": [120, 121], "blender": {}, "negative": [121]}
+    assert pl["outputs"]["9x16"]["screen"] == {"draw": [120], "blender": {121: "why"}, "negative": []}
+    assert "negative" not in pl["outputs"]["16x9"]["keep"]
+
+
+def test_a_render_promises_the_negative_layer_of_mkrs_frames_with_negative_type():
+    from mkmmd.cli.render import promise
+    req = {"items": {}, "keep": None, "screen": [120, 121, 122]}
+    out_plan = {"draw": [120, 121, 122], "screen": {"draw": [120, 121], "blender": {122: "why"}, "negative": [121]}}
+    got = promise(req, out_plan, [120, 121, 122, 123])
+    assert got[121] == ["00121.png", "negative/00121.png", "screen/00121.png"]
+    assert got[120] == ["00120.png", "screen/00120.png"] and got[122] == ["00122.png", "screen/00122.png"]
+    assert got[123] == ["00123.png"]
 
 
 def test_frame_specs_join_runs():

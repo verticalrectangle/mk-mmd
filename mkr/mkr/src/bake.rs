@@ -456,6 +456,11 @@ pub struct MeshRec {
     pub show: Option<[i64; 2]>,
     #[serde(default, deserialize_with = "null_default")]
     pub knockout: bool,
+    /// Negative screen type: not laid over the picture but inverting it under its coverage, a layer of its own
+    /// (`negative/<f>.png`, crate::layers); never in the screen layer. Never knock-out type too (the text stage refuses
+    /// both).
+    #[serde(default, deserialize_with = "null_default")]
+    pub negative: bool,
 }
 
 impl MeshRec {

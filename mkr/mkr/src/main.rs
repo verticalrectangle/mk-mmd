@@ -277,6 +277,7 @@ fn render(bake: PathBuf, output: String, frames: Option<String>, out: PathBuf, s
             counts.figure += done.figure;
             counts.keep += done.keep;
             counts.screen += done.screen;
+            counts.negative += done.negative;
             flat_s += t.elapsed().as_secs_f64();
             f0 = f1;
         }

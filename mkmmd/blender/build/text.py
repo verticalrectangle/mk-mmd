@@ -67,6 +67,11 @@ are packed into the .blend.
                             `width` the share of the room). Needs no surface
   knockout = true           screen type reversed out of a silhouette shot (the figure's ink on the colour, the colour on
                             the figure; with no strip or ring); in any other shot it is ordinary screen type
+  negative = true           screen type as a photographic negative: the picture under its glyphs is inverted (out = bg * (1 - a)
+                            + (1 - bg) * a, `a` the glyph's antialiased coverage), the colour of the text unused. Its
+                            coverage is a layer of its own (`negative/<frame>.png`), laid by `mk post` after the ordinary
+                            screen type, so the two coexist; overlapping negative type is one coverage (inverted once).
+                            Needs `screen`; refused with `knockout`, `backing` or `outline` (core/screentype.negative_spec)
   aspect.<output> = {...}   an output's own version of the entry: its keys laid over the entry's (tables merge, anything
                             else is replaced). An entry with `screen` or `aspect` is built once per output (objects end
                             `@<output>` when the project has several, rendered for that output only)
@@ -95,6 +100,7 @@ from . import textring as RG
 KNOWN = {"name", "on", "mount", "at", "facing", "up", "box", "text", "value", "font", "size", "fit", "align", "valign",
          "offset", "color", "glow", "lit", "depth", "lift", "tracking", "word_spacing", "leading", "reveal", "blink",
          "flicker", "fade", "ghost", "halo", "haze", "back", "kinetic", "lyric", "backing", "outline", "screen", "knockout",
+         "negative",
          "blocks", "_aspect", "_multi", "_shot", "_path"}
 MAX_NAME = 50                  # bytes of a text's name in UTF-8 (a kana takes 3): Blender keeps 63 and `mk_text_` takes 8
 LIFT = 0.002                    # m in front of the surface
@@ -1083,6 +1089,7 @@ def _one(ctx, coll, spec, cache):
     unknown = sorted(set(spec) - KNOWN)
     if unknown:
         raise BuildError(f"text {name!r}: unknown keys {unknown} (known: {sorted(KNOWN)})")
+    negative = SR.negative_spec(spec)             # a TextError for a misuse: the stage names the text
     nbytes = len(name.encode("utf-8"))          # Blender cuts a name at 63 bytes: two texts would end up sharing one
     if nbytes > MAX_NAME:
         raise BuildError(f"text {name!r}: the name takes {nbytes} bytes (UTF-8: a kana or kanji takes 3), over {MAX_NAME} "
@@ -1215,6 +1222,8 @@ def _one(ctx, coll, spec, cache):
         ob["mk_aspect"] = str(spec["_aspect"])
     if spec.get("knockout"):                       # reversed over silhouette shots whatever their `knockout` table says
         ob["mk_knockout"] = 1
+    if negative:                                   # coverage into the negative layer, which inverts the picture (mk post)
+        ob["mk_negative"] = 1
     if spec.get("_shot") is not None:
         ob["mk_shot"] = str(spec["_shot"])
 

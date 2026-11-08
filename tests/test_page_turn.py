@@ -238,15 +238,15 @@ def test_the_wrap_is_no_cut_effect_and_turns_the_finished_frame_over_frame_0_hel
     main, still = flat(RED, w, h), flat(BLUE, w, h)                         # the clip's end and frame 0, as finished
     assert not any(fx.active(f) for f in window) and fx.missing(window) == [] and fx.frame(t["last"], main) is main
     for f in (t["first"] + 6, t["last"]):
-        img, layer, mask = PAGE.wrap(t, f, (main, None, None), (still, None, None))
-        assert layer is None and mask is None
+        img, layer, mask, neg = PAGE.wrap(t, f, (main, None, None, None), (still, None, None, None))
+        assert layer is None and mask is None and neg is None
         under = (img[..., 0] < 0.15) & (img[..., 1] < 0.15) & (img[..., 2] > 0.3)   # the blue picture alone
         under = cv2.erode(under.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)   # not its antialiased edge
         assert under.sum() > 50
         ratio = img[under] / still[under]
         assert float(ratio.max()) <= 1.0 + 1e-5                               # the first frame, under a shadow at most
         assert np.abs(ratio - ratio[:, :1]).max() < 1e-3                     # darkened evenly: its own colour
-    last = PAGE.wrap(t, t["last"], (main, None, None), (still, None, None))[0]
+    last = PAGE.wrap(t, t["last"], (main, None, None, None), (still, None, None, None))[0]
     assert float((np.abs(last - still).max(axis=2) < 1e-5).mean()) > 0.6     # mostly frame 0 itself by the end
 
 
@@ -279,3 +279,26 @@ def test_the_type_laid_on_after_the_grade_and_the_keep_mask_turn_with_the_page()
     m = turn.mask(np.full((h, w), 0.25, np.float32), np.full((h, w), 0.75, np.float32))
     assert (m[:, page] == 0.25).all() and (m[:, past] == 0.75).all() and (m[:, back] == 0.0).all()
     assert turn.layer(None, None) is None and turn.mask(None, None) is None
+
+
+def test_the_negative_layer_turns_with_the_page_at_the_wrap_as_the_screen_layer_does():
+    """`wrap` turns the negative type's layer (the coverage that inverts the graded picture, `[post] screen = "over"`) with the
+    page: its own coverage on the flat page, frame 0's past the roll, none where the page's back lies."""
+    w, h = SIZES["16x9"]
+    t = plan(WRAP, dir="left", angle=0.0)["transitions"][0]
+    k = 6
+    c, R, (c0, _) = PG.line(t, k, (w, h)), PG.roll(t, (w, h)), PG.travel(t, (w, h))
+    xs = np.arange(w, dtype=np.float32)
+    past = xs > c + R + 2.0
+    page = xs < c - max(c0 - c - math.pi * R, 0.0) - 2.0
+    up = 2.0 * c + math.pi * R - xs
+    back = (xs < c - 2.0) & (up > 2.0) & (up < w - 3.0)
+    mine, theirs = np.zeros((h, w, 4), np.float32), np.zeros((h, w, 4), np.float32)
+    mine[..., :3], theirs[..., :3] = 1.0, 1.0
+    mine[..., 3], theirs[..., 3] = 0.8, 0.3
+    main, still = flat(RED, w, h), flat(BLUE, w, h)
+    img, layer, mask, neg = PAGE.wrap(t, t["first"] + k, (main, None, None, mine), (still, None, None, theirs))
+    assert layer is None and mask is None and img.shape == (h, w, 3)
+    assert (neg[:, page, 3] == np.float32(0.8)).all() and (neg[:, past, 3] == np.float32(0.3)).all()
+    assert (neg[:, back, 3] == 0.0).all()
+    assert PAGE.wrap(t, t["first"] + k, (main, None, None, None), (still, None, None, None))[3] is None

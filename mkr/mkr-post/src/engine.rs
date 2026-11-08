@@ -29,11 +29,12 @@ pub enum Picture {
     Finished(Vec<u8>),
 }
 
-/// A job's files, read (on any thread) before the GPU works on it: the frame, its screen layer and its keep mask
-/// staged for the GPU there (the frame's submit only copies them), what its ops read decoded.
+/// A job's files, read (on any thread) before the GPU works on it: the frame, its screen layer, its negative layer and
+/// its keep mask staged for the GPU there (the frame's submit only copies them), what its ops read decoded.
 pub struct Inputs {
     pub picture: Picture,
     pub layer: Option<wgpu::Buffer>,
+    pub negative: Option<wgpu::Buffer>,
     pub keep: Option<wgpu::Buffer>,
     /// Each op's inputs (fx::Effect::inputs), in the ops' order.
     pub files: Vec<Vec<Arc<Decoded>>>,
@@ -110,7 +111,7 @@ pub fn inputs(job: &Job, w: u32, h: u32, device: &wgpu::Device) -> Result<Inputs
         if bytes.len() != (w * h * 3) as usize {
             bail!("{}: {} bytes, not a {w}x{h} rgb24 frame", f.path, bytes.len());
         }
-        return Ok(Inputs { picture: Picture::Finished(bytes), layer: None, keep: None, files: Vec::new() });
+        return Ok(Inputs { picture: Picture::Finished(bytes), layer: None, negative: None, keep: None, files: Vec::new() });
     }
     let picture = match (&job.png, &job.raw) {
         (Some(p), None) => Picture::Packed(staged(device, &pngio::read(Path::new(p), w, h, Kind::Picture)?)?),
@@ -126,12 +127,14 @@ pub fn inputs(job: &Job, w: u32, h: u32, device: &wgpu::Device) -> Result<Inputs
     };
     let layer = job.layer.as_ref()
         .map(|p| staged(device, &pngio::read(Path::new(p), w, h, Kind::Layer)?)).transpose()?;
+    let negative = job.negative.as_ref()
+        .map(|p| staged(device, &pngio::read(Path::new(p), w, h, Kind::Layer)?)).transpose()?;
     let keep = job.keep.as_ref()
         .map(|p| staged(device, &pngio::read(Path::new(p), w, h, Kind::Mask)?)).transpose()?;
     let files = job.ops.par_iter()
         .map(|op| op.effect().inputs().par_iter().map(|i| fx::read(i, w, h)).collect::<Result<Vec<_>>>())
         .collect::<Result<Vec<_>>>()?;
-    Ok(Inputs { picture, layer, keep, files })
+    Ok(Inputs { picture, layer, negative, keep, files })
 }
 
 #[repr(C)]
@@ -174,8 +177,10 @@ struct GradeParams {
 struct Kernels {
     unpack_picture: wgpu::ComputePipeline,
     unpack_mask: wgpu::ComputePipeline,
+    unpack_alpha: wgpu::ComputePipeline,
     expand: wgpu::ComputePipeline,
     composite: wgpu::ComputePipeline,
+    negate: wgpu::ComputePipeline,
     grade: wgpu::ComputePipeline,
     quantize: wgpu::ComputePipeline,
 }
@@ -189,11 +194,13 @@ pub struct Engine {
     lut: wgpu::Buffer,
     vig: wgpu::Buffer,
     grain: wgpu::Buffer,
-    packed: [wgpu::Buffer; 3],
+    packed: [wgpu::Buffer; 4],
     raw: wgpu::Buffer,
     img: [wgpu::Buffer; 2],
     layer: wgpu::Buffer,
     mask: wgpu::Buffer,
+    /// The negative layer's coverage, one float a pixel.
+    neg: wgpu::Buffer,
     rgb: wgpu::Buffer,
     darkest: wgpu::Buffer,
     /// Where frames' bytes are read back from, round in turn: the GPU works on the frames after one while its bytes are
@@ -231,19 +238,23 @@ impl Engine {
         let k = Kernels {
             unpack_picture: gpu.kernel("unpack", UNPACK, "unpack_picture"),
             unpack_mask: gpu.kernel("unpack", UNPACK, "unpack_mask"),
+            unpack_alpha: gpu.kernel("unpack", UNPACK, "unpack_alpha"),
             expand: gpu.kernel("unpack", UNPACK, "expand"),
             composite: gpu.kernel("composite", COMPOSITE, "composite"),
+            negate: gpu.kernel("composite", COMPOSITE, "negate"),
             grade: gpu.kernel("grade", GRADE, "grade"),
             quantize: gpu.kernel("quantize", QUANTIZE, "quantize"),
         };
         let lut = gpu.storage_init("lut", bytemuck::cast_slice(&setup.lut));
         let vig = gpu.storage_init("vignette", &floats(&setup.vignette, n as usize)?);
         let grain = gpu.storage_init("grain", &floats(&setup.grain.file, n as usize * setup.grain.count as usize)?);
-        let packed = [gpu.storage("frame", n * 4), gpu.storage("layer8", n * 4), gpu.storage("mask8", n * 4)];
+        let packed = [gpu.storage("frame", n * 4), gpu.storage("layer8", n * 4), gpu.storage("mask8", n * 4),
+                      gpu.storage("negative8", n * 4)];
         let raw = gpu.storage("raw", n * 12);
         let img = [gpu.storage("img0", n * 16), gpu.storage("img1", n * 16)];
         let layer = gpu.storage("layer", n * 16);
         let mask = gpu.storage("mask", n * 4);
+        let neg = gpu.storage("negative", n * 4);
         let rgb = gpu.storage("rgb", n * 3);
         let darkest = gpu.storage("darkest", 4);
         let out_bytes = if setup.floats { n * 16 } else { n * 3 };
@@ -255,7 +266,7 @@ impl Engine {
         }));
         let stamps = Stamps::new(&gpu);
         Ok(Engine {
-            gpu, setup, w, h, k, lut, vig, grain, packed, raw, img, layer, mask, rgb, darkest, readback,
+            gpu, setup, w, h, k, lut, vig, grain, packed, raw, img, layer, mask, neg, rgb, darkest, readback,
             slot: std::sync::atomic::AtomicUsize::new(0), res: Resources::default(), stamps,
         })
     }
@@ -335,15 +346,21 @@ impl Engine {
             enc.copy_buffer_to_buffer(l, 0, &self.packed[1], 0, l.size());
             gpu.pass(&mut enc, &self.k.unpack_picture,
                      &[(0, &dims), (1, &self.packed[1]), (2, &self.lut), (3, &self.layer)], groups);
-            if graded {
-                self.composite(&mut enc, cur, keep);
-            }
+        }
+        let negative = inputs.negative.is_some() && !plain;
+        if let (Some(n), false) = (&inputs.negative, plain) {
+            enc.copy_buffer_to_buffer(n, 0, &self.packed[3], 0, n.size());
+            gpu.pass(&mut enc, &self.k.unpack_alpha,
+                     &[(0, &dims), (1, &self.packed[3]), (2, &self.lut), (4, &self.neg)], groups);
+        }
+        if graded {
+            self.composite(&mut enc, cur, keep, inputs.layer.is_some(), negative);
         }
         if !plain {
             self.grade(&mut enc, job.k, job.grade.as_ref().unwrap_or(&self.setup.grade), keep, cur);
             cur = 1 - cur;
-            if !graded && inputs.layer.is_some() {
-                self.composite(&mut enc, cur, false);
+            if !graded {
+                self.composite(&mut enc, cur, false, inputs.layer.is_some(), negative);
             }
         }
         stamp(&mut enc, &mut marks, "grade");
@@ -421,10 +438,21 @@ impl Engine {
         Ok(())
     }
 
-    fn composite(&self, enc: &mut wgpu::CommandEncoder, cur: usize, keep: bool) {
+    /// The screen type over the picture `img[cur]` (mkmmd.core.screentype.composite): the screen layer laid over it
+    /// (`layer`), then the negative type inverting what is under it (`negative`: it goes last, as on the CPU).
+    fn composite(&self, enc: &mut wgpu::CommandEncoder, cur: usize, keep: bool, layer: bool, negative: bool) {
+        if !layer && !negative {
+            return;
+        }
         let p = self.gpu.uniform(bytemuck::bytes_of(&Dims { w: self.w, h: self.h, a: keep as u32, b: 0 }));
-        self.gpu.pass(enc, &self.k.composite, &[(0, &p), (1, &self.img[cur]), (2, &self.layer), (3, &self.mask)],
-                      tiles(self.w, self.h));
+        if layer {
+            self.gpu.pass(enc, &self.k.composite, &[(0, &p), (1, &self.img[cur]), (2, &self.layer), (3, &self.mask)],
+                          tiles(self.w, self.h));
+        }
+        if negative {
+            self.gpu.pass(enc, &self.k.negate, &[(0, &p), (1, &self.img[cur]), (3, &self.mask), (4, &self.neg)],
+                          tiles(self.w, self.h));
+        }
     }
 
     fn grade(&self, enc: &mut wgpu::CommandEncoder, k: u32, g: &Grade, keep: bool, cur: usize) {

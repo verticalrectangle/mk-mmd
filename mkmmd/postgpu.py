@@ -15,7 +15,8 @@ output.
                                 with a sink (the encoder's stdin) mkr-post writes the bytes there, receive() gives None
     grade(g)                    a mkmmd.post.Grade as mkr-post's Grade: the setup's, or a frame's own
 
-A job (one JSON line) names the cut's frame (or a float RGB picture a worker wrote, `raw`), its screen layer and keep
+A job (one JSON line) names the cut's frame (or a float RGB picture a worker wrote, `raw`), its screen layer, its negative
+layer (`negative = true` screen type: the picture is inverted under its coverage after the screen layer is laid) and keep
 mask, and the ops still to draw, or carries a frame this side finished (`finished`: its bytes in a file and its darkest
 luma); with a breathing palette (`[look] breathe`) it carries its own `grade`, the setup's with that frame's colours.
 mkr-post answers each with its clip index, the darkest luma and the frame's bytes, in the order the jobs came."""
@@ -83,9 +84,9 @@ def unusable(out, files=True):
     for f, p in out.files.items():
         if not _png_ok(p, out.size):
             return f"{p}: not an 8-bit PNG of {out.size[0]}x{out.size[1]}"
-        lp = out.src / SRT.layer_rel(f)
-        if lp.exists() and not _png_ok(lp, out.size, layer=True):
-            return f"{lp}: not an 8-bit PNG of the frame's size"
+        for lp in (out.src / SRT.layer_rel(f), out.src / SRT.negative_rel(f)):
+            if lp.exists() and not _png_ok(lp, out.size, layer=True):
+                return f"{lp}: not an 8-bit PNG of the frame's size"
         kp = out.src / KP.rel(f)
         if out.keep and kp.exists() and not _png_ok(kp, out.size):
             return f"{kp}: not an 8-bit PNG of {out.size[0]}x{out.size[1]}"

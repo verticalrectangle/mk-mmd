@@ -13,8 +13,9 @@ and inserts need for the cut's frames, drawn per size into <dir>/<size name>/ be
 the CLI composites them over the cut's images); map (default false: each image also reports `map_camera`, its camera as
 mkmmd.pixmap.Camera reads it, and `map_geo`, an .npz in `out` with the geometry of its frame as it rendered, written
 once per frame: the CLI rasterises the pixel map from them and removes the file). Each image of a shot view reports
-`screen`: the RGBA layer of its screen type (<out>/<size name>/screen/<frame>.png, mkmmd.core.screentype) or None; the
-CLI lays it over the image last, as `mk post` does."""
+`screen`: the RGBA layer of its screen type (<out>/<size name>/screen/<frame>.png, mkmmd.core.screentype) or None, and
+`negative` that of its negative type (negative/<frame>.png, only its alpha is read) or None; the
+CLI lays them over the image last, as `mk post` does."""
 import math
 import os
 
@@ -208,16 +209,19 @@ def look(args):
                 drew = "cycles" if FE.is_fisheye(sc.camera) else engine
                 if kind:
                     layer = os.path.join(args["out"], size["name"], SRT.layer_rel(int(f)))
-                    if os.path.exists(layer):
-                        os.unlink(layer)                  # nothing stale: a frame with no screen type has no layer
-                    looks.render(path, layer=layer)       # a fisheye's frame: Cycles (mkmmd.blender.styles)
+                    negative = os.path.join(args["out"], size["name"], SRT.negative_rel(int(f)))
+                    for stale in (layer, negative):
+                        if os.path.exists(stale):
+                            os.unlink(stale)              # nothing stale: a frame with no screen type has no layer
+                    looks.render(path, layer=layer, negative=negative)   # a fisheye's frame: Cycles (mkmmd.blender.styles)
                 else:
-                    layer = None
+                    layer = negative = None
                     with FE.cycles(sc):
                         bpy.ops.render.render(write_still=True)
                 item = {"view": v["name"], "size": size["name"], "frame": int(f), "path": path,
                         "camera": sc.camera.name if sc.camera else None,
-                        "screen": layer if layer and os.path.exists(layer) else None}
+                        "screen": layer if layer and os.path.exists(layer) else None,
+                        "negative": negative if negative and os.path.exists(negative) else None}
                 if drew != engine:
                     item["engine"] = drew                 # a fisheye: only Cycles draws it
                 if args.get("map"):                      # a frozen cut frame may hold another pose than the set's

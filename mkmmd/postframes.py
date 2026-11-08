@@ -196,27 +196,30 @@ class Output:
 
     # ---------------------------------------------------------------- one frame
     def _read(self, f):
-        """(picture, screen layer, keep mask) of a rendered frame `f`."""
+        """(picture, screen layer, keep mask, negative layer) of a rendered frame `f`: the negative layer (the coverage of
+        `negative = true` type, mkmmd.core.screentype) only where the frame has a screen layer, which is written after it."""
         layer = P.read_rgba(self.src / SRT.layer_rel(f), self.size)
+        neg = None if layer is None else P.read_rgba(self.src / SRT.negative_rel(f), self.size)
         km = P.read(self.src / KP.rel(f), self.size) if self.keep else None
-        return P.read(self.files[f], self.size), layer, km
+        return P.read(self.files[f], self.size), layer, km, neg
 
     def _inputs(self, f):
-        """(picture, screen layer, keep mask) frame `f` starts from: its own, or over a gap the last frame of the clip
-        rendered before it (the first frame rendered, with no layer and no mask, before any)."""
+        """(picture, screen layer, keep mask, negative layer) frame `f` starts from: its own, or over a gap the last frame of
+        the clip rendered before it (the first frame rendered, with no layer and no mask, before any)."""
         if f in self.files:
             return self._read(f)
         g = max((h for h in self.frames if h < f and h in self.files), default=None)
         if g is None:
-            return self.lead, None, None
+            return self.lead, None, None, None
         if self._carried[0] != g:
             self._carried = (g, self._read(g))
         return self._carried[1]
 
     def _before_grade(self, f):
         """Frame `f` as finished before the wrap and the grade: (picture, screen type still to lay over the graded
-        picture, keep mask, screen type frames, effects that found a layer missing)."""
-        raw, layer, km = self._inputs(f)
+        picture, keep mask, the negative layer still to invert the graded picture with, screen type frames, effects that
+        found a layer missing)."""
+        raw, layer, km, neg = self._inputs(f)
         fx, ffx = self.fx, self.ffx
         mask = None if km is None or (fx and fx.active(f)) or (ffx and ffx.active(f)) else km[..., 0]
         img, bare, typed = raw, 0, 0
@@ -235,31 +238,33 @@ class Output:
         if self.streaks is not None:                              # lens streaks: from the picture's lights, not the type
             img = (self.streaks if self._streaks is None else self._streaks.at(self.breath.mix(f)))(img)
         if layer is not None and self.screen == "graded":        # screen type: over the cut and what its effects made of it
-            img = SRT.composite(img, layer)
+            img = SRT.composite(img, layer, neg)                  # (negative type last: it inverts the type under it too)
             typed += 1
             if mask is not None:                                  # the type over a kept eye is graded as type
                 mask = mask * (1.0 - layer[..., 3])
+                if neg is not None:
+                    mask = mask * (1.0 - neg[..., 3])
         over = layer if self.screen == "over" else None           # or over the finished picture, the grade under it
-        return img, over, mask, typed, bare
+        return img, over, mask, neg if over is not None else None, typed, bare
 
     def finish(self, k):
         """The clip's frame at index `k` finished: (rgb24 bytes, (darkest luma, screen type frames, kept, effects that
         found a layer missing))."""
         f = self.frames[k]
-        img, over, mask, typed, bare = self._before_grade(f)
+        img, over, mask, neg, typed, bare = self._before_grade(f)
         w = self.wrap
         if w is not None:                                         # the loop's wrap: this frame as finished turned over
             if f == w["still"]:                                   # frame 0 as finished, held still
-                self._held = (img, over, mask)
+                self._held = (img, over, mask, neg)
             if w["first"] <= f <= w["last"]:
                 if self._held is None:                            # frame 0 as the pass in order finishes it: first,
-                    self._held = Output(**self.args)._before_grade(w["still"])[:3]     # with nothing drawn before
+                    self._held = Output(**self.args)._before_grade(w["still"])[:4]     # with nothing drawn before
                 wrap = w if self.breath is None else self.breath.at("transition", w, f)
-                img, over, mask = PAGE.wrap(wrap, f, (img, over, mask), self._held)
+                img, over, mask, neg = PAGE.wrap(wrap, f, (img, over, mask, neg), self._held)
         g = self.graded(f)(img, k, keep=mask)
         kept = mask is not None
-        if over is not None:
-            g = SRT.composite(g, over)
+        if over is not None or neg is not None:
+            g = SRT.composite(g, over, neg)
             typed += 1
         return P.to_u8(g).tobytes(), (P.luma_min(g), typed, int(kept), bare)
 
@@ -315,6 +320,9 @@ class Output:
         layer = None if g is None else self.src / SRT.layer_rel(g)
         if layer is not None and layer.exists():
             job["layer"] = str(layer)
+            neg = self.src / SRT.negative_rel(g)
+            if neg.exists():
+                job["negative"] = str(neg)
         mask = None if g is None or not self.keep or (fx and fx.active(f)) or entries else self.src / KP.rel(g)
         if mask is not None and mask.exists():
             job["keep"] = str(mask)

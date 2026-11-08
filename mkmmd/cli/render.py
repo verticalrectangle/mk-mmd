@@ -357,14 +357,17 @@ def finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_fram
 def promise(req, out_plan, frames):
     """{frame: [files relative to the output's folder]} an mkr render leaves for each of `frames`, mkr's and Blender's
     alike: the frame, its layers (`req`, MKR.request), its screen type where it has any (`out_plan`, MKR.plan's for the
-    output) and its keep mask."""
+    output), its negative layer where mkr draws negative type (the plan's "negative") and its keep mask."""
     scr = out_plan.get("screen") or {}
     screen = set(scr.get("draw") or ()) | set(scr.get("blender") or ())
+    negative = set(scr.get("negative") or ())
     out = {}
     for f in frames:
         rels = [f"{f:05d}.png"]
         for item in req["items"].get(str(f), ()):
             rels += [r for r in TR.rel_paths(item, f) if r not in rels]
+        if f in negative:
+            rels.append(SRT.negative_rel(f))
         if f in screen:
             rels.append(SRT.layer_rel(f))
         if req.get("keep"):

@@ -133,6 +133,148 @@ def test_composite_takes_the_rgb_of_a_base_that_has_an_alpha_channel_too():
     assert SR.composite(base, layer).shape == (1, 1, 3)
 
 
+# ------------------------------------------------------------------------------------------------------ negative type
+NH, NW = 8, 16
+
+
+def backdrop():
+    """A synthetic picture: a gradient left to right (a different slope in each channel, rising rows) with a sharp edge, a
+    bright slab from column 10 whose rows 2..5 hold a hard step (white) in it. Float32 in 0..1, (NH, NW, 3)."""
+    x = np.linspace(0.0, 1.0, NW, dtype=np.float32)[None, :, None]
+    y = np.linspace(0.1, 0.4, NH, dtype=np.float32)[:, None, None]
+    bg = np.concatenate([np.broadcast_to(x, (NH, NW, 1)), np.broadcast_to(1.0 - x, (NH, NW, 1)) * 0.5 + y,
+                         np.broadcast_to(x * 0.3 + y, (NH, NW, 1))], axis=2).astype(np.float32)
+    bg[2:6, 10:] = 1.0
+    return bg
+
+
+def glyphs():
+    """A synthetic glyph's coverage (NH, NW): solid in a box that straddles the hard edge, an antialiased rim of 0.25 / 0.5 /
+    0.75 round it, nothing elsewhere. Returned as the negative layer: RGBA with arbitrary colour, the alpha the coverage."""
+    a = np.zeros((NH, NW), np.float32)
+    a[2:6, 8:14] = 1.0
+    a[1, 8:14], a[6, 8:14] = 0.25, 0.75
+    a[2:6, 7], a[2:6, 14] = 0.5, 0.5
+    layer = np.zeros((NH, NW, 4), np.float32)
+    layer[..., :3] = (0.9, 0.1, 0.4)                 # the glyph's colour: not used
+    layer[..., 3] = a
+    return layer
+
+
+def test_negative_type_inverts_the_covered_pixels_and_leaves_the_rest_bit_for_bit():
+    bg, neg = backdrop(), glyphs()
+    keep_b, keep_n = bg.copy(), neg.copy()
+    out = SR.composite(bg, None, neg)
+    a = neg[..., 3]
+    assert out.shape == (NH, NW, 3) and out.dtype == np.float32
+    assert np.array_equal(out[a == 1.0], 1.0 - bg[a == 1.0])                  # solid coverage: the photographic negative
+    assert np.array_equal(out[a == 0.0], bg[a == 0.0])                        # outside the glyph: the same bits
+    assert (a == 1.0).sum() == 24 and (a == 0.0).sum() > 80                   # (a real mix of both)
+    assert np.array_equal(bg, keep_b) and np.array_equal(neg, keep_n)         # inputs untouched
+
+
+def test_negative_type_follows_the_coverage_formula_where_it_is_partial():
+    bg, neg = backdrop(), glyphs()
+    a = neg[..., 3:4].astype(np.float64)
+    want = bg.astype(np.float64) * (1.0 - a) + (1.0 - bg.astype(np.float64)) * a
+    out = SR.composite(bg, None, neg)
+    assert np.abs(out - want).max() < 1e-6
+    rim = (a[..., 0] > 0) & (a[..., 0] < 1)
+    assert rim.sum() == 4 * 2 + 6 + 6 and np.abs(out[rim] - bg[rim]).max() > 0.01       # it moved: not just the solid part
+    mid = out[3, 7]                                                                     # a half-covered pixel of the gradient
+    assert mid.tolist() == pytest.approx((0.5 * bg[3, 7] + 0.5 * (1.0 - bg[3, 7])).tolist(), abs=1e-6)
+    assert mid.tolist() == pytest.approx([0.5, 0.5, 0.5], abs=1e-6)                     # half-way between a picture and its negative is grey
+
+
+def test_the_edge_of_the_picture_inverts_on_both_sides_of_it():
+    bg, neg = backdrop(), glyphs()
+    out = SR.composite(bg, None, neg)
+    assert bg[3, 9].tolist() != [1.0, 1.0, 1.0] and bg[3, 10].tolist() == [1.0, 1.0, 1.0]       # the hard step in the picture
+    assert out[3, 10].tolist() == [0.0, 0.0, 0.0]                                                # white under the glyph: black
+    assert out[3, 9].tolist() == pytest.approx((1.0 - bg[3, 9]).tolist())                        # and the gradient beside it
+    assert out[3, 10].tolist() == [0.0, 0.0, 0.0] and out[3, 15].tolist() == [1.0, 1.0, 1.0]      # past the glyph: the white again
+
+
+def test_negative_and_ordinary_type_coexist_ordinary_first_and_negative_over_it():
+    bg, neg = backdrop(), glyphs()
+    layer = np.zeros((NH, NW, 4), np.float32)
+    layer[0:4, 0:10] = (0.0, 0.8, 0.0, 1.0)                    # an opaque green box, partly under the negative glyph
+    layer[6:8, 0:6] = (1.0, 0.0, 0.0, 0.5)                      # half red, clear of it
+    plain = SR.composite(bg, layer)
+    out = SR.composite(bg, layer, neg)
+    a = neg[..., 3]
+    assert np.array_equal(out[a == 0.0], plain[a == 0.0])      # where the negative is absent: exactly today's composite
+    assert np.array_equal(SR.composite(bg, layer, None), plain)
+    assert out[2, 9].tolist() == pytest.approx((1.0 - plain[2, 9]).tolist(), abs=1e-7)   # negative over green: green's negative
+    assert out[2, 9].tolist() == pytest.approx([1.0, 0.2, 1.0], abs=1e-6)
+    assert out[3, 12].tolist() == [0.0, 0.0, 0.0]               # negative over the white slab, no ordinary type there
+    assert out[0, 0].tolist() == pytest.approx([0.0, 0.8, 0.0])  # ordinary type clear of the glyph: untouched by it
+
+
+def test_overlapping_negative_type_is_one_coverage_and_inverts_once():
+    """Two negative words that overlap are drawn into one layer, as the glyphs of one word that overlap are: straight alpha
+    laid over, `1 - (1 - a1)(1 - a2)`. Where they overlap the picture is inverted once (a negative of a negative would give
+    the picture back, a hole in the type); a half of each makes three quarters."""
+    bg = backdrop()
+    first, second = np.zeros((NH, NW), np.float32), np.zeros((NH, NW), np.float32)
+    first[1:5, 2:8], second[3:7, 5:11] = 1.0, 1.0                  # overlap: rows 3..4, columns 5..7
+    first[7, 0], second[7, 0] = 0.5, 0.5
+    cover = 1.0 - (1.0 - first) * (1.0 - second)
+    layer = np.dstack([np.ones((NH, NW, 3), np.float32), cover])
+    out = SR.composite(bg, None, layer)
+    both = (first == 1.0) & (second == 1.0)
+    assert both.sum() == 6 and np.array_equal(out[both], 1.0 - bg[both])
+    assert np.array_equal(out[(first == 1.0) ^ (second == 1.0)], 1.0 - bg[(first == 1.0) ^ (second == 1.0)])
+    assert out[7, 0].tolist() == pytest.approx((0.25 * bg[7, 0] + 0.75 * (1.0 - bg[7, 0])).tolist(), abs=1e-6)
+
+
+def test_negative_type_clips_its_coverage_and_takes_a_base_with_an_alpha_channel():
+    base = np.full((1, 2, 4), 0.25, np.float32)
+    layer = np.zeros((1, 2, 4), np.float32)
+    layer[0, 0, 3], layer[0, 1, 3] = 3.0, -1.0
+    out = SR.composite(base, None, layer)
+    assert out.shape == (1, 2, 3)
+    assert out[0, 0].tolist() == [0.75, 0.75, 0.75] and out[0, 1].tolist() == [0.25, 0.25, 0.25]
+
+
+@pytest.mark.parametrize("spec, frag", [
+    ({"negative": "yes", "screen": True}, r"negative is true or false, not 'yes'"),
+    ({"negative": 1, "screen": True}, r"negative is true or false, not 1"),
+    ({"negative": True}, r"negative = true needs `screen`"),
+    ({"negative": True, "screen": False}, r"negative = true needs `screen`"),
+    ({"negative": True, "screen": True, "knockout": True}, r"negative and knockout both reverse type"),
+    ({"negative": True, "screen": True, "backing": {"color": "x"}}, r"negative and backing cannot go together"),
+    ({"negative": True, "screen": True, "outline": {"width": 0.1}}, r"negative and outline cannot go together"),
+    ({"negative": True, "screen": True, "lyrics": {"backing": {"color": "x"}}},
+     r"negative and lyrics.backing cannot go together"),
+])
+def test_negative_misuse_is_refused_naming_the_key(spec, frag):
+    with pytest.raises(TextError, match=frag):
+        SR.negative_spec(spec)
+
+
+def test_negative_is_a_flag_of_screen_type_and_false_or_absent_is_ordinary():
+    assert SR.negative_spec({"screen": True, "negative": True}) is True
+    assert SR.negative_spec({"screen": {"anchor": "top"}, "negative": True, "knockout": False, "backing": False}) is True
+    for spec in ({}, {"screen": True}, {"screen": True, "negative": False}, {"negative": False}, {"negative": None}):
+        assert SR.negative_spec(spec) is False
+
+
+def test_negative_is_checked_on_each_outputs_version_of_the_entry():
+    spec = {"name": "t", "screen": True, "negative": True, "aspect": {"9x16": {"knockout": True}}}
+    with pytest.raises(TextError, match="negative and knockout"):
+        SR.per_output(spec, ["16x9", "9x16"])
+    spec = {"name": "t", "screen": True, "aspect": {"9x16": {"negative": True}}}
+    got = dict(SR.per_output(spec, ["16x9", "9x16"]))
+    assert SR.negative_spec(got["9x16"]) is True and SR.negative_spec(got["16x9"]) is False
+    with pytest.raises(TextError, match="negative = true needs `screen`"):
+        SR.per_output({"name": "t", "negative": True}, ["16x9"])
+
+
+def test_negative_layer_is_a_file_of_its_own_beside_the_screen_layer():
+    assert SR.negative_rel(7) == "negative/00007.png" and SR.layer_rel(7) == "screen/00007.png"
+
+
 # ------------------------------------------------------------------------------------------------------ extends
 def test_an_entry_that_extends_another_is_it_with_its_own_keys_laid_over_it_and_a_base_is_not_built():
     base = {"name": "ly", "abstract": True, "font": "marker", "size": 0.05, "lyrics": {"style": "slide", "wow": {}, "line": 1},

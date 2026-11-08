@@ -282,6 +282,9 @@ def build(ctx, coll, spec, suffix, cache):
     name = spec.get("name", "?")
     try:
         screen = SR.screen_spec(spec) is not None
+        if SR.negative_spec(spec):
+            raise T.TextError("negative does not apply to blocks (toy blocks are painted solids: their coverage is a "
+                              "shape, not type to invert); drop negative or blocks")
         opts = BT.options(spec, screen)
     except (BT.BlockError, T.TextError) as e:
         msg = str(e)

@@ -27,7 +27,9 @@ from the passes that do work, all inside the one render call of a frame and comp
   screen the text stage's screen type (objects with `mk_screen`, hidden from every scene render): the same pass through an
          orthographic camera one frame height tall, kept off the frame as its own RGBA layer file (`render(path, layer=...)`;
          `mk post` lays it over the cut and its effects; `prepare` answers "screen" for a shot with no look of its own); its
-         `knockout` type goes into the knock pass of a silhouette, in the picture.
+         `knockout` type goes into the knock pass of a silhouette, in the picture. `negative` type (objects with `mk_negative`)
+         is the same pass of those objects alone, kept as a second layer file (`negative/<frame>.png`, written first: only
+         its alpha, the coverage, is read) that `mk post` inverts the picture with, under its glyphs.
 No file is left behind and nothing in the scene stays changed.
 
 vector. A flat-vector drawing of the scene in the project's tones, composed with numpy (`compose_vector`) from Workbench
@@ -372,7 +374,7 @@ class Looks:
         self.cl = {}
         self.tint_values = []
         self.screen_names = [o.name for o in self.sc.objects if "mk_screen" in o.keys()]
-        self.screen = ([], [])            # (type over the frame, type reversed out of a silhouette) at the prepared frame
+        self.screen = ([], [], [])        # (type over the frame, type reversed out of a silhouette, negative type) there
         self.screen_cam = None
 
     # ---------------------------------------------------------------- state machine
@@ -417,10 +419,10 @@ class Looks:
                 getattr(self, "_enter_" + kind)(name, spec)
         if self.kind == "silhouette":
             self._update_silhouette()
-        self.screen = self.screen_live(frame, aspect) if shot is None and self.screen_names else ([], [])
+        self.screen = self.screen_live(frame, aspect) if shot is None and self.screen_names else ([], [], [])
         if self.kind != "silhouette":              # nothing to reverse out of: all of it goes over the frame
-            self.screen = (self.screen[0] + self.screen[1], [])
-        return self.kind or ("screen" if self.screen[0] else None)
+            self.screen = (self.screen[0] + self.screen[1], [], self.screen[2])
+        return self.kind or ("screen" if self.screen[0] or self.screen[2] else None)
 
     def leave(self):
         if self.kind is not None:
@@ -436,44 +438,55 @@ class Looks:
             bpy.data.cameras.remove(data)
             self.screen_cam = None
 
-    def render(self, path, layer=None):
+    def render(self, path, layer=None, negative=None):
         """Render the current frame to `path` in the active look (a plain render for the reflection, whose image settings
         are the scene's; the composed silhouette is written as the file type of `path`). The screen type of the frame goes
-        into its own RGBA file `layer` (written first: a frame on disk always has its layer) and is left off the picture, so
-        `mk post` can lay it over whatever the cut effects make of the frame; with no `layer` it is laid over the picture
-        here. A silhouette's `knockout` type belongs to its figure and is always in the picture."""
-        over = self.screen[0]
-        rgba = None
-        if over and layer is not None:
-            self.screen_layer(layer)
-        elif over:
-            rgba = self._screen_pass(over, "screen")
+        into its own RGBA file `layer` (written last: a frame on disk always has its layer) and is left off the picture, so
+        `mk post` can lay it over whatever the cut effects make of the frame; the negative type goes into `negative`
+        (written before `layer`; see `screen_layer`). With no `layer` both are laid over the picture here. A silhouette's
+        `knockout` type belongs to its figure and is always in the picture."""
+        over, _, neg = self.screen
+        rgba = nrgba = None
+        if (over or neg) and layer is not None:
+            self.screen_layer(layer, negative)
+        elif over or neg:
+            rgba = self._screen_pass(over, "screen") if over else None
+            nrgba = self._screen_pass(neg, "negative") if neg else None
         if self.kind in ("silhouette", "vector"):
             img = self.compose(self.passes())
-        elif rgba is not None:
+        elif rgba is not None or nrgba is not None:
             img = self._shoot_scene()
         else:
             self.sc.render.filepath = path
             with FE.cycles(self.sc):                       # a fisheye's frame: Cycles (mk render refused any other)
                 bpy.ops.render.render(write_still=True)
             return
-        if rgba is not None:
-            img = SR.composite(img, rgba)
+        if rgba is not None or nrgba is not None:
+            img = SR.composite(img, rgba, nrgba)
         _save(path, img)
 
     # ---------------------------------------------------------------- screen type
-    def screen_layer(self, layer):
+    def screen_layer(self, layer, negative=None):
         """Write the screen type of the prepared frame into its RGBA `layer` file, as `render` does beside the frame (mk's
-        own renderer draws the frame itself); False when none is on screen."""
-        if not self.screen[0]:
+        own renderer draws the frame itself); False when none is on screen. A frame with negative type first gets its
+        coverage in the RGBA file `negative` (alpha = the coverage, colour white), then `layer` (fully transparent when the
+        frame has no ordinary type), so the layer's presence says the negative one is there too."""
+        over, _, neg = self.screen
+        if not (over or neg):
             return False
-        _save_rgba(layer, self._screen_pass(self.screen[0], "screen"))
+        if neg:
+            if negative is None:
+                raise RuntimeError("negative screen type is on this frame: screen_layer needs the path of its layer")
+            cover = self._screen_pass(neg, "negative")
+            cover[..., :3] = 1.0
+            _save_rgba(negative, cover)
+        _save_rgba(layer, self._screen_pass(over, "screen"))
         return True
 
     def screen_live(self, frame, aspect):
-        """(names of the screen type on screen at `frame` in an output, those of them to reverse out of a silhouette): the
-        objects made for that output (`mk_aspect`) whose `mk_show` frames [on, off) hold the frame."""
-        over, knock = [], []
+        """(names of the screen type on screen at `frame` in an output, those of them to reverse out of a silhouette, the
+        negative type): the objects made for that output (`mk_aspect`) whose `mk_show` frames [on, off) hold the frame."""
+        over, knock, neg = [], [], []
         for n in self.screen_names:
             o = bpy.data.objects[n]
             if aspect is not None and "mk_aspect" in o.keys() and o["mk_aspect"] != aspect:
@@ -481,8 +494,8 @@ class Looks:
             show = o.get("mk_show")
             if show is not None and not show[0] <= frame < show[1]:
                 continue
-            (knock if "mk_knockout" in o.keys() else over).append(n)
-        return over, knock
+            (neg if "mk_negative" in o.keys() else knock if "mk_knockout" in o.keys() else over).append(n)
+        return over, knock, neg
 
     def _screen_camera(self):
         """The orthographic camera that frames the plane z = 0 one frame height tall (made once, removed by `close`)."""

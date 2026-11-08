@@ -89,6 +89,25 @@ def test_screen_type_over_a_kept_spot_is_graded_as_type(tmp_path, capsys):
     assert np.abs(v[0:5, 0:10] - RED).max() <= 1                                  # the kept picture beside it: red
 
 
+def test_negative_type_over_a_kept_spot_is_graded_as_type_too(tmp_path, capsys):
+    """Negative type on the kept left half inverts the red picture (to cyan) under the grade, and where it covers the mask is
+    cut like ordinary type's: the inverted pixels turn grey with the rest of the type, while the kept picture beside it stays
+    red. Only the alpha of the negative layer counts (its colour is not used)."""
+    d = still(tmp_path, PLAIN + 'keep = { cast = "eve", materials = ["瞳"] }\n')
+    mask(d / KP.rel(5), {(0, W): 1.0})
+    (d / "screen").mkdir()
+    (d / "negative").mkdir()
+    Image.fromarray(np.zeros((H, W, 4), np.uint8), "RGBA").save(d / SR.layer_rel(5))
+    n = np.zeros((H, W, 4), np.uint8)
+    n[5:15, 0:10] = (255, 0, 0, 255)
+    Image.fromarray(n, "RGBA").save(d / SR.negative_rel(5))
+    assert run_post(tmp_path, capsys)[0] == 0
+    v = picture(tmp_path)
+    grey = round(0.2126 * (255 - RED[0]) + 0.7152 * (255 - RED[1]) + 0.0722 * (255 - RED[2]))
+    assert np.abs(v[5:15, 0:10] - grey).max() <= 1                                 # the negative's cyan, graded to grey
+    assert np.abs(v[0:5, 0:10] - RED).max() <= 1                                    # the kept picture beside it: red
+
+
 def test_a_missing_mask_is_an_error_unless_gaps_are_allowed_then_the_frame_is_graded_whole(tmp_path, capsys):
     still(tmp_path, PLAIN + 'keep = { cast = "eve", materials = ["瞳"] }\n')
     code, rep = run_post(tmp_path, capsys)

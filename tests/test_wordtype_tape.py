@@ -521,6 +521,29 @@ def test_every_key_screen_and_zone_words_emit_is_one_the_text_stage_accepts():
     assert {"screen", "knockout", "_shot", "reveal", "lift"} <= emitted
 
 
+def test_a_lyric_entry_with_screen_and_negative_expands_to_words_that_are_all_negative_screen_type():
+    """`negative = true` on a lyric entry goes down to every word's spec (the text stage reads it there), a zone can turn it
+    on for one shot alone, and a zone that adds `knockout` or a `backing` to negative words is refused at the word."""
+    src = (Path(__file__).resolve().parent.parent / "mkmmd/blender/build/text.py").read_text(encoding="utf-8")
+    known = _literal_known(src)
+    tl = timeline()
+    e = zoned(zones={"a": {"negative": True}, "b": {"screen": {"anchor": "bottom"}}})
+    specs, summ = run(tl, SHOTS, entry=e, panel_of=lambda ee: (1.0, 0.5), measure=lambda s, *a: fake_measure(s))
+    by = {}
+    for s in specs:
+        by.setdefault(s["_shot"], []).append(bool(s.get("negative")))
+    assert by == {"a": [True] * 3, "b": [False] * 4}
+    assert all(SR.negative_spec(s) is bool(s.get("negative")) for s in specs) and "negative" in known
+    assert no_text_in(summ, tl)
+    flat = {**zoned(), "negative": True}
+    specs, _ = run(tl, entry=flat)
+    assert len(specs) == 4 and all(s["negative"] is True and SR.negative_spec(s) for s in specs)
+    assert {"negative", "screen"} <= set().union(*(set(s) for s in specs)) <= known
+    for bad, frag in (({"knockout": True}, "negative and knockout"), ({"backing": {"color": "rose"}}, "negative and backing")):
+        with pytest.raises(SR.TextError, match=frag):
+            SR.negative_spec({**specs[0], **bad})
+
+
 def _literal_known(src):
     import ast
     for node in ast.walk(ast.parse(src)):

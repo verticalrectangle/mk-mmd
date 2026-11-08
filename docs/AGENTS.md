@@ -300,8 +300,8 @@ fingertip bone's `.tail` and the prop.
   under it (or `inks`, one per shape kind with `pick = "shape"`); on a flat `back` the ground stays empty, so a silhouette comes
   apart, and a `cell` keyed down on a `lane` assembles her out of shapes, finer on every hit.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
-  nib, and screen type laid over the picture. Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
-  Delete `renders/<preset>` when type changes: a stale `screen/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
+  nib, and screen type laid over the picture (`negative = true` makes it a photographic negative of the picture under its glyphs). Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
+  Delete `renders/<preset>` when type changes: a stale `screen/` or `negative/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
   `bullets = {at = "cast:rin.center", offsets = [...]}` ([Lyrics](design.md#lyrics)): each flies past where she is on the frame it lands; key her hop or duck on
   the same onsets and prove it with a `clearance` check. Persona's kinetic type is screen type with `lyrics = {style = "slam", layout = "same",
   recycle = {fade = 4, slide = 7}, backing = {color = "#E3263A", torn = 0, slant = 14}}` in a heavy italic font. A phrase sung again and again

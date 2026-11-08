@@ -12,7 +12,8 @@
 //!           material is seen, black elsewhere; EEVEE's 16 samples and filter; R x A of the 8-bit straight RGBA
 //!   screen  the screen type's meshes (buffers of their own) through the output's screen camera, lights off: their
 //!           emission and transparency as the lit pass draws them; Standard view (the bake's screen LUT) on the
-//!           straight colour, straight RGBA
+//!           straight colour, straight RGBA; with negative type on screen, first that alone the same way into the
+//!           negative layer, whose file is written before the screen layer's (Writer::push_after)
 //!
 //! Workbench's antialiasing (render_aa "16"), measured on Blender 4.2's own renders of probe scenes (tiny squares that
 //! only one sample point can see, a slanted half-plane, a turned square; 16-bit alpha): its 16 sample points sit at
@@ -262,6 +263,8 @@ struct Pending {
     slot: usize,
     path: PathBuf,
     mode: Mode,
+    /// Its file goes to disk before the next pass's (a frame's negative layer, before its screen layer).
+    before: bool,
     index: wgpu::SubmissionIndex,
     bytes: u64,
     mapped: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
@@ -286,6 +289,8 @@ pub struct LayerKit {
     film_bgl: wgpu::BindGroupLayout,
     targets: Option<Targets>,
     pending: std::collections::VecDeque<Pending>,
+    /// The file and picture of a pass written before the next, waiting for that pass's.
+    held: Option<(PathBuf, Pixels)>,
     next_slot: usize,
 }
 
@@ -364,7 +369,7 @@ impl Renderer<'_> {
                 self.layer_frame(&cam, w, h, &kit.sets[Mode::Figure as usize], seed);
                 let mut enc = self.layer_encoder(&mut first);
                 self.figure_pass(kit, &mut enc, &staged.shown, meshes, w, h);
-                self.finish_pass(kit, enc, path, Mode::Figure, w, h, writer)?;
+                self.finish_pass(kit, enc, path, Mode::Figure, false, w, h, writer)?;
                 counts.figure += 1;
             }
             if let Some((path, cam)) = &flat.keep {
@@ -372,18 +377,25 @@ impl Renderer<'_> {
                 self.layer_frame(&cam, w, h, &kit.sets[Mode::Keep as usize], seed);
                 let mut enc = self.layer_encoder(&mut first);
                 self.keep_pass(kit, &mut enc, &staged, &cam, w, h);
-                self.finish_pass(kit, enc, path, Mode::Keep, w, h, writer)?;
+                self.finish_pass(kit, enc, path, Mode::Keep, false, w, h, writer)?;
                 counts.keep += 1;
             }
             if let Some((path, silhouette)) = &flat.screen {
                 let cam = screen_camera(self.bake, output)?;
                 self.screen_cover(kit, output, flat.frame)?;
-                self.load_screen(kit, output, flat.frame, flat.k, ScreenPart::Over { silhouette: *silhouette })?;
                 self.layer_frame(&cam, w, h, &kit.sets[Mode::Screen as usize], seed);
-                let mut enc = self.layer_encoder(&mut first);
-                self.screen_pass(kit, &mut enc, &cam, w, h);
-                self.finish_pass(kit, enc, path, Mode::Screen, w, h, writer)?;
+                // the negative type alone into its layer, then the rest into the screen layer (nothing in it when only
+                // negative type is on screen), written after the negative layer: its presence says that one is there
+                let negative = flat.negative.iter().map(|p| (p, ScreenPart::Negative, true));
+                let over = (path, ScreenPart::Over { silhouette: *silhouette }, false);
+                for (file, part, before) in negative.chain([over]) {
+                    self.load_screen(kit, output, flat.frame, flat.k, part)?;
+                    let mut enc = self.layer_encoder(&mut first);
+                    self.screen_pass(kit, &mut enc, &cam, w, h);
+                    self.finish_pass(kit, enc, file, Mode::Screen, before, w, h, writer)?;
+                }
                 counts.screen += 1;
+                counts.negative += usize::from(flat.negative.is_some());
             }
             if let Some(enc) = first {
                 self.gpu.queue.submit(Some(enc.finish()));
@@ -605,6 +617,7 @@ impl Renderer<'_> {
             film_bgl,
             targets: None,
             pending: Default::default(),
+            held: None,
             next_slot: 0,
         }))
     }
@@ -1051,10 +1064,10 @@ impl Renderer<'_> {
     }
 
     /// Read the pass's film back (a ring of buffers) and submit it; the oldest pass is collected first when the ring is
-    /// full.
+    /// full. `before`: its file goes to disk before the next pass's (a frame's negative layer, then its screen layer).
     #[allow(clippy::too_many_arguments)]
     fn finish_pass(&mut self, kit: &mut LayerKit, mut enc: wgpu::CommandEncoder, path: &std::path::Path, mode: Mode,
-                   w: u32, h: u32, writer: &mut Writer) -> Result<()> {
+                   before: bool, w: u32, h: u32, writer: &mut Writer) -> Result<()> {
         while kit.pending.len() >= RING {
             let p = kit.pending.pop_front().context("checked")?;
             self.collect_layer(kit, p, w, h, writer)?;
@@ -1072,12 +1085,13 @@ impl Renderer<'_> {
         t.readback[slot].slice(..bytes).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        kit.pending.push_back(Pending { slot, path: path.to_path_buf(), mode, index, bytes, mapped });
+        kit.pending.push_back(Pending { slot, path: path.to_path_buf(), mode, before, index, bytes, mapped });
         Ok(())
     }
 
-    /// Wait for a pass and hand its bytes to the writers (which lay them out as the file's channels).
-    fn collect_layer(&self, kit: &LayerKit, p: Pending, w: u32, h: u32, writer: &mut Writer) -> Result<()> {
+    /// Wait for a pass and hand its bytes to the writers (which lay them out as the file's channels); a pass written
+    /// `before` the next waits in the kit for that one, the two then written in order (Writer::push_after).
+    fn collect_layer(&self, kit: &mut LayerKit, p: Pending, w: u32, h: u32, writer: &mut Writer) -> Result<()> {
         let t = kit.targets.as_ref().context("no layer targets")?;
         let buf = &t.readback[p.slot];
         self.gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(p.index), timeout: None })
@@ -1085,7 +1099,12 @@ impl Renderer<'_> {
         p.mapped.recv()?.map_err(|e| anyhow::anyhow!("readback: {e}"))?;
         let data = buf.slice(..p.bytes).get_mapped_range().map_err(|e| anyhow::anyhow!("readback: {e:?}"))?.to_vec();
         buf.unmap();
-        writer.push(p.path, w, h, p.mode.pixels(t.stride as usize * 4, data), WRITING)
+        let pixels = p.mode.pixels(t.stride as usize * 4, data);
+        if p.before {
+            kit.held = Some((p.path, pixels));
+            return Ok(());
+        }
+        writer.push_after(kit.held.take(), p.path, w, h, pixels, WRITING)
     }
 
     /// A silhouette frame's knock pass (styles.Looks: its knock-out screen type, reversed out of the figure in the

@@ -131,6 +131,14 @@ impl Writer {
     /// Queue a picture for `path` (laid out as its file's channels and encoded on the pool, write_image); blocks
     /// while more than `limit` pictures wait (bounding the memory they hold).
     pub fn push(&mut self, path: PathBuf, w: u32, h: u32, pixels: Pixels, limit: usize) -> Result<()> {
+        self.push_after(None, path, w, h, pixels, limit)
+    }
+
+    /// `push`, after `first` (a picture of the same size for another file, if any): both written on one thread, `first`
+    /// whole on disk before `path` is begun, and `path` not at all when `first` fails, so that `path`'s presence says
+    /// `first` is there (a frame's negative layer and its screen layer, layers.rs).
+    pub fn push_after(&mut self, first: Option<(PathBuf, Pixels)>, path: PathBuf, w: u32, h: u32, pixels: Pixels,
+                      limit: usize) -> Result<()> {
         while self.pending >= limit {
             self.rx.recv().context("the PNG writers stopped")??;
             self.pending -= 1;
@@ -138,8 +146,12 @@ impl Writer {
         let tx = self.tx.clone();
         self.pending += 1;
         self.pool.spawn(move || {
-            let channels = pixels.channels();
-            let _ = tx.send(pixels.rows(w, h).and_then(|rows| write_image(&path, w, h, channels, &rows)));
+            let write = |path: &Path, pixels: Pixels| {
+                let channels = pixels.channels();
+                pixels.rows(w, h).and_then(|rows| write_image(path, w, h, channels, &rows))
+            };
+            let first = first.map_or(Ok(()), |(p, px)| write(&p, px));
+            let _ = tx.send(first.and_then(|()| write(&path, pixels)));
         });
         Ok(())
     }
@@ -191,5 +203,28 @@ mod tests {
         assert_eq!(&rgba[..8], &[1, 1, 1, 255, 2, 2, 2, 255]);
         assert_eq!(rgba.len(), 3 * 2 * 4);
         assert!(Pixels::Packed { channels: 4, data: vec![0; 5] }.rows(1, 1).is_err());
+    }
+
+    #[test]
+    fn a_picture_pushed_after_another_is_written_after_it_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("mkr-png-after-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rgba = |v: u8| Pixels::Packed { channels: 4, data: vec![v; 2 * 2 * 4] };
+        let mut w = Writer::new(4).unwrap();
+        w.push_after(Some((dir.join("negative/00001.png"), rgba(1))), dir.join("screen/00001.png"), 2, 2, rgba(2), 4)
+            .unwrap();
+        w.finish().unwrap();
+        for (f, v) in [("negative/00001.png", 1), ("screen/00001.png", 2)] {
+            let img = image::open(dir.join(f)).unwrap().to_rgba8();
+            assert!(img.as_raw().iter().all(|&x| x == v), "{f}");
+        }
+        // a first picture that cannot be written keeps the second off the disk
+        let mut w = Writer::new(4).unwrap();
+        let bad = Pixels::Packed { channels: 4, data: vec![0; 5] };
+        let screen = dir.join("screen/00002.png");
+        w.push_after(Some((dir.join("negative/00002.png"), bad)), screen.clone(), 2, 2, rgba(2), 4).unwrap();
+        assert!(w.finish().is_err());
+        assert!(!screen.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

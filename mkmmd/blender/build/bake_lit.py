@@ -46,11 +46,12 @@ bake.json "lit":
   left_out  [{name, why, shows}]: what Blender renders that the bake cannot hold (a volume, hair, a mesh too big to
             bake on every frame, ...), with the clip frames [[k0, k1), ...] it shows on
   screen    null, or the screen layer: meshes [MESH by_frame of screen type (SCREEN below), with aspect, show [on, off)
-            Blender frames, knockout], left_out [{name, why, aspect, show}] (a word the bake could not evaluate or hold:
-            those frames' layers are Blender's), cameras {output: {type ORTHO, ortho_scale, sensor_fit, clip, size,
-            matrix (3x4 glTF)}}, pass {engine, film_transparent, lights, world, motion_blur, dither, compositing,
-            use_raytracing, samples {default, looks {shot or "medium <i>": {output: n}}}}, view and lut / zero / floor
-            (as `view`, of its Standard transform: screen_lut.bin), format {file_format, color_mode, color_depth, alpha}
+            Blender frames, knockout, negative], left_out [{name, why, aspect, show}] (a word the bake could not
+            evaluate or hold: those frames' layers are Blender's), cameras {output: {type ORTHO, ortho_scale,
+            sensor_fit, clip, size, matrix (3x4 glTF)}}, pass {engine, film_transparent, lights, world, motion_blur,
+            dither, compositing, use_raytracing, samples {default, looks {shot or "medium <i>": {output: n}}}}, view
+            and lut / zero / floor (as `view`, of its Standard transform: screen_lut.bin), format {file_format,
+            color_mode, color_depth, alpha}
   points    {key: {expr, offset FLOAT (per frame x y z, world, glTF axes; NaN where no layer asks for it or it fails),
             frames [[k0, k1, shot], ...], errors [{error, frames}]}}: the layers' points (mkmmd.core.transition.demands);
             the point file is {p: [x, 1 - y], depth: z, m: hypot((qx - x) w / h, qy - y)} with (x, y, z) the point
@@ -1999,7 +2000,7 @@ class Lit:
                       "shown": shown(sw.word.frames >= 0), "matrix": matrix(np.eye(4)[None]), "armature": None,
                       "dqs": False, "why": "screen type", "vertices": None, "attributes": None, "triangles": None,
                       "slots": None, "morphs": None, "bend": None, "by_frame": sw.word.record(base), "show": show,
-                      "knockout": "mk_knockout" in o.keys()}
+                      "knockout": "mk_knockout" in o.keys(), "negative": "mk_negative" in o.keys()}
             screen.append(sw.rec)
         for rec in meshes + screen:                         # the object whose look record selects it
             rec["record"] = rec["instance"]["by"] if rec["instance"] else rec["name"]

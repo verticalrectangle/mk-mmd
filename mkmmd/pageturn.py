@@ -44,13 +44,15 @@ def frame(tr, frame, main, incoming):
 
 def wrap(tr, frame, page, under):
     """The loop's wrap on `frame` of its window (`tr`: the page turn at the clip's end, mkmmd.core.transition.wrap_of).
-    `page` is the outgoing frame and `under` frame 0, each as finished before the grade, as (picture, layer, mask): the
-    picture (float RGB) with its cut effects, frame effects, lens streaks and the screen type graded with it on it, the
-    screen type still to be laid over the graded picture (straight RGBA) and `[post] keep`'s mask, either of the last two
-    None for none. Returns the frame's own three: the picture turned as a page over frame 0's, held still, and the layer
+    `page` is the outgoing frame and `under` frame 0, each as finished before the grade, as (picture, layer, mask,
+    negative): the picture (float RGB) with its cut effects, frame effects, lens streaks and the screen type graded with
+    it on it, the screen type still to be laid over the graded picture (straight RGBA), `[post] keep`'s mask and the
+    negative layer still to invert the graded picture with (straight RGBA, its alpha the coverage), any of the last three
+    None for none. Returns the frame's own four: the picture turned as a page over frame 0's, held still, and the layers
     and the mask turned with it."""
     t = Turn(tr, frame, (page[0].shape[1], page[0].shape[0]))
-    return t.picture(page[0], under[0]), t.layer(page[1], under[1]), t.mask(page[2], under[2])
+    return (t.picture(page[0], under[0]), t.layer(page[1], under[1]), t.mask(page[2], under[2]),
+            t.layer(page[3], under[3]))
 
 
 class Turn:

@@ -8,9 +8,11 @@ height, a margin or a band means the same in every shot and the 16:9 and 9:16 ou
 (w / h frame heights). The text stage builds such a text as an ordinary text object on the plane z = 0 (one unit = one frame
 height, hidden from every render); a frame that has any on screen gets a second pass, the type alone through an orthographic
 camera one frame height tall, which `mk render` keeps as a file of its own (`screen/<frame>.png`, straight RGBA) so that `mk post`
-lays it over whatever the cut effects make of the frame (`composite`). This module is the maths: the per-output overlay of an
-entry (`aspect.<output>`), `extends`, the band that `screen = {anchor, margin, height}` stands for, the layer's file name and the
-compositing. Errors are `TextError`s without the entry's name (the stage adds it)."""
+lays it over whatever the cut effects make of the frame (`composite`). `negative = true` type is not laid over but a photographic
+negative: its coverage goes to a layer of its own (`negative/<frame>.png`) and `composite` inverts the picture under it. This
+module is the maths: the per-output overlay of an entry (`aspect.<output>`), `extends`, the band that
+`screen = {anchor, margin, height}` stands for, the layers' file names and the compositing. Errors are `TextError`s without
+the entry's name (the stage adds it)."""
 import numpy as np
 
 from .typeset import TextError
@@ -72,9 +74,13 @@ def per_output(spec, outputs):
         if not isinstance(over, dict):
             raise TextError(f"aspect.{name} is a table of overrides")
     if asp is None and spec.get("screen") in (None, False):
+        negative_spec(spec)
         return [(None, spec)]
     base = {k: v for k, v in spec.items() if k != "aspect"}
-    return [(name, deep_merge(base, (asp or {}).get(name))) for name in outputs]
+    out = [(name, deep_merge(base, (asp or {}).get(name))) for name in outputs]
+    for _, s in out:
+        negative_spec(s)
+    return out
 
 
 # ------------------------------------------------------------------------------------------------------ the frame
@@ -103,6 +109,34 @@ def screen_spec(spec):
     if out["height"] is not None and not 0.0 < out["height"] <= 1.0:
         raise TextError("screen height is in (0, 1] frame heights")
     return out
+
+
+def negative_spec(spec):
+    """Whether the entry is negative screen type (`negative = true`): its glyphs are not laid over the picture but invert
+    it, `out = bg * (1 - a) + (1 - bg) * a` under the coverage `a`. `negative = false` or none is ordinary screen type (or
+    not screen type). Refused (a TextError): a value that is not true or false, no `screen` (the text is a thing in the
+    scene, there is no picture to invert), `knockout` (that reverses the type out of a silhouette shot's figure: a
+    different reversal, and the two cannot both apply to the same glyphs) and `backing` / `outline` (a strip or ring is a
+    plate of its own: its coverage would be inverted too, a block with the word cut out of it)."""
+    v = spec.get("negative")
+    if v is None or v is False:
+        return False
+    if v is not True:
+        raise TextError(f"negative is true or false, not {v!r} (a [[text]] with `screen`: the picture under its glyphs "
+                        "is inverted)")
+    if screen_spec(spec) is None:
+        raise TextError("negative = true needs `screen` (screen = true | {anchor, side, margin, height, width}): it "
+                        "inverts the picture under the type")
+    if spec.get("knockout"):
+        raise TextError("negative and knockout both reverse type (negative inverts the picture under the glyphs, "
+                        "knockout reverses them out of a silhouette shot's figure): use one of them")
+    lyr = spec.get("lyrics")
+    for key, val in (("backing", spec.get("backing")), ("outline", spec.get("outline")),
+                     ("lyrics.backing", lyr.get("backing") if isinstance(lyr, dict) else None)):
+        if val not in (None, False):
+            raise TextError(f"negative and {key} cannot go together: negative type is the glyphs' coverage alone, a "
+                            "strip or ring would be inverted as a plate with the word cut out of it")
+    return True
 
 
 def frame_width(size):
@@ -136,19 +170,43 @@ def panel(screen, size, at=None, box=None):
 
 # ------------------------------------------------------------------------------------------------------ the layer files
 LAYER_DIR = "screen"
+NEGATIVE_DIR = "negative"
 
 
 def layer_rel(frame):
     """Path of a frame's screen layer inside a frame folder: `screen/<frame>.png` (straight RGBA, the frame's size; absent when
-    nothing is on screen). `mk render` writes it next to the frame, `mk post` and `mk look` lay it over the cut's frame."""
+    nothing is on screen, ordinary or negative: with only negative type on it, fully transparent). `mk render` writes it next
+    to the frame, `mk post` and `mk look` lay it over the cut's frame."""
     return f"{LAYER_DIR}/{int(frame):05d}.png"
 
 
+def negative_rel(frame):
+    """Path of a frame's negative layer inside a frame folder: `negative/<frame>.png` (RGBA, the frame's size, only its ALPHA
+    is read: the coverage of the `negative = true` type, 0..1; absent when none is on screen). Written before the frame's
+    `screen/<frame>.png`, so that one's presence says the negative layer, if there is one, is there too."""
+    return f"{NEGATIVE_DIR}/{int(frame):05d}.png"
+
+
 # ------------------------------------------------------------------------------------------------------ compositing
-def composite(base, layer):
-    """`layer` (h, w, 4) straight RGBA laid over `base` (h, w, 3) RGB, both float in display space, top row first: the
-    picture with the screen type on it. Returns float32 (h, w, 3); neither argument changes."""
+def composite(base, layer=None, negative=None):
+    """The picture `base` (h, w, 3) RGB, float in display space, top row first, with its screen type on it: `layer` (h, w, 4)
+    straight RGBA laid over it, then the `negative` layer (h, w, 4, its alpha the coverage `a` of the negative type) inverting
+    what is under it, per channel `out = under * (1 - a) + (1 - under) * a`. Negative type goes last: it inverts the picture
+    with the ordinary screen type on it, and where its coverage is 0 the pixel is the ordinary composite's, bit for bit (no
+    `negative`, exactly the ordinary composite). Overlapping negative type has no sum of its own: it is one layer, drawn as
+    one coverage (the union of the glyphs, as the glyphs of one word overlap), so its pixels invert once. Either layer may
+    be None. Returns float32 (h, w, 3); no argument changes."""
     base = np.asarray(base, np.float32)
-    layer = np.asarray(layer, np.float32)
-    a = np.clip(layer[..., 3:4], 0.0, 1.0)
-    return base[..., :3] * (1.0 - a) + layer[..., :3] * a
+    if layer is None:
+        out = np.array(base[..., :3], np.float32, order="C")
+    else:
+        layer = np.asarray(layer, np.float32)
+        a = np.clip(layer[..., 3:4], 0.0, 1.0)
+        out = base[..., :3] * (1.0 - a) + layer[..., :3] * a
+    if negative is not None:
+        a = np.clip(np.asarray(negative, np.float32)[..., 3:4], 0.0, 1.0)
+        inv = 1.0 - out
+        inv *= a
+        out *= 1.0 - a
+        out += inv
+    return out

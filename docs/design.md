@@ -761,7 +761,8 @@ glTF's axes (+Y up); what node graphs read (Generated coordinates, attributes) s
 - What Blender renders that the bake cannot hold (a volume, hair, a point cloud, a mesh over its cap, instances of a deforming
   object) is listed in `left_out` with the frames it shows on, so `mk render` leaves those frames to Blender.
 - Screen type (`lit.screen`): every word of it on the frames it shows (`show` [on, off) frames, `aspect` its output,
-  `knockout`), the screen layer's orthographic camera per output (one frame height tall, at z = 10 looking down, +Y up,
+  `knockout`, `negative`: a negative word is drawn alone into `negative/<frame>.png` before the rest goes into `screen/<frame>.png`,
+  and the PNG writer puts the first file on disk before the second), the screen layer's orthographic camera per output (one frame height tall, at z = 10 looking down, +Y up,
   in glTF's axes), its pass (EEVEE, film transparent, lights off, black world, no motion blur or dither, the shot look's
   samples or 16), its view transform (Standard, no look) captured as a LUT like the scene's, and its file format
   (straight RGBA, 8 bits). A word is held as fitted geometry (`mkmmd/core/fitgeo.py`, numpy, tested; mkr decodes it in
@@ -5047,6 +5048,7 @@ The same entry also makes lyric type (`lyrics`), handwriting (`ink`) and type of
 | `ink` | `{strokes \| track, on, width, lift, color, dry, glossy, from, to}`: handwriting instead of type, a pen's strokes that appear behind the nib; the entry carries only `name` and `ink` ([Ink](#ink)) |
 | `screen` | `true` or `{anchor, side, margin, height, width}`: type of the picture, laid over the finished frame of whichever shot is cutting; `at`, `box`, `size`, `offset` are in frame heights, and no `on`, `mount`, `facing` or `up` ([Screen type](#screen-type)) |
 | `knockout` | `true`: screen type reversed out of a silhouette shot, in any other shot ordinary screen type ([Screen type](#screen-type)) |
+| `negative` | `true`: screen type as a photographic negative: the picture under its glyphs is inverted by their coverage `a` (`out = bg * (1 - a) + (1 - bg) * a`, the text's `color` unused). Needs `screen`; refused with `knockout`, `backing`, `outline` or `blocks`; lyric entries and `lyrics.zones` take it like any key ([Screen type](#screen-type)) |
 | `aspect.<output>` | `{...}`: an output's own version of the entry, its keys laid over the entry's (tables merge key by key, everything else is replaced). An entry with `screen` or `aspect` is built once per output; with several outputs the objects end `@<output>` and exist for that output only. An output the project does not have is an error |
 | `extends`, `abstract` | `extends = "<name>"`: the entry is that entry (resolved first, so chains work; a loop or an unknown name is an error; the entry needs a name of its own) with its own keys laid over it, tables merged; `abstract = true` makes an entry a base that is never built (and is not inherited), so a look that eight lyric lines share is written once |
 
@@ -5117,8 +5119,8 @@ A `[[text]]` with `lyrics = {...}` is lyric type: one text per sung word, read f
 that every word lands on its onset. `mkmmd/core/wordtype.py` (numpy only, tested on synthetic timelines) selects the words and decides
 when each lands, arrives, spreads, weighs, leaves and where it stands; `mkmmd/blender/build/wordtype.py` reads the file and hands one
 ordinary text per word to the stage, each with a `kinetic` table of keys. The entry's other keys (`on`, `mount` / `at` / `facing` /
-`box`, `font`, `size` / `fit`, `color`, `glow`, `lit`, `depth`, `lift`, `offset`, `outline`, `backing`, `screen`, ...) go to every
-word; the words take their text from the timeline, so `text`, `value`, `kinetic`, `reveal` and `lyric` are errors, and so are the
+`box`, `font`, `size` / `fit`, `color`, `glow`, `lit`, `depth`, `lift`, `offset`, `outline`, `backing`, `screen`, `negative`, ...) go to every
+word (`negative = true` with `screen` makes each a photographic negative of the picture under it: [Screen type](#screen-type), where it is refused with `backing` and `outline`); the words take their text from the timeline, so `text`, `value`, `kinetic`, `reveal` and `lyric` are errors, and so are the
 looks of a kinetic text that need a material of their own (`ghost`, `halo`, `blink`, `flicker`, `fade`). `on` may be a list of
 surfaces (word k goes to surface k mod len: a diagonal chain over window panes in lyric order is such a list, each word fitted into its
 own pane). Words that must stay where they are on screen while the camera moves are type of the picture (`screen`, below), or, to
@@ -5440,6 +5442,25 @@ after everything else in the shot, so an expanding or collapsing figure takes it
 (on a plain text leave `backing` and `outline` off: they would be alpha of the same kind). In a shot that is not a silhouette it is
 ordinary screen type. A shot's own `knockout = {objects, color}` still serves type that belongs to the scene.
 
+`negative = true` is screen type as a photographic negative: where a glyph covers a pixel the picture is inverted instead of painted,
+per channel `out = bg * (1 - a) + (1 - bg) * a` with `a` the glyph's antialiased coverage (a solid pixel is exactly `1 - bg`, a
+rim pixel part way to it; the text's `color` is not used, its keyed opacity, if any, scales the coverage). The coverage is a
+layer of its own, `<frames>/negative/<frame>.png` (RGBA, only its alpha is read), written before the frame's `screen/<frame>.png`
+(which a frame with negative type has too, fully transparent when it has no ordinary type there), so a screen layer on disk says its
+negative one is there as well. `mk post` and `mk look` lay the ordinary layer first and invert the picture with the negative one
+last, at the same place: after the cut effects and before the grade, or after the grade with `[post] screen = "over"`
+(`mkmmd.core.screentype.composite` on the CPU, the `negate` kernel of mkr-post on the GPU; the two agree within a level, tested).
+Negative and ordinary type therefore live in one frame without touching each other, and negative type inverts whatever ordinary type
+it lies over too. Negative type that overlaps (two words, or the overlapping letters of one) is one coverage, `1 - (1 - a1)(1 - a2)`,
+and inverts once: a second inversion would hand the picture back and punch the type full of holes. Over a kept eye (`[post] keep`)
+the mask is cut where it covers, as for ordinary type, and at the loop's wrap the negative layer turns with the page like the screen
+one. The key needs `screen`, and is refused (`text '<name>': negative and knockout both reverse type ...`) with `knockout` (the other
+reversal: out of a silhouette's figure; the two do not combine, pick one), `backing` and `outline` (a strip or ring is a plate of its
+own: it would be inverted as a block with the word cut out of it) and `blocks`; a value that is not true or false is an error too.
+Lyric entries (`lyrics = {...}` with `screen`) take it as any entry key does, one negative word each, and `lyrics.zones` can turn it
+on or off per shot (`zones = { <shot> = { negative = true } }`). `mk render` draws the negative layer in Blender and, where the bake
+holds the words, in mkr; frames with none have no file.
+
 ```toml
 [[text]]                              # a title in a band at the bottom left, up from 2 to 5 s; 9x16 centres it
 name = "title"
@@ -5455,8 +5476,8 @@ Limits. The words are one more layer over the whole frame: a transition or an in
 them), but for the loop's wrap, whose page carries them. What belongs to a figure is the exception: a silhouette's `knockout` type
 is part of that shot's picture. `mk render --no-styles` and `mk look --no-styles` leave screen type out (it is part of the looks).
 The layer files are small (the type is mostly transparent) and a frame with nothing on screen has none. The pass is one more EEVEE
-render of a frame that has any type on it. A stale `screen/` folder of an earlier build stays on disk with the frames it belongs
-to: delete `renders/<preset>` when the type changes, as for any frame.
+render of a frame that has any type on it (two, with negative type: one for each layer). A stale `screen/` or `negative/` folder of an
+earlier build stays on disk with the frames it belongs to: delete `renders/<preset>` when the type changes, as for any frame.
 
 ### Cassette type
 
@@ -5703,7 +5724,8 @@ Frames are claimed with an empty file first, so a stopped render resumes; a disk
 (it keeps 1.5 GB spare). Shots with a render-time look ([Shots](#looks-silhouette-and-reflection): silhouette, reflection) are finished
 flat frames on disk, composed inside the render job; `--no-styles` renders them as lit, and leaves out the cut effects and the screen type too (they are part of the looks). `[[transition]]` and `[[insert]]`
 ([Shots](#transitions-and-inserts)) add the layers they need next to the frames (`plate/`, `matte/`, `back/`, `point/`; `--no-transitions`
-leaves them out). Screen type ([Text](#screen-type)) is `screen/<frame>.png`, straight RGBA, for the frames that have any. With
+leaves them out). Screen type ([Text](#screen-type)) is `screen/<frame>.png`, straight RGBA, for the frames that have any (with
+`negative = true` type also `negative/<frame>.png`, whose alpha is the coverage that inverts the picture, written before it). With
 `[post] keep` ([Post](#post)) each frame gets `keep/<frame>.png` too, the mask of where the kept materials are seen, drawn before
 the frame (a frame already on disk without one gets it).
 
@@ -6228,7 +6250,8 @@ The encoder is `[post] encoder` or `--encoder`: `x264` (the default: libx264 at 
 some 250 frames a second at 1080p against x264 slow's 14, larger files).
 
 `--gpu` or `[post] gpu = true` hands what mkr-post can do of each frame to the GPU (`mkr/mkr-post`, driven by
-`mkmmd/postgpu.py`): the frame effects it draws, the screen type, the keep mask, the grade and the bytes for the encoder,
+`mkmmd/postgpu.py`): the frame effects it draws, the screen type (the ordinary layer over the picture, then a frame's negative
+layer, `negative/<frame>.png`, inverting it: the job's `layer` and `negative`, kernels `composite` and `negate`), the keep mask, the grade and the bytes for the encoder,
 the rest of a frame (cut effects, the other kinds, an entry with a `rect` but a film's, entries before the last one it
 cannot draw) worked out by the workers and handed on as a picture; the loop's wrap, `halation` and `streaks` stay on the
 CPU (with either, the whole output does). Each kind it draws has a module in `mkmmd/gpufx/` that works the frame's
@@ -6367,6 +6390,8 @@ at `strength`. It is drawn before the screen type, so lyrics never streak. An un
 
 `[post] screen = "over"` lays the screen type over the finished, graded picture instead of under the grade (`"graded"`, the
 default): its colours exactly as written, no grain or vignette on it, as type set on a photograph. Any other value is an error.
+Negative screen type (`negative = true`, [Screen type](#screen-type)) goes the same way: it inverts the picture under the grade (the
+inverted picture is graded) or, with `"over"`, the finished, graded one.
 
 `[post]` (all optional) is otherwise the grade, applied after the screen type in this order:
 

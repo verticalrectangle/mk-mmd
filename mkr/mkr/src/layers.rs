@@ -12,8 +12,12 @@
 //!                         metre up the camera's +Y
 //!   keep/<f>.png          `[post] keep`: EEVEE's flat emission, kept materials white and the rest black, MMD materials
 //!                         transparent by their own alpha; linear, 16 samples, R x A of the RGBA pass, as RGBA (alpha 1)
-//!   screen/<f>.png        the screen type: its emission through the screen camera, lights off, film transparent,
-//!                         Standard view, straight RGBA
+//!   screen/<f>.png        the screen type but the negative: its emission through the screen camera, lights off, film
+//!                         transparent, Standard view, straight RGBA; a frame with negative type on screen has one too
+//!                         (transparent when that is all it has)
+//!   negative/<f>.png      the negative type (`negative = true`): the same pass of it alone, written before the
+//!                         frame's screen/<f>.png (whose presence says it is there); mk post inverts the picture under
+//!                         its alpha
 //!
 //! A request (`--layers FILE`, written by mk render: mkmmd/render/mkr.py) lists the layers: {"items": {frame: [item]},
 //! "keep": {"materials": [bake material names], "frames": [...]} | null, "screen": [frames] | null}. `sort` says which
@@ -132,6 +136,10 @@ pub fn screen_rel(frame: i64) -> String {
     format!("screen/{frame:05}.png")
 }
 
+pub fn negative_rel(frame: i64) -> String {
+    format!("negative/{frame:05}.png")
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct KeepRequest {
     /// The bake's materials that keep their colour.
@@ -207,12 +215,22 @@ pub struct Sorted {
     pub blender: BTreeMap<String, String>,
 }
 
+/// The screen type's frames sorted as `Sorted` sorts them, and those of `draw` with negative type on screen: mkr draws
+/// their negative layer too, before their screen layer.
+#[derive(Serialize, Default, Clone, Debug)]
+pub struct ScreenSorted {
+    pub draw: Vec<i64>,
+    pub blender: BTreeMap<String, String>,
+    pub negative: Vec<i64>,
+}
+
 pub struct Verdicts {
     /// Per frame of the request, per item: None when mkr draws it, else why Blender must.
     pub items: BTreeMap<i64, Vec<Option<String>>>,
-    /// Over the frames mkr draws (`mine`): their keep masks, and their screen type (frames with any on screen).
+    /// Over the frames mkr draws (`mine`): their keep masks, and their screen type (frames with any on screen,
+    /// ordinary or negative).
     pub keep: Sorted,
-    pub screen: Sorted,
+    pub screen: ScreenSorted,
 }
 
 /// Sort the request's layers of `output` between mkr and Blender; `mine` are the frames mkr draws (the keep mask and
@@ -238,11 +256,16 @@ pub fn sort(bake: &Bake, support: &Support, output: &str, req: &Request, mine: &
             }
         }
     }
-    let mut screen = Sorted::default();
+    let mut screen = ScreenSorted::default();
     for &f in req.screen.iter().filter(|f| mine.contains(f)) {
-        match screen_blocker(bake, support, output, f, ScreenPart::Over { silhouette: silhouette_frame(looks, f) })? {
+        match screen_layer_blocker(bake, support, output, f, silhouette_frame(looks, f))? {
             None => {}
-            Some(Ok(())) => screen.draw.push(f),
+            Some(Ok(negative)) => {
+                screen.draw.push(f);
+                if negative {
+                    screen.negative.push(f);
+                }
+            }
             Some(Err(why)) => {
                 screen.blender.insert(f.to_string(), why);
             }
@@ -448,6 +471,21 @@ pub fn screen_blocker(bake: &Bake, support: &Support, output: &str, frame: i64, 
     Ok(live.then_some(Ok(())))
 }
 
+/// Whether `frame` of `output` has a screen layer (None: neither ordinary nor negative type is on screen; else Ok when
+/// mkr draws it, with whether negative type is on screen, whose layer it draws first; Err why not): its `Over` and
+/// `Negative` parts together, as Blender writes the two files (styles.Looks.screen_layer), both mkr's or both
+/// Blender's. `silhouette`: a silhouette's frame, whose knock-out type stays off the layer.
+pub fn screen_layer_blocker(bake: &Bake, support: &Support, output: &str, frame: i64, silhouette: bool)
+                            -> Result<Option<Result<bool, String>>> {
+    let over = screen_blocker(bake, support, output, frame, ScreenPart::Over { silhouette })?;
+    let negative = screen_blocker(bake, support, output, frame, ScreenPart::Negative)?;
+    Ok(match (over, negative) {
+        (Some(Err(why)), _) | (_, Some(Err(why))) => Some(Err(why)),
+        (None, None) => None,
+        (_, negative) => Some(Ok(negative.is_some())),
+    })
+}
+
 /// Screen type on screen at `frame` in `output` that the bake could not hold, and why.
 pub fn screen_left_out(bake: &Bake, output: &str, frame: i64) -> Option<String> {
     let screen = bake.doc.lit.as_ref()?.screen.as_ref()?;
@@ -457,18 +495,21 @@ pub fn screen_left_out(bake: &Bake, output: &str, frame: i64) -> Option<String> 
     screen.left_out.iter().find(|o| on(&o.aspect, &o.show)).map(|o| format!("screen type {}: {}", o.name, o.why))
 }
 
-/// Which of the screen type on screen a pass draws: the layer's (`Over`: in a silhouette's frame all but its knock-out
-/// type, elsewhere all of it) or a silhouette's knock pass (`Knock`: its knock-out type alone).
+/// Which of the screen type on screen a pass draws: the screen layer's (`Over`: all but the negative type, and in a
+/// silhouette's frame but its knock-out type too), the negative layer's (`Negative`: the negative type alone) or a
+/// silhouette's knock pass (`Knock`: its knock-out type alone).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScreenPart {
     Over { silhouette: bool },
+    Negative,
     Knock,
 }
 
 impl ScreenPart {
     fn draws(self, m: &crate::bake::MeshRec) -> bool {
         match self {
-            ScreenPart::Over { silhouette } => !(silhouette && m.knockout),
+            ScreenPart::Over { silhouette } => !m.negative && !(silhouette && m.knockout),
+            ScreenPart::Negative => m.negative,
             ScreenPart::Knock => m.knockout,
         }
     }
@@ -486,7 +527,7 @@ pub fn live_screen<'a>(screen: &'a crate::bake::ScreenRec, output: &'a str, fram
     screen.meshes.iter().filter(move |m| on_screen(m, output, frame) && part.draws(m))
 }
 
-/// The screen type records (indices into `screen.meshes`) on screen in `output` on any of `frames`, either part: what a
+/// The screen type records (indices into `screen.meshes`) on screen in `output` on any of `frames`, every part: what a
 /// kit drawing those frames' screen type loads (a project's whole screen type can run to gigabytes: jwin_mv's 180
 /// words hold 88 million vertices).
 pub fn screen_records(screen: &crate::bake::ScreenRec, output: &str, frames: &[i64]) -> Vec<usize> {
@@ -636,21 +677,26 @@ pub struct Counts {
     pub point: usize,
     pub keep: usize,
     pub screen: usize,
+    pub negative: usize,
 }
 
 /// One frame's flat passes (layers_gpu.rs): its figures (file, camera, meshes), its keep mask (file, camera), its
-/// screen type (file, and whether the frame is a silhouette's, whose knock-out type stays off the layer).
+/// screen type (file, and whether the frame is a silhouette's, whose knock-out type stays off the layer) and, with
+/// negative type on screen, its negative layer's file (drawn first: a frame with one has its screen layer too).
 pub struct Flat {
     pub frame: i64,
     pub k: usize,
     pub figures: Vec<(PathBuf, String, Vec<usize>)>,
     pub keep: Option<(PathBuf, String)>,
     pub screen: Option<(PathBuf, bool)>,
+    pub negative: Option<PathBuf>,
 }
 
 fn flat_of<'a>(flats: &'a mut BTreeMap<i64, Flat>, bake: &Bake, f: i64) -> Result<&'a mut Flat> {
     let k = bake.k(f).with_context(|| format!("frame {f} is outside the clip"))?;
-    Ok(flats.entry(f).or_insert_with(|| Flat { frame: f, k, figures: Vec::new(), keep: None, screen: None }))
+    Ok(flats.entry(f).or_insert_with(|| {
+        Flat { frame: f, k, figures: Vec::new(), keep: None, screen: None, negative: None }
+    }))
 }
 
 /// The points of the request, written now, and the frames' flat passes for the GPU; items mkr cannot draw are skipped
@@ -701,9 +747,13 @@ pub fn plan_flat(bake: &Bake, support: &Support, output: &str, req: &Request, ou
     }
     for &f in &req.screen {
         let silhouette = silhouette_frame(looks, f);
-        match screen_blocker(bake, support, output, f, ScreenPart::Over { silhouette })? {
+        match screen_layer_blocker(bake, support, output, f, silhouette)? {
             None => {}
-            Some(Ok(())) => flat_of(&mut flats, bake, f)?.screen = Some((out.join(screen_rel(f)), silhouette)),
+            Some(Ok(negative)) => {
+                let flat = flat_of(&mut flats, bake, f)?;
+                flat.screen = Some((out.join(screen_rel(f)), silhouette));
+                flat.negative = negative.then(|| out.join(negative_rel(f)));
+            }
             Some(Err(why)) => warnings.push(format!("frame {f}: screen type: {why}, skipped")),
         }
     }
@@ -713,6 +763,7 @@ pub fn plan_flat(bake: &Bake, support: &Support, output: &str, req: &Request, ou
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn items_parse_and_name_their_files() {
@@ -762,5 +813,92 @@ mod tests {
         // a metre up at 5 m with a 50 mm lens on a 36 mm sensor: 50 / 36 / 5 of the width, in frame heights
         let want = 50.0 / 36.0 / 5.0 * 1920.0 / 1080.0;
         assert!((p.3 - want).abs() < 1e-4, "{p:?} vs {want}");
+    }
+
+    /// A word of screen type on screen in Blender frames [on, off): `kind` "plain", "knockout" or "negative", its one
+    /// material, its geometry on every frame of `screen_bake` (`held`; else the bake holds none of it).
+    fn word(name: &str, show: [i64; 2], kind: &str, material: &str, held: bool) -> Value {
+        let by_frame = if held { json!({"geoms": [], "frames": [0, 0, 0, 0, 0, 0]}) } else { Value::Null };
+        json!({"name": name, "kind": "by_frame", "materials": [material], "show": show, "knockout": kind == "knockout",
+               "negative": kind == "negative", "by_frame": by_frame})
+    }
+
+    /// A bake of Blender frames 1..=6 whose lit scene is the screen type `words` of output o.
+    fn screen_bake(tag: &str, words: Vec<Value>) -> (PathBuf, Bake) {
+        let dir = std::env::temp_dir().join(format!("mkr_layers_{tag}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lut = |file: &str| json!({"file": file, "n": 2, "lo": -1.0, "hi": 1.0});
+        let camera = json!({"ortho_scale": 1.0, "clip": [0.1, 100.0],
+                            "matrix": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 10.0, 0.0]});
+        let doc = json!({"version": 5, "fps": 30.0, "frame0": 1, "frames": 6,
+                         "outputs": [{"name": "o", "size": [4, 4]}], "screen": words.len(),
+                         "lit": {"view": {"lut": lut("view_lut.bin")}, "meshes": [],
+                                 "screen": {"meshes": words, "left_out": [], "cameras": {"o": camera},
+                                            "lut": lut("screen_lut.bin")}}});
+        std::fs::write(dir.join("bake.json"), doc.to_string()).unwrap();
+        std::fs::write(dir.join("bake.bin"), b"").unwrap();
+        std::fs::write(dir.join("lit.bin"), b"").unwrap();
+        let bake = Bake::open(&dir).unwrap();
+        (dir, bake)
+    }
+
+    /// Each pass draws its own of the screen type: the screen layer all but the negative type (in a silhouette's frame
+    /// but its knock-out type too), the negative layer the negative type alone, a silhouette's knock pass its knock-out
+    /// type; a record from before negative type is not.
+    #[test]
+    fn each_screen_pass_draws_its_own_type() {
+        let rec = |v: Value| serde_json::from_value::<crate::bake::MeshRec>(v).unwrap();
+        let parts = [ScreenPart::Over { silhouette: false }, ScreenPart::Over { silhouette: true },
+                     ScreenPart::Negative, ScreenPart::Knock];
+        let draws = |v: Value| {
+            let m = rec(v);
+            parts.map(|p| p.draws(&m))
+        };
+        assert_eq!(draws(word("aa", [1, 2], "plain", "m", true)), [true, true, false, false]);
+        assert_eq!(draws(word("bb", [1, 2], "knockout", "m", true)), [true, false, false, true]);
+        assert_eq!(draws(word("cc", [1, 2], "negative", "m", true)), [false, false, true, false]);
+        assert!(!rec(json!({"name": "dd", "knockout": true})).negative);
+        assert!(!rec(json!({"name": "ee", "negative": null})).negative);
+    }
+
+    /// A frame's screen layer is mkr's when its ordinary and its negative type both are, Blender's when either is not;
+    /// negative type alone on screen makes it live (its negative layer and an empty screen layer). The plan lists mkr's
+    /// frames with negative type, and their flats name the negative layer beside the screen layer.
+    #[test]
+    fn ordinary_and_negative_type_sort_together() {
+        let (dir, bake) = screen_bake("negative", vec![
+            word("aa", [1, 3], "plain", "m", true),
+            word("bb", [2, 4], "negative", "m", true),
+            word("cc", [4, 5], "knockout", "m", true),
+            word("dd", [5, 6], "negative", "m", false),
+            word("ee", [6, 7], "plain", "noded", true),
+            word("ff", [6, 7], "negative", "m", true),
+        ]);
+        let support = Support { materials: BTreeMap::from([("noded".to_string(), vec!["NODE".to_string()])]),
+                                meshes: BTreeMap::new(), scene: None };
+        let verdict = |f: i64, silhouette: bool| screen_layer_blocker(&bake, &support, "o", f, silhouette).unwrap();
+        assert_eq!(verdict(1, false), Some(Ok(false)));
+        assert_eq!(verdict(2, false), Some(Ok(true)));
+        assert_eq!(verdict(3, false), Some(Ok(true)));          // negative type alone
+        assert_eq!(verdict(4, false), Some(Ok(false)));         // knock-out type is laid over outside a silhouette
+        assert_eq!(verdict(4, true), None);                     // and is the figure's in one
+        let why = |f: i64| verdict(f, false).and_then(Result::err).unwrap_or_default();
+        assert!(why(5).starts_with("screen type dd: the bake holds no geometry"), "{}", why(5));    // the negative part
+        assert!(why(6).starts_with("screen type ee: material noded"), "{}", why(6));               // the ordinary part
+        let req = Request { screen: (1..=6).collect(), ..Request::default() };
+        let mine: BTreeSet<i64> = (1..=6).collect();
+        let plan = serde_json::to_value(sort(&bake, &support, "o", &req, &mine).unwrap().screen).unwrap();
+        assert_eq!(plan["draw"], json!([1, 2, 3, 4]));
+        assert_eq!(plan["negative"], json!([2, 3]));
+        assert_eq!(plan["blender"].as_object().unwrap().keys().collect::<Vec<_>>(), ["5", "6"]);
+        let out = dir.join("frames");
+        let mut warnings = Vec::new();
+        let flats = plan_flat(&bake, &support, "o", &req, &out, &mut Counts::default(), &mut warnings).unwrap();
+        let files: Vec<_> = flats.iter().map(|f| (f.frame, f.screen.clone(), f.negative.clone())).collect();
+        let screen = |f: i64| Some((out.join(format!("screen/{f:05}.png")), false));
+        assert_eq!(files, [(1, screen(1), None), (2, screen(2), Some(out.join("negative/00002.png"))),
+                           (3, screen(3), Some(out.join("negative/00003.png"))), (4, screen(4), None)]);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

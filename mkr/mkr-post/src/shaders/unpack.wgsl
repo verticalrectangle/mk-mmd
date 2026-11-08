@@ -1,6 +1,7 @@
 // A decoded PNG (RGBA8 per pixel, r | g << 8 | b << 16 | a << 24) to float as mkmmd.post.read makes it: v / 255 in
 // float32 (`lut`, from numpy). `unpack_picture` keeps all four channels, `unpack_mask` the red one (a keep mask read
-// as RGB, its first channel used); `expand` widens a worker's float RGB picture (w * h * 3 float32); `widen_luma` a
+// as RGB, its first channel used), `unpack_alpha` the alpha one (a negative layer: only its coverage is read); `expand`
+// widens a worker's float RGB picture (w * h * 3 float32); `widen_luma` a
 // figure layer's luma bytes (four pixels a word, D.w pixels) to such words (the byte in r, g and b, alpha 255).
 
 struct Dims {
@@ -35,6 +36,15 @@ fn unpack_mask(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let i = id.y * D.w + id.x;
     mask[i] = lut[packed[i] & 255u];
+}
+
+@compute @workgroup_size(16, 16)
+fn unpack_alpha(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= D.w || id.y >= D.h) {
+        return;
+    }
+    let i = id.y * D.w + id.x;
+    mask[i] = lut[packed[i] >> 24u];
 }
 
 @compute @workgroup_size(16, 16)

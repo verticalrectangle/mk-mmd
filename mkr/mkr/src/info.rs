@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::bake::{Bake, Shot};
 use crate::frames::{medium_at, shot_at, shows};
-use crate::layers::{Request, Sorted};
+use crate::layers::{Request, ScreenSorted, Sorted};
 use crate::looks::{OutputLooks, job_blocker};
 use crate::materials::Support;
 
@@ -23,11 +23,12 @@ pub struct OutputPlan {
     /// Per frame of the request, per item: null when mkr draws it, else why Blender must.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<BTreeMap<String, Vec<Option<String>>>>,
-    /// The keep masks and screen type of the frames mkr draws: which mkr draws too, which Blender must (and why).
+    /// The keep masks and screen type of the frames mkr draws: which mkr draws too, which Blender must (and why); the
+    /// screen type's also which of mkr's have negative type on screen (their negative layer too).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep: Option<Sorted>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub screen: Option<Sorted>,
+    pub screen: Option<ScreenSorted>,
 }
 
 #[derive(Serialize, Default)]

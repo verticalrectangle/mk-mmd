@@ -535,7 +535,7 @@ impl Renderer<'_> {
                     // the cut's own frame: its knock-out screen type, reversed out of the figure (styles.Looks)
                     if kit.screen.is_none() {
                         let flat = crate::layers::Flat { frame: job.frame, k, figures: Vec::new(), keep: None,
-                                                          screen: Some((PathBuf::new(), true)) };
+                                                          screen: Some((PathBuf::new(), true)), negative: None };
                         kit.screen = self.flat_kit(output, std::slice::from_ref(&flat), &[])?;
                     }
                     let sk = kit.screen.as_mut().context("no screen kit")?;

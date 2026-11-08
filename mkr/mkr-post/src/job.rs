@@ -64,10 +64,10 @@ pub struct Floor {
     pub lo: f32,
 }
 
-/// One frame: where its picture comes from, the frame effects still to draw on it (in table order), its screen type
-/// and its keep mask; `k` its index in the clip (the grain frame); `grade` its own grade when it is not the setup's (a
-/// breathing palette mixes the grade's colours frame by frame). Or a frame Python finished itself (`finished`),
-/// handed on as it is in the jobs' order.
+/// One frame: where its picture comes from, the frame effects still to draw on it (in table order), its screen type,
+/// its negative type and its keep mask; `k` its index in the clip (the grain frame); `grade` its own grade when it is
+/// not the setup's (a breathing palette mixes the grade's colours frame by frame). Or a frame Python finished itself
+/// (`finished`), handed on as it is in the jobs' order.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Job {
     pub k: u32,
@@ -79,6 +79,10 @@ pub struct Job {
     pub raw: Option<String>,
     #[serde(default)]
     pub layer: Option<String>,
+    /// The negative type's layer (`negative = true` screen type: only its alpha, the coverage, is read), when the frame
+    /// has any: it inverts the picture under it, after the screen layer is laid (mkmmd.core.screentype.composite).
+    #[serde(default)]
+    pub negative: Option<String>,
     /// The keep mask, when it applies to this frame.
     #[serde(default)]
     pub keep: Option<String>,

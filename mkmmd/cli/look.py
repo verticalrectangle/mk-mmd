@@ -355,9 +355,10 @@ def _mkr_shots(args, proj, frames, held, dem, views, out):
             png, path = d / f"{f:05d}.png", out / f"cut_{n}_{f:05d}.jpg"
             Image.open(png).convert("RGB").save(path, quality=90)
             png.unlink()
-            screen = d / SRT.layer_rel(f)
+            screen, neg = d / SRT.layer_rel(f), d / SRT.negative_rel(f)
             shots.append({"view": "cut", "size": n, "frame": f, "path": str(path),
-                          "screen": str(screen) if screen.exists() else None})
+                          "screen": str(screen) if screen.exists() else None,
+                          "negative": str(neg) if neg.exists() else None})
         for cam, shot in cs:
             for f in frames:
                 path = out / f"{cam}_{n}_{int(f):05d}.jpg"
@@ -458,6 +459,7 @@ def run(args):
         has_fx = fx is not None and fx.active(f)
         has_ffx = ffx is not None and ffx.active(f)
         layer = P.read_rgba(s["screen"], size) if s.get("screen") else None
+        neg = P.read_rgba(s["negative"], size) if layer is not None and s.get("negative") else None
         im = None
         if has_fx or has_ffx or layer is not None:
             im = _rgb(s["path"])
@@ -473,7 +475,7 @@ def run(args):
             except (FileNotFoundError, FX.FxError) as e:
                 raise UsageError(str(e)) from None
         if layer is not None:
-            im = SRT.composite(im, layer)
+            im = SRT.composite(im, layer, neg)
         done[s["path"]] = (im, has_fx or has_ffx, layer is not None)
         return done[s["path"]]
 
@@ -499,14 +501,15 @@ def run(args):
                 Image.fromarray(P.to_u8(im)).save(s["path"], quality=90)
     for tag in shots:                                # the layers were for the composite: no files left beside the images
         for s in shots[tag]:
-            if s.get("screen"):
-                lp = Path(s["screen"])
-                lp.unlink(missing_ok=True)
-                for d in (lp.parent, lp.parent.parent):
-                    try:
-                        d.rmdir()
-                    except OSError:
-                        pass
+            for key in ("screen", "negative"):
+                if s.get(key):
+                    lp = Path(s[key])
+                    lp.unlink(missing_ok=True)
+                    for d in (lp.parent, lp.parent.parent):
+                        try:
+                            d.rmdir()
+                        except OSError:
+                            pass
     if held:                                         # frame 0 lay under the wrap's page: it is not an image asked for
         for s in shots["a"]:
             if s["view"] == "cut" and int(s["frame"]) in held:
