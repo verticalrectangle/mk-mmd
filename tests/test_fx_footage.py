@@ -430,3 +430,55 @@ def test_credits_count_footage_videos_and_photo_world_photos_by_slug_or_by_a_reg
                         {"kind": "photo_world", "image": "street"}],
                 "credits": {"assets": ["font", "sea"], "lines": ["Song"]}}
     assert project_credits(Proj, reg) == (["girl", "road", "sea", "river", "street", "plate", "font"], ["Song"])
+
+
+# ================================================================================================= open decoders
+def fake_clips(monkeypatch, sizes):
+    """FT.source over made-up clips of the given sizes {name: (w, h)}: which of them have been let go of (`closed`)."""
+    closed = []
+
+    class Fake:
+        def __init__(self, path):
+            self.name, self.size = path, sizes[path]
+
+        def close(self):
+            closed.append(self.name)
+
+    monkeypatch.setattr(FT, "Clip", Fake)
+    monkeypatch.setattr(FT, "resolve", lambda clip, root=None: clip)
+    return FT.source(), closed
+
+
+def test_a_source_keeps_every_clip_open_that_fits_the_budget_so_four_clips_shown_together_are_not_reopened(monkeypatch):
+    """Four 1080p clips asked in turn frame after frame (a peak of four keys, each over a clip of its own): with two
+    decoders open each ask reopened a clip and seeked from a key frame, some 400 ms; all four stay open."""
+    names = ["a", "b", "c", "d"]
+    get, closed = fake_clips(monkeypatch, {n: (1920, 1080) for n in names})
+    for _ in range(5):
+        for n in names:
+            get(n)
+    assert closed == []
+
+
+def test_a_source_still_lets_go_of_4k_decoders_beyond_the_two_it_always_keeps(monkeypatch):
+    names = ["a", "b", "c", "d"]
+    get, closed = fake_clips(monkeypatch, {n: (3840, 2160) for n in names})
+    for n in names:
+        get(n)
+    assert closed[-2:] == ["a", "a"] or set(closed) == {"a", "b"}          # c and d (the last two) stay open, a and b go
+    assert "c" not in closed and "d" not in closed and {"a", "b"} <= set(closed)
+    get("a")
+    assert set(closed) >= {"c"} or "b" in closed                            # asking a again lets go of the oldest open one
+
+
+def test_a_source_counts_what_a_clip_holds_by_its_size_the_oldest_over_the_budget_go_first(monkeypatch):
+    sizes = {"hd1": (1920, 1080), "hd2": (1920, 1080), "hd3": (1920, 1080), "uhd": (3840, 2160), "hd4": (1920, 1080)}
+    get, closed = fake_clips(monkeypatch, sizes)
+    for n in ("hd1", "hd2", "hd3"):
+        get(n)
+    get("uhd")                                  # 3 x 75 MB + 300 MB = 525 MB: all still fit
+    assert closed == []
+    get("hd4")                                  # + 75 MB = 600 MB: still the budget
+    assert closed == []
+    get("hd1")                                  # newest first: hd1, hd4, uhd, hd3 = 525 MB, then hd2 = 600 MB: fits too
+    assert closed == []

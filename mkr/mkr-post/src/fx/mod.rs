@@ -56,12 +56,13 @@ pub mod camcorder;
 pub mod silk;
 pub mod shapes;
 pub mod key;
+pub mod rect;
 
 /// The ops mkr-post draws (`mkr-post info`).
 pub const OPS: &[&str] = &["warp", "echo", "slitscan", "lens", "shock", "push", "slab", "split", "melt", "footage", "flood",
                            "spiral", "kaleido", "liquid", "tunnel", "mandala", "trails", "scope", "grid", "stack",
                            "pixelsort", "doodle", "mosh", "film", "tint", "halftone", "invert", "inks", "camcorder",
-                           "shapes", "key"];
+                           "shapes", "key", "rect"];
 
 /// One frame effect's picture work.
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +99,7 @@ pub enum Op {
     Camcorder(camcorder::Camcorder),
     Shapes(shapes::Shapes),
     Key(key::Key),
+    Rect(rect::Rect),
 }
 
 impl Op {
@@ -134,6 +136,7 @@ impl Op {
             Op::Camcorder(o) => o,
             Op::Shapes(o) => o,
             Op::Key(o) => o,
+            Op::Rect(o) => o,
         }
     }
 }

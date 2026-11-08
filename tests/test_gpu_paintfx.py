@@ -15,6 +15,7 @@ from PIL import Image
 import gpu_fixtures as GF
 from mkmmd import footage as FT
 from mkmmd import mandala as MDF
+from mkmmd import picturefx as PFX
 from mkmmd import postgpu as PG
 from mkmmd.core import framefx as FX
 from mkmmd.core import palette as PAL
@@ -135,14 +136,29 @@ def test_film(gpu, tmp_path, keys):
     check(gpu, tmp_path, spec, frames_of(spec))         # every frame: mkr-post keeps the print a step's first one made
 
 
-def test_a_rect_goes_to_the_gpu_only_for_a_kind_that_draws_its_box(tmp_path):
+def test_a_rect_goes_to_the_gpu_for_every_kind_bracketed_by_the_rect_ops_unless_it_draws_its_box(tmp_path):
     pl = plan({"kind": "film", "from": 0.0, "to": 1.0, "rect": [0.0, 0.0, 0.5, 1.0]},
-              {"kind": "tint", "from": 0.0, "to": 1.0, "rect": [0.0, 0.0, 0.5, 1.0]})
+              {"kind": "tint", "from": 0.0, "to": 1.0, "rect": [0.0, 0.0, 0.5, 1.0], "feather": 10.0})
     ffx = GF.frame_fx(pl["fx"], SMALL, tmp_path, frames={g: picture(g) for g in range(F0, F0 + 40)}, fps=FPS,
                       frame0=F0, hits={})
     film, tint = ffx.fxs
-    assert PG.ops(ffx, film, film["f0"]) is not None
-    assert PG.ops(ffx, tint, tint["f0"]) is None
+    film_ops = PG.ops(ffx, film, film["f0"])
+    assert film_ops is not None and [o["op"] for o in film_ops] == ["film"]          # it prints the rect's box itself
+    got = PG.ops(ffx, tint, tint["f0"])
+    assert [o["op"] for o in got] == ["rect", "tint", "rect"] and got[0]["phase"] == "begin"
+    end = got[2]
+    ramps = np.fromfile(end["ramps"], np.float32)
+    w, h = SMALL
+    assert end["phase"] == "end" and end["count"] == len(ramps) == w + h
+    rows, cols = PFX.rect_ramps(SMALL, (0.0, 0.0, 0.5, 1.0), 10.0 * ffx.px)
+    assert np.array_equal(ramps[:h], rows) and np.array_equal(ramps[h:], cols)
+    assert PG.ops(ffx, tint, tint["f0"])[2]["ramps"] == end["ramps"]                 # written once, by what they are
+
+
+@pytest.mark.parametrize("rect, feather", [([0.0, 0.0, 0.5, 1.0], 10.0), ([0.3, 0.2, 0.9, 0.8], 0.0)])
+def test_a_tint_limited_to_a_rect_is_kept_inside_it_as_the_cpu_keeps_it(gpu, tmp_path, rect, feather):
+    spec = {"kind": "tint", "from": 0.0, "to": 1.0, "color": "love", "rect": rect, "feather": feather}
+    check(gpu, tmp_path, spec, frames_of(spec)[::5])
 
 
 @pytest.mark.parametrize("keys", [

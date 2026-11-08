@@ -89,8 +89,9 @@ class GPU:
 
     def check(self, ffx, fx, frame, img):
         """(max level difference, pixels off by more than one) between the CPU path and mkr-post drawing entry `fx` of
-        `ffx` on `frame` over `img`; the ops must be there (mkr-post draws it)."""
-        ops = GFX.KINDS[fx["kind"]].ops(ffx, fx, frame)
+        `ffx` on `frame` over `img`, the ops as the post sends them (mkmmd.postgpu.ops: an entry limited to a `rect` is
+        bracketed by the rect ops); the ops must be there (mkr-post draws it)."""
+        ops = PG.ops(ffx, fx, frame)
         assert ops is not None, f"{fx['kind']}: left to the CPU"
         got = self.draw(img, PG.hand(ffx, ops))
         want = P.to_u8(ffx._apply(fx, frame, img)).tobytes()

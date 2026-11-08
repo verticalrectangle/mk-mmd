@@ -20,6 +20,7 @@ layer (`negative = true` screen type: the picture is inverted under its coverage
 mask, and the ops still to draw, or carries a frame this side finished (`finished`: its bytes in a file and its darkest
 luma); with a breathing palette (`[look] breathe`) it carries its own `grade`, the setup's with that frame's colours.
 mkr-post answers each with its clip index, the darkest luma and the frame's bytes, in the order the jobs came."""
+import hashlib
 import json
 import os
 import queue
@@ -95,13 +96,32 @@ def unusable(out, files=True):
 
 def ops(ffx, fx, frame):
     """The ops of entry `fx` on `frame` (a list, maybe empty when it leaves the picture as it is), or None when mkr-post
-    cannot draw it: a kind it lacks (mkmmd.gpufx.KINDS), a `rect` (but for a kind whose module says RECT: it draws the
-    rect's box itself), or what its kind's module leaves to the CPU. Its parameters come from the same FrameFx methods
-    the CPU path uses."""
+    cannot draw it: a kind it lacks (mkmmd.gpufx.KINDS) or what its kind's module leaves to the CPU. Its parameters come
+    from the same FrameFx methods the CPU path uses. An entry limited to a `rect` is bracketed by the generic `rect` ops
+    (FrameFx._apply's `img + (out - img) * rect_mask`) unless its kind's module says RECT: it draws the rect itself."""
     kind = GFX.KINDS.get(fx["kind"])
-    if kind is None or (fx.get("rect") is not None and not getattr(kind, "RECT", False)):
+    if kind is None:
         return None
-    return kind.ops(ffx, fx, frame)
+    got = kind.ops(ffx, fx, frame)
+    if got and fx.get("rect") is not None and not getattr(kind, "RECT", False):
+        return [{"op": "rect", "phase": "begin"}, *got, rect_end(ffx, fx)]
+    return got
+
+
+def rect_end(ffx, fx):
+    """The `rect` op that keeps the ops of entry `fx` inside its rect: the ramps of mkmmd.picturefx.rect_ramps over the
+    whole frame (rows then columns, float32) in a file of the scratch folder named by what they are made of, written once
+    and kept (several workers write the same bytes: the file appears whole)."""
+    from . import picturefx as PFX
+    rect, feather = tuple(float(v) for v in fx["rect"]), float(fx["feather"] * ffx.px)
+    rows, cols = PFX.rect_ramps(ffx.size, rect, feather)
+    data = np.concatenate([rows, cols]).astype(np.float32).tobytes()
+    path = Path(ffx.paths.scratch) / f"rect-{hashlib.sha1(data).hexdigest()[:16]}.f32"
+    if not path.exists():
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    return {"op": "rect", "phase": "end", "ramps": str(path), "count": len(data) // 4}
 
 
 def dropped(ffx, frame):

@@ -245,6 +245,20 @@ def test_key_opens_from_a_point(gpu, tmp_path, request, keys):
     note(request, check(gpu, tmp_path, spec, frames_of(spec)[::5], pic=ramp, frames=cut()))
 
 
+@pytest.mark.parametrize("keys", [
+    {"rect": [0.0, 0.0, 0.5, 1.0], "feather": 8.0},                                      # a feathered half of the frame
+    {"rect": [0.5, 0.0, 1.0, 1.0], "feather": 0.0, "burn": 3, "fade": 0.6},              # a hard edge, with a trail
+    {"rect": [0.2, 0.15, 0.85, 0.7], "feather": 14.0, "spread": 0.8, "center": [0.3, 0.4], "bands": 4, "soft": 0.1,
+     "spill": "gold", "mask": "ground", "objects": "a*", "strength": [[0.0, 0.5], [1.0, 1.0]]},
+])
+def test_key_limited_to_a_rect(gpu, tmp_path, request, keys):
+    """A key with a `rect` (the bros silhouettes' half frames) is bracketed by mkr-post's generic rect ops: the frame
+    outside it as it was, a feathered edge as the CPU's rect_mask makes it, a trail and a mask inside."""
+    spec = key(tolerance=[[0.0, 0.15], [1.0, 0.45]], **keys)
+    frames = frames_of(spec)
+    note(request, check(gpu, tmp_path, spec, frames[3::5], pic=ramp, frames=cut(), masked="mask" in keys))
+
+
 def test_key_opens_from_a_point_of_the_scene_that_moves(gpu, tmp_path, request):
     spec = key(tolerance=0.3, spread=0.8, center={"point": "any"}, burn=2, fade=0.6)
     note(request, check(gpu, tmp_path, spec, frames_of(spec)[::4], pic=ramp, frames=cut(),

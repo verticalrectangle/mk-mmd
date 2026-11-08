@@ -6252,7 +6252,7 @@ some 250 frames a second at 1080p against x264 slow's 14, larger files).
 `--gpu` or `[post] gpu = true` hands what mkr-post can do of each frame to the GPU (`mkr/mkr-post`, driven by
 `mkmmd/postgpu.py`): the frame effects it draws, the screen type (the ordinary layer over the picture, then a frame's negative
 layer, `negative/<frame>.png`, inverting it: the job's `layer` and `negative`, kernels `composite` and `negate`), the keep mask, the grade and the bytes for the encoder,
-the rest of a frame (cut effects, the other kinds, an entry with a `rect` but a film's, entries before the last one it
+the rest of a frame (cut effects, the other kinds, entries before the last one it
 cannot draw) worked out by the workers and handed on as a picture; the loop's wrap, `halation` and `streaks` stay on the
 CPU (with either, the whole output does). Each kind it draws has a module in `mkmmd/gpufx/` that works the frame's
 numbers out with the same `FrameFx` methods the CPU path uses, and `mkr/mkr-post/src/fx/<kind>.rs` with
@@ -6295,6 +6295,16 @@ the CPU:
 | `grid` (colour and picture backs, silkscreen fills) | pattern backs |
 | `stack` | wallpaper bands, era looks, squash, silkscreen and copies under 0.75 |
 | `doodle`, `label`, `camcorder` (strokes, text, leaders, the tape's random parts and its stamp drawn by the workers), `film` (in a `rect` too: its box printed as a picture of its own) | |
+
+An entry limited to a `rect` goes to mkr-post whatever its kind: its ops are bracketed by two generic `rect` ops
+(`mkr/mkr-post/src/fx/rect.rs`, `shaders/fx_rect.wgsl`; `mkmmd.postgpu.ops`): `begin` keeps the picture as it reaches the entry,
+`end` puts it back outside the rect, `before + (after - before) * m` with `m` the rect's ramps (`picturefx.rect_ramps`, rows
+then columns over the whole frame, written once to a file named by their bytes and kept), as `FrameFx._apply` keeps it. A
+`film` still prints the rect's box itself. The frames' clips (a `footage` entry's, a `key`'s) are decoded and fitted by OpenCV
+in the process that sends the jobs, one thread, as the CPU path reads them; `mkmmd.footage.source` keeps as many decoders
+open as fit 600 MB (`OPEN_BYTES`: a clip counts 36 bytes a pixel, 75 MB at 1080p, 300 MB at 4K; the last two always), so that
+four clips shown together (a peak of four keys, each over a clip of its own) are not reopened, and seeked from a key frame,
+on every frame: that thrash was 1.5 s a frame, the whole of a 243 s post of bros' 773 draft frames, which now takes 20 s.
 
 Its kernels follow the numpy and OpenCV code they replace: warps and remaps sample at float coordinates with fused
 multiply-adds as OpenCV 5 does (bit for bit), sorts pack their keys as numpy does, the vignette, the grain and the 1/255

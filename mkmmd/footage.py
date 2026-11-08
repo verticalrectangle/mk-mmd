@@ -26,7 +26,9 @@ FITS = ("cover", "contain")
 FRAMES = 3                      # decoded frames kept per clip (a 4K frame is 25 MB)
 PICTURES = 2                    # fitted pictures kept per clip (one shown over several frames of a slower clip)
 SKIP = 120                      # frames read on rather than seeking (a seek decodes on from the key frame before)
-OPEN = 2                        # clips a source keeps open, the last asked (a 4K decoder and its frames: some 300 MB)
+OPEN = 2                        # clips a source always keeps open, the last asked (a 4K decoder and its frames: some 300 MB)
+OPEN_BYTES = 600 << 20          # and as many more as fit this (a clip counts w * h * 36 bytes: 4K 300 MB, 1080p 75 MB):
+                                # a project that shows four clips frame after frame must not reopen two every frame
 DECODE_THREADS = 4              # FFmpeg's threads per clip: its default, one a core, spends twice the CPU on a frame
                                 # (the frames are the same bytes whatever the count)
 
@@ -80,15 +82,20 @@ def resolve(clip, root=None):
 
 def source(root=None):
     """callable(clip) -> Clip for a project at `root`: each clip resolved (`resolve`) and made once, the OPEN asked last
-    kept open (the others let go of their decoders and frames until they are asked again)."""
+    kept open and, behind them, the ones asked before while they fit OPEN_BYTES together (the others let go of their
+    decoders and frames until they are asked again; reopening a clip seeks, decoding on from a key frame, some hundred
+    milliseconds of a frame)."""
     opened = OrderedDict()
 
     def get(clip):
         if clip not in opened:
             opened[clip] = Clip(resolve(clip, root))
         opened.move_to_end(clip)
-        for older in list(opened.values())[:-OPEN]:
-            older.close()
+        held = 0
+        for n, c in enumerate(reversed(list(opened.values()))):
+            held += c.size[0] * c.size[1] * 36
+            if n >= OPEN and held > OPEN_BYTES:
+                c.close()
         return opened[clip]
     return get
 
