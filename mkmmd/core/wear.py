@@ -21,7 +21,7 @@ import math
 import numpy as np
 
 NUMBERS = ("at", "neck_deg", "yaw_deg", "roll_deg", "pivot", "scale")
-TABLES = {"strap": ("top", "bottom", "over", "width", "thickness", "material", "shoulder_radius"),
+TABLES = {"strap": ("top", "bottom", "over", "width", "thickness", "material", "shoulder_radius", "standoff"),
           "cable": ("object", "anchor", "radius", "trail", "out", "sway", "reach", "tail_len", "follow", "sim")}
 
 
@@ -149,7 +149,10 @@ def strap_path(top, bottom, shoulder, spine, radius, over_side=1.0, standoff=0.0
 
     `top` / `bottom` are (point, direction) pairs: where the strap leaves each button and the way it goes first.
     `spine` is the interpolator from `spine_axis`, `radius` the torso's half depth (m) at the chest (the strap rides
-    `standoff` outside it), `over_side` +1 when the shoulder is on the character's left (+x)."""
+    `standoff` outside it), `over_side` +1 when the shoulder is on the character's left (+x). Before the lower button
+    the strap keeps 3 cm behind it (a button sits at mid-thickness of a body's edge: behind the prop's back), so a prop
+    worn nearer than the torso's ellipse, or a strap with a large `standoff`, never has its band come out of the
+    prop's face."""
     (p0, d0), (p1, d1) = [(np.asarray(a, float), np.asarray(b, float) / np.linalg.norm(b)) for a, b in (top, bottom)]
     s = np.asarray(shoulder, float)
     R = float(radius) + float(standoff)
@@ -164,6 +167,8 @@ def strap_path(top, bottom, shoulder, spine, radius, over_side=1.0, standoff=0.0
 
     xs = over_side * abs(s[0])
     zh = p1[2]                                                       # the lower button's height: the strap meets the hip there
+    hip = on_torso(zh + 0.02, -over_side * abs(s[0]) * 0.45, True)   # the belly's far side, where it turns to the button:
+    hip[1] = max(hip[1], p1[1] + 0.03)                               # behind the prop's back there, however near she wears it
     pts = [p0, p0 + d0 * 0.03,
            on_torso(s[2] - 0.035, xs * 0.85, True),                   # across the chest, just inside the shoulder joint
            np.array([xs * 0.95, spine(z_top)[1] - 0.004, z_top]),     # over the top of the shoulder
@@ -171,7 +176,7 @@ def strap_path(top, bottom, shoulder, spine, radius, over_side=1.0, standoff=0.0
            on_torso(0.5 * (s[2] + zh) + 0.05, xs * 0.25, False),      # diagonally across the back ...
            on_torso(zh + 0.12, -over_side * abs(s[0]) * 0.55, False),
            np.array([-over_side * (1.55 * R), spine(zh + 0.04)[1] + 0.02, zh + 0.04]),    # ... round the far hip ...
-           on_torso(zh + 0.02, -over_side * abs(s[0]) * 0.45, True),
+           hip,
            p1 + d1 * 0.03, p1]
     P = np.array(pts, float)
     d = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]

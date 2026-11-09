@@ -144,6 +144,24 @@ def test_card_style_gives_the_neck_and_pick_problems():
     assert params["stop"] == pytest.approx(0.008 - GF.STRUM_CLEAR)                         # the hand stays above the strings (x = tip)
     assert params["heading"] == GF.STRUM_HEADING                                            # the arm places the wrist, not a heading
     assert GF.card_style(strum, {"tip": 0.012})[2]["edge"] == pytest.approx(0.019)
+    assert GF.card_style(dict(strum, clear=0.006), {})[2]["stop"] == pytest.approx(0.002)                # a card may ask more room
+    assert GF.card_style(dict(strum, clear=0.006), {"tip": 0.013, "clear": 0.010})[2]["stop"] == pytest.approx(0.003)   # the hand wins
+    with pytest.raises(ValueError, match="clear"):
+        GF.card_style(strum, {"clear": 0.02})
+    # held as a plectrum: the thumb across it. The slab turns with the hand (the pick's width under the fingers, the pads
+    # on its middle line, its longer end across them) and the strings stop the skin along y, where the tip now points
+    style, prop, params = GF.card_style(dict(strum, hold="across"), {"tip": 0.018, "clear": 0.009})
+    assert style == "pinch" and prop == {"width": 0.0008, "depth": 0.026, "length": pytest.approx(0.036)}
+    assert params["edge"] == pytest.approx(0.013) and params["stop"] == pytest.approx(0.009) and params["stop_axis"] == "y"
+    assert "stop_axis" not in GF.card_style(dict(strum, hold="across"), {"hold": "along"})[2]          # the hand's key wins
+    with pytest.raises(ValueError, match="hold"):
+        GF.card_style(strum, {"hold": "sideways"})
+    G = GF.strum_frame((0.0, -0.0155, 0.091), (0, -1, 0), (0, 0, 1), (1, 0, 0), 0.018)
+    H = GF.hand_frame(G, "across")
+    assert GF.hand_frame(G, "along") is not None and np.allclose(GF.hand_frame(G, "along"), G)
+    assert np.allclose(H[:3, 1], G[:3, 0]) and np.allclose(H[:3, 2], G[:3, 2]) and np.allclose(H[:3, 3], G[:3, 3])   # y to the tip
+    assert H[:3, 0] @ np.array([0.0, 1.0, 0.0]) == pytest.approx(0.0) and H[2, 0] > 0.5 and H[0, 0] > 0.5   # the fingers lie along
+    assert np.allclose(H @ np.linalg.inv(GF.HOLD_TURN), G)                                             # the face, toward the nut
     with pytest.raises(ValueError, match="inside its length"):
         GF.card_style(strum, {"tip": 0.05})
     with pytest.raises(ValueError, match="pick"):
@@ -395,6 +413,11 @@ def test_strap_goes_over_the_shoulder_round_the_back_and_clears_the_torso():
     mirrored = WR.strap_path((top[0] * [-1, 1, 1], top[1] * [-1, 1, 1]), (bottom[0] * [-1, 1, 1], bottom[1] * [-1, 1, 1]),
                              shoulder * [-1, 1, 1], spine, radius=0.0998, over_side=-1.0)
     assert mirrored[:, 0] == pytest.approx(-path[:, 0], abs=1e-9)                           # a right shoulder: the mirror image
+    # a long body worn low and close, its strap standing well off a jacket: the band still comes to the lower button from
+    # behind (the prop's face is 2 cm in front of the button), never out through the prop
+    near = (np.array([-0.30, -0.10, 0.85]), np.array([-0.8, 0.0, -0.2]))
+    low = WR.strap_path(top, near, shoulder, spine, radius=0.0998, over_side=1.0, standoff=0.03)
+    assert low[-10:, 1].min() > near[0][1] - 0.012
 
 
 # ------------------------------------------------------------------------------------------------ the cable

@@ -73,7 +73,7 @@ def objects(ctx, ref):
     out = [ctx.props[prop].root]
     for items in ctx.props[prop].card.get("use", {}).values():
         for u in items if isinstance(items, list) else []:
-            if isinstance(u, dict) and u.get("name") == use and u.get("object") in bpy.data.objects:
+            if isinstance(u, dict) and u.get("name") == use and u.get("object") and u["object"] in bpy.data.objects:
                 out.append(bpy.data.objects[u["object"]])
     return out
 

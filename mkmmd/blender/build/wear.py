@@ -101,6 +101,7 @@ def build_strap(ctx, m, prop, sp, T):
     measure = (m.rig or {}).get("measure") or {}
     radius = torso_radius(m.rig, smap.get("upper_body2", smap.get("upper_body")), measure)
     path = WR.strap_path(ends[0], ends[1], shoulder, spine, radius, over_side=math.copysign(1.0, shoulder[0]),
+                         standoff=float(sp.get("standoff", 0.007)),
                          shoulder_r=float(sp.get("shoulder_radius", 0.22 * float(measure.get("upper_arm", 0.2)))))
     c = np.array([spine(z)[1] for z in path[:, 2]])
     centre = np.stack([np.zeros(len(path)), c, path[:, 2] - np.where(path[:, 2] > shoulder[2] - 0.06, 0.07, 0.0)], 1)

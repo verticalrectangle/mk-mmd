@@ -14,8 +14,13 @@ WHEEL_APPROACH = 90.0                 # palm on the side of the rim that faces t
 WHEEL_WRAP = -1                       # fingers round the outside of the rim, then the front
 RING_TYPES = {"ring", "wheel"}
 STRUM_LEAN = 45.0                     # deg: a pick's squeeze axis leans from the bass side toward the neck (or the bridge)
-STRUM_CLEAR = 0.004                   # m: the pick hand's skin stays this far above the strings' plane
+STRUM_CLEAR = 0.004                   # m: the pick hand's skin stays this far above the strings' plane (a card or a hand may ask more)
 STRUM_HEADING = 90.0                  # deg: the wrist anywhere on the hand's side of the pick (the arm places it)
+HOLDS = ("along", "across")           # how the fingers lie on a pick (`hold_of`)
+ACROSS_HEADING = 35.0                 # deg: held "across", the fingers lie along the pick's width within this (the wrist bends for it)
+# the hand's pinch frame in the pick's for the hold "across": its x (the way the fingers lie) is the pick's -y (along the
+# strings, from the hand's side), its y the pick's x (toward the tip), z the same squeeze axis
+HOLD_TURN = np.array([[0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
 
 
 def unit(v):
@@ -110,6 +115,23 @@ def strum_frame(center, normal, along, across, tip, thumb="neck", lean=STRUM_LEA
     return frame_matrix(x, np.cross(z, x), z, np.asarray(center, float) + n * float(tip))
 
 
+def hold_of(entry, hand):
+    """How a pick is held: the hand's `hold`, else the strum entry's, else "along". "along": the index finger and the
+    thumb point down the pick at the strings, its tip beyond their tips and its wide end between them, in the open (a
+    card held by its edge). "across": the thumb lies across the pick along the strings, its pad on the wide end, and the
+    tip comes out under the thumb's side toward the strings: how a plectrum is held."""
+    hold = hand.get("hold", entry.get("hold", HOLDS[0]))
+    if hold not in HOLDS:
+        raise ValueError(f"grip {entry.get('name', '?')!r} (strum): hold must be one of {', '.join(HOLDS)}, got {hold!r}")
+    return hold
+
+
+def hand_frame(G, hold):
+    """The frame the hand's pinch is solved in for a pick whose frame is `G` (strum_frame): `G` itself held "along",
+    turned a quarter about the squeeze axis held "across" (HOLD_TURN). The pick object stays in `G`."""
+    return np.asarray(G, float) if hold == "along" else np.asarray(G, float) @ HOLD_TURN
+
+
 def clock_of(hand, side):
     return float(hand.get("clock", CLOCK[side]))
 
@@ -125,8 +147,12 @@ def card_style(entry, hand):
                    the index finger's fret) and `chord` (a name or a table); hand key press (the pad's place behind the wire)
     strum          style pinch of the card's `pick` {thickness, length, width, tip}: width = thickness, depth = length, length =
                    width, edge = length - tip (hand key `tip` overrides the card's: how far the pick sticks out of the pads),
-                   heading STRUM_HEADING (the arm the build adds places the wrist) and stop = tip - STRUM_CLEAR (the hand
-                   stays above the strings: in strum_frame they lie at x = tip)
+                   heading STRUM_HEADING (the arm the build adds places the wrist) and stop = tip - clear (the hand
+                   stays above the strings: in strum_frame they lie at x = tip; `clear` is the hand's key, else the
+                   card entry's, else STRUM_CLEAR: with a pick held far back, a clear near its tip keeps the fingertips
+                   from reaching down beside it). Held "across" (`hold_of`) the same slab in the hand's frame
+                   (`hand_frame`): depth = the pick's width with the pads on its middle line, length = twice its
+                   longer end, and the stop on y (stop_axis "y")
     Raises ValueError naming what is missing."""
     kind, name = entry.get("type"), entry.get("name", "?")
 
@@ -174,6 +200,14 @@ def card_style(entry, hand):
         tip = float(hand.get("tip", pick.get("tip", 0.008)))
         if not 0.0 < tip < length:
             raise ValueError(f"grip {name!r} (strum): the pick's tip ({tip * 1e3:g} mm) must be inside its length ({length * 1e3:g} mm)")
-        params.update(edge=length - tip, heading=STRUM_HEADING, stop=tip - STRUM_CLEAR)
+        clear = float(hand.get("clear", entry.get("clear", STRUM_CLEAR)))
+        if not 0.0 < clear <= tip:
+            raise ValueError(f"grip {name!r} (strum): clear ({clear * 1e3:g} mm, the skin's distance from the strings) must be "
+                             f"above 0 and at most the pick's tip ({tip * 1e3:g} mm)")
+        if hold_of(entry, hand) == "across":                   # the slab turned with the hand: the pick's width under the
+            width = float(pick["width"])                        # fingers, its length across them, the strings at y = tip
+            params.update(edge=0.5 * width, heading=ACROSS_HEADING, stop=tip - clear, stop_axis="y")
+            return "pinch", {"width": float(pick["thickness"]), "depth": width, "length": 2.0 * max(length - tip, tip)}, params
+        params.update(edge=length - tip, heading=STRUM_HEADING, stop=tip - clear)
         return "pinch", {"width": float(pick["thickness"]), "depth": length, "length": float(pick["width"])}, params
     raise ValueError(f"grip {name!r}: type {kind!r} has no grip style (ring, pen, pinch, neck, strum)")

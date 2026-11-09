@@ -208,6 +208,17 @@ all round, IoU 0.96 with the pick and cord in; the headstock within 2 mm), 3/4 v
 shot (`keep = ["guitar*"]`, `accent = ["guitar_cable"]`) upright and turned 65 degrees about +Y, where the long neck, headstock,
 horns, strap buttons and the hanging cord read at once.
 
+## Worked example: the offset guitar
+
+`mkmmd/blender/library/props/offset_guitar*.py` (card `library:offset_guitar`): an offset-waist guitar that takes the electric
+guitar's neck whole (`electric_guitar_neck`: the same scale, frets, strings and headstock, so the card's `neck` grip is that
+guitar's entry) and has its own `_layout`, `_body`, `_hw` and `_parts`. Its numbers were read off one front-on photograph
+(`mk ref photos`): the scale from the nut and the 12th fret, then the body's edges at stations 15 mm apart, the guard's the
+same way, and the middles of the pickups, bridge, tremolo and controls; each was checked by drawing the layout's outlines over the
+photograph at its scale (the first pickguard cut through the jack: its lower lobe had been read off a small picture, a zoom with a
+millimetre grid put it right). The tremolo arm is a separate object so that a hand can carry it
+([Playing a worn guitar](design.md#playing-a-worn-guitar)). It builds in 0.8 s and scores under 0.15 on `form`.
+
 ## Worked example: the bass
 
 `mkmmd/blender/library/props/electric_bass*.py` (card `library:electric_bass`): a short-scale bass of the Mustang Bass kind,

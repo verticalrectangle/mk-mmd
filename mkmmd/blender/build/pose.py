@@ -1373,7 +1373,9 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None, reference=None)
                 G = GF.strum_frame(p.world(u["center"]), p.world_dir(u.get("normal", (0, -1, 0))),
                                    p.world_dir(u.get("along", (0, 0, 1))), p.world_dir(u.get("across", (1, 0, 0))), tip,
                                    hh.get("thumb", "neck"))
-                info = {"thumb": hh.get("thumb", "neck"), "tip_mm": round(tip * 1000, 1)}
+                hold = GF.hold_of(u, hh)
+                G = GF.hand_frame(G, hold)                      # the hand's own frame; the pick stays in the strum frame
+                info = {"thumb": hh.get("thumb", "neck"), "tip_mm": round(tip * 1000, 1), "hold": hold}
                 pick = u["pick"].get("object")
                 if u.get("palm"):                               # the heel of the hand over the card's patch (the bridge)
                     pm, Gi = u["palm"], np.linalg.inv(np.asarray(G, float))
@@ -1469,7 +1471,10 @@ def _grip(ctx, m, smap, name, side, h, back, out_dir, pole=None, reference=None)
     if pick:                                                     # the object the hand carries (a pick): modelled in the grip frame
         if pick not in bpy.data.objects:
             raise BuildError(f"{where}: grip {ref!r}: the card's pick object {pick!r} is not in the scene")
-        out["pick"] = {"object": bpy.data.objects[pick], "T": np.asarray(res["target_in_wrist"], float)}
+        T = np.asarray(res["target_in_wrist"], float)                # the hand's frame in the wrist; the pick's own in it
+        if info.get("hold") == "across":
+            T = T @ np.linalg.inv(GF.HOLD_TURN)
+        out["pick"] = {"object": bpy.data.objects[pick], "T": T}
     if "pose_names" in res:                                      # a plucking station: each finger's poses (grip style pluck)
         out["poses"] = {str(n): {str(b): tuple(float(x) for x in q) for b, q in zip(bs, qs)}
                         for n, bs, qs in zip(res["pose_names"], res["pose_bones"], res["pose_quats"])}

@@ -209,10 +209,10 @@ def back_mesh():
 # ===================================================================================================================
 # the plectrum
 # ===================================================================================================================
-def pick_outline():
+def pick_outline(p=None):
     """The 351 shape's outline (m, 2) in the pinch frame: a rounded triangle, tip at x = tip, base at x = tip - length, centred
-    across (y), `width` wide at the base corners."""
-    p = L.PICK
+    across (y), `width` wide at the base corners. `p`: the pick's numbers (default the layout's `PICK`)."""
+    p = L.PICK if p is None else p
     L0, W0 = p["length"], p["width"]
     for _ in range(6):
         P = np.array([[0.0, 0.0], [-L0, 0.5 * W0], [-L0, -0.5 * W0]])
@@ -223,11 +223,12 @@ def pick_outline():
     return G.ccw(o)
 
 
-def pick_mesh():
+def pick_mesh(p=None):
     """The plectrum in the pinch frame of the grip solver: origin midway between the pads (the pick's mid-plane), +x toward the
-    tip (at x = tip), y across its width, z across its thickness. Role `pick`."""
-    t = L.PICK["thickness"]
-    m = S.rounded_panel(pick_outline(), t, r_edge=0.00035, n=2, mat=M["pick"])
+    tip (at x = tip), y across its width, z across its thickness. Role `pick`. `p`: the pick's numbers (default `PICK`)."""
+    p = L.PICK if p is None else p
+    t = p["thickness"]
+    m = S.rounded_panel(pick_outline(p), t, r_edge=0.00035, n=2, mat=M["pick"])
     return m.moved((0.0, 0.0, -0.5 * t))
 
 

@@ -169,6 +169,10 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   the cloth closer to its shape when a move is too fast for it, `mk build --skip cloth` is the fast loop for everything else.
 - **Worn props** (a guitar on its strap, [Playing a worn guitar](design.md#playing-a-worn-guitar)): `wear = "rin"` on the prop, `grip = "guitar:neck"` and
   `grip = "guitar:strum"` on the hands, `strum = {...}` in `perform`; check `strum`, `string_play`, `prop_body` and the arm `contact`. The
+  An `offset_guitar` (the shoegaze one) adds `anchor_to = "rin"`: its tremolo arm goes in her picking hand and swings with the
+  strum; lay it into her fingers with `slots = { arm = { swing, lift, length } }` and look at the hand. A pick hand's
+  `hold = "across"` (the offset guitar's default) is a real plectrum grip, `clear` keeps its skin off the strings: look at the
+  hand from the thumb side, the index side and along the strings before showing a close-up. The
   strings the hand plays vibrate on their own ([Strings that ring](design.md#strings-that-ring): only those strings, from the fret
   held, a strum's one after another): look at a close-up of the neck and of the picking hand frame by frame before trusting a take.
 - **Gag props** (their rows in [Props](design.md#props)): `library:pillow_cloud` (key `puff` 0 -> 1: the pillow puffs into a cloud; `hug`

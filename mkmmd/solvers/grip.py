@@ -1247,7 +1247,8 @@ def solve_wheel(hand, prop, approach=90.0, wrap=1, seeds=8, workers=None, **tuni
 # pads meet face to face (pad normal within PINCH_FACE of the squeeze axis). Joint angles stay near a relaxed pulp
 # pinch. Given the arm (`arm`, see _Arm) the wrist also stays where the arm reaches it with a straight-ish wrist and a
 # forearm clear of the `avoid` points (a pick over a guitar's strings: the forearm over the body's edge); given `stop`
-# no skin of the hand passes the plane x = stop (the strings under the pick).
+# no skin of the hand passes the plane x = stop (the strings under a pick the fingers point down), or y = stop with
+# `stop_axis` y (the strings under a pick the thumb lies across).
 PINCH_NAMES = ["i_mcp", "i_pip", "i_dip", "i_spr", "m_curl", "r_curl", "l_curl", "m_spr",
                "t_palmar", "t_radial", "t_roll", "t_mcp", "t_ip", "px", "py", "pz", "ua", "ub", "uc"]
 # priors: index slightly flexed, thumb opposed (palmar and radial abduction, rolled so the pad turns toward the index,
@@ -1307,12 +1308,12 @@ class _Pinch:
     X_SCALE = np.r_[PINCH_SIGMA, np.full(3, 1.0), np.full(3, 0.05)]
 
     def __init__(self, hand, width, depth=0.15, length=0.16, edge=0.004, heading=25.0, clear=PINCH_CLEAR, arm=None,
-                 stop=None, palm=None):
+                 stop=None, palm=None, stop_axis=0):
         self.hand, self.w, self.depth = hand, float(width), float(depth)
         self.length, self.edge = float(length), float(edge)
         self.heading_tol, self.clear = float(heading), float(clear)
         self.arm = None if arm is None else _Arm(arm_spec(arm), PINCH_ARM_FREE, PINCH_ARM_SIGMA)
-        self.stop = None if stop is None else float(stop)
+        self.stop, self.stop_axis = None if stop is None else float(stop), int(stop_axis)
         hd, F = hand, hand.F
         self.pad_i = hd.surface(F["index"][2], hd.ventral, 0.0, 1.0, 0.3)       # the pads: palmar skin of the distal
         self.pad_t = hd.surface(F["thumb"][2], hd.pad_t, 0.0, 1.0, 0.3)         # phalanges, as check_posed measures
@@ -1441,7 +1442,7 @@ class _Pinch:
         r = np.concatenate([r, np.maximum(0.0, 0.0002 - A["sdf"]) / 0.0002, A["clash"] / 0.0004,
                             np.maximum(0.0, self.clear - A["sdf"][self.others]) / 0.003])
         if self.stop is not None:
-            r = np.concatenate([r, np.maximum(0.0, A["L"][self.skin, 0] - self.stop) / PINCH_STOP_SCALE])
+            r = np.concatenate([r, np.maximum(0.0, A["L"][self.skin, self.stop_axis] - self.stop) / PINCH_STOP_SCALE])
         return r
 
     # ---- solving
@@ -1479,7 +1480,7 @@ class _Pinch:
                "outer_fingers_clear_mm": round(float(sdf[self.others].min()) * 1e3, 1),
                "angles_deg": _angles(A["deg"])}
         if self.stop is not None:
-            out["stop_clear_mm"] = round((self.stop - float(A["L"][self.skin, 0].max())) * 1e3, 1)
+            out["stop_clear_mm"] = round((self.stop - float(A["L"][self.skin, self.stop_axis].max())) * 1e3, 1)
         if self.arm is not None:
             out.update(self.arm.report(*self.wrist(A)))
         if self.palm is not None:                                               # the heel over its patch (a bridge)
@@ -1507,7 +1508,8 @@ def solve_pinch(hand, prop, edge=0.004, seeds=8, workers=None, **tuning):
     seeds   parallel starts (the lowest cost wins); workers: processes (default: all cores, 1 = here)
     tuning  heading (deg, default 25: tolerance of the wrist -> pinch point direction around +x), clear (m, default 10
             mm: how far the middle, ring and little fingers stay from the object), nfev (evaluations of the reach /
-            grip / polish stages), stop (m: no skin of the hand passes the plane x = stop), arm (the arm that carries
+            grip / polish stages), stop (m: no skin of the hand passes the plane x = stop, or y = stop with
+            stop_axis = "y": a thumb lying across a pick, whose tip points along y), arm (the arm that carries
             the hand, in the frame: see arm_spec and _Arm; its bend is free up to PINCH_ARM_FREE degrees)
     report  contacts {index, thumb: gap_mm (smallest distance from the phalanx's palmar skin to the slab, + outside),
             x_mm, y_mm (contact point in the frame: mean of the pad skin weighted by exp(-gap / 1 mm)), facing_deg (pad
@@ -1519,9 +1521,11 @@ def solve_pinch(hand, prop, edge=0.004, seeds=8, workers=None, **tuning):
             (pole or chosen) and forearm_clear_mm (with avoid points: the forearm's least clearance, - inside); with `palm`
             ({center, normal, axes: two unit vectors in the plane, size: [m, m], lift}: a patch in the frame the heel of
             the hand rests over, a guitar's bridge) palm_mm (the heel's lowest skin over the patch's plane)."""
-    unknown = set(tuning) - {"heading", "clear", "nfev", "stop", "arm", "palm"}
+    unknown = set(tuning) - {"heading", "clear", "nfev", "stop", "stop_axis", "arm", "palm"}
     if unknown:
-        raise ValueError(f"unknown pinch tuning {sorted(unknown)} (have heading, clear, nfev, stop, arm, palm)")
+        raise ValueError(f"unknown pinch tuning {sorted(unknown)} (have heading, clear, nfev, stop, stop_axis, arm, palm)")
+    if tuning.get("stop_axis", "x") not in ("x", "y"):
+        raise ValueError(f"pinch stop_axis must be \"x\" or \"y\", got {tuning['stop_axis']!r}")
     edge = float(edge)
     if not (math.isfinite(edge) and edge >= 0.0):
         raise ValueError(f"pinch edge must be a non-negative number of metres, got {edge!r}")
@@ -1537,7 +1541,7 @@ def solve_pinch(hand, prop, edge=0.004, seeds=8, workers=None, **tuning):
         stop = float(tuning["stop"])
         if not math.isfinite(stop):
             raise ValueError(f"pinch stop must be a finite x (m), got {tuning['stop']!r}")
-        kw["stop"] = stop
+        kw["stop"], kw["stop_axis"] = stop, "xy".index(tuning.get("stop_axis", "x"))
     if tuning.get("palm") is not None:
         kw["palm"] = dict(tuning["palm"])
     pin = _Pinch(hand, **kw)
