@@ -201,6 +201,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
 | `[post]` | `mk post` | the grade: see [Rendering and post](#rendering-and-post) |
+| `[[excerpt]]` | `mk post` | spans of the clip written as videos of their own beside each output (`name`, `from`, `to`, `outputs`, `loop`): [Excerpts](#excerpts) |
 | `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages, the picture effects pixelsort, film, camcorder, doodle, booth, the haze: mist, fog, bokeh, and mitosis): see [Frame effects](#frame-effects) |
 | `[[medium]]` | `mk build` (shots), `mk render`, `mk look` | a window of clip seconds drawn in another look whatever shot is in the cut: see [Medium shifts](#medium-shifts) |
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
@@ -6582,6 +6583,33 @@ contrast = 1.12
 split = { shadows = "iris", highlights = "gold", amount = 0.05 }
 halation = { strength = 0.2, tint = "rose" }
 grain = { amount = 0.01 }
+```
+
+#### Excerpts
+
+`[[excerpt]]` is a span of the clip that `mk post` also writes as a video of its own beside each output, a loop for a
+feed or a teaser: `out/<name>_<output>_<excerpt>[_<preset>].mp4`. The encoder that takes the output's finished frames
+writes the span's to a second file as they pass (`mkmmd/core/excerpt.py` checks the entries and names the frames,
+tested; `mk post`'s ffmpeg cuts them out with `trim` and `atrim`), so nothing is finished or decoded twice and an
+excerpt is the output's own frames, encoded with the same settings. It holds the frames a shot or an effect over the
+same span holds, round(`from` x fps) up to, not with, round(`to` x fps): one cut on a bar line starts on that bar's
+first frame and stops before the next bar's. The report has each one under its output's `excerpts`, and `--to` copies
+them too. A still has none.
+
+| Key | Meaning |
+|---|---|
+| `name` | required, unique: part of the file's name (letters, digits, `-`, `_`) |
+| `from`, `to` | clip seconds (required): a span inside the clip |
+| `outputs` | the outputs it is cut out of, one name or a list (default: every output) |
+| `loop` | `true`: its sound is not faded out at its end, for a video that runs back into its start (default `false`: faded over the last 60 ms, as the clip's is) |
+
+```toml
+[[excerpt]]                   # four bars of the riff as a loop, square and upright
+name = "loop"
+from = 33.5311
+to = 40.9803
+outputs = ["1x1", "9x16"]
+loop = true
 ```
 
 ### Play

@@ -22,6 +22,7 @@ from .. import master as MS
 from .. import memory as MEM
 from .. import postframes as PF
 from .. import postgpu as PG
+from ..core import excerpt as EX
 from ..core import framefx as FX
 from ..core import keep as KP
 from ..core import progress as PR
@@ -60,6 +61,11 @@ clip's end, the loop's wrap, comes after all that: each frame of its window as f
 picture and the keep masks turn with the page. With [look] breathe every colour all that takes from the palette (the
 effects', the streaks', the grade's floor, split toning and halation) is each frame's mix of the two palettes' colours
 (docs/design.md: Post).
+
+[[excerpt]] entries (name, from, to in clip seconds, outputs, loop) are spans written as videos of their own beside each
+output, <project>/out/<name>_<output>_<excerpt>[_<preset>].mp4: the frames of the span as the encoder takes them (nothing
+is finished twice), with the clip's sound over them, faded out at the end unless `loop = true` (a loop for a feed runs
+back into its start).
 
 The frames are finished by worker processes over chunks of consecutive frames and handed to the encoder in order: the
 same frames whatever their number, --jobs or [post] jobs (default: up to 4, fewer when half the memory available would
@@ -111,22 +117,33 @@ def add(sub):
     p.set_defaults(func=run)
 
 
-def encode(frames, size, fps, out, audio=None, crf=15, encoder="x264", preset="slow"):
+def encode(frames, size, fps, out, audio=None, crf=15, encoder="x264", preset="slow", excerpts=()):
     """ffmpeg reading rgb24 frames of `size` on its stdin and writing `out`: H.264 (yuv420p) by libx264 at `preset` and
-    CRF `crf`, or by the GPU through VAAPI at constant QP `crf`, with the song's span `audio` (AAC, faded out)."""
+    CRF `crf`, or by the GPU through VAAPI at constant QP `crf`, with the song's span `audio` (AAC, faded out). Each of
+    `excerpts` (mkmmd.core.excerpt's entries, with the file each goes `out` to) is written beside it as the frames
+    pass: its span cut out of the same stream and encoded alike."""
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if encoder == "vaapi":
         cmd += ["-vaapi_device", CFG.load()["vaapi_device"]]
     cmd += ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-"]
     if audio:
-        cmd += ["-ss", f"{audio['start']:.6f}", "-t", f"{audio['duration']:.6f}", "-i", audio["file"], "-map", "0:v",
-                "-map", "1:a", "-af", f"afade=t=out:st={max(0.0, audio['duration'] - 0.06):.4f}:d=0.06",
-                "-c:a", "aac", "-b:a", "320k"]
-    if encoder == "vaapi":
-        cmd += ["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", str(crf)]
-    else:
-        cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-tune", "film"]
-    cmd += ["-movflags", "+faststart", str(out)]
+        cmd += ["-ss", f"{audio['start']:.6f}", "-t", f"{audio['duration']:.6f}", "-i", audio["file"]]
+
+    def one(path, picture=None, sound=None):
+        args = []
+        if audio:
+            args += ["-map", "0:v", "-map", "1:a", "-af", sound, "-c:a", "aac", "-b:a", "320k"]
+        chain = ([picture] if picture else []) + (["format=nv12", "hwupload"] if encoder == "vaapi" else [])
+        if chain:
+            args += ["-vf", ",".join(chain)]
+        if encoder == "vaapi":
+            args += ["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", str(crf)]
+        else:
+            args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-tune", "film"]
+        return args + ["-movflags", "+faststart", str(path)]
+    cmd += one(out, sound=f"afade=t=out:st={max(0.0, audio['duration'] - 0.06):.4f}:d=0.06" if audio else None)
+    for e in excerpts:
+        cmd += one(e["out"], *EX.filters(e, fps))
     return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
 
@@ -180,6 +197,11 @@ def run(args):
     if jobs is not None and (isinstance(jobs, bool) or not isinstance(jobs, int) or jobs < 1):
         raise UsageError(f"[post] jobs / --jobs = {jobs!r}: a whole number of processes, 1 or more")
     encoder, x264_preset = encoding(args, post)
+    try:
+        excerpts = [] if still else EX.normalize(proj.data.get("excerpt"), proj.duration, proj.fps,
+                                                 [o.name for o in proj.outputs])
+    except EX.ExcerptError as e:
+        raise UsageError(str(e)) from None
     gpu = bool(args.gpu if args.gpu is not None else post.get("gpu", False))
     if not args.no_audio and au.get("file") and not still:
         f = Path(au["file"]).expanduser()
@@ -206,7 +228,7 @@ def run(args):
         FF.check_footage((plan or {}).get("fx") or [], FT.source(proj.root))
     except FT.FootageError as e:
         raise UsageError(str(e)) from None
-    todo = [frames_of(proj, o, args, frames, keep, still, od) for o in outs]
+    todo = [frames_of(proj, o, args, frames, keep, still, od, excerpts) for o in outs]
     s = {"plan": plan, "breath": breath, "keep": keep, "frames": frames, "audio": audio, "crf": args.crf,
          "encoder": encoder, "x264_preset": x264_preset, "gpu": gpu, "jobs": jobs, "allow_gaps": args.allow_gaps,
          "still": still}
@@ -241,16 +263,18 @@ def run(args):
         for t in todo:
             dest = Path(args.to).expanduser() / t["out"].name
             dest.write_bytes(t["out"].read_bytes())
+            for e in t["excerpts"]:
+                (dest.parent / e["out"].name).write_bytes(e["out"].read_bytes())
             report[t["name"]]["copied"] = str(dest)
     emit({"preset": args.preset, "seconds": round(time.time() - t0, 1), "audio": bool(audio), "audio_master": mastering,
           "outputs": report})
     return 0
 
 
-def frames_of(proj, o, args, frames, keep, still, od):
+def frames_of(proj, o, args, frames, keep, still, od, excerpts=()):
     """What output `o` is made from, checked: {name, src (its frame folder), files {frame: PNG}, missing (frames not
-    there), out (the video or still), follow (a mkmmd.core.progress.Follow with --follow)}. With --follow the frames a
-    running render promised count as there."""
+    there), out (the video or still), excerpts (those of `excerpts` cut out of it, each with its own `out`), follow (a
+    mkmmd.core.progress.Follow with --follow)}. With --follow the frames a running render promised count as there."""
     src = proj.root / "renders" / args.preset / o.name
     files = {int(p.stem): p for p in src.glob("*.png") if p.stat().st_size > 0} if src.exists() else {}
     follow = None
@@ -271,7 +295,9 @@ def frames_of(proj, o, args, frames, keep, still, od):
         raise UsageError(f"{o.name}: no frames in {src}")
     suffix = "" if args.preset == "final" else f"_{args.preset}"
     return {"name": o.name, "src": src, "files": files, "missing": len(missing), "follow": follow,
-            "out": od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}"}
+            "out": od / f"{proj.name}_{o.name}{suffix}.{'png' if still else 'mp4'}",
+            "excerpts": [{**e, "out": od / f"{proj.name}_{o.name}_{e['name']}{suffix}.mp4"}
+                         for e in excerpts if o.name in e["outputs"]]}
 
 
 def size_of(t, still):
@@ -368,7 +394,8 @@ def finish(proj, t, s, pools, clips, ready):
     pool = None
     if n_jobs > 1 and len(frames) > PF.CHUNK:
         pool = pools.get(n_jobs) or pools.setdefault(n_jobs, PF.Planners(n_jobs))
-    ff = None if still else encode(frames, size, proj.fps, out, s["audio"], s["crf"], s["encoder"], s["x264_preset"])
+    ff = None if still else encode(frames, size, proj.fps, out, s["audio"], s["crf"], s["encoder"], s["x264_preset"],
+                                   t["excerpts"])
     server = None
     if why_cpu is None and not still:
         scratch = tempfile.mkdtemp(prefix=MEM.scratch_prefix("mkpost"), dir=SHM if os.path.isdir(SHM) else None)
@@ -427,6 +454,9 @@ def finish(proj, t, s, pools, clips, ready):
         rep["seconds"] = round(time.time() - t0, 1)
         if follow is not None:
             rep["waited_for_render"] = round(follow.waited - waited, 1)
+        if t["excerpts"]:
+            rep["excerpts"] = {e["name"]: {"video": str(e["out"]), "frames": e["frames"],
+                                           "seconds": round(e["frames"] / proj.fps, 4)} for e in t["excerpts"]}
     if s["keep"]:
         rep["keep_frames"] = kept                          # graded with the colour kept (not inside a cut effect)
     if job.fx:
