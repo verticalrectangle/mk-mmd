@@ -55,6 +55,12 @@ def normalize(spec, out, palette, what):
     FX._hits(spec, out, what, required=False)
 
 
+def sources(fx, frame):
+    """The other frame of the cut a mitosis reads at `frame`: its span's first, where the figure's box sizes the cells
+    (mk look, which draws only the frames asked for, draws the figure there too)."""
+    return [] if frame == fx["f0"] else [fx["f0"]]
+
+
 def divisions(times, split, most):
     """The clip seconds the divisions start on: each hit of `times` at least `split` after the division before it began
     (a cell does not divide while it divides), `most` of them at most."""

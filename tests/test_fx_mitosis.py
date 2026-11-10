@@ -8,6 +8,7 @@ import pytest
 from mkmmd import framefx as FF
 from mkmmd import mitosis as MTF
 from mkmmd import postgpu as PG
+from mkmmd.core import framefx as FX
 from mkmmd.core import mitosis as MT
 from mkmmd.core import palette as PAL
 from mkmmd.core import transition as TR
@@ -102,6 +103,13 @@ def test_a_figure_divides_into_two_copies_and_her_place_closes():
     flat = runner(onto, m).frame(F0 + 60, img)
     assert np.allclose(flat[2, 2], onto["fx"][0]["back"]) and np.allclose(flat[45, 80], onto["fx"][0]["back"], atol=0.02)
     assert MTF.ground(img, m)[45, 80].max() < 0.2                # the ground closes from what is round her
+
+
+def test_a_later_frame_reads_the_figure_on_the_spans_first_frame():
+    pl = plan(mitosis())
+    read = TR.fx_frames(pl, [F0 + 60])[F0]                                        # her box there sizes the cells
+    assert [it["objects"] for it in read if it["kind"] == "figure"] == [["Reisen*"]]
+    assert TR.fx_frames(pl, [F0]) == {}
 
 
 def test_the_gpu_leaves_mitosis_to_the_cpu():

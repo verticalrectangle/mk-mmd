@@ -873,8 +873,8 @@ def sources(fx, frame, frame0, hits=None):
     the first frame of a collage or a mandala whose `keys` turn its figure, or whose `at` or `height` set it into the
     frame, or a stack whose copies `peel` off, about a pivot found on it (`base`, `center`), a film's held frame (the
     first of the film frame it shows), a booth's captures so far (those of a lane only with `hits`, the [audio] hits
-    file) and the frame before a paint app's eraser, while it rubs that out. A collage with its own `shot` reads those
-    frames of that shot (its plates)."""
+    file), the frame before a paint app's eraser, while it rubs that out, and the first frame of a mitosis (the figure's
+    box there sizes its cells). A collage with its own `shot` reads those frames of that shot (its plates)."""
     k = fx["kind"]
     if k == "echo":
         out = [frame - j * fx["every"] for j in range(1, fx["count"] + 1)]
@@ -899,6 +899,8 @@ def sources(fx, frame, frame0, hits=None):
         out = PA.sources(fx, frame)
     elif k in CK.KINDS:
         out = CK.sources(fx, frame)
+    elif k in MT.KINDS:
+        out = MT.sources(fx, frame)
     else:
         out = []
     if k in FIGURES and _found_pivot(fx) and frame != fx["f0"] and fx["f0"] not in out:
