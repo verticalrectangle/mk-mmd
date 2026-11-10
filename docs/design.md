@@ -201,7 +201,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
 | `[post]` | `mk post` | the grade: see [Rendering and post](#rendering-and-post) |
-| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages and the picture effects pixelsort, film, camcorder, doodle, booth): see [Frame effects](#frame-effects) |
+| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages, the picture effects pixelsort, film, camcorder, doodle, booth, and the haze: mist, fog, bokeh): see [Frame effects](#frame-effects) |
 | `[[medium]]` | `mk build` (shots), `mk render`, `mk look` | a window of clip seconds drawn in another look whatever shot is in the cut: see [Medium shifts](#medium-shifts) |
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
 | `[colliders]` | sim, checks | named lists of collision shapes: see [Colliders](#colliders) |
@@ -3896,7 +3896,7 @@ entry in its palette colours mixed by that frame's mix, in `mk post` and `mk loo
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)) (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)), or the haze: `mist`, `fog` or `bokeh` ([Haze](#haze-mist-fog-bokeh)) (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
 | `aspect` | any entry: `[fx.aspect.<output>]`, its own keys for one output ([Each output its own: aspect](#each-output-its-own-aspect)) |
 | `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears, the lasers' light, the prints' mix. A push has none |
@@ -5056,6 +5056,67 @@ back = "base"
 inks = ["text", "love", "pine"]
 pick = "shape"
 turn = 25
+```
+
+#### Haze: mist, fog, bokeh
+
+Three kinds put air and light between the lens and the picture: a room full of haze, a diffusion filter on the lens,
+fairy lights out of focus. `mkmmd/core/haze.py` checks them and lays out a bokeh's lights (tested), `mkmmd/haze.py` draws
+them (numpy and OpenCV). Every frame is a function of the entry, its `seed` and the clip second, so any frame comes out
+the same in any order; lengths are short sides of the frame, so every output shows the same haze. `strength` scales the
+mist's light, the fog's thickness and the lights' level. About 0.15 s (mist), 0.05 s (fog) and 0.03 s (bokeh) a 1080p
+frame on the CPU; `--gpu` leaves them to it.
+
+- **`mist`**: a bloom. What each pixel has over `threshold` is spread round it and screened back on, so lights glow and
+  whites breathe; only what is over the threshold spreads (a bright ground does not wash out: raise `threshold` until
+  only the lights glow). `diffuse` softens the whole picture as a diffusion filter does.
+- **`fog`**: sheets of noise drifting across the frame in one to four colours, from where it is thin to where it is
+  thick, each further sheet slower and a little off the fog's way. With `floor` it lies toward the ground. With
+  `mask = "ground"` it is behind the figure, and only a `veil` of it in front of her.
+- **`bokeh`**: discs of light, most of them small, drifting through the frame, twinkling, a little brighter at the rim
+  as a lens draws a light out of focus; a light that leaves the frame comes round again outside it, never popping. On
+  hits they swell and brighten. With `mask = "ground"` they pass behind the figure, but for the largest of them (`front`).
+
+| Key | Meaning |
+|---|---|
+| `radius`, `threshold`, `knee` | mist: how far the light spreads, short sides (0.03, 0.002 .. 0.5; it also spreads fainter at 2.5 times that); the brightness (a pixel's brightest channel) over which light spreads (0.7), coming in softly from `knee` (0.15) under it to `knee` over it |
+| `diffuse`, `tint`, `blend` | mist: how much of the softened picture is mixed in (0, 0 .. 1); a colour the spread light is multiplied by; `screen` (default) or `add` |
+| `colors`, `density` | fog: one to four colours, the thin fog's first (default `rose`); how much of the picture the thickest fog covers (0.5, 0 .. 1) |
+| `scale`, `detail`, `layers`, `seed` | fog: the size of its patches, short sides (0.6); octaves of noise in a sheet (3, 1 .. 5); sheets (2, 1 .. 4); the deal (1) |
+| `speed`, `angle` | fog and bokeh: the drift, short sides a second (fog 0.03, bokeh 0.02), along `angle` degrees counter-clockwise from the right (fog 0; bokeh 90: rising) |
+| `floor`, `veil`, `blend` | fog: how much it thins toward the top of the frame (0: even; 1: none at the top); the share of it in front of a masked figure (0.35); `over` (default) or `screen` |
+| `count`, `size`, `colors` | bokeh: the lights (40, up to 400); their radius, short sides, a number or `[smallest, largest]` (`[0.015, 0.07]`; most are small); their colours (`["gold", "rose", "foam"]`) |
+| `wander`, `twinkle`, `rate` | bokeh: how far each light's heading strays from `angle` and how much it sways (0.5, 0 .. 1); how deep it dims as it twinkles (0.5) and how often, times a second (0.5) |
+| `soft`, `rim`, `front` | bokeh: the edge of a disc, a share of its radius (0.25); how much brighter its rim is (0.35); the share of the lights, the largest, drawn in front of a masked figure (0.15) |
+| `times`, `lane`, `min_db`, `every`, `pulse`, `decay` | bokeh: on each hit the lights are `pulse` (0.5) brighter and a quarter of that larger, dying over `decay` s (0.3) |
+| `mask`, `objects` | `ground` keeps a fog and a bokeh behind the figure (but for the veil and the front lights) and a mist off her; `figure` the other way round |
+
+```toml
+[[fx]]                        # a pink room full of haze, thick at the floor, drifting left to right behind her
+kind = "fog"
+from = 0.0
+to = 33.5
+colors = ["rose", "#F7D7DE"]
+density = 0.7
+floor = 0.6
+mask = "ground"
+objects = "Reisen*"
+
+[[fx]]                        # fairy lights out of focus, rising, swelling on the snare; a few pass in front of her
+kind = "bokeh"
+from = 0.0
+to = 33.5
+colors = ["gold", "#FFE9F0", "foam", "iris"]
+lane = "snare"
+mask = "ground"
+objects = "Reisen*"
+
+[[fx]]                        # and everything glows a little
+kind = "mist"
+from = 0.0
+to = 33.5
+radius = 0.035
+diffuse = 0.4
 ```
 
 #### Each output its own: aspect

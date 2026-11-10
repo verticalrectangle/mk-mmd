@@ -61,7 +61,8 @@ mkmmd.core.videosticker's. `prints` (real photographs dealt over the picture as 
 ring round a point or pinned over a base print) are mkmmd.core.prints'. `key` (a colour of the picture keyed out and
 pushed too far: a video, a colour or the frame before burning through in colour fringes and crushed steps) is
 mkmmd.core.colorkey's, and `shapes` (the picture as flat circles, squares, triangles and diamonds, a cell each,
-refining on the hits) is mkmmd.core.shapes'.
+refining on the hits) is mkmmd.core.shapes'. The haze (`mist`: a bloom and a diffusion filter, `fog`: haze drifting
+across the picture, `bokeh`: out-of-focus lights drifting through it) is mkmmd.core.haze's.
 
 Any entry may give `aspect.<output>` tables: its own keys for one output (the span, the figure and the frames it reads
 stay the entry's).
@@ -75,6 +76,7 @@ from . import activity as AC
 from . import colorkey as CK
 from . import eralook as ER
 from . import fields as FL
+from . import haze as HZ
 from . import labels as LB
 from . import lanes as LN
 from . import lasers as LZ
@@ -92,7 +94,7 @@ from . import videosticker as VS
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
          "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS + \
-    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS
+    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS
 CLIPS = ("footage",) + VS.KINDS + CK.KINDS              # the kinds that show a video `clip` (mkmmd.footage reads it)
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 SILK = "silkscreen"                                     # a collage's fill: the figure printed in flat inks, Warhol's
@@ -188,6 +190,8 @@ KEYS.update({k: _COMMON | own for k, own in PA.KEYS.items()})
 DEFAULTS.update(PA.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in LZ.KEYS.items()})
 DEFAULTS.update(LZ.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in HZ.KEYS.items()})
+DEFAULTS.update(HZ.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in VS.KEYS.items()})
 DEFAULTS.update(VS.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in PR.KEYS.items()})
@@ -410,6 +414,8 @@ def normalize(spec, palette, what="fx"):
         PA.normalize(spec, out, palette, what)
     elif kind in LZ.KINDS:
         LZ.normalize(spec, out, palette, what)
+    elif kind in HZ.KINDS:
+        HZ.normalize(spec, out, palette, what)
     elif kind in VS.KINDS:
         VS.normalize(spec, out, palette, what)
     elif kind in PR.KINDS:
