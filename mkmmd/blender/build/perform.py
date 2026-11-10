@@ -13,7 +13,8 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
   neck_share = 0.35                  share of the head's turn carried by the neck
   eye_max = 24 (deg)
   breath = {per_min = 16.5, deg = 0.6}, sway = {deg = 0.37, period = 2.5}, nod = {deg = 0.48, period = 2.3}
-  bob = {deg = 1.5, beats = [t...] | timeline = "audio/timeline.json" (the default), downbeat_accent = 1.6}
+  bob = {deg = 1.5, beats = [t...] | timeline = "audio/timeline.json" (the default), downbeat_accent = 1.6, from, to}
+                                     or a list of such tables (a gentle bob in the verse, a deeper one in the chorus)
   startle = [t...]
   lean = [[t, deg], ...], turn = [[t, deg], ...], tilt = [[t, deg], ...]   extra upper-body lean forward / turn
                                      toward the model's left / sideways tilt toward its left over time, eased between
@@ -386,6 +387,18 @@ def _window(ts, b, ease=0.15):
     return PF.smooth((ts - lo) / ease + 1.0) * PF.smooth((hi - ts) / ease + 1.0)
 
 
+def _beat_tables(spec, key, name):
+    """[(table, where)] of a `bob` or `bounce`: one table or a list of them, each over its own `from`..`to` (summed)."""
+    v = spec.get(key)
+    out = []
+    for i, b in enumerate(v if isinstance(v, list) else [v] if v else []):
+        where = f"perform.{name}.{key}" + (f"[{i}]" if isinstance(v, list) else "")
+        if not isinstance(b, dict):
+            raise BuildError(f"{where} = {b!r}: expected a table")
+        out.append((b, where))
+    return out
+
+
 ROCK_EASE = 0.4                                           # s: a rock's way in before its `from` and out after its `to`
 
 
@@ -628,10 +641,11 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
     toes0 = {s: math.radians(float(v)) for s, v in (base.get("toes") or {}).items()}
     n = len(ts)
     lift, dip, side, behind, info = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n), {}
+    for b, where in _beat_tables(spec, "bounce", name):
+        beats, acc = _beat_marks(ctx, b, where)
+        dip = dip + float(b.get("depth", 0.03)) * _window(ts, b) * PF.beat_pulse(
+            ts, beats, float(b.get("attack", 0.05)), float(b.get("decay", 0.16)), acc)
     if bn:
-        beats, acc = _beat_marks(ctx, bn, f"perform.{name}.bounce")
-        dip = float(bn.get("depth", 0.03)) * _window(ts, bn) * PF.beat_pulse(
-            ts, beats, float(bn.get("attack", 0.05)), float(bn.get("decay", 0.16)), acc)
         info["bounce_mm"] = round(float(dip.max()) * 1000, 1)
     if cr:
         down = PF.eased_keys(ts, cr)
@@ -948,10 +962,9 @@ def run(ctx):
         sway = PF.sway(ts, sw.get("period", 2.5), sw.get("deg", 0.37))
         nod = math.radians(nd.get("deg", 0.48)) * np.sin(2 * math.pi * ts / nd.get("period", 2.3)) * (1 - w_away)
         bob = np.zeros(len(ts))
-        if spec.get("bob"):
-            b = spec["bob"]
-            beats, accent = _beat_marks(ctx, b, f"perform.{name}.bob")
-            bob = PF.beat_bob(ts, beats, b.get("deg", 1.5), accent=accent)
+        for b, where in _beat_tables(spec, "bob", name):
+            beats, accent = _beat_marks(ctx, b, where)
+            bob = bob + _window(ts, b) * PF.beat_bob(ts, beats, b.get("deg", 1.5), accent=accent)
         startle = PF.startles(ts, spec.get("startle", []))
         lean_x = np.radians(PF.eased_keys(ts, spec.get("lean", [])))
         turn_x = np.radians(PF.eased_keys(ts, spec.get("turn", [])))
@@ -1087,6 +1100,7 @@ def run(ctx):
                 ax_l = (R.inverted() @ axis).normalized()
                 K.key_bone_quats(arm, b, fr, [tuple(Quaternion(ax_l, math.radians(deg) * a)) for a in amp],
                                  interp="BEZIER", replace=False)
+                m.twitched.add(b)                          # the sim keeps the flick on a bone it simulates
         if spec.get("strum"):
             info["strum"] = _strum(ctx, name, m, spec["strum"])
         if spec.get("drum"):

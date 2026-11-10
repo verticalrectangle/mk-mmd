@@ -1838,14 +1838,14 @@ all of the turn (they spot where she faced, [Body](#body)).
 | `breath` | `{per_min = 16.5, deg = 0.6}`: chest pitch on `upper_body2` |
 | `sway` | `{deg = 0.37, period = 2.5}`: a slow turn of the upper body about the vertical |
 | `nod` | `{deg = 0.48, period = 2.3}`: a slow nod of the head, fading while a gaze event holds the head away |
-| `bob` | `{deg = 1.5, beats = [t, ...], timeline = "audio/timeline.json", downbeat_accent = 1.6}`: the head dips after each beat (60 ms attack, 220 ms decay). Needs `beats` (clip seconds) or a timeline file (`timeline`, default `audio/timeline.json`: its beats; its downbeats dip `downbeat_accent` times deeper; a missing file stops the build naming `perform.<cast>.bob`); `beats` wins |
+| `bob` | `{deg = 1.5, beats = [t, ...], timeline = "audio/timeline.json", downbeat_accent = 1.6, from, to}`, or a list of such tables (each over its own `from`..`to`, summed: a small bob in a verse, a deeper one in a chorus): the head dips after each beat (60 ms attack, 220 ms decay). Needs `beats` (clip seconds) or a timeline file (`timeline`, default `audio/timeline.json`: its beats; its downbeats dip `downbeat_accent` times deeper; a missing file stops the build naming `perform.<cast>.bob`); `beats` wins |
 | `startle` | `[t, ...]`: at each time the upper body jolts backward (4.5 degrees, settling with a 0.35 s time constant) |
 | `lean`, `turn`, `tilt` | `[[t, deg], ...]`: extra upper-body forward lean, turn toward the left and sideways tilt toward the left over time, smoothstep-eased between the keys, held before the first and after the last, on top of the pose's base: a reach that leans in and settles back, a head on a shoulder. Hand targets still hold, except hands whose pose `ride` is a chest bone, which go with it. The first key's value holds from the start of the pre-roll: begin with a `[0, 0]` key to start from the base |
 | `head_tilt` | `[[t, deg], ...]`: the head rolls toward the left on top of the gaze, keyed the same way |
 | `head_turn` | `[[t, deg], ...]`: the head turns toward the left on top of the gaze, keyed the same way: a look back over the shoulder |
 | `head_nod` | `[[t, deg], ...]`: the head nods forward and down on top of the gaze, keyed the same way: a headbang (the gaze still pulls the head toward its target by `head_share` of the body's lean, so a nod over a deep lean takes more) |
 | `rock`, `head_rock` | `{deg, period = 4.0, phase = 0.0, axis = "side", hips = 0, from, to, ease = 0.4}`: a periodic sway of the upper body and of the head: `deg × sin(2π t / period + phase)` of clip time (`phase` in radians), added to the keyed ones; `axis` `"side"` leans the body (like `tilt`) and rolls the head (like `head_tilt`) toward the left, `"front"` leans the body forward (like `lean`) and nods the head, `"turn"` twists the body (like `turn`) and shakes the head. Unlike the keys it goes on at any clip time, so a dreamy sway survives a re-cut; a squirm seen side-on is a fast `turn` (a swing a beat). `rock.hips` (metres) shifts the hips toward the left with the same swing, the feet planted, so the weight goes from foot to foot: a groove without steps. `from`, `to` (clip seconds) keep a sway to a span, eased in over `ease` seconds before `from` and out over them after `to` (as `bounce`'s window); a list of tables is several sways, summed: a sway in each span where she only stands (still for the poses and dances between them), or the hips in one table and the body leaning against them in another |
-| `bounce` | `{depth = 0.03, beats = [t, ...], timeline, downbeat_accent = 1.6, from, to, attack = 0.05, decay = 0.16}`: the hips (the `center` bone) dip `depth` m on each beat (downbeats weighted), the feet planted, so the knees pump; `from`, `to` (clip seconds) limit it |
+| `bounce` | `{depth = 0.03, beats = [t, ...], timeline, downbeat_accent = 1.6, from, to, attack = 0.05, decay = 0.16}`, or a list of such tables (summed): the hips (the `center` bone) dip `depth` m on each beat (downbeats weighted), the feet planted, so the knees pump; `from`, `to` (clip seconds) limit it |
 | `rise` | `[[t, metres], ...]`: the whole body, feet too, lifts by that much (eased between keys): she floats |
 | `crouch` | `[[t, metres], ...]`: the hips drop by that much, the feet planted, so the knees bend (eased between keys, on top of `bounce`): a landing, a squat, a brace before a jump |
 | `kick` | `{foot = "L", height = 0.12, back = 0.08, hold = 0, beats, timeline, downbeat_accent, from, to, attack = 0.06, decay = 0.18}`: that foot flicks up and back on the beats; `hold` (0..1) keeps it that share of the way up between them (a foot kicked up behind a lovestruck girl) |
@@ -1879,8 +1879,9 @@ timeline does not have is a build error. `mouth` is the peak weight at full voic
 negative lead reads better on screen), `voice` is the `espeak-ng` voice, the language of the words. `espeak-ng` must be
 installed: `mk doctor` reports whether it is found, and without it the stage raises.
 
-A twitch is keyed on the bone itself on top of its other keys, so twitch the bone a chain hangs from (an `ear_root`): the sim
-stage keys the chain's own bones and replaces any twitch keys on them.
+A twitch is keyed on the bone itself on top of its other keys. On a bone the sim stage simulates (a model whose ear's top
+bone is its chain's first: there is no `ear_root` above it to twitch) the flick rides the simulation: the sim keys the
+chain's bones and turns a twitched one by its twitch on top, the rest of the chain going with it.
 
 #### Strum
 
@@ -2831,7 +2832,9 @@ elbow points. The pose stage warns when the forearm still passes more than 10 mm
 over the edge there: wear the prop lower or further toward that arm), when a wrist bends more than 55 degrees against its
 forearm or reaches past 0.98 of the arm's length;
 the pick object, modelled in that frame, is bone-parented to the wrist. Hands on a `neck` or `strum` point ride the prop
-(`ride` defaults to its root). `mk grip neck --side L --card @card.json --chord power --fret 3` solves one without a build.
+(`ride` defaults to its root), and on a prop the character wears the elbow's pole rides it too: the arms keep their shape
+when she steps, turns or spins (a pole left standing in the world twists them as soon as she leaves the spot).
+`mk grip neck --side L --card @card.json --chord power --fret 3` solves one without a build.
 
 **Strumming** (`[perform.<cast>] strum`; the keys and the stroke model are under [Perform](#perform), `strum`, and in
 `mkmmd/core/strum.py`). The strokes come from the song: `rhythm = "onsets:other"` plays the plucks the timeline's detector

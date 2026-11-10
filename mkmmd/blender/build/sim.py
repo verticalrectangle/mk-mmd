@@ -110,6 +110,23 @@ def gravity_scale(keys, ts, where):
     return np.interp(np.asarray(ts, float), [t for t, _ in pts], [g for _, g in pts])
 
 
+def _keyed_quats(arm, bone, frames):
+    """The bone-local rotation (n, 4) w x y z a bone's keys give on `frames` (identity where it has no curve)."""
+    act = arm.animation_data.action if arm.animation_data else None
+    path = f'pose.bones["{bone}"].rotation_quaternion'
+    fcs = [act.fcurves.find(path, index=c) if act else None for c in range(4)]
+    q = np.array([[fc.evaluate(f) if fc is not None else float(c == 0) for c, fc in enumerate(fcs)] for f in frames])
+    return q / np.linalg.norm(q, axis=1, keepdims=True)
+
+
+def _over(a, b):
+    """Quaternion products a[i] * b[i] ((n, 4) w x y z): the rotation b, then a."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    w = a[:, 0] * b[:, 0] - (a[:, 1:] * b[:, 1:]).sum(1)
+    v = a[:, :1] * b[:, 1:] + b[:, :1] * a[:, 1:] + np.cross(a[:, 1:], b[:, 1:])
+    return np.c_[w, v]
+
+
 def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
     """Simulate the chains of rig_pass, key them, return (bones, penetration (F, 3), report)."""
     frames = ctx.frames
@@ -154,7 +171,10 @@ def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
                    "engine": spec.get("engine", "auto")}
     res, rep = ctx.solve("mkmmd.solvers.strands", arrays, solver_spec, tag=tag)
     for i, b in enumerate(chains.bones):
-        K.key_bone_quats(arm, b, frames, res["quats"][:, i], interp="LINEAR")
+        q = res["quats"][:, i]
+        if b in m.twitched:                                # a twitch keyed on a chain bone: the flick rides the sim
+            q = _over(q, _keyed_quats(arm, b, frames))
+        K.key_bone_quats(arm, b, frames, q, interp="LINEAR")
     return chains.bones, res["pen"], rep
 
 

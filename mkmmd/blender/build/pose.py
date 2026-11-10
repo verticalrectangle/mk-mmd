@@ -1794,6 +1794,10 @@ def run(ctx):
                     if ob is None:
                         raise BuildError(f"pose.{name}.hands.{side}: ride object {ride!r} not found")
                     _reparent(tgt, ob)
+                    worn = getattr(gp, "worn", None) if gp is not None else None
+                    if worn and worn.get("cast") == name and ob is gp.root:
+                        _reparent(pole, ob)                # a prop she wears goes where she goes: her elbow with it, or a
+                        #                                    step or a spin leaves the pole behind and twists the arm
             grip, interp = None, "BEZIER"
             if h.get("notes") is not None and not (h.get("grip") and gu is not None and gu.get("type") == "neck"):
                 raise BuildError(f"pose.{name}.hands.{side}: `notes` is a fretting hand's bass line: it needs a neck grip "

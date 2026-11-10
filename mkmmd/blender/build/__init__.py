@@ -55,6 +55,7 @@ class Member:
         self.moves = None           # what the pose stage compiled the [[move]] entries from (pose.free_hands again)
         self.seat = None            # world seat frame used by the pose stage
         self.necks = {}             # side -> a fretting hand's neck grip {prop, entry, states, press} (perform rings strings)
+        self.twitched = set()       # the bones perform's `twitch` keyed (the sim keeps the flick on a chain bone)
 
 
 class Ctx:
