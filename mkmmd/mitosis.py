@@ -115,8 +115,8 @@ def divide(img, m, box, at, scale, angle, stretch, fx, back):
 
 
 class MitosisFx:
-    """The mitosis's part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, fps, frame0, _t, _hit_times and
-    _figure)."""
+    """The mitosis's part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, fps, frame0, _t, _hit_times,
+    _figure, and for a figure from a `shot` of its own _shot_frame and _posed, as a collage does)."""
 
     def _mitosis_init(self):
         self._mito = {}                  # a mitosis's index -> its figure's box on the span's first frame (px)
@@ -127,13 +127,22 @@ class MitosisFx:
         if fx["index"] not in self._mito:
             got = None
             for g in range(fx["f0"], fx["f1"]):
-                m = self._figure(fx, g)
+                m = self._mitosis_figure(fx, g)[1]
                 if m is not None and (m >= 0.5).any():
                     ys, xs = np.nonzero(m >= 0.5)
                     got = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
                     break
             self._mito[fx["index"]] = got
         return self._mito[fx["index"]]
+
+    def _mitosis_figure(self, fx, g, img=None):
+        """(picture, coverage) of a mitosis's figure on frame `g` as it stands in the frame: cut from `img` (the cut's
+        frame there; None: its coverage alone) or, with a `shot`, from what that shot shows, and set in by `at` and
+        `height` as a collage's figure is."""
+        m = self._figure(fx, g)
+        if m is None or not (fx.get("shot") or FX.placed(fx)):
+            return img, m
+        return self._posed(fx, g, None if img is None else self._shot_frame(fx, g) if fx.get("shot") else img, m)
 
     def mitosis_at(self, fx, frame):
         """(at (n, 2) px, scale, angle, stretch) of a mitosis's cells on `frame`, fitted into the frame; None when the
@@ -153,14 +162,17 @@ class MitosisFx:
 
     def _mitosis(self, fx, frame, img):
         s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
-        m = self._figure(fx, frame) if s > 0.0 else None
+        pic, m = self._mitosis_figure(fx, frame, img) if s > 0.0 else (img, None)
         cells = self.mitosis_at(fx, frame) if m is not None else None
         if cells is None or not (m >= 0.5).any():
             return img
-        back = ground(img, m) if fx["back"] == MT.PICTURE else np.broadcast_to(np.asarray(fx["back"], np.float32), img.shape)
+        if fx["back"] != MT.PICTURE:
+            back = np.broadcast_to(np.asarray(fx["back"], np.float32), img.shape)
+        else:                                # her place in the picture closed: a figure from a plate was never in it
+            back = img if fx.get("shot") else ground(img, self._figure(fx, frame))
         ys, xs = np.nonzero(m >= 0.5)
         now = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
         box = self.mitosis_box(fx)
         move = np.array([0.5 * (now[0] + now[2] - box[0] - box[2]), 0.5 * (now[1] + now[3] - box[1] - box[3])])
-        out = divide(img, m, now, cells[0] + move * cells[1][:, None], cells[1], cells[2], cells[3], fx, back)
+        out = divide(pic, m, now, cells[0] + move * cells[1][:, None], cells[1], cells[2], cells[3], fx, back)
         return out if s >= 1.0 else (img + (out - img) * np.float32(s)).astype(np.float32)

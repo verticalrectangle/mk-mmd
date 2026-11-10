@@ -48,6 +48,7 @@ def scene():
     (mitosis(split=0.0), "split = 0.0: expected 0.1..10"),
     (mitosis(times=[1.0], lane="kick"), "one of them"),
     (mitosis(cells=4), "unknown keys ['cells']"),
+    (mitosis(shot=""), "expected the name of a [[shot]]"),
 ])
 def test_bad_entries_say_what_is_wrong(spec, frag):
     with pytest.raises(TR.TransitionError) as e:
@@ -103,6 +104,21 @@ def test_a_figure_divides_into_two_copies_and_her_place_closes():
     flat = runner(onto, m).frame(F0 + 60, img)
     assert np.allclose(flat[2, 2], onto["fx"][0]["back"]) and np.allclose(flat[45, 80], onto["fx"][0]["back"], atol=0.02)
     assert MTF.ground(img, m)[45, 80].max() < 0.2                # the ground closes from what is round her
+
+
+def test_a_figure_from_a_shot_of_its_own_is_set_into_a_picture_she_is_not_in():
+    data = {"project": {"duration": 4.0}, "output": [{"name": "t", "size": [W, H]}],
+            "shot": [{"name": "a", "from": 0.0, "to": 4.0}, {"name": "far", "plate": True}],
+            "fx": [mitosis(shot="far", at=[0.25, 0.9], height=0.5, alpha=0.0, wobble=0.0)]}
+    pl = TR.plan(data, FPS, F0, MOON)
+    img, m = scene()                              # the cut's frame, and where the shot `far` has her
+    green = np.zeros((H, W, 3), np.float32)
+    green[..., 1] = 1.0                           # what `far` shows
+    r = FF.FrameFx(pl["fx"], (W, H), fps=FPS, frame0=F0, frame_of=lambda g: None, point_of=None,
+                   figure_of=lambda key, g: m, plate_of=lambda shot, g: green)
+    out = r.frame(F0 + 15, img)
+    assert np.allclose(out[40:78, 28:52], [0.0, 1.0, 0.0], atol=0.02)      # feet at (0.25, 0.9), half the frame tall
+    assert np.array_equal(out[28:62, 68:92], img[28:62, 68:92])            # the cut's frame is left as it is
 
 
 def test_a_later_frame_reads_the_figure_on_the_spans_first_frame():

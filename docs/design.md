@@ -5180,8 +5180,10 @@ skin and it pinches as they part. Odd divisions pull apart sideways, even ones u
 the figure's box on the span's first frame sizes all of it, and the colony is scaled and moved to stay inside `fit` of
 the frame. A hit that falls while a cell divides is passed over. With `back = "picture"` her place in the picture is
 closed from the ground round her (seamless on a plain ground, a blur on a busy one); best where the whole figure is in
-the frame. A function of the entry, its hits and the clip second: any frame comes out the same in any order. About
-0.2 s a 1080p frame on the CPU; `--gpu` leaves it to it.
+the frame. With a `shot` the figure comes from that shot's own render (a plate) and is set into the frame by `at` and
+`height`, as a collage's is: cells over a picture she is not in (a recording an [inset](#insets-the-picture-on-a-screen-in-a-recording)
+made of the frame), which is left whole under them. A function of the entry, its hits and the clip second: any frame comes
+out the same in any order. About 0.2 s a 1080p frame on the CPU; `--gpu` leaves it to it.
 
 | Key | Meaning |
 |---|---|
@@ -5193,6 +5195,7 @@ the frame. A function of the entry, its hits and the clip second: any frame come
 | `body`, `cytoplasm`, `alpha`, `membrane` | how far the cell stands round the figure, short sides (0.03); its colour (`rose`) and how much of it covers the ground (0.5); the colour of its skin (`love`) |
 | `wobble` | how much a freed cell wobbles, a share of its size (0.12), dying over a quarter of a second |
 | `back` | `"picture"` (default: the picture, her place closed) or a colour |
+| `shot`, `at`, `height` | the figure from another shot's own render, and where it stands in the frame: its feet at `at` `[x, y]` (frame fractions), `height` of the frame tall, as a collage's ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)); default the figure where the cut's frame has it |
 
 ```toml
 [[fx]]                        # she divides on the four snares of the last bar: sixteen of her

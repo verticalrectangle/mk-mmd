@@ -4,7 +4,9 @@ as a cell does, checked, timed and laid out here; mkmmd/mitosis.py draws it.
 The figure (`objects`) sits in a soft cell of its own (a membrane round its outline). On each hit the cell divides: it
 is pulled long, pinches in the middle and comes apart into two smaller copies of the figure, each in its own cell, that
 wobble for a moment. Odd divisions pull apart sideways, even ones up and down, each a little off true; `max` divisions
-make 2 ** max cells. The colony is kept inside the frame (`fit`).
+make 2 ** max cells. The colony is kept inside the frame (`fit`). The figure is cut out of the picture, or comes from a
+`shot` of its own (a plate) set into the frame by `at` and `height` as a collage's is: cells over a picture she is not
+in.
 
 Everything is a function of the entry, its hits and the clip second: a frame comes out the same wherever a render
 starts. Lengths are short sides of the frame."""
@@ -15,10 +17,10 @@ import numpy as np
 KINDS = ("mitosis",)
 HITS = {"times", "lane", "min_db", "every"}
 KEYS = {"mitosis": {"objects", "split", "max", "gap", "tilt", "fit", "body", "cytoplasm", "membrane", "alpha", "back",
-                    "wobble", "seed"} | HITS}
+                    "wobble", "seed", "shot", "at", "height"} | HITS}
 DEFAULTS = {"mitosis": {"split": 0.6, "max": 4, "gap": 0.06, "tilt": 10.0, "fit": 0.92, "body": 0.03,
                         "cytoplasm": "rose", "membrane": "love", "alpha": 0.5, "back": "picture", "wobble": 0.12,
-                        "seed": 1, "min_db": None, "every": 1}}
+                        "seed": 1, "min_db": None, "every": 1, "shot": None, "at": None, "height": None}}
 PICTURE = "picture"             # a mitosis's back: the picture, the figure's place in it filled from what is round it
 SHRINK = 0.68                   # a daughter cell is this size of its mother (two side by side are then about as wide)
 PULL = 0.25                     # a dividing cell is pulled this much longer than it is, half way through
@@ -52,6 +54,12 @@ def normalize(spec, out, palette, what):
     out["membrane"] = FX._colour(out["membrane"], palette, f"{what} membrane")
     if out["back"] != PICTURE:
         out["back"] = FX._colour(out["back"], palette, f"{what} back")
+    if out["shot"] is not None and (not isinstance(out["shot"], str) or not out["shot"].strip()):
+        raise FX.FxError(f"{what}: shot = {out['shot']!r}: expected the name of a [[shot]] (typically one with "
+                         f"plate = true) whose own render the figure is taken from")
+    out["at"] = None if out["at"] is None else FX._pair(out["at"], f"{what} at")
+    out["height"] = None if out["height"] is None else FX._num(out["height"], f"{what} height", 0.01, 10.0)
+    out["keys"], out["pivot"] = None, "base"         # set in as a collage's figure is: about her feet, and not moved on
     FX._hits(spec, out, what, required=False)
 
 
