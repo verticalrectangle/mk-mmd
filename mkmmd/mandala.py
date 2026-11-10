@@ -247,18 +247,20 @@ def _parts(name):
     return MD.shape_parts(name)
 
 
-def shape_tile(name, main, accent, ink, size, edge):
+def shape_tile(name, main, accent, ink, size, edge, pen=0.0):
     """Sticker shape `name` (mkmmd.core.mandala.shape_parts) as a tile, its box's longer side `size` px, anchored at the
-    shape's middle: its parts painted in order in `main`, `accent` and `ink` and the shades of the first two (`dark`
-    toward the ink, `light` toward white), at SUPER times the size and shrunk."""
+    shape's middle: its parts painted in order in `main`, `accent` and `ink`, the shades of the first two (`dark`
+    toward the ink, `light` toward white) and white `paper`, at SUPER times the size and shrunk. With a `pen` (a width,
+    of the box's longer side) an ink line that wide goes round the whole shape, outside it and inside the `size`."""
     parts = _parts(name)
     lo, hi = MD.shape_box(parts)
-    k = size * SUPER
-    m = 2.0 * SUPER                                      # canvas px round the shape
+    k = size * SUPER / (1.0 + 2.0 * pen)
+    grow = max(int(round(pen * k)), 1) if pen > 0.0 else 0
+    m = 2.0 * SUPER + grow                               # canvas px round the shape
     W, H = int(math.ceil((hi[0] - lo[0]) * k + 2 * m)), int(math.ceil((hi[1] - lo[1]) * k + 2 * m))
     W, H = W + (-W) % SUPER, H + (-H) % SUPER
     colours = {"main": main, "dark": _mix(main, ink, DARKEN), "light": _mix(main, WHITE, LIGHTEN), "accent": accent,
-               "accent_dark": _mix(accent, ink, DARKEN), "ink": ink}
+               "accent_dark": _mix(accent, ink, DARKEN), "ink": ink, "paper": WHITE}
     rgb, a = np.zeros((H, W, 3), np.float32), np.zeros((H, W), np.float32)
     for role, kind, p, width in parts:
         q = np.rint(((np.asarray(p, float) - lo) * k + m) * 16.0).astype(np.int32)
@@ -270,6 +272,9 @@ def shape_tile(name, main, accent, ink, size, edge):
         c = (cov.astype(np.float32) / np.float32(255.0))
         rgb = rgb * (1.0 - c[..., None]) + np.asarray(colours[role], np.float32) * c[..., None]
         a = a + (1.0 - a) * c
+    if grow:
+        grown = cv2.dilate(a, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1, 2 * grow + 1)))
+        rgb, a = rgb + np.asarray(ink, np.float32) * (grown - a)[..., None], grown      # the line under the shape
     w, h = W // SUPER, H // SUPER
     rgb, a = _resized(rgb, (w, h), True), np.clip(_resized(a, (w, h), True), 0.0, 1.0)
     anchor = ((-lo[0] * k + m + 0.5) / SUPER - 0.5, (-lo[1] * k + m + 0.5) / SUPER - 0.5)
@@ -511,8 +516,9 @@ class MandalaFx:
             make = lambda: sprite_tile(key[1], size, ew, face)                    # noqa: E731
         else:
             main, accent, ink = MD.shape_colours(src, j, k)
-            key = ("shape", MD.shape_of(src, j), tuple(main), tuple(accent), tuple(ink), round(size, 2), ew)
-            make = lambda: shape_tile(key[1], key[2], key[3], key[4], size, ew)   # noqa: E731
+            pen = MD.shape_pen(src, j)
+            key = ("shape", MD.shape_of(src, j), tuple(main), tuple(accent), tuple(ink), round(size, 2), ew, pen)
+            make = lambda: shape_tile(key[1], key[2], key[3], key[4], size, ew, pen)   # noqa: E731
         got = self._md_tiles.get(key)
         if got is None:
             got = self._md_tiles[key] = make()

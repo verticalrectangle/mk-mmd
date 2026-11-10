@@ -68,6 +68,7 @@ def disc_sprite(path, colour=(255, 0, 0), size=40, box=60):
     (mandala(rings=[{"source": "leaf"}]), "source = 'leaf'"),
     (mandala(rings=[{"source": {"shape": "tulip"}}]), "shape = 'tulip': one of clover"),
     (mandala(rings=[{"source": {"shape": "star", "size": 2}}]), "unknown keys ['size'] of a shape"),
+    (mandala(rings=[{"source": {"shape": "star", "pen": 1}}]), "pen is true or false"),
     (mandala(rings=[{"source": {"sprites": [3]}}]), "a slug, a file, a glob or {tag"),
     (mandala(rings=[{"source": {"sprites": {"tags": "x"}}}]), "a slug, a file, a glob or {tag"),
     (mandala(rings=[{"source": {"sprites": "a", "shape": "star"}}]), "\"figure\", {sprites"),
@@ -206,14 +207,34 @@ def test_a_copy_is_hidden_before_it_pops_overshoots_and_settles_on_its_size():
 # ---------------------------------------------------------------- the stickers
 def test_sticker_shapes_fill_a_unit_box_the_butterfly_is_symmetric_and_the_clover_has_four_leaves():
     for name in MD.SHAPES:
-        lo, hi = MD.shape_box(MD.shape_parts(name))
+        parts = MD.shape_parts(name)
+        lo, hi = MD.shape_box(parts)
         assert max(hi - lo) == pytest.approx(1.0)
+        assert {role for role, _, _, _ in parts} <= set(MD.ROLES)                 # nothing the painter has no colour for
     wings = [p for role, kind, p, _ in MD.shape_parts("butterfly") if kind == "fill"]
     pts = np.concatenate(wings)
     assert np.sort(pts[:, 0]) == pytest.approx(np.sort(-pts[:, 0]))               # mirror images across x = 0
     assert sum(1 for role, kind, _, _ in MD.shape_parts("clover") if role == "main") == 4
     with pytest.raises(ValueError, match="no shape 'tulip'"):
         MD.shape_parts("tulip")
+
+
+def test_a_rabbit_sticker_is_white_whatever_its_colour():
+    pl = plan([stickers(rings=[{"count": 1, "radius": 0.0, "scale": 0.5, "orient": "upright",
+                                "source": {"shape": "rabbit", "colors": ["love"]}}], back="#000000")], size=(96, 96))
+    out = runner(pl, size=(96, 96)).frame(F0 + 40, np.zeros((96, 96, 3), np.float32))
+    assert out[51, 48] == pytest.approx([1.0, 1.0, 1.0], abs=1e-3)       # its forehead: the sticker's paper, not `love`
+
+
+def test_a_pen_draws_its_line_round_a_flat_shape_and_leaves_a_kits_shape_as_it_is():
+    def inked(shape, pen):
+        pl = plan([stickers(rings=[{"count": 1, "radius": 0.0, "scale": 0.8, "orient": "upright", "source": {
+            "shape": shape, "colors": ["#FF0000"], "accent": "#FF0000", "ink": "#00FF00", "pen": pen}}],
+            back="#000000")], size=(240, 240))
+        out = runner(pl, size=(240, 240)).frame(F0 + 40, np.zeros((240, 240, 3), np.float32))
+        return int(((out[..., 1] > 0.9) & (out[..., 0] < 0.1)).sum())
+    assert inked("star", False) == 0 and inked("star", True) > 100          # a green line round the red star
+    assert inked("rabbit", True) == inked("rabbit", False) > 100            # drawn with the pen already
 
 
 def test_a_shape_ring_reads_its_colours_at_the_hits_plus_the_copy_and_its_shapes_round_the_ring():

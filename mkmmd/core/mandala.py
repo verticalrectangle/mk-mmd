@@ -3,10 +3,11 @@
 picture work.
 
     mandala  concentric rings of copies about a `center` on a `back`: copies of the figure (cut out as a collage cuts
-             it), of sprites (pictures with alpha: registry slugs, tags, files, globs) or of stickers drawn here (a
-             clover, a flower, a heart, a star, a butterfly). Each ring turns its own way, steps on the hits and blooms
-             outward on them; with `grow` its copies pop in one by one; every copy may wear a die-cut `edge` and cast a
-             `shadow`, and the figure itself may stay in the middle (`center_figure`)
+             it), of sprites (pictures with alpha: registry slugs, tags, files, globs) or of stickers drawn here (flat
+             ones: a clover, a flower, a heart, a star, a butterfly; and two kits drawn with a pen's ink line: a moon, a
+             rabbit, a carrot and dango; a daisy, a cassette, a pedal and cherries). Each ring turns its own way, steps
+             on the hits and blooms outward on them; with `grow` its copies pop in one by one; every copy may wear a
+             die-cut `edge` and cast a `shadow`, and the figure itself may stay in the middle (`center_figure`)
     trails   rainbow after-images of the figure: its coverage `delay` frames apart back to `count` copies, each in a
              colour of a ramp that cycles (`cycle` steps a second, and one on each hit), fading with age, behind it
 
@@ -23,14 +24,23 @@ from . import picturefx as PC
 from . import tween as TW
 
 KINDS = ("mandala", "trails")
-SHAPES = ("clover", "flower", "heart", "star", "butterfly")
+SHAPES = ("clover", "flower", "heart", "star", "butterfly", "moon", "rabbit", "carrot", "dango", "daisy", "cassette",
+          "pedal", "cherry")
+ROLES = ("main", "dark", "light", "accent", "accent_dark", "ink", "paper")   # what a shape's part is painted in
 ORIENTS = ("radial", "upright")               # a copy's top: away from the centre, or up the frame
 ORDERS = ("rings", "inward", "around", "random")   # the order a grow pops the copies in
 TRAIL_BLENDS = ("over", "screen", "add")
 RAINBOW = ("love", "rose", "gold", "foam", "pine", "iris")    # a trail's ramp: the palette's accents round the wheel
 SHAPE_COLORS = {"clover": ("pine", "foam"), "flower": ("love", "rose", "iris"), "heart": ("love", "rose"),
-                "star": ("gold", "rose"), "butterfly": ("iris", "love", "foam", "gold")}
-SHAPE_ACCENT = {"clover": "gold", "flower": "gold", "heart": "rose", "star": "love", "butterfly": "gold"}
+                "star": ("gold", "rose"), "butterfly": ("iris", "love", "foam", "gold"), "moon": ("gold", "rose"),
+                "rabbit": ("rose", "love", "iris"), "carrot": ("gold", "rose"), "dango": ("rose", "love", "iris"),
+                "daisy": ("gold", "rose", "love"), "cassette": ("iris", "foam", "love", "gold"),
+                "pedal": ("love", "pine", "iris", "gold"), "cherry": ("love", "rose")}
+SHAPE_ACCENT = {"clover": "gold", "flower": "gold", "heart": "rose", "star": "love", "butterfly": "gold",
+                "moon": "rose", "rabbit": "love", "carrot": "pine", "dango": "foam", "daisy": "gold", "cassette": "gold",
+                "pedal": "gold", "cherry": "pine"}
+PEN = 0.022                                  # the ink line round a drawn sticker's parts, of its box before scaling
+PENNED = ("moon", "rabbit", "carrot", "dango", "daisy", "cassette", "pedal", "cherry")    # drawn with it: the two kits
 SCALE = {"figure": 0.25, "sticker": 0.12}    # a ring's `scale` by default: a copy's height (the figure's) or longer side
 RING = {"count": None, "radius": None, "scale": None, "turn": 12.0, "step": 0.0, "phase": 0.0, "mirror": False,
         "spin": 0.0, "orient": "radial", "angle": 0.0, "source": "figure", "fill": None}
@@ -99,7 +109,8 @@ def _refs(FX, v, what, key="sprites"):
 
 
 def _source(FX, v, palette, what):
-    """A ring's `source`: "figure", {sprites = [...], eyes, mouth} or {shape = name or [names], colors, accent, ink}."""
+    """A ring's `source`: "figure", {sprites = [...], eyes, mouth} or {shape = name or [names], colors, accent, ink,
+    pen}."""
     if v == "figure":
         return {"kind": "figure"}
     if isinstance(v, dict) and len({"sprites", "shape"} & set(v)) == 1:
@@ -109,15 +120,17 @@ def _source(FX, v, palette, what):
                 raise FX.FxError(f"{what}: source: unknown keys {extra} of a sprite source (known: "
                                  f"{sorted({'sprites'} | set(EY.KEYS))})")
             return {"kind": "sprites", "refs": _refs(FX, v["sprites"], what), "face": EY.face(v, f"{what} source")}
-        extra = sorted(set(v) - {"shape", "colors", "accent", "ink"})
+        extra = sorted(set(v) - {"shape", "colors", "accent", "ink", "pen"})
         if extra:
-            raise FX.FxError(f"{what}: source: unknown keys {extra} of a shape (known: accent, colors, ink, shape)")
+            raise FX.FxError(f"{what}: source: unknown keys {extra} of a shape (known: accent, colors, ink, pen, shape)")
+        if not isinstance(v.get("pen", False), bool):
+            raise FX.FxError(f"{what}: source: pen is true or false, not {v['pen']!r}")
         names = [v["shape"]] if isinstance(v["shape"], str) else v["shape"]
         if not isinstance(names, (list, tuple)) or not names or any(n not in SHAPES for n in names):
             raise FX.FxError(f"{what}: shape = {v['shape']!r}: one of {', '.join(SHAPES)}, or a list of them")
         own = {n: {"colors": [FX._colour(c, palette, f"{what} {n}") for c in SHAPE_COLORS[n]],
                    "accent": FX._colour(SHAPE_ACCENT[n], palette, f"{what} {n}")} for n in names}
-        return {"kind": "shape", "shapes": list(names),
+        return {"kind": "shape", "shapes": list(names), "pen": v.get("pen", False),
                 "colors": None if v.get("colors") is None else FX._colours(v["colors"], palette, f"{what} colors"),
                 "accent": None if v.get("accent") is None else FX._colour(v["accent"], palette, f"{what} accent"),
                 "ink": FX._colour(v.get("ink", "text"), palette, f"{what} ink"), "own": own}
@@ -408,6 +421,13 @@ def shape_colours(src, j, k):
     return cs[(k + j) % len(cs)], src["accent"] or src["own"][name]["accent"], src["ink"]
 
 
+def shape_pen(src, j):
+    """The width of the ink line to draw round the whole of copy j of a shape ring, of its box's longer side: the
+    pen's round a flat shape of a ring with `pen` (its stars and hearts drawn as the kits are), 0 otherwise: a kit's
+    shape has the line already."""
+    return PEN if src["pen"] and shape_of(src, j) not in PENNED else 0.0
+
+
 # ================================================================================================= trails
 def trail_copies(fx, frame, t, times, fps, frame0):
     """A trail's copies on `frame` at clip second `t`, the oldest first: [(j, frame g it shows, opacity, place on the
@@ -562,14 +582,144 @@ def _butterfly():
     return _mirrored(wings + antenna) + body
 
 
-_SHAPE_PARTS = {"clover": _clover, "flower": _flower, "heart": _heart_parts, "star": _star, "butterfly": _butterfly}
+def _closed(p):
+    """A polygon's points and the first again: its outline as a line."""
+    p = np.asarray(p, float)
+    return np.concatenate([p, p[:1]])
+
+
+def _drawn(role, p, width=PEN):
+    """A polygon filled in `role` with the pen's ink line round it."""
+    return [(role, "fill", np.asarray(p, float), 0.0), ("ink", "line", _closed(p), width)]
+
+
+def _box(x0, y0, x1, y1, r):
+    """A box, its corners rounded by `r`."""
+    return _rounded([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], r)
+
+
+def _tilted(parts, angle):
+    """The parts turned `angle` degrees counter-clockwise: a sticker drawn upright and laid askew."""
+    return [(role, kind, _turned(p, angle), w) for role, kind, p, w in parts]
+
+
+def _moon():
+    d, r1 = 0.2, 0.41                                        # the bite out of the disc: a circle r1 wide, d to the right
+    x = (d * d + 0.25 - r1 * r1) / (2.0 * d)
+    y = math.sqrt(0.25 - x * x)                              # the horns: where the two circles cross
+    a, b = math.atan2(y, x), math.atan2(y, x - d)
+    ta, tb = np.linspace(a, 2.0 * math.pi - a, 56), np.linspace(2.0 * math.pi - b, b, 44)
+    body = np.concatenate([0.5 * np.stack([np.cos(ta), np.sin(ta)], 1),
+                           ((d, 0.0) + r1 * np.stack([np.cos(tb), np.sin(tb)], 1))[1:-1]])
+    ts = np.radians(np.linspace(195.0, 250.0, 16))
+    shine = 0.44 * np.stack([np.cos(ts), np.sin(ts)], 1)
+    asleep = _curve([-0.43, 0.0], [-0.375, 0.07], [-0.32, 0.0])             # its eye, shut
+    return _tilted(_drawn("main", body) + [("light", "line", shine, 0.03), ("ink", "line", asleep, 0.02),
+                                           ("accent", "fill", _ellipse(-0.37, 0.13, 0.05, 0.032, n=24), 0.0)], 24.0)
+
+
+def _rabbit():
+    parts = []
+    for s in (-1.0, 1.0):                                    # the ears behind the head, their insides in the colour
+        for role, kind, p, w in _drawn("paper", _ellipse(0.0, 0.0, 0.1, 0.3)) + [
+                ("main", "fill", _ellipse(0.0, 0.03, 0.045, 0.2, n=32), 0.0)]:
+            parts.append((role, kind, _turned(p, -9.0 * s) + (0.15 * s, -0.24), w))
+    parts += _drawn("paper", _ellipse(0.0, 0.2, 0.31, 0.25, n=64))
+    for s in (-1.0, 1.0):                                    # eyes with a glint, cheeks
+        parts += [("accent", "fill", _ellipse(0.125 * s, 0.16, 0.034, 0.044, n=24), 0.0),
+                  ("paper", "fill", _ellipse(0.125 * s - 0.012, 0.145, 0.012, 0.012, n=12), 0.0),
+                  ("light", "fill", _ellipse(0.215 * s, 0.26, 0.05, 0.03, n=24), 0.0)]
+    mouth = np.array([[-0.05, 0.3], [-0.025, 0.315], [0.0, 0.285], [0.025, 0.315], [0.05, 0.3]])
+    return parts + [("main", "fill", _ellipse(0.0, 0.235, 0.028, 0.02, n=16), 0.0), ("ink", "line", mouth, 0.014)]
+
+
+def _carrot():
+    root = _smooth([[-0.13, -0.2], [0.0, -0.25], [0.13, -0.2], [0.115, 0.0], [0.055, 0.3], [0.0, 0.47], [-0.055, 0.3],
+                    [-0.115, 0.0]], n=8)
+    parts = []
+    for a in (-32.0, 32.0, 0.0):                             # three leaves fanned from its top, the middle one over
+        parts += _drawn("accent", _turned(_ellipse(0.0, -0.17, 0.05, 0.15, n=32), -a) + (0.0, -0.2))
+    parts += _drawn("main", root)
+    parts += [("dark", "line", np.array(m), 0.016) for m in ([[-0.11, -0.07], [-0.03, -0.055]],
+                                                             [[0.1, 0.07], [0.035, 0.085]],
+                                                             [[-0.06, 0.22], [-0.005, 0.235]])]
+    return _tilted(parts + [("light", "fill", _ellipse(-0.055, -0.12, 0.018, 0.06, angle=4.0, n=20), 0.0)], -28.0)
+
+
+def _dango():
+    parts = [("ink", "line", np.array([[0.0, -0.29], [0.0, 0.68]]), 0.03)]     # the stick, its tip inside the top one
+    for y, role in ((-0.29, "main"), (0.0, "paper"), (0.29, "accent")):
+        parts += _drawn(role, _ellipse(0.0, y, 0.16, 0.15, n=40))
+        parts.append(("paper", "fill", _ellipse(-0.065, y - 0.06, 0.03, 0.045, angle=35.0, n=16), 0.0))
+    return _tilted(parts, -24.0)
+
+
+def _daisy():
+    parts = []
+    for j in range(10):
+        parts += _drawn("paper", _turned(_ellipse(0.0, -0.3, 0.083, 0.2, n=32), 36.0 * j), 0.018)
+    parts += _drawn("main", _ellipse(0.0, 0.0, 0.15, 0.15, n=40), 0.018)
+    return parts + [("dark", "fill", _ellipse(0.07 * math.sin(math.radians(72 * j + 15)),
+                                              -0.07 * math.cos(math.radians(72 * j + 15)), 0.018, 0.018, n=12), 0.0)
+                    for j in range(5)]
+
+
+def _cassette():
+    parts = _drawn("main", _box(-0.5, -0.32, 0.5, 0.32, 0.055)) + _drawn("paper", _box(-0.42, -0.25, 0.42, 0.1, 0.03), 0.016)
+    parts += [("accent", "line", np.array([[-0.35, -0.185], [0.35, -0.185]]), 0.036),          # the label's stripe
+              ("ink", "fill", _box(-0.27, -0.115, 0.27, 0.045, 0.045), 0.0)]                   # the window
+    for s in (-1.0, 1.0):                                    # the reels
+        parts += [("paper", "fill", _ellipse(0.15 * s, -0.035, 0.056, 0.056, n=28), 0.0),
+                  ("ink", "fill", _ellipse(0.15 * s, -0.035, 0.022, 0.022, n=14), 0.0)]
+    parts += _drawn("dark", np.array([[-0.3, 0.32], [-0.24, 0.17], [0.24, 0.17], [0.3, 0.32]]), 0.016)
+    parts += [("ink", "fill", _ellipse(0.12 * s, 0.25, 0.022, 0.022, n=14), 0.0) for s in (-1.0, 1.0)]
+    return parts + [("dark", "fill", _ellipse(0.445 * sx, 0.265 * sy, 0.017, 0.017, n=12), 0.0)
+                    for sx in (-1.0, 1.0) for sy in (-1.0, 1.0)]
+
+
+def _pedal():
+    parts = []
+    for s in (-1.0, 1.0):                                    # the jacks, out of its sides
+        parts += _drawn("dark", _box(min(0.27 * s, 0.38 * s), -0.02, max(0.27 * s, 0.38 * s), 0.1, 0.02), 0.016)
+    body = _rounded([[-0.27, -0.5], [0.27, -0.5], [0.32, 0.5], [-0.32, 0.5]], 0.07)
+    parts += _drawn("main", body)
+    for x, a in ((-0.16, -40.0), (0.0, 10.0), (0.16, 55.0)):                # three knobs, each turned its own way
+        tip = (x + 0.05 * math.sin(math.radians(a)), -0.36 - 0.05 * math.cos(math.radians(a)))
+        parts += [("ink", "fill", _ellipse(x, -0.36, 0.062, 0.062, n=28), 0.0),
+                  ("paper", "line", np.array([[x, -0.36], tip]), 0.018)]
+    band = np.array([[-0.283, -0.22], [0.283, -0.22], [0.294, -0.02], [-0.294, -0.02]])
+    xs = np.linspace(-0.2, 0.2, 41)
+    wave = np.stack([xs, -0.12 + 0.05 * np.sin((xs + 0.2) / 0.4 * 4.0 * math.pi)], 1)
+    parts += [("paper", "fill", band, 0.0), ("ink", "line", band[:2], 0.014), ("ink", "line", band[2:], 0.014),
+              ("accent", "line", wave, 0.024)]                                # its label: a band with a wave on it
+    parts += _drawn("accent", _ellipse(0.0, 0.07, 0.026, 0.026, n=16), 0.012)                   # the lamp
+    parts += _drawn("light", _ellipse(0.0, 0.29, 0.11, 0.11, n=40), 0.016)                      # the switch
+    parts += _drawn("paper", _ellipse(0.0, 0.29, 0.062, 0.062, n=28), 0.014)
+    return parts + [("ink", "line", _closed(body), PEN)]
+
+
+def _cherry():
+    top = np.array([0.04, -0.44])
+    parts = [("accent_dark", "line", _curve(top, [-0.2, -0.2], [-0.21, 0.06]), 0.03),
+             ("accent_dark", "line", _curve(top, [0.2, -0.2], [0.23, 0.13]), 0.03)]
+    leaf = _smooth([[0.04, -0.44], [0.16, -0.54], [0.33, -0.55], [0.46, -0.47], [0.33, -0.39], [0.17, -0.39]], n=8)
+    parts += _drawn("accent", leaf, 0.018) + [("accent_dark", "line", np.array([[0.06, -0.445], [0.4, -0.47]]), 0.014)]
+    for cx, cy, r in ((-0.21, 0.24, 0.21), (0.24, 0.3, 0.2)):
+        parts += _drawn("main", _ellipse(cx, cy, r, r * 0.96))
+        parts.append(("light", "fill", _ellipse(cx - 0.08, cy - 0.08, 0.035, 0.06, angle=40.0, n=20), 0.0))
+    return parts
+
+
+_SHAPE_PARTS = {"clover": _clover, "flower": _flower, "heart": _heart_parts, "star": _star, "butterfly": _butterfly,
+                "moon": _moon, "rabbit": _rabbit, "carrot": _carrot, "dango": _dango, "daisy": _daisy,
+                "cassette": _cassette, "pedal": _pedal, "cherry": _cherry}
 
 
 def shape_parts(name):
     """The parts of sticker shape `name` in the order they are painted: [(role, "fill" or "line", (n, 2) points, line
     width)], about the shape's middle (0, 0), x right and y down, scaled so its box (lines' widths in) is 1 on its
     longer side. Roles: `main` (the copy's colour), `dark` and `light` (it darkened toward the ink and lightened toward
-    white), `accent` (and `accent_dark`), `ink`."""
+    white), `accent` (and `accent_dark`), `ink`, `paper` (white: a rabbit's fur, a daisy's petals, a label)."""
     if name not in _SHAPE_PARTS:
         raise ValueError(f"no shape {name!r} (shapes: {', '.join(SHAPES)})")
     parts = _SHAPE_PARTS[name]()

@@ -121,7 +121,8 @@ def ops(ffx, fx, frame):
                 face, pupils = tl.face, eyes.get((cp["ring"], j))
             else:
                 main, accent, ink = MD.shape_colours(src, j, k)
-                key = ("shape", MD.shape_of(src, j), tuple(main), tuple(accent), tuple(ink), round(size, 2), ew)
+                key = ("shape", MD.shape_of(src, j), tuple(main), tuple(accent), tuple(ink), round(size, 2), ew,
+                       MD.shape_pen(src, j))
             got = tile(key, lambda: (GF.tile_files(ffx, tl, key, once if key[0] == "shape" else None), tl.a.shape,
                                      tl.anchor))
         i, (_, shape, anchor) = got
