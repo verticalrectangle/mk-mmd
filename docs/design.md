@@ -6421,7 +6421,8 @@ sketches 0.002 levels. A silhouette frame costs about 0.3 s of wall time with ei
 `mk post` composites the cut effects over the cut's frames, draws the lens streaks (`streaks`, below) from the result, lays the screen
 type over it, turns the frames of the loop's wrap over frame 0 as finished, then grades the frames and encodes
 `<project>/out/<name>_<output>[_<preset>].mp4` (the preset is left out of the name for `final`) with `[audio]` (`file`, `start` = song
-seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 320k with a 60 ms fade-out. A clip of one frame
+seconds at clip time 0): H.264 (x264, `--crf` 15, yuv420p, even size) and AAC 320k with a 60 ms fade-out, at 44.1 or 48 kHz,
+the nearer to the file's own rate (a 96 kHz master is resampled: players and platforms take those two). A clip of one frame
 (`[project] duration` of one frame) is a still: each output's graded frame is written as `<name>_<output>[_<preset>].png`, at
 its own size, with no sound (the sim and cloth reports then measure its frame and the two before). A missing frame or layer is an error
 unless `--allow-gaps` (the previous frame repeats; the plain cut shows where a layer is missing); `--to DIR` also copies the videos;

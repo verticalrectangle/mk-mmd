@@ -32,11 +32,14 @@ from .common import add_project_arg, cut_breath, cut_plan, emit, get_project, Us
 ENCODERS = ("x264", "vaapi")
 X264_PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo")
 SHM = "/dev/shm"            # mkr-post's hand-over folder, in memory where the system has it
+RATES = "aformat=sample_rates=44100|48000"     # the song at 44.1 or 48 kHz, the nearer to its own: what players and
+#                                                platforms take as AAC (a 96 kHz master is resampled, not passed on)
 
 HELP = """Grade the rendered frames of each output ([post] in mk.toml: contrast, split tone, the palette floor that keeps
 shadows off black, halation, vignette, grain) and encode them to <project>/out/<name>_<output>[_<preset>].mp4 (the
 preset is left out of the name for `final`) with the audio of [audio] (file, start = song seconds at clip time 0), as
-H.264 (yuv420p, even size) and AAC with a 60 ms fade-out at the end. With [audio.master] the clip's audio is mastered for
+H.264 (yuv420p, even size) and AAC (at 44.1 or 48 kHz, the nearer to the file's own rate: a 96 kHz master is resampled)
+with a 60 ms fade-out at the end. With [audio.master] the clip's audio is mastered for
 small speakers first (mkmmd.master: the booms of a lane of [audio] hits get overtones a phone can play, a lifted attack
 and the rest of the mix ducked under them; the sub is cut; the loudness is set under a limiter), and the report's
 `audio_master` says how far the booms stand out through a phone's speakers before and after. Missing frames are an error
@@ -119,9 +122,9 @@ def add(sub):
 
 def encode(frames, size, fps, out, audio=None, crf=15, encoder="x264", preset="slow", excerpts=()):
     """ffmpeg reading rgb24 frames of `size` on its stdin and writing `out`: H.264 (yuv420p) by libx264 at `preset` and
-    CRF `crf`, or by the GPU through VAAPI at constant QP `crf`, with the song's span `audio` (AAC, faded out). Each of
-    `excerpts` (mkmmd.core.excerpt's entries, with the file each goes `out` to) is written beside it as the frames
-    pass: its span cut out of the same stream and encoded alike."""
+    CRF `crf`, or by the GPU through VAAPI at constant QP `crf`, with the song's span `audio` (AAC at one of RATES,
+    faded out). Each of `excerpts` (mkmmd.core.excerpt's entries, with the file each goes `out` to) is written beside
+    it as the frames pass: its span cut out of the same stream and encoded alike."""
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if encoder == "vaapi":
         cmd += ["-vaapi_device", CFG.load()["vaapi_device"]]
@@ -132,7 +135,7 @@ def encode(frames, size, fps, out, audio=None, crf=15, encoder="x264", preset="s
     def one(path, picture=None, sound=None):
         args = []
         if audio:
-            args += ["-map", "0:v", "-map", "1:a", "-af", sound, "-c:a", "aac", "-b:a", "320k"]
+            args += ["-map", "0:v", "-map", "1:a", "-af", f"{sound},{RATES}", "-c:a", "aac", "-b:a", "320k"]
         chain = ([picture] if picture else []) + (["format=nv12", "hwupload"] if encoder == "vaapi" else [])
         if chain:
             args += ["-vf", ",".join(chain)]

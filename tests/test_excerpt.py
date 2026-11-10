@@ -50,3 +50,20 @@ def test_the_encoder_writes_an_excerpts_frames_to_a_file_of_its_own(tmp_path):
     whole, cut = levels(tmp_path / "all.mp4"), levels(tmp_path / "mid.mp4")
     assert len(whole) == n and np.all(np.diff(whole) > 10)
     assert cut == pytest.approx(whole[3:9], abs=2.0)                # frames 3 to 8 of the clip, and no other
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+@pytest.mark.parametrize("rate, encoded", [(96000, 48000), (44100, 44100)])
+def test_the_song_is_encoded_at_a_rate_players_take_in_the_video_and_in_its_excerpt(tmp_path, rate, encoded):
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate={rate}:duration=1",
+                    "-c:a", "pcm_s24le", str(tmp_path / "song.wav")], check=True)
+    e = {**EX.normalize([{"name": "mid", "from": 0.1, "to": 0.3}], 0.4, 30, ["t"])[0], "out": tmp_path / "mid.mp4"}
+    ff = P.encode(range(12), (32, 16), 30, tmp_path / "all.mp4", crf=30, preset="ultrafast", excerpts=[e],
+                  audio={"file": str(tmp_path / "song.wav"), "start": 0.0, "duration": 0.4})
+    ff.stdin.write(bytes(12 * 32 * 16 * 3))
+    ff.stdin.close()
+    assert ff.wait() == 0
+    for name in ("all.mp4", "mid.mp4"):
+        got = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate",
+                              "-of", "csv=p=0", str(tmp_path / name)], capture_output=True, text=True, check=True)
+        assert int(got.stdout.strip()) == encoded
