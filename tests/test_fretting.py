@@ -390,41 +390,61 @@ def test_entry_picks_by_name():
     assert WR.entry({"wear": [WEAR]})["name"] == "stand"
 
 
-def test_strap_goes_over_the_shoulder_round_the_back_and_clears_the_torso():
+TRUNK, TRUNK_R = np.array([0.0, -0.05, 0.98]), np.array([0.24, 0.10, 0.25])
+NECK_R = 0.035
+
+
+def wearer(point, direction, far):
+    """A wearer for strap_path: an ellipsoid trunk (shoulders at its top) under a neck: (distance, facing) where a ray
+    first meets her (a ray that starts within her meets her from within), or None."""
+    p, d = np.asarray(point, float), np.asarray(direction, float)
+    hits = []
+    for q, e, ok in (((p - TRUNK) / TRUNK_R, d / TRUNK_R, lambda z: True),
+                     ((p[:2] - TRUNK[:2]) / NECK_R, d[:2] / NECK_R, lambda z: z > 1.15)):
+        a, b, c = e @ e, 2.0 * (q @ e), q @ q - 1.0
+        if c < 0.0 and ok(p[2]):
+            return 0.0, False
+        if a > 1e-12 and b * b >= 4.0 * a * c:
+            t = (-b - math.sqrt(b * b - 4.0 * a * c)) / (2.0 * a)
+            hits += [t] if 0.0 <= t <= far and ok(p[2] + t * d[2]) else []
+    return (min(hits), True) if hits else None
+
+
+def test_strap_is_taut_over_the_shoulder_across_the_back_and_off_the_wearer():
     spine = WR.spine_axis([[0, -0.053, 0.935], [0, -0.05, 1.019], [0, -0.039, 1.168], [0, -0.053, 0.79]])
-    top = (np.array([0.30, -0.22, 1.02]), np.array([-0.5, 0.2, 0.8]))
-    bottom = (np.array([-0.10, -0.17, 0.80]), np.array([0.0, 0.5, 0.2]))
+    top = (np.array([0.02, -0.21, 1.10]), np.array([0.8, 0.0, 0.6]))             # a horn's tip in front of her chest
+    bottom = (np.array([-0.32, -0.20, 0.80]), np.array([-1.0, 0.0, -0.2]))       # the tail, out past her other hip
     shoulder = np.array([0.091, 0.006, 1.18])
-    path = WR.strap_path(top, bottom, shoulder, spine, radius=0.0998, over_side=1.0)
-    assert path.shape == (48, 3)
+    path, normals, kind = WR.strap_path(top, bottom, shoulder, spine, 0.0998, wearer, over_side=1.0)
     assert path[0] == pytest.approx(top[0]) and path[-1] == pytest.approx(bottom[0])
-    assert np.all(np.isfinite(path))
-    assert path[:, 2].max() > shoulder[2] + 0.02                                            # over the shoulder, above the joint
+    level = np.linalg.norm((path - TRUNK) / TRUNK_R, axis=1)                     # 1 on the trunk's surface
+    assert np.all(np.isfinite(path)) and level.min() > 1.0                       # nowhere in her
     k = int(np.argmax(path[:, 2]))
-    assert 0.03 < path[k, 0] < 0.13 and abs(path[k, 1] - shoulder[1]) < 0.06
-    back = path[(path[:, 1] > spine(1.0)[1] + 0.05)]
-    assert len(back) > 5 and back[:, 0].min() < 0.0 < back[:, 0].max() + 0.1                # the diagonal crosses her back
-    # beyond the two ends the band stays out of the torso: every point of the middle is farther than its radius from the axis
-    mid = path[3:-3]
-    ax = np.array([spine(z) for z in mid[:, 2]])
-    r = np.hypot(mid[:, 0] - ax[:, 0], mid[:, 1] - ax[:, 1])
-    inside = (mid[:, 2] < shoulder[2]) & (mid[:, 2] > 0.85)
-    assert r[inside].min() > 0.0998 * 0.9
-    mirrored = WR.strap_path((top[0] * [-1, 1, 1], top[1] * [-1, 1, 1]), (bottom[0] * [-1, 1, 1], bottom[1] * [-1, 1, 1]),
-                             shoulder * [-1, 1, 1], spine, radius=0.0998, over_side=-1.0)
-    assert mirrored[:, 0] == pytest.approx(-path[:, 0], abs=1e-9)                           # a right shoulder: the mirror image
-    # a long body worn low and close, its strap standing well off a jacket: the band still comes to the lower button from
-    # behind (the prop's face is 2 cm in front of the button), never out through the prop
-    near = (np.array([-0.30, -0.10, 0.85]), np.array([-0.8, 0.0, -0.2]))
-    low = WR.strap_path(top, near, shoulder, spine, radius=0.0998, over_side=1.0, standoff=0.03)
-    assert low[-10:, 1].min() > near[0][1] - 0.012
+    on_top = TRUNK[2] + TRUNK_R[2] * math.sqrt(1.0 - (((path[k, :2] - TRUNK[:2]) / TRUNK_R[:2]) ** 2).sum())
+    assert 0.003 < path[k, 2] - on_top < 0.012                                   # it lies on her shoulder, a standoff off it,
+    assert normals[k, 2] > 0.7 and normals[k, 0] > 0.1                           # rolled to its slope,
+    assert NECK_R + 0.012 < path[k, 0] < 0.13                                    # between her neck and her arm
+    touch = int(np.argmax(level < 1.06))                                         # up to there it hangs free: a straight line
+    run = path[:touch + 1] - path[0]
+    chord = run[-1] / np.linalg.norm(run[-1])
+    assert touch > 5 and np.linalg.norm(run - np.outer(run @ chord, chord), axis=1).max() < 0.002
+    back = path[path[:, 1] > spine(1.0)[1] + 0.05]
+    assert len(back) > 5 and back[:, 0].min() < 0.0 < back[:, 0].max()           # the diagonal crosses her back
+    mirrored, _, _ = WR.strap_path((top[0] * [-1, 1, 1], top[1] * [-1, 1, 1]), (bottom[0] * [-1, 1, 1], bottom[1] * [-1, 1, 1]),
+                                   shoulder * [-1, 1, 1], spine, 0.0998, wearer, over_side=-1.0)
+    assert mirrored[:, 0] == pytest.approx(-path[:, 0], abs=1e-9)                # a right shoulder: the mirror image
+    # the way to the lower button goes back over the prop: the band runs across its pin first, a tab flat round it
+    end = path[-2] - path[-1]
+    assert abs(end @ bottom[1]) / (np.linalg.norm(end) * np.linalg.norm(bottom[1])) < 0.05
+    assert kind[0] == 0 and (kind[-2:] == 0).all() and (kind[1:-4] != 0).all()  # the prop's: the buttons, the run across;
+    assert kind[k] == 1 and (kind[1:touch - 2] == 2).all()                       # on her shoulder; clear of her before it
 
 
 # ------------------------------------------------------------------------------------------------ the cable
 def test_cable_hangs_to_the_floor_and_lies_along_it():
     top = np.array([0.55, -0.20, 0.95])
     P = CB.hang(top, [0.0, -0.3, -0.95], floor_z=0.0, tail=(-1.0, 1.0), radius=0.0032)
-    assert P[0] == pytest.approx(top) and len(P) == 9
+    assert P[0] == pytest.approx(top)
     assert P[:, 2].min() == pytest.approx(0.0032, abs=1e-9)                                  # the cord's centre never sinks into the floor
     assert np.all(P[5:, 2] < 0.2)                                                           # the far part lies on the floor
     assert np.linalg.norm(P[-1, :2] - P[5, :2]) == pytest.approx(0.9, rel=0.05)             # tail_len of it along the floor

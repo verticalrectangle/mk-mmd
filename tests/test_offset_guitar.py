@@ -59,7 +59,6 @@ def test_card_is_the_electric_guitars_with_this_bodys_points(card, parts):
         assert G.distance(np.array([[p[0], p[2]]]), o)[0] < 0.0008 and p[1] == pytest.approx(0.5 * L.BODY_T)
         i = int(np.argmin(np.linalg.norm(o - np.array([p[0], p[2]]), axis=1)))
         assert d[[0, 2]] @ n[i] > 0.9 * np.linalg.norm(d[[0, 2]])                             # out of the edge, seen from the front
-    assert entry(card, "anchor", "strap_bottom")["dir"][1] > 0.6 > 0.1 > abs(entry(card, "anchor", "strap_top")["dir"][1])   # and back
     jack = entry(card, "anchor", "jack")
     along = (parts["plug"].V - vec(jack["point"])) @ vec(jack["dir"])
     assert along.max() == pytest.approx(0.0, abs=1e-4) and vec(jack["dir"])[1] < -0.5      # the plug's end, out of the face

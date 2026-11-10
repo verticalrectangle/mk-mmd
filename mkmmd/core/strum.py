@@ -51,6 +51,11 @@ DEFAULTS = {
     "min_gap": 0.09,         # s: onsets closer than this are one stroke
     "beat_tol": 0.22,        # beats: how close to a beat or an offbeat a strike must be to take its direction from it
     "share": 0.6,            # share of the sideways travel the hand makes by turning about the wrist (see the build)
+    "ghost_lift": 0.007,     # m: a ghost stroke (one of the rhythm's that `hits` leaves out) passes this high over the strings
+    "ghost_scale": 0.8,      # ... on this share of a stroke's travel: the hand keeps time, the strings keep still
+    "swing": 1.0,            # share of the forearm's swing from the elbow the hand turns with (0: it stays square to the strings)
+    "loose": 1.0,            # how loose the wrist is: the hand falls behind the forearm and flicks through at the turn (0: stiff)
+    "human": 1.0,            # a player's own unevenness in how far each stroke goes (0: a machine's strokes)
 }
 PICK = {                     # picking single strings (rhythm "notes"): what differs from strumming
     "span": 0.026,           # m: a stroke sweeps 13 mm either side of its string
@@ -64,6 +69,7 @@ PICK = {                     # picking single strings (rhythm "notes"): what dif
     "up_scale": 1.0,         # alternate picking: up strokes as strong as down strokes
     "min_gap": 0.05,
     "share": 0.85,           # the stroke is a turn of the hand about the wrist (`wrist_turn`): the arm hardly moves
+    "swing": 0.0, "loose": 0.0, "human": 0.0,      # ... and nothing else of it turns: a picked line is exact
 }
 FINGERS = {                  # fingerstyle (technique "fingers", rhythm "notes"): rest strokes, what differs from picking
     "attack": 0.11,          # s: a rest stroke's swing from hovering through its string to its rest on the next lower one,
@@ -85,6 +91,11 @@ MIN_SHIFT = 0.04             # s: the shortest move between stations
 CONTACT = 0.0005             # m: a picked string's contact half-width is its radius plus this (the pick's half thickness)
 TURN_MIN = 0.03              # m per radian: a turn about the wrist that moves the tip less sideways than this is left out
 TURN_SIDEWAYS = (0.5, 0.85)  # the share of the turn's tip motion that goes sideways: no turn below the first, all above
+WRIST = ((0.10, 0.25), (0.5, 0.2))   # s between two strikes -> the share of a stroke the wrist makes: fast strumming is the wrist's
+TRAIL = (0.022, 14.0, 0.012)         # a loose wrist: the hand is this many s behind the forearm, by this many degrees at most,
+                             # rounded over this many s
+HUMAN = (0.05, 0.06, 0.85)   # a player's strokes: the spread of one stroke's travel, of its slow drift, and how much of the
+                             # drift the next stroke keeps
 
 
 class StrumError(ValueError):
@@ -92,9 +103,9 @@ class StrumError(ValueError):
 
 
 class Stroke:
-    __slots__ = ("t", "dir", "amp", "accent", "depth", "attack", "lead", "follow", "c", "w", "string", "finger")
+    __slots__ = ("t", "dir", "amp", "accent", "depth", "attack", "lead", "follow", "c", "w", "string", "finger", "ghost")
 
-    def __init__(self, t, dir, amp=1.0, accent=False, depth=None, c=None, w=None, string=None, finger=None):
+    def __init__(self, t, dir, amp=1.0, accent=False, depth=None, c=None, w=None, string=None, finger=None, ghost=False):
         self.t, self.dir, self.amp, self.accent = float(t), int(dir), float(amp), bool(accent)
         self.depth = None if depth is None else float(depth)    # m: this stroke's own depth (a spec's), else the path's
         self.attack = self.lead = self.follow = None            # filled in by `path`
@@ -102,10 +113,12 @@ class Stroke:
         self.w = None if w is None else float(w)                # centred on 0) and the half-width of its contact (None: sigma)
         self.string = string                                    # the picked string's number (1 = the highest), for reports
         self.finger = finger                                    # fingerstyle: "index" or "middle" plucks it (None: a pick)
+        self.ghost = bool(ghost)                                # the hand makes it over the strings: nothing is played
 
     def __repr__(self):
         what = "" if self.string is None else f", string {self.string}"
         what += "" if self.finger is None else f", {self.finger}"
+        what += ", ghost" if self.ghost else ""
         return f"Stroke(t={self.t:.3f}, {'down' if self.dir > 0 else 'up'}, amp={self.amp:.2f}{', accent' if self.accent else ''}{what})"
 
 
@@ -220,8 +233,13 @@ def plan(spec, timeline, duration=None, notes=None):
                  "notes" (picking: the `notes` given, [(t, c, w, string)] from `pick_notes`) or a list of strike times
         from, to the window (clip seconds, default the whole clip): only strikes inside it are played
         accent   "downbeats" | "beats" | a list of times: strikes within `accent_window` of those are accented
+        hits     "downbeats" | "beats" | a list of times: only the strikes within `accent_window` of those are PLAYED; the
+                 rhythm's other strokes are ghost strokes, made over the strings (the hand keeps its swing going on every
+                 eighth and meets the strings where the chords are). Default: every stroke is played
         technique "fingers" plays the notes with rest strokes (needs rhythm "notes"), else a pick
-        + the DEFAULTS keys accent_gain, up_scale, accent_window, min_gap, beat_tol (PICK's defaults when picking)
+        seed     of the player's unevenness (`human`: how far each stroke goes, stroke to stroke and drifting; default 1)
+        + the DEFAULTS keys accent_gain, up_scale, accent_window, min_gap, beat_tol, ghost_scale, human (PICK's defaults
+          when picking)
 
     Directions come from the beat grid (`directions`; the grid's own parity for `beats:N`); picked notes alternate strictly,
     down first and down again after a pause long enough for the hand to rest (lead, attack, follow, approach and retreat
@@ -282,26 +300,53 @@ def plan(spec, timeline, duration=None, notes=None):
         dirs = directions(times, beats, float(p["beat_tol"]))
     else:
         dirs = [1 if i % 2 == 0 else -1 for i in range(len(times))]
-    marks = spec.get("accent")
-    if marks == "downbeats":
-        marks = downbeats
-    elif marks == "beats":
-        marks = beats
-    elif marks in (None, False):
-        marks = []
-    elif isinstance(marks, str):
-        raise StrumError(f"accent {marks!r}: expected \"downbeats\", \"beats\" or a list of times")
-    marks = np.asarray(marks, float)
+    marks = _marks(spec.get("accent"), beats, downbeats, "accent")
+    hits = _marks(spec.get("hits"), beats, downbeats, "hits")
+    near = lambda m, t: m is not None and len(m) > 0 and float(np.min(np.abs(m - t))) <= float(p["accent_window"])  # noqa: E731
+    human, rng, slow = float(p["human"]), np.random.default_rng([int(spec.get("seed", 1)), 7919]), 0.0
+    spread, wander, keep = HUMAN
     out = []
     for i, (t, d) in enumerate(zip(times, dirs)):
-        acc = bool(len(marks) and np.min(np.abs(marks - t)) <= float(p["accent_window"]))
+        ghost = hits is not None and not near(hits, t)
+        acc = not ghost and bool(near(marks, t))
         amp = (float(p["accent_gain"]) if acc else 1.0) * (float(p["up_scale"]) if d < 0 else 1.0)
+        if ghost:
+            amp *= float(p["ghost_scale"])
+        if human > 0.0:                                        # no two strokes of a hand go quite as far
+            slow = keep * slow + math.sqrt(1.0 - keep * keep) * float(rng.normal())
+            amp *= 1.0 + human * (spread * float(np.clip(rng.normal(), -2.0, 2.0)) + wander * float(np.clip(slow, -2.0, 2.0)))
         if geo is None:
-            out.append(Stroke(t, d, amp, acc, spec.get("depth")))
+            out.append(Stroke(t, d, amp, acc, spec.get("depth"), ghost=ghost))
         else:
             _t, c, w, string = geo[i]
-            out.append(Stroke(t, d, amp, acc, spec.get("depth"), c=c, w=w, string=string, finger=who[i]))
+            out.append(Stroke(t, d, amp, acc, spec.get("depth"), c=c, w=w, string=string, finger=who[i], ghost=ghost))
     return out
+
+
+def _marks(value, beats, downbeats, key):
+    """The times a spec's `accent` or `hits` names ("downbeats", "beats" or a list of times) as an array, None for none."""
+    if value is None or value is False:
+        return None
+    if isinstance(value, str):
+        if value not in ("downbeats", "beats"):
+            raise StrumError(f"{key} {value!r}: expected \"downbeats\", \"beats\" or a list of times")
+        value = downbeats if value == "downbeats" else beats
+    return np.asarray(value, float)
+
+
+def windmilled(strokes, times, dur=0.5):
+    """The strokes a windmill takes the place of: before the down stroke nearest each of `times` (within 0.12 s: the one
+    it comes down on, which is played) the hand goes round for `dur` seconds, away from the strings, so the strokes
+    struck in that time are not played. Returns ([the strike time each windmill comes down on, None where no down stroke
+    is near], [those strokes])."""
+    lands, gone = [], []
+    for tw in times:
+        downs = [s for s in strokes if s.dir > 0 and abs(s.t - float(tw)) <= 0.12]
+        t_s = min(downs, key=lambda s: abs(s.t - float(tw))).t if downs else None
+        lands.append(t_s)
+        if t_s is not None:
+            gone += [s for s in strokes if t_s - dur < s.t < t_s - 1e-6 and s not in gone]
+    return lands, gone
 
 
 def pick_notes(placed, neck, entry):
@@ -340,6 +385,8 @@ def height(u, half, sigma, depth, lift, c=0.0):
 
 
 def depth_of(stroke, p):
+    if stroke.ghost:                                           # over the strings, not into them
+        return -float(p["ghost_lift"])
     d = float(p["depth"]) if stroke.depth is None else stroke.depth
     return d * (float(p["accent_gain"]) if stroke.accent else 1.0) * (float(p["up_scale"]) if stroke.dir < 0 else 1.0)
 
@@ -377,6 +424,37 @@ def wrist_turn(pivot, centre, across):
         return None, 0.0
     k = np.cross(r, c)
     return k / np.linalg.norm(k), lever
+
+
+def hand_turn(strokes, ts, sigma, lever_arm, lever_hand, **kw):
+    """How the pick hand turns in the plane of a strum at the times `ts`: {"swing", "wrist"} ((F,) rad each; + carries the
+    tip the down strokes' way). A strum is swung from the elbow and the hand goes with the forearm instead of sliding
+    along the strings square to them: "swing" is the share `swing` of that turn (u / `lever_arm`, the metres from the
+    elbow to the tip across the swing). The wrist makes part of every stroke itself, the more the faster the strokes
+    come (WRIST; `lever_hand`: metres from the wrist to the tip), and a loose one (`loose`) lets the hand fall behind the
+    forearm on the way and flick through at the turn (TRAIL: it trails the tip's speed, softly limited): "wrist". kw
+    overrides the DEFAULTS; with swing = loose = 0 the hand stays square (zeros)."""
+    p = {**DEFAULTS, **{k: v for k, v in kw.items() if v is not None}}
+    ts = np.asarray(ts, float)
+    swing, loose = float(p["swing"]), float(p["loose"])
+    if not strokes or not len(ts) or (swing <= 0.0 and loose <= 0.0):
+        return {"swing": np.zeros(len(ts)), "wrist": np.zeros(len(ts))}
+    h = 0.002
+    grid = np.arange(ts[0] - 0.1, ts[-1] + 0.1 + h, h)
+    u = path(strokes, grid, sigma, **kw)["u"]
+    t_s = np.array([s.t for s in strokes])
+    gaps = np.diff(t_s)
+    gap = np.concatenate([gaps[:1], np.minimum(gaps[:-1], gaps[1:]), gaps[-1:]]) if len(t_s) > 1 else np.array([1.0])
+    share = np.interp(grid, t_s, np.interp(gap, *WRIST)) if lever_hand > TURN_MIN else np.zeros(len(grid))
+    arm = swing * (1.0 - share) * u / lever_arm if lever_arm > TURN_MIN else np.zeros(len(grid))
+    wrist = np.zeros(len(grid))
+    if lever_hand > TURN_MIN:
+        lag, limit, soft = TRAIL
+        limit = math.radians(limit)
+        k = np.hanning(2 * max(int(round(soft / h)), 1) + 1)
+        trail = limit * np.tanh(-loose * lag * np.gradient(u, h) / lever_hand / limit)
+        wrist = swing * share * u / lever_hand + np.convolve(trail, k / k.sum(), mode="same")
+    return {"swing": np.interp(ts, grid, arm), "wrist": np.interp(ts, grid, wrist)}
 
 
 def _timing(strokes, p):
@@ -439,7 +517,7 @@ def path(strokes, ts, sigma, **kw):
                 uu = hermite(u_s, 0.0, u_1, m1, (ts[m] - lo) / max(hi - lo, 1e-9))
             elif kind == "B":
                 uu = u_1 + v * (ts[m] - lo)
-                contact[m] = True
+                contact[m] = not s.ghost
             else:
                 dist = u_e - u_2
                 m0 = math.copysign(min(abs(v) * s.follow, 3.0 * abs(dist)), dist)

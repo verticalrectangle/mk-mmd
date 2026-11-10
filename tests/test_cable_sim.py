@@ -33,7 +33,8 @@ def test_a_cord_swings_with_a_bouncing_plug_keeps_its_length_and_stays_out_of_th
     mid = x.shape[1] // 3
     assert np.ptp(x[:, mid, 2]) > 0.02 and np.ptp(x[:, mid, 0]) > 0.02          # the hanging cord moves with it
     seg = np.linalg.norm(np.diff(x, axis=1), axis=2)
-    assert seg.max() < 1.04 * np.median(seg)                                   # no bungee: under 4 % stretch anywhere
+    assert seg[:, :20].max() < 1.04 * np.median(seg)                           # no bungee: what hangs keeps its length ...
+    assert seg.max() < (1.01 + RC.DRAG_AT) * np.median(seg)                    # ... and what lies is never pulled out far
     assert x[..., 2].min() >= 0.0032 - 1e-6                                     # never into the floor
     W = geom.world(shapes.pack(), src_R[0], src_pos[0])
     beyond = np.arange(x.shape[1]) * rep["segment_mm"] / 1000 > RC.ANCHOR_FREE
@@ -47,3 +48,14 @@ def test_a_still_plug_leaves_the_cord_still_once_it_has_settled():
     plug = np.tile([0.0, 0.0, 0.9], (60, 1))
     x, _rep, *_ = _swing(plug, leg=False)
     assert np.abs(x[-1] - x[-30]).max() < 5e-4                                 # no swing left, no creep on the floor
+
+
+def test_a_plug_that_walks_past_the_cords_slack_drags_its_far_end_and_the_cord_does_not_stretch():
+    t = np.arange(120) / FPS
+    walk = 1.6 * np.clip((t - 0.5) / 1.5, 0.0, 1.0)                           # 1.6 m away from where the cord lies, in 1.5 s
+    plug = np.stack([walk, np.zeros(len(t)), np.full(len(t), 0.9)], 1)
+    x, rep, *_ = _swing(plug, leg=False)
+    seg = np.linalg.norm(np.diff(x, axis=1), axis=2)
+    assert seg.max() < (1.01 + RC.DRAG_AT) * np.median(seg)                    # pinned for good at its far end it stretched
+    assert x[-1, -1, 0] - x[0, -1, 0] > 0.3                                      # the far end came along the floor after it
+    assert x[..., 2].min() >= 0.0032 - 1e-6

@@ -24,6 +24,16 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
   head_tilt = [[t, deg], ...]        the head rolls toward the model's left (on top of the gaze), keyed the same way
   head_turn = [[t, deg], ...]        the head turns toward the model's left (on top of the gaze): a look over the shoulder
   head_nod = [[t, deg], ...]         the head nods forward and down (on top of the gaze), keyed the same way: a headbang
+  groove = {every = 2, shift = 0.03, dip = 0.018, light = 0.6, soft = 8, roll = 4, yaw = 3, still = 0.8, heel = 7,
+            lean = 1, nod = 1.5, vary = 0.25, first = "L", seed, from, to, ease = 0.4, beats | timeline,
+            downbeat_accent = 1.3}   or a list: she stands in time as a person does: her weight goes from foot to foot
+                                     every `every` beats (a sprung change of leg: the hips over the standing leg, the
+                                     pelvis tilted and turned, the chest leaning back so her head keeps still, the free
+                                     heel off the floor) and her knees let her down onto each beat and bring her back up,
+                                     in full where her weight lands and `light` of it on the other beats, never locked
+                                     (`soft` degrees of bend at least: the hips come down for it)
+                                     (mkmmd.core.perform.groove). Use it, not a `rock` and a `bounce` laid over each
+                                     other: those are a pendulum and a pulse, and together they bob her like a buoy
   rock = {deg, period = 4.0, phase = 0.0, hips = 0.0, from, to, ease = 0.4}, head_rock = {...}   a periodic sideways lean of
                                      the upper body (like `tilt`) and roll of the head (like `head_tilt`) toward the model's
                                      left: deg * sin(2 pi t / period + phase) of clip time, ADDED to the keyed tilts; unlike
@@ -188,6 +198,9 @@ def _strum(ctx, name, m, specs):
             ctx.log("WARNING", f"{where}: no strokes (rhythm and window select no strike time)")
             out[side] = {"strokes": 0}
             continue
+        if first.get("windmill") and not SM.fingerstyle(first):  # the strokes a windmill goes round instead of: not played
+            for s in SM.windmilled(strokes, first["windmill"], float(first.get("windmill_dur", 0.5)))[1]:
+                s.ghost, s.accent = True, False
         if SM.fingerstyle(first):
             out[side] = _pluck(ctx, m, side, strokes, keep, where)
         else:
@@ -204,9 +217,23 @@ def _strum(ctx, name, m, specs):
     return out
 
 
+def _in_prop(ctx, m, prop, bone):
+    """Where a bone's head is in a prop's frame once the pose has settled (the frame the pose stage's keys ease in by)."""
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    sc.frame_set(int(ctx.start + ctx.settle))
+    dg = bpy.context.evaluated_depsgraph_get()
+    ae = m.arm.evaluated_get(dg)
+    p = prop.root.evaluated_get(dg).matrix_world.inverted() @ (ae.matrix_world @ ae.pose.bones[bone].head)
+    sc.frame_set(keep)
+    return np.array(p)
+
+
 def _pick(ctx, m, side, prop, first, strokes, keep, sigma, entry, where):
     """A pick hand's goal over its strokes (see `_strum`), keyed every frame (LINEAR) from the first approach to the last
-    retreat. Returns the numbers of the report."""
+    retreat. The tip is where the path has it; a strumming hand turns in the plane of the strum as a forearm swung from
+    the elbow and a loose wrist turn it (mkmmd.core.strum.hand_turn), so it is the arm that strums and not a hand sliding
+    along a rail. Returns the numbers of the report."""
     from ...core import strum as SM
     f1 = ctx.start + ctx.settle
     tgt = m.ik[side][0]
@@ -215,23 +242,45 @@ def _pick(ctx, m, side, prop, first, strokes, keep, sigma, entry, where):
     centre = np.asarray(entry["center"], float)
     win = SM.window(strokes, **keep)
     fr = np.arange(max(f1 + 1, math.floor(ctx.frame(win[0]))), min(ctx.end, math.ceil(ctx.frame(win[1]))) + 1)
-    P = SM.path(strokes, [ctx.time(f) for f in fr], sigma, **keep)
+    times = [ctx.time(f) for f in fr]
+    P = SM.path(strokes, times, sigma, **keep)
     act = tgt.animation_data.action
     loc0 = np.array([act.fcurves.find("location", index=i).evaluate(f1) for i in range(3)])
     q0 = Quaternion([act.fcurves.find("rotation_quaternion", index=i).evaluate(f1) for i in range(4)])
     R0 = np.array(q0.to_matrix())
-    wrist = S.semantic_map(m.arm)[f"wrist.{side}"]
-    pivot = loc0 - R0 @ np.array([0.0, m.arm.data.bones[wrist].length, 0.0])      # the wrist head: the goal acts on the tail
+    smap = S.semantic_map(m.arm)
+    pivot = loc0 - R0 @ np.array([0.0, m.arm.data.bones[smap[f"wrist.{side}"]].length, 0.0])   # the wrist head: the goal
+    plane, turn, turned = None, np.zeros(len(fr)), {}                                           # acts on the tail
     if SM.picking(first):                                  # picking a line: the stroke is a turn of the hand about the wrist
         axis, kappa = SM.wrist_turn(pivot, centre, c)
         share = float(keep["share"]) if axis is not None else 0.0
     else:                                                  # a strum: a turn about the strings' direction, where it goes sideways
         share, kappa = SM.turn_share(keep["share"], pivot, centre, a, c)
         axis = a
+        elbow = _in_prop(ctx, m, prop, smap[f"elbow.{side}"]) if f"elbow.{side}" in smap else None
+        k_e, lever_e = SM.wrist_turn(elbow, centre, c) if elbow is not None else (None, 0.0)
+        k_w, lever_w = SM.wrist_turn(pivot, centre, c)
+        lo, hi = SM.TURN_SIDEWAYS                               # ... and in the strum's own plane: the forearm's swing
+
+        def across(k, lever, joint):                            # from the elbow and the wrist's own part, each where its
+            if k is None:                                       # lever lies across the stroke (a forearm that comes down
+                return 0.0                                      # along it, a hand hanging from a wrist above the strings:
+            return float(SM.smoothstep((lever / max(float(np.linalg.norm(centre - joint)), 1e-6) - lo) / (hi - lo)))
+
+        f_e, f_w = across(k_e, lever_e, elbow), across(k_w, lever_w, pivot)     # the whole arm carries the stroke then)
+        if f_e > 0.0 or f_w > 0.0:
+            plane = k_e if f_e > 0.0 else k_w
+            T = SM.hand_turn(strokes, times, sigma, lever_e if f_e > 0.0 else 0.0, lever_w if f_w > 0.0 else 0.0, **keep)
+            way = 1.0 if k_w is None or float(np.dot(k_w, plane)) >= 0.0 else -1.0
+            turn = np.clip(f_e * T["swing"] + way * f_w * T["wrist"], -0.6, 0.6)
+        turned = {"swing_deg": round(float(np.degrees(np.abs(f_e * T["swing"]).max())), 1) if f_e > 0.0 else 0.0,
+                  "wrist_deg": round(float(np.degrees(np.abs(f_w * T["wrist"]).max())), 1) if f_w > 0.0 else 0.0}
     locs, rots = [], []
-    for u, h in zip(P["u"], P["h"]):
+    for i, (u, h) in enumerate(zip(P["u"], P["h"])):
         th = float(np.clip(share * u / kappa, -0.6, 0.6)) if share else 0.0
         Rt = np.array(Quaternion(Vector(axis if share else a), th).to_matrix())
+        if plane is not None:
+            Rt = np.array(Quaternion(Vector(plane), float(turn[i])).to_matrix()) @ Rt
         tip = centre + u * c + h * n                       # where the path wants the pick tip
         move = tip - (pivot + Rt @ (centre - pivot))
         locs.append(tuple(pivot + Rt @ (loc0 - pivot) + move))
@@ -247,8 +296,9 @@ def _pick(ctx, m, side, prop, first, strokes, keep, sigma, entry, where):
     K.key_vec(tgt, "rotation_quaternion", fr, rots, interp="LINEAR", replace=False)
     down = sum(1 for s in strokes if s.dir > 0)
     out = {"technique": "pick", "strokes": len(strokes), "down": down, "up": len(strokes) - down,
+           "ghost": sum(1 for s in strokes if s.ghost),
            "frames": [int(fr[0]), int(fr[-1])], "sigma_mm": round(sigma * 1e3, 1), "turn_share": round(share, 2),
-           "first": [round(s.t, 3) for s in strokes[:6]], "max_u_mm": round(float(np.abs(P["u"]).max()) * 1e3, 1)}
+           "first": [round(s.t, 3) for s in strokes[:6]], "max_u_mm": round(float(np.abs(P["u"]).max()) * 1e3, 1), **turned}
     if mills:
         out["windmills"] = mills
     return out
@@ -306,26 +356,27 @@ def _pluck(ctx, m, side, strokes, keep, where):
             "stations": sorted(st), "frames": [int(fr[0]), int(fr[-1])], "first": [round(s.t, 3) for s in strokes[:6]]}
 
 
+WINDMILL_REACH = 0.7    # a windmill's arm straightens this share of the way (to 0.97 of its length) as it goes over the top
+WINDMILL_ELBOW = 0.06   # ... and its elbow is this share of the turn behind the hand there (a flung arm's elbow follows)
+
+
 def _windmill(ctx, m, side, prop, normal, fr, locs, rots, strokes, times, dur, where):
     """A windmill: over the `dur` seconds before a down stroke (the one nearest each time in `times`) the pick hand swings a
     full circle. Its goal (position and orientation as at that strike) turns once about an axis through the shoulder along
-    the guitar's face normal, coming down onto the strings at the strike, which then plays as planned; the arm IK follows.
-    The circle eases in from wherever the strumming has the hand. `locs`, `rots` are the goals of the frames `fr` in the
-    prop's frame. Returns (locs, rots, [strike times])."""
+    the guitar's face normal, reaching out over the top (WINDMILL_REACH of the way to a straight arm) and coming down
+    onto the strings at the strike, which then plays as planned; the arm IK follows, and the elbow's pole goes round with
+    the goal, so the whole arm turns from the shoulder and the hand keeps its turn on the forearm (a pole left where it
+    stood asked the wrist for a roll no wrist has: its limit held the hand back, and flipped it for a few frames at the
+    top). The circle eases in from wherever the strumming has the hand. `locs`, `rots` are the goals of the frames `fr`
+    as they are keyed. Returns (locs, rots, [strike times])."""
     sc = bpy.context.scene
     keep = sc.frame_current
-    sc.frame_set(int(ctx.start + ctx.settle))
-    dg = bpy.context.evaluated_depsgraph_get()
-    ae = m.arm.evaluated_get(dg)
-    shoulder_w = ae.matrix_world @ ae.pose.bones[S.semantic_map(m.arm)[f"arm.{side}"]].head
-    Mp = prop.root.evaluated_get(dg).matrix_world.copy()
-    sc.frame_set(keep)
-    centre = np.array(Mp.inverted() @ shoulder_w)
-    up_l = np.array(Mp.to_3x3().normalized().inverted() @ Vector((0.0, 0.0, 1.0)))
+    tgt, pole = m.ik[side]
+    smap = S.semantic_map(m.arm)
     axis = Vector(normal).normalized()
     L, Q = np.array(locs, float), np.array(rots, float)
     ts = np.array([ctx.time(f) for f in fr])
-    done = []
+    done, poles = [], {}
     for tw in times:
         downs = [s for s in strokes if s.dir > 0 and abs(s.t - tw) <= 0.12]
         if not downs:
@@ -333,21 +384,59 @@ def _windmill(ctx, m, side, prop, normal, fr, locs, rots, strokes, times, dur, w
         t_s = min(downs, key=lambda s: abs(s.t - tw)).t
         j = int(np.argmin(np.abs(ts - t_s)))
         p_s, q_s = L[j].copy(), Quaternion(Q[j])
+        sc.frame_set(int(round(ctx.frame(t_s - 0.5 * dur))))    # her shoulder as she stands and leans while it goes round
+        dg = bpy.context.evaluated_depsgraph_get()               # (the body is keyed before the strum)
+        ae, te, pe = m.arm.evaluated_get(dg), tgt.evaluated_get(dg), pole.evaluated_get(dg)
+        joints = [ae.matrix_world @ ae.pose.bones[smap[f"{b}.{side}"]].head for b in ("arm", "elbow", "wrist")]
+        shoulder_w = joints[0]
+        full = (joints[1] - joints[0]).length + (joints[2] - joints[1]).length + ae.pose.bones[smap[f"wrist.{side}"]].length
+        Mp = prop.root.evaluated_get(dg).matrix_world.copy()
+        Gp = te.matrix_world @ te.matrix_basis.inverted()        # what carries the goal: its keys are in this frame
+        pole0 = pe.location.copy()
+        Pp = pe.matrix_world @ pe.matrix_basis.inverted()        # ... and the pole
+        normal_w = Mp.to_3x3().normalized() @ axis
+        centre = np.array(Gp.inverted() @ shoulder_w)
+        g_axis = (Gp.to_3x3().normalized().inverted() @ normal_w).normalized()
+        up_l = np.array(Gp.to_3x3().normalized().inverted() @ Vector((0.0, 0.0, 1.0)))
+        pole_c = Pp.inverted() @ shoulder_w
+        pole_axis = (Pp.to_3x3().normalized().inverted() @ normal_w).normalized()
+        r_s = max(float(np.linalg.norm(p_s - centre)), 1e-6)
+        out = max(WINDMILL_REACH * (0.97 * full / r_s - 1.0), 0.0)   # how much further out the hand is over the top
+        skull, near = None, math.inf                             # the middle of her head, and how near her arm comes to it
+        if "head" in smap:
+            hb = ae.pose.bones[smap["head"]]
+            skull = (np.array(Gp.inverted() @ (ae.matrix_world @ (0.5 * (hb.head + hb.tail)))), 0.5 * hb.length)
 
         def turned(th):
-            R = Quaternion(axis, th)
-            return centre + np.array(R @ Vector(p_s - centre)), R @ q_s
+            R = Quaternion(g_axis, th)
+            return centre + (1.0 + out * math.sin(0.5 * th) ** 2) * np.array(R @ Vector(p_s - centre)), R @ q_s
 
         sign = 1.0 if float((turned(-0.25)[0] - p_s) @ up_l) > 0 else -1.0     # the hand comes down onto the strings
         t0 = t_s - dur
         for k in np.where((ts >= t0) & (ts <= ts[j]))[0]:
             r = min((ts[k] - t0) / dur, 1.0)
-            p, q = turned(-sign * 2.0 * math.pi * (1.0 - r ** 1.6))      # slow out of the strumming, fast down onto the strike
+            th = -sign * 2.0 * math.pi * (1.0 - r ** 1.6)                # slow out of the strumming, fast down onto the strike
+            p, q = turned(th)
             w = min(1.0, r / 0.15)
             w = w * w * (3.0 - 2.0 * w)
             L[k] = L[k] * (1.0 - w) + p * w
             Q[k] = np.array(Quaternion(Q[k]).slerp(q, w))
-        done.append(round(float(t_s), 3))
+            if skull is not None:                               # her arm, as the line from her shoulder to her hand
+                ab = L[k] - centre
+                on = float(np.clip((skull[0] - centre) @ ab / max(float(ab @ ab), 1e-12), 0.0, 1.0))
+                near = min(near, float(np.linalg.norm(centre + on * ab - skull[0])))
+            trail = th * (1.0 + WINDMILL_ELBOW * math.sin(0.5 * th) ** 2)    # the elbow a little behind the hand over the top
+            poles[int(fr[k])] = tuple(pole0.lerp(pole_c + Quaternion(pole_axis, trail) @ (pole0 - pole_c), w))
+        clear = round(near * 100.0, 1) if skull is not None and math.isfinite(near) else None
+        if clear is not None and near < 2.0 * skull[1]:
+            ctx.log("WARNING", f"{where}: windmill {tw:g}: her arm passes {clear:g} cm from the middle of her head, across "
+                               f"her face: the circle lies in the plane of the strings, in front of her, and on a small "
+                               f"player or a guitar worn high that is where her head is. Look at it frame by frame, or "
+                               f"leave it out")
+        done.append({"t": round(float(t_s), 3), "head_cm": clear})
+    sc.frame_set(keep)
+    if poles:
+        K.key_vec(pole, "location", sorted(poles), [poles[f] for f in sorted(poles)], interp="LINEAR", replace=False)
     return [tuple(v) for v in L], K.continuous([tuple(q) for q in Q]), done
 
 
@@ -462,8 +551,9 @@ def _turn(ctx, name, m, spec, ts, frames):
         ankle = arm.data.bones[ik].head_local
         p = ankle + Wi @ Vector(feet0.get(s, Vector()))
         feet[s] = (p.x - centre.x, p.y - centre.y)
-        toe = smap.get(f"toe_ik.{s}") or smap.get(f"toe.{s}")
-        if toe:                                                  # the point a spin on this foot turns on
+        toe = _ball(m, smap, s) or smap.get(f"toe_ik.{s}") or smap.get(f"toe.{s}")
+        if toe:                                                  # the point a spin on this foot turns on: the ball of
+            #                                                      the foot where its toes bend, else their tip
             d = arm.data.bones[toe].head_local - ankle
             if d.xy.length > 1e-6:
                 axes[s] = Vector((-d.y, d.x, 0.0)).normalized()      # the foot's own across: its heel lifts about it
@@ -612,7 +702,81 @@ def _legs(m, smap, W, centre0, feet0, where):
     return out
 
 
-def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
+def _groove(ctx, name, m, spec, ts):
+    """A member's `groove` (a table or a list of tables, each over its own `from`..`to`: summed) as
+    mkmmd.core.perform.groove's signals over `ts`, None without one. The beats are each table's `beats` or its
+    timeline's (downbeats weighted `downbeat_accent`); `spine`, what the chest's lean back must carry to keep her head
+    still, is the height of her head over her hips at rest."""
+    v = spec.get("groove")
+    tables = v if isinstance(v, list) else [v] if v else []
+    if not tables:
+        return None
+    arm, smap = m.arm, S.semantic_map(m.arm)
+    spine = 0.5
+    if "head" in smap and "upper_body" in smap:
+        spine = max(float(arm.data.bones[smap["head"]].head_local.z - arm.data.bones[smap["upper_body"]].head_local.z)
+                    * float(arm.matrix_world.to_scale().z), 0.1)
+    total = None
+    for i, t in enumerate(tables):
+        where = f"perform.{name}.groove" + (f"[{i}]" if isinstance(v, list) else "")
+        if not isinstance(t, dict):
+            raise BuildError(f"{where} = {t!r}: expected a table")
+        if t.get("first", "L") not in ("L", "R"):
+            raise BuildError(f"{where}: first = \"L\" or \"R\" (the foot her weight goes to first), not {t['first']!r}")
+        beats, acc = _beat_marks(ctx, dict(t, downbeat_accent=t.get("downbeat_accent", PF.GROOVE["downbeat_accent"])), where)
+        g = PF.groove(ts, beats, acc, spine=spine, **{k: t[k] for k in PF.GROOVE_KEYS
+                                                    if k in t and k not in ("timeline", "beats", "accent")})
+        if total is None:
+            total = g
+        else:
+            total = {k: ({s: total[k][s] + g[k][s] for s in g[k]} if isinstance(g[k], dict) else total[k] + g[k])
+                     for k in g}
+    return total
+
+
+def _ball(m, smap, s):
+    """The toes' joint of foot `s` where the toes have their own skin: the ball of the foot, what a heel lifts about
+    while they stay flat on the floor. None for a foot in one piece (it rises on the tip of its toes)."""
+    toe = smap.get(f"toe.{s}")
+    return toe if toe and any(toe in ob.vertex_groups for ob in m.meshes) else None
+
+
+def _soft_knees(m, smap, W, centre0, feet0, settle, offs, turns, feet, soft, wave, win):
+    """While she grooves her knees are never locked: (how far her hips must come down for neither leg to be straighter
+    than `soft` ((F,) rad of knee bend from the rest pose: mkmmd.core.perform.leg_reach), (F,) m >= 0, taken in by `win`
+    (0..1); {side: (F,) rad}, the knees' bend with that and the beat's `wave` ((F,) m of dip) on top). `offs` (F, 3) are
+    the hips' offsets and `feet` {side: (F, 3)} the ankles' (armature axes, m, on top of the pose stage's world offsets
+    `centre0`, `feet0`, eased in by `settle`), `turns` the pelvis' turn per frame (armature axes) about its bone's head.
+    A pelvis that tilts over a standing leg hangs from that hip: the leg is a strut, so the tilt lowers her (the free
+    hip drops twice as far) instead of pushing the standing foot off the floor. (None, {}) for a skeleton without the
+    bones."""
+    arm, Wi = m.arm, W.inverted()
+    names = {s: [smap.get(f"{b}.{s}") for b in ("leg", "knee", "ankle")] for s in feet}
+    if "lower_body" not in smap or len(feet) < 2 or not all(all(v) for v in names.values()):
+        return None, {}
+
+    def at(bone):
+        return np.array(Wi @ (arm.matrix_world @ arm.data.bones[bone].head_local - arm.matrix_world.translation))
+
+    pivot, st, c0 = at(smap["lower_body"]), np.asarray(settle, float)[:, None], np.array(Wi @ centre0)
+    legs, over = {}, []
+    for s, (hip_b, knee_b, ankle_b) in names.items():
+        hip, ankle = at(hip_b), at(ankle_b)
+        bends, reach = PF.leg_reach(hip, at(knee_b), ankle)
+        hips = pivot + c0 * st + offs + np.array([np.array(q @ Vector(hip - pivot)) for q in turns])
+        v = hips - (ankle + np.array(Wi @ feet0.get(s, Vector())) * st + feet[s])
+        far = np.interp(soft, bends, reach)                     # hip to ankle with the knee bent `soft`
+        over.append(v[:, 2] - np.sqrt(np.maximum(far ** 2 - v[:, 0] ** 2 - v[:, 1] ** 2, 0.0)))
+        legs[s] = (v, bends, reach)
+    need = 0.001 * np.log1p(sum(np.exp(np.clip(o / 0.001, -60.0, 60.0)) for o in over)) * np.clip(win, 0.0, 1.0)
+    bend = {}
+    for s, (v, bends, reach) in legs.items():                    # a smooth max(0, the two legs') above, to the millimetre
+        d = np.linalg.norm(v - np.array([0.0, 0.0, 1.0]) * (need + wave)[:, None], axis=1)
+        bend[s] = np.interp(d, reach[::-1], bends[::-1])
+    return need, bend
+
+
+def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=None):
     """bounce, crouch, rise, kick, air, a step_turn's or spin's feet, a walk's feet and the rock's hips: the hips (the
     `center` bone) and the feet (the leg IK bones) move on top of the offsets the pose stage gave them (eased in over the
     settle like them). `bounce` dips the hips on the beats while the feet stay planted (the knees bend: a punk's pump);
@@ -629,7 +793,7 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
     rocks = [(r, win) for r, win in _rocks(spec, "rock", name) if float(r.get("hips", 0.0))]
     if walk and walk.get("air"):
         ai = (list(ai) if isinstance(ai, list) else [ai] if ai else []) + [{"from": a, "to": b} for a, b in walk["air"]]
-    if not (bn or rs or kk or cr or rocks or ai or turn or (walk and walk.get("feet"))):
+    if not (bn or rs or kk or cr or rocks or ai or turn or (walk and walk.get("feet")) or groove):
         return {}
     arm = m.arm
     smap = S.semantic_map(arm)
@@ -660,6 +824,12 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
                                                           + float(r.get("phase", 0.0)))
     if rocks:
         info["hips_mm"] = round(max(abs(float(r["hips"])) for r, _win in rocks) * 1000, 1)
+    if groove is not None:                                       # the weight from foot to foot (the knees: below)
+        side = side + groove["side"]
+        info["groove"] = {"shift_mm": round(float(np.abs(groove["side"]).max()) * 1000, 1),
+                          "dip_mm": round(float(groove["dip"].max()) * 1000, 1),
+                          "roll_deg": round(float(np.degrees(np.abs(groove["roll"]).max())), 1),
+                          "heel_deg": round(float(np.degrees(max(groove["heel"][s].max() for s in ("L", "R")))), 1)}
     if walk and walk.get("feet") and np.abs(walk.get("sway", 0.0)).max() > 0:
         side = side + walk["sway"]                                   # the strut: over the foot that is down
         info["sway_mm"] = round(float(np.abs(walk["sway"]).max()) * 1000, 1)
@@ -690,12 +860,8 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
                            "point_deg": round(float(np.degrees(air_pitch[s].max())), 1)} for s in ("L", "R")}
         if kicks:
             info["air"]["kicks"] = kicks
-    centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i]) + left_w * float(side[i])
-                    + back_w * float(behind[i])) for i, s in enumerate(settle)]
-    K.key_bone_locs(arm, smap["center"], frames, centre, interp="LINEAR")
-    if not (rs or kk or ai or turn or (walk and walk.get("feet"))):
-        return info
-    for s in ("L", "R"):
+    feet, flat = {}, {}                                          # {side: (leg IK bone, offsets, yaw, heel)}: the feet's part
+    for s in ("L", "R") if rs or kk or ai or turn or (walk and walk.get("feet")) or groove else ():
         ik = smap.get(f"leg_ik.{s}")
         if not ik:
             continue
@@ -716,17 +882,63 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None):
         if walk and s in walk.get("feet", {}):                      # the walk's step, relative to the root it carries
             d[:, :2] += walk["feet"][s] - np.asarray(walk["feet0"][s], float)
             d[:, 2] += walk["lift"][s]
+        heel = (turn["pitch"][s] if turn and s in turn["pitch"] else np.zeros(n)).copy()
+        ball = _ball(m, smap, s)
+        if groove is not None:                                   # the free heel comes up: the ankle rises and goes forward,
+            h = groove["heel"][s]                                # the foot pitching about the toes' joint where the toes
+            ank = smap.get(f"ankle.{s}")                         # have their own skin (they stay flat on the floor), else
+            a0 = arm.data.bones[ank].head_local if ank else Vector((0.0, 0.0, 0.1))     # about their tip
+            if ball:
+                t0 = arm.data.bones[ball].head_local
+                run, high = abs(float((t0 - a0).y)), max(float((a0 - t0).z), 0.0)
+            else:
+                tip = smap.get(f"toe_ik.{s}") or smap.get(f"toe.{s}")
+                run = abs(float((arm.data.bones[tip].head_local - a0).y)) if tip else 0.1
+                high = max(float(a0.z), 0.02)
+            splay = toes0.get(s, 0.0)                            # along the foot, as the pose turned it out
+            fwd = run * (np.cos(h) - 1.0) - high * np.sin(h)
+            d[:, 2] += run * np.sin(h) + high * (np.cos(h) - 1.0)
+            d[:, 0] += -math.sin(splay) * fwd
+            d[:, 1] += math.cos(splay) * fwd
+            heel += h
+        if ball and heel.any():                                  # toes that bend stay flat on the floor under a heel
+            flat[s] = (ball, heel)                               # that lifts (a groove's free foot, a spin's relevé)
+        feet[s] = (ik, d, yaw_rel, heel)
+    pelvis = None
+    if groove is not None:                                       # the pelvis: the standing hip up, the free one forward,
+        q0 = base.get("lower_body", Quaternion())               # on top of the pose's own pelvis turn
+        up_a, back_a = Vector((0.0, 0.0, 1.0)), Vector((0.0, 1.0, 0.0))
+        pelvis = [Quaternion(up_a, float(groove["yaw"][i])) @ Quaternion(back_a, float(groove["roll"][i]))
+                  @ Quaternion().slerp(q0, float(settle[i])) for i in range(n)]
+        need, bend = _soft_knees(m, smap, W, centre0, feet0, settle, np.stack([side, behind, lift - dip], 1), pelvis,
+                                 {s: f[1] for s, f in feet.items()}, groove["soft"], groove["dip"], groove["win"])
+        if need is not None:                                     # and her knees soft under it: the hips come down for that
+            dip = dip + need
+            on = groove["win"] > 0.99
+            if on.any():
+                both = np.degrees(np.concatenate([b[on] for b in bend.values()]))
+                info["groove"].update(sink_mm=round(float(need.max()) * 1000, 1),
+                                      knee_deg=[round(float(both.min()), 1), round(float(both.max()), 1)])
+        dip = dip + groove["dip"]                                # the beat in the knees, under that
+    centre = [tuple(centre0 * float(s) + up_w * float(lift[i] - dip[i]) + left_w * float(side[i])
+                    + back_w * float(behind[i])) for i, s in enumerate(settle)]
+    K.key_bone_locs(arm, smap["center"], frames, centre, interp="LINEAR")
+    if pelvis is not None and "lower_body" in smap:
+        K.key_bone_arm(arm, smap["lower_body"], frames, pelvis, interp="LINEAR")
+    for s, (ik, d, yaw_rel, heel) in feet.items():
         f0 = feet0.get(s, Vector())
         K.key_bone_locs(arm, ik, frames, [tuple(f0 * float(st) + W @ Vector(d[i])) for i, st in enumerate(settle)],
                         interp="LINEAR")
         pitch = air_pitch[s] if air_pitch is not None else np.zeros(n)
-        heel = turn["pitch"][s] if turn and s in turn["pitch"] else np.zeros(n)
-        if (turn and s in turn["feet"]) or pitch.any():           # the foot's yaw and its toes, on top of the pose's toes
+        lat = Vector((1.0, 0.0, 0.0))
+        across = turn["toe_axis"].get(s, lat) if turn else lat      # a spin's heel lifts about the foot's own across
+        if (turn and s in turn["feet"]) or pitch.any() or heel.any():   # the foot's yaw and its toes, on top of the pose's
             toes = toes0.get(s, 0.0) * np.asarray(settle, float)
-            up, lat = Vector((0.0, 0.0, 1.0)), Vector((1.0, 0.0, 0.0))
-            across = turn["toe_axis"].get(s, lat) if turn else lat  # a spin's heel lifts about the foot's own across
+            up = Vector((0.0, 0.0, 1.0))
             K.key_bone_arm(arm, ik, frames, [Quaternion(up, float(yaw_rel[i] + toes[i])) @ Quaternion(lat, float(pitch[i]))
                                              @ Quaternion(across, float(heel[i])) for i in range(n)], interp="LINEAR")
+        if s in flat:
+            K.key_bone_arm(arm, flat[s][0], frames, [Quaternion(across, -float(a)) for a in flat[s][1]], interp="LINEAR")
     if walk and any(np.abs(v).max() > 0 for v in walk.get("swing", {}).values()):
         info["arm_swing"] = _arm_swing(ctx, m, walk, frames)
     return info
@@ -974,6 +1186,10 @@ def run(ctx):
         head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
         head_pitch_x = np.radians(PF.eased_keys(ts, spec.get("head_nod", [])))
         head_yaw_x = np.radians(PF.eased_keys(ts, spec.get("head_turn", [])))
+        gv = _groove(ctx, name, m, spec, ts) if body else None   # the weight from foot to foot: the chest leans back
+        if gv is not None:                                       # over the hips, the head rights itself and nods late
+            tilt_x, turn_x, lean_x = tilt_x + gv["tilt"], turn_x + gv["turn"], lean_x + gv["lean"]
+            head_tilt_x, head_pitch_x = head_tilt_x + gv["head_tilt"], head_pitch_x + gv["nod"]
         for key, table, win in [(k, r, w) for k in ("rock", "head_rock") for r, w in _rocks(spec, k, name)]:
             swing = PF.rock(ts, table.get("period", 4.0), table.get("deg", 0.0), table.get("phase", 0.0)) * win(ts)
             axis = table.get("axis", "side")
@@ -1039,7 +1255,7 @@ def run(ctx):
                 K.key_bone_quats(arm, b, frames, loc, interp="LINEAR")
         info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames), **turn_info, **walk_info}
         if body:
-            info.update(_body(ctx, name, m, spec, ts, frames, settle, plan, wplan))
+            info.update(_body(ctx, name, m, spec, ts, frames, settle, plan, wplan, gv))
         info["body"] = body
         # ---- face: blinks + lids
         bl = spec.get("blink", {})

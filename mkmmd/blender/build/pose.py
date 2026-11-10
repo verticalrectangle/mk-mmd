@@ -1689,7 +1689,9 @@ def run(ctx):
                              (float(spec.get("lean_share", 0.6)), float(spec.get("turn_share", 0.6))))
         for sem, q in base.items():
             K.key_bone_arm(arm, smap[sem], [f0, f1], [Quaternion(), q], interp="BEZIER")
-        m.base = {"spine": base, "chain": chain, "center": centre, "feet": {}}
+        pelvis = (hip_turn @ _q((1, 0, 0), -seat["pelvis"]) if seat else
+                  hip_turn if hp.get("roll") or hp.get("yaw") or hp.get("pitch") else Quaternion())
+        m.base = {"spine": base, "chain": chain, "center": centre, "feet": {}, "lower_body": pelvis}
         # feet on the floor / pedals (leg IK bones move to the ankle targets)
         feet = spec.get("feet", "seat" if seat else None)
         if feet == "seat" and not seat:

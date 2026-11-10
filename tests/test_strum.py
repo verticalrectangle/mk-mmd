@@ -75,7 +75,7 @@ def test_off_grid_onsets_alternate_and_doubled_onsets_are_one_stroke():
 def test_window_and_accent_select_and_weight_strikes():
     on = eighths()
     tl = dict(TL, onsets={"other": on})
-    st = SM.plan({"rhythm": "onsets:other", "from": on[4] - 0.01, "to": on[11] + 0.01, "accent": "downbeats"}, tl)
+    st = SM.plan({"rhythm": "onsets:other", "from": on[4] - 0.01, "to": on[11] + 0.01, "accent": "downbeats", "human": 0}, tl)
     assert [s.t for s in st] == pytest.approx(on[4:12])
     accented = [s for s in st if s.accent]
     assert accented and all(min(abs(s.t - d) for d in DOWNBEATS) <= 0.06 for s in accented)
@@ -87,6 +87,38 @@ def test_window_and_accent_select_and_weight_strikes():
     assert SM.plan({"rhythm": "times".split()[0] and [1.0, 2.0], "accent": [2.0]}, TL)[1].accent
     with pytest.raises(SM.StrumError, match="accent"):
         SM.plan({"rhythm": "beats:8", "accent": "loudest"}, TL)
+
+
+def test_hits_leave_the_rhythm_s_other_strokes_as_ghosts_over_the_strings():
+    """Eighths of which only the beats are played: the hand keeps its swing going, the up strokes pass over the strings
+    and ring nothing."""
+    from mkmmd.core import strings as CS
+    st = SM.plan({"rhythm": "beats:8", "from": BEATS[4], "to": BEATS[8], "hits": "beats", "accent": "beats"}, TL)
+    assert [s.ghost for s in st] == [s.dir < 0 for s in st] and any(s.ghost for s in st)
+    assert not any(s.accent for s in st if s.ghost) and all(s.accent for s in st if not s.ghost)
+    ts = np.arange(BEATS[3], BEATS[9], 0.001)
+    P = SM.path(st, ts, SIGMA)
+    for s in st:
+        cross = (ts > s.t + 0.002) & (ts < s.t + s.attack - 0.002)
+        if s.ghost:
+            assert P["h"][cross].min() >= SM.DEFAULTS["ghost_lift"] - 1e-6 and not P["contact"][cross].any()
+        else:
+            assert P["h"][cross].max() < 0.0 and P["contact"][cross].all()
+    assert np.ptp(P["u"][(ts > BEATS[5]) & (ts < BEATS[7])]) > 2 * SIGMA                 # the swing goes on through them
+    centres = {1: SIGMA, 6: -SIGMA}
+    rung = CS.hits(st, centres, SIGMA, SM.DEFAULTS)
+    assert len(rung) == len(CS.hits([s for s in st if not s.ghost], centres, SIGMA, SM.DEFAULTS)) > 0
+    with pytest.raises(SM.StrumError, match="hits"):
+        SM.plan({"rhythm": "beats:8", "hits": "loudest"}, TL)
+
+
+def test_a_player_s_strokes_are_uneven_from_a_seed_and_a_machine_s_are_not():
+    spec = {"rhythm": "beats:8", "accent": "downbeats"}
+    a, b, c, flat = (SM.plan(dict(spec, **kw), TL) for kw in ({}, {}, {"seed": 2}, {"human": 0}))
+    assert [s.amp for s in a] == [s.amp for s in b] and [s.amp for s in a] != [s.amp for s in c]
+    assert [(s.t, s.dir, s.accent) for s in a] == [(s.t, s.dir, s.accent) for s in flat]      # only how far they go
+    rel = np.array([s.amp / f.amp for s, f in zip(a, flat)])
+    assert 0.03 < rel.std() < 0.12 and np.abs(rel - 1.0).max() < 0.25                 # uneven, never wild
 
 
 def test_plan_reports_what_is_missing():
@@ -219,3 +251,33 @@ def test_the_hand_turns_about_the_wrist_only_where_the_turn_moves_the_tip_sidewa
     half, _ = SM.turn_share(0.6, [-0.05, -0.07, 0.0], centre, along, across)              # in between: some of it
     assert 0.0 < half < 0.6
     assert SM.turn_share(0.6, [0.0, -0.02, 0.0], centre, along, across)[0] == 0.0          # too short a lever to matter
+
+
+# ------------------------------------------------------------------------------------------------ the hand's own turn
+def test_a_strumming_hand_turns_with_the_forearm_and_a_loose_wrist_trails_it():
+    """Eighths: the forearm's swing from the elbow (0.25 m from the tip) and the wrist's own part (0.08 m) make the stroke
+    between them; a loose wrist is behind the forearm through every stroke; fast strokes are more the wrist's."""
+    st = SM.plan({"rhythm": "beats:8", "from": BEATS[4], "to": BEATS[12], "human": 0}, TL)
+    ts = np.arange(BEATS[4], BEATS[12], 0.001)
+    u = SM.path(st, ts, SIGMA)["u"]
+    T, stiff = SM.hand_turn(st, ts, SIGMA, 0.25, 0.08), SM.hand_turn(st, ts, SIGMA, 0.25, 0.08, loose=0)
+    assert T["swing"] * 0.25 + stiff["wrist"] * 0.08 == pytest.approx(u, abs=1e-4)
+    trail = T["wrist"] - stiff["wrist"]
+    for s in st[2:-2]:
+        k = int(np.argmin(np.abs(ts - (s.t + 0.5 * s.attack))))
+        assert trail[k] * s.dir < -math.radians(3.0)                                  # behind the forearm on the way
+    assert np.abs(trail).max() <= math.radians(SM.TRAIL[1]) + 1e-9
+    fast = SM.plan({"rhythm": "beats:16", "from": BEATS[4], "to": BEATS[8], "human": 0}, TL)
+    tf = np.arange(BEATS[5], BEATS[7], 0.001)
+    uf, wf = SM.path(fast, tf, SIGMA)["u"], SM.hand_turn(fast, tf, SIGMA, 0.25, 0.08, loose=0)["wrist"]
+    k, kf = int(np.argmax(np.abs(u[1000:3000]))) + 1000, int(np.argmax(np.abs(uf)))
+    assert wf[kf] * 0.08 / uf[kf] > stiff["wrist"][k] * 0.08 / u[k] + 0.15              # the wrist's share of the stroke
+    square = SM.hand_turn(st, ts, SIGMA, 0.25, 0.08, swing=0, loose=0)
+    assert not square["swing"].any() and not square["wrist"].any()
+
+
+def test_a_windmill_takes_the_place_of_the_strokes_struck_while_the_hand_goes_round():
+    st = SM.plan({"rhythm": "beats:8", "from": BEATS[4], "to": BEATS[12]}, TL)
+    lands, gone = SM.windmilled(st, [BEATS[8] + 0.03, 99.0], dur=0.5)
+    assert lands == [pytest.approx(BEATS[8]), None]                                    # the down stroke it comes down on
+    assert [s.t for s in gone] == pytest.approx([BEATS[7], BEATS[7] + BEAT / 2], abs=1e-3)

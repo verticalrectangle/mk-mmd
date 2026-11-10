@@ -19,7 +19,11 @@ def skew(v):
 
 
 def min_rot(a, b):
-    """(n, 3, 3) rotations taking unit vectors a -> b with the least turn."""
+    """(n, 3, 3) rotations taking unit vectors a -> the directions b with the least turn. b is made unit here: where
+    the turn is nearly a half turn the formula's 1 / (1 + c) multiplies whatever b's length is off by, so a bone frame a
+    hair off orthonormal (built on its parent's, itself from such a turn) would be thousands of times further off, and
+    so on down a strand that is folded back on itself, until its frames are no rotations at all."""
+    b = b / np.maximum(np.linalg.norm(b, axis=1, keepdims=True), 1e-12)
     v = np.cross(a, b)
     c = np.einsum("ij,ij->i", a, b)
     K = skew(v)
@@ -89,8 +93,9 @@ KINDS = ("sphere", "capsule", "box", "cylinder")
 
 class Shapes:
     """Kinematic shapes, each riding on a source. `items[kind]` are dicts with src (index into sources), tag, model
-    (index of the model body it came from or None) and geometry: sphere c R; capsule a b R; box M half rnd;
-    cylinder M R hh rnd (M: 4x4 placement in the source frame; rnd: rounded edges, m)."""
+    (index of the model body it came from or None), families (the chain families it collides with: None, all of them)
+    and geometry: sphere c R; capsule a b R; box M half rnd; cylinder M R hh rnd (M: 4x4 placement in the source
+    frame; rnd: rounded edges, m)."""
 
     def __init__(self):
         self.sources, self._si = [], {}
@@ -104,8 +109,9 @@ class Shapes:
             self.sources.append(key)
         return self._si[key]
 
-    def add(self, kind, source, tag, model=None, **geo):
+    def add(self, kind, source, tag, model=None, families=None, **geo):
         self.items[kind].append(dict(src=self.src(*source), tag=tag, model=model,
+                                     families=None if families is None else tuple(families),
                                      **{k: (np.array(v, float) if isinstance(v, (list, tuple, np.ndarray)) else v)
                                         for k, v in geo.items()}))
 
@@ -116,7 +122,7 @@ class Shapes:
         if kind == "floor":
             self.floor_z = float(it["z"])
             return
-        self.add(kind, source, tag, model=it.pop("model", None), **it)
+        self.add(kind, source, tag, model=it.pop("model", None), families=it.pop("families", None), **it)
 
     def body(self, armature, body, model):
         """A model collision body from rig.json (`bone`, `geom` in the bone's rest frame)."""
@@ -140,7 +146,7 @@ class Shapes:
         for kind, items in self.items.items():
             n = len(items)
             P[kind] = dict(n=n, src=np.array([it["src"] for it in items], int), tag=[it["tag"] for it in items],
-                           model=[it["model"] for it in items])
+                           model=[it["model"] for it in items], families=[it.get("families") for it in items])
             if kind == "sphere":
                 P[kind].update(c=np.array([it["c"] for it in items]).reshape(n, 3),
                                R=np.array([it["R"] for it in items], float))
@@ -300,7 +306,8 @@ def enable_matrix(chains, P, rig, rest_W, samples=SAMPLES, radius=None, use_mask
     """(N, K) collision enables per kind for chains vs packed shapes P. Skipped pairs: a model body the chain bone
     already overlaps in the rest pose (the author's intended overlaps, e.g. hair roots inside the head sphere); within
     anchor_free metres of the root, the body the chain hangs from and every pair the PMX collision masks exclude;
-    further down every body collides unless use_masks. Scene shapes (model None) always collide."""
+    further down every body collides unless use_masks. Scene shapes (model None) always collide, with every chain or,
+    for a shape that names its `families` (a strap hair lies over, with the skirt under it), with the chains of those."""
     N = len(chains)
     X, own, _ = chains.points(samples)
     rr = (chains.radius if radius is None else radius)[own]
@@ -316,6 +323,9 @@ def enable_matrix(chains, P, rig, rest_W, samples=SAMPLES, radius=None, use_mask
         for k in range(n):
             m = P[kind]["model"][k]
             if m is None:
+                only = (P[kind].get("families") or [None] * n)[k]
+                if only is not None:
+                    E[~np.isin(np.array(chains.family), list(only)), k] = False
                 continue
             body = rig["bodies"][m]
             E[(pen_rest[kind][0][:, k] > 0).reshape(N, len(samples)).any(1), k] = False

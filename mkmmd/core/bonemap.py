@@ -60,7 +60,7 @@ SIDED = {
     "leg": ["足"],
     "knee": ["ひざ", "膝"],
     "ankle": ["足首"],
-    "toe": ["つま先"],
+    "toe": ["つま先", "足つま先"],
     "leg_ik": ["足IK"],
     "toe_ik": ["つま先IK"],
     "leg_ik_parent": ["足IK親"],

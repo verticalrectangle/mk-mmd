@@ -225,3 +225,21 @@ def test_each_output_is_finished_while_the_render_of_the_next_has_not_begun(tmp_
     assert e.value.code == 0, rep
     assert order == ["wide finished"]                           # wide went on its own, late followed after it
     assert enc.frames["wide"] == enc.frames["late"] and len(enc.frames["late"]) == TJ.END + 1 - TJ.F0
+
+
+def test_frames_older_than_the_built_scene_are_stale_and_a_resumed_render_s_are_not(tmp_path):
+    """A render skips the frames on disk so that a stopped one resumes; frames drawn before the scene was built again
+    show the scene of the build before, and their layers with them."""
+    import os
+
+    from mkmmd.cli import render as RN
+    d = tmp_path / "renders" / "draft" / "wide"
+    (d / "plate").mkdir(parents=True)
+    built = 1_000_000.0
+    for rel, age in (("00101.png", -60), ("00102.png", -60), ("00103.png", 60), ("plate/00101.png", -60),
+                     ("plate/00103.png", 60), ("render.json", -60), ("00250.png", -60)):
+        (d / rel).write_bytes(b"x")
+        os.utime(d / rel, (built + age, built + age))
+    old = [str(p.relative_to(d)) for p in RN.stale_files(d, range(101, 104), built)]
+    assert old == ["00101.png", "00102.png", "plate/00101.png"]          # not the newer ones, the manifest or frame 250
+    assert RN.stale_files(tmp_path / "none", [101], built) == []

@@ -21,8 +21,8 @@ import math
 import numpy as np
 
 NUMBERS = ("at", "neck_deg", "yaw_deg", "roll_deg", "pivot", "scale")
-TABLES = {"strap": ("top", "bottom", "over", "width", "thickness", "material", "shoulder_radius", "standoff"),
-          "cable": ("object", "anchor", "radius", "trail", "out", "sway", "reach", "tail_len", "follow", "sim")}
+TABLES = {"strap": ("top", "bottom", "over", "width", "thickness", "material", "standoff", "slack", "sim"),
+          "cable": ("object", "anchor", "radius", "trail", "out", "sway", "reach", "tail_len", "slack", "follow", "sim")}
 
 
 class WearError(ValueError):
@@ -143,46 +143,219 @@ def spine_axis(points):
     return at
 
 
-def strap_path(top, bottom, shoulder, spine, radius, over_side=1.0, standoff=0.007, shoulder_r=0.045, n=48):
-    """The centre line of a strap from the prop's upper button `top` over the wearer's `shoulder` (the shoulder joint, character
-    axes) down her back to the hip on the other side and to the lower button `bottom`: (n, 3) points, character axes.
+STRAP_LEAD = 0.03             # m: a band that would turn back over the prop first runs this far across its button's pin
+STRAP_REACH = 0.12            # m: the wearer's surface is looked for this far outside the strap's first line
+STRAP_SIDE = (0.005, 0.08)    # m: the grid across the first line her surface is mapped on; how far the band may move to a side
+STRAP_TILT = 1.0              # the band rolls with what it lies on up to this slope across it (45 degrees)
 
-    `top` / `bottom` are (point, direction) pairs: where the strap leaves each button and the way it goes first.
-    `spine` is the interpolator from `spine_axis`, `radius` the torso's half depth (m) at the chest (the strap rides
-    `standoff` outside it), `over_side` +1 when the shoulder is on the character's left (+x). Before the lower button
-    the strap keeps 3 cm behind it (a button sits at mid-thickness of a body's edge: behind the prop's back), so a prop
-    worn nearer than the torso's ellipse, or a strap with a large `standoff`, never has its band come out of the
-    prop's face."""
-    (p0, d0), (p1, d1) = [(np.asarray(a, float), np.asarray(b, float) / np.linalg.norm(b)) for a, b in (top, bottom)]
-    s = np.asarray(shoulder, float)
+
+def strap_path(top, bottom, shoulder, spine, radius, surface, over_side=1.0, standoff=0.007, width=0.05, n=96):
+    """(points, normals, kind): points and normals (n, 3) in character axes, the line of a strap's inner face from the prop's
+    upper button `top` over the wearer's `shoulder` (the shoulder joint), across her back and round her other side to the
+    lower button `bottom`, and the way the band faces along it; kind (n,) of each point: 0 the prop's (a button, a run
+    across its pin), 1 lying on her, 2 clear of her.
+
+    `top` / `bottom` are (point, direction) pairs: a button and the way its pin points. `spine` is the interpolator from
+    `spine_axis`, `radius` the torso's half depth (m) at the chest, `over_side` +1 when the shoulder is on the character's
+    left (+x). `surface(point, direction, far)` is the wearer herself: None, or (distance, facing) where a ray first
+    meets her, facing False when it meets her from within (her skin and clothes without what hangs or swings, her arms
+    and her head).
+
+    The band is pulled taut, as the prop's weight does: straight where nothing is under it, on her where she is in the
+    way, `standoff` off her surface under its whole `width` and rolled to the slope of what it lies on. A first line is
+    drawn without her surface (straight from the upper button to the top of the shoulder, then round the torso's ellipse
+    seen from above, falling evenly, to where it runs straight to the lower button: a straight line on the unrolled
+    torso); her surface is mapped under it and to either side (STRAP_SIDE); then every point of the line takes the place
+    across the line and the height off her that make the band shortest, so it lies against the neck's foot, passes
+    beside what stands out of her back and bridges her hollows. Over the shoulder it never moves toward the arm (a taut
+    string would slide down a sloping shoulder; a strap's grip holds it). A band that would turn back over the prop from
+    a button (the tail of a body worn across her) first runs STRAP_LEAD across the pin: a tab lies flat round its pin,
+    and the band comes to the button from behind the prop."""
+    flip = np.array([1.0 if over_side >= 0 else -1.0, 1.0, 1.0])         # a right shoulder: solved as its mirror image
+    (p0, d0), (p1, d1) = [(np.asarray(a, float) * flip, np.asarray(b, float) * flip / np.linalg.norm(b)) for a, b in (top, bottom)]
+    s = np.asarray(shoulder, float) * flip
+
+    def axis(z):
+        return np.asarray(spine(z), float) * flip[:2]
+
+    def hit(p, d, far):
+        return surface(p * flip, d * flip, far)
+
+    def inside(p):
+        """A point within her that the band at p faces away from: on the torso's axis at p's height; over the shoulder,
+        under p (the band faces up there, forward before it and backward after)."""
+        k = min(max((p[2] - (s[2] - 0.10)) / 0.08, 0.0), 1.0)
+        k = k * k * (3.0 - 2.0 * k)
+        z = p[2] - 0.07 * k
+        x, y = axis(z)
+        return np.array([x + k * (p[0] - x), y, z])
+
     R = float(radius) + float(standoff)
-    z_top = s[2] + float(shoulder_r)
+    crest = np.array([abs(s[0]) * 0.95, axis(s[2])[1] - 0.004, s[2] + 0.05])
+    cx, cy = axis(0.5 * (s[2] + p1[2]))
+    th = np.radians(np.arange(math.degrees(math.acos(min(0.9 * crest[0] / (1.6 * R), 1.0))), 270.0, 1.0))
+    E = np.stack([cx + 1.6 * R * np.cos(th), cy + R * np.sin(th)], 1)    # the torso seen from above, from behind the shoulder
+    dE = np.stack([-1.6 * R * np.sin(th), R * np.cos(th)], 1)            # round her back to her other side and her front
 
-    def on_torso(z, x, front):
-        """A point at height z and lateral x on the torso's front or back surface (an ellipse about its axis)."""
-        ax = spine(z)
-        a = R * (1.15 if z < s[2] - 0.2 else 1.0)                   # a little wider at the hips
-        y = ax[1] + (-1.0 if front else 1.0) * a * math.sqrt(max(1.0 - (x / (1.6 * a)) ** 2, 0.15))
-        return np.array([x, y, z])
+    def round_her(end):
+        """The first line from behind the shoulder round the torso to where it runs straight to `end`: (k, 3)."""
+        side = dE[:, 0] * (end[1] - E[:, 1]) - dE[:, 1] * (end[0] - E[:, 0])
+        turn = np.nonzero(np.sign(side) != np.sign(side[0]))[0]
+        k = int(turn[0]) if len(turn) else len(th) - 1
+        xy = np.vstack([E[np.unique(np.r_[np.arange(0, k, 12), k])], end[None, :2]])
+        run = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+        return np.column_stack([xy, (s[2] - 0.035) + (end[2] - (s[2] - 0.035)) * run / run[-1]])
 
-    xs = over_side * abs(s[0])
-    zh = p1[2]                                                       # the lower button's height: the strap meets the hip there
-    hip = on_torso(zh + 0.02, -over_side * abs(s[0]) * 0.45, True)   # the belly's far side, where it turns to the button:
-    hip[1] = max(hip[1], p1[1] + 0.03)                               # behind the prop's back there, however near she wears it
-    pts = [p0, p0 + d0 * 0.03,
-           on_torso(s[2] - 0.035, xs * 0.85, True),                   # across the chest, just inside the shoulder joint
-           np.array([xs * 0.95, spine(z_top)[1] - 0.004, z_top]),     # over the top of the shoulder
-           on_torso(s[2] - 0.035, xs * 0.85, False),                  # down behind it
-           on_torso(0.5 * (s[2] + zh) + 0.05, xs * 0.25, False),      # diagonally across the back ...
-           on_torso(zh + 0.12, -over_side * abs(s[0]) * 0.55, False),
-           np.array([-over_side * (1.55 * R), spine(zh + 0.04)[1] + 0.02, zh + 0.04]),    # ... round the far hip ...
-           hip,
-           p1 + d1 * 0.03, p1]
-    P = np.array(pts, float)
+    def lead(p, d, toward):
+        """Where the band turns after running across the pin at p, or None when it leaves the button freely."""
+        v = toward - p
+        if v @ d >= 0.0:
+            return None
+        across = v - (v @ d) * d
+        return p + STRAP_LEAD * across / max(np.linalg.norm(across), 1e-9)
+
+    first, last = lead(p0, d0, crest), lead(p1, d1, round_her(p1)[-2])
+    a, b = (p0 if first is None else first), (p1 if last is None else last)
+    way = np.vstack([a, a + (crest - a) / 3.0, a + (crest - a) * 2.0 / 3.0, crest, round_her(b)])
+    t = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(way, axis=0), axis=1))]
+    q = np.linspace(0.0, 1.0, 2 * int(n))
+    G, _ = _resample(np.stack([_cr(way[:, i], t / t[-1], q) for i in range(3)], 1), n)
+    T = np.gradient(G, axis=0)
+    T /= np.linalg.norm(T, axis=1)[:, None]
+    N = G - np.array([inside(p) for p in G])
+    N -= np.einsum("ij,ij->i", N, T)[:, None] * T
+    N /= np.linalg.norm(N, axis=1)[:, None]
+    B = np.cross(T, N)                                                   # across the band: toward the arm over the shoulder
+    F, S, step = _strap_floor(G, N, B, hit, float(standoff), float(width))
+    side = _strap_side(G, N, B, F, step, np.where(G[:, 2] > s[2] - 0.06, 0.0, np.inf))
+    G = G + side[:, None] * B
+    floor = _at(F, side / step)
+    h = _taut(G, N, floor)
+    on = np.nonzero(h - floor < 0.002)[0]                                # where it lies on her it rolls with her slope,
+    roll = np.interp(np.arange(len(G)), on, _at(S, side / step)[on]) if len(on) else np.zeros(len(G))
+    for _ in range(3):                                                   # and keeps that roll where it hangs free
+        roll[1:-1] = 0.25 * roll[:-2] + 0.5 * roll[1:-1] + 0.25 * roll[2:]
+    lies = np.zeros(len(G))
+    lies[on] = 1.0
+    P, N = G + h[:, None] * N, np.c_[N - roll[:, None] * B, lies]
+    lead = [0.0, 0.0]                                                    # the band's length held by the prop at each end
+    if first is not None:
+        P, N, lead[0] = np.vstack([p0, P]), np.vstack([N[:1], N]), STRAP_LEAD
+    if last is not None:
+        P, N, lead[1] = np.vstack([P, p1]), np.vstack([N, N[-1:]]), STRAP_LEAD
+    along = np.linspace(0.0, float(np.linalg.norm(np.diff(P, axis=0), axis=1).sum()), int(n))
+    P, N = _resample(P, n, N)
+    kind = np.where((along <= lead[0] + 1e-9) | (along >= along[-1] - lead[1] - 1e-9), 0, np.where(N[:, 3] > 0.5, 1, 2))
+    return P * flip, N[:, :3] / np.linalg.norm(N[:, :3], axis=1)[:, None] * flip, kind
+
+
+def _resample(P, n, also=None):
+    """(n points evenly along the polyline P, the rows of `also` read at the same places)."""
     d = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
-    t = d / d[-1]
-    q = np.linspace(0.0, 1.0, int(n))
-    return np.stack([_cr(P[:, i], t, q) for i in range(3)], 1)
+    q = np.linspace(0.0, d[-1], int(n))
+    return (np.stack([np.interp(q, d, P[:, i]) for i in range(3)], 1),
+            None if also is None else np.stack([np.interp(q, d, also[:, i]) for i in range(also.shape[1])], 1))
+
+
+def _strap_floor(G, N, B, hit, standoff, width):
+    """(F, S, step), F and S (m, 2K + 1): for the band centred at each point of the first line G and each offset k * step
+    across it (along B), the slope S across it of what lies under its width (a line fitted through her surface there,
+    STRAP_TILT at most) and the height F along its normal N its centre line must keep for the band, rolled to that slope,
+    to clear her by `standoff`: -1 where nothing is under it, STRAP_REACH where the ray meets her from within (the foot
+    of her neck: a wall). The ends are left free."""
+    step, reach = STRAP_SIDE
+    wide, K = max(1, int(round(0.4 * width / step))), int(round(reach / step))
+    off = np.arange(-K - wide, K + wide + 1) * step
+    M = np.full((len(G), len(off)), np.nan)
+    for i in range(1, len(G) - 1):
+        for k, b in enumerate(off):
+            met = hit(G[i] + b * B[i] + STRAP_REACH * N[i], -N[i], 3.0)
+            if met is not None and not met[1]:
+                M[i, k] = STRAP_REACH
+            elif met is not None and met[0] < STRAP_REACH + 0.25:
+                M[i, k] = STRAP_REACH - met[0]
+    u = np.arange(-wide, wide + 1) * step
+    F, S = np.full((len(G), 2 * K + 1), -1.0), np.zeros((len(G), 2 * K + 1))
+    for k in range(2 * K + 1):
+        W = M[:, k:k + 2 * wide + 1]
+        ok = np.isfinite(W)
+        cnt = np.maximum(ok.sum(1), 1)
+        Wz = np.where(ok, W, 0.0)
+        du, dw = (u - (ok * u).sum(1, keepdims=True) / cnt[:, None]) * ok, (Wz - Wz.sum(1, keepdims=True) / cnt[:, None]) * ok
+        var = (du * du).sum(1)
+        S[:, k] = np.where((ok.sum(1) >= 3) & (var > 1e-12), np.clip((du * dw).sum(1) / np.maximum(var, 1e-12), -STRAP_TILT, STRAP_TILT), 0.0)
+        F[:, k] = np.where(ok.any(1), np.where(ok, W - S[:, k:k + 1] * u, -np.inf).max(1) + standoff, -1.0)
+    return F, S, step
+
+
+def _at(F, f):
+    """The map F read at the offsets f (m,), in steps from its middle column: one value per row."""
+    K = F.shape[1] // 2
+    f = np.clip(np.asarray(f, float) + K, 0.0, 2 * K - 1e-9)
+    k = np.floor(f).astype(int)
+    r = np.arange(len(F))
+    return F[r, k] * (1.0 - (f - k)) + F[r, k + 1] * (f - k)
+
+
+def _strap_side(G, N, B, F, step, most, sweeps=4000, tol=5e-6):
+    """The offset across the first line (m,), `most` (m,) at most, at which each point of the band lies when the band is
+    at its shortest over the floor map F: each point in turn takes the best place between its neighbours (every offset of
+    the map tried with the best height over it, refined between the grid's lines), until none moves; the offsets are then
+    smoothed."""
+    m, K = len(G), F.shape[1] // 2
+    grid = np.arange(-K, K + 1) * step
+    side = np.zeros(m)
+    h = np.maximum(F[:, K], 0.0)
+    h[0] = h[-1] = 0.0
+    for _ in range(sweeps):
+        moved = 0.0
+        for idx in (np.arange(1, m - 1, 2), np.arange(2, m - 1, 2)):
+            P = G + side[:, None] * B + h[:, None] * N
+            base = G[idx][:, None, :] + grid[None, :, None] * B[idx][:, None, :]
+            _h, cost = _best_height(P[idx - 1][:, None, :] - base, P[idx + 1][:, None, :] - base, N[idx][:, None, :], F[idx])
+            k = np.clip(cost.argmin(1), 1, 2 * K - 1)
+            r = np.arange(len(idx))
+            c0, c1, c2 = cost[r, k - 1], cost[r, k], cost[r, k + 1]
+            bend = c0 - 2.0 * c1 + c2
+            sub = np.where(bend > 1e-12, np.clip(0.5 * (c0 - c2) / np.maximum(bend, 1e-12), -0.5, 0.5), 0.0)
+            new = np.minimum(side[idx] + 0.7 * ((k - K + sub) * step - side[idx]), most[idx])
+            base = G[idx] + new[:, None] * B[idx]
+            nh, _cost = _best_height(P[idx - 1] - base, P[idx + 1] - base, N[idx], _at(F[idx], new / step))
+            moved = max(moved, float(np.abs(nh - h[idx]).max()), float(np.abs(new - side[idx]).max()))
+            side[idx], h[idx] = new, nh
+        if moved < tol:
+            break
+    for _ in range(2):
+        side[1:-1] = 0.25 * side[:-2] + 0.5 * side[1:-1] + 0.25 * side[2:]
+    return np.minimum(side, most)
+
+
+def _best_height(a, b, N, floor):
+    """(h, length): the height h >= floor along the unit normal N, from a base point whose neighbours lie at a and b
+    from it, at which the way from one neighbour to the other through the point is shortest, and that way's length."""
+    aa, ab = (a * N).sum(-1), (b * N).sum(-1)
+    ra = np.sqrt(np.maximum((a * a).sum(-1) - aa * aa, 0.0))
+    rb = np.sqrt(np.maximum((b * b).sum(-1) - ab * ab, 0.0))
+    h = np.maximum(floor, (aa * rb + ab * ra) / np.maximum(ra + rb, 1e-12))
+    return h, np.sqrt((h - aa) ** 2 + ra * ra) + np.sqrt((h - ab) ** 2 + rb * rb)
+
+
+def _taut(G, N, floor, sweeps=12000, tol=2e-6):
+    """Heights h (m,) >= floor along the unit normals N, zero at both ends, at which the line G + h N is shortest (a
+    convex problem: each point in turn takes its best height between its neighbours, until none moves)."""
+    m = len(G)
+    h = np.maximum(floor, 0.0)
+    h[0] = h[-1] = 0.0
+    for _ in range(sweeps):
+        moved = 0.0
+        for idx in (np.arange(1, m - 1, 2), np.arange(2, m - 1, 2)):
+            P = G + h[:, None] * N
+            new, _cost = _best_height(P[idx - 1] - G[idx], P[idx + 1] - G[idx], N[idx], floor[idx])
+            moved = max(moved, float(np.abs(new - h[idx]).max()))
+            h[idx] = new
+        if moved < tol:
+            break
+    return h
 
 
 def _cr(v, t, q):

@@ -200,8 +200,11 @@ class Strum(Metric):
         except SM.StrumError as e:
             raise CheckError(f"strum: {e}") from None
         fingers = tech == "fingers"
+        if specs[0].get("windmill") and not fingers:           # the strokes a windmill goes round instead of: not played
+            for s in SM.windmilled(strokes, specs[0]["windmill"], float(specs[0].get("windmill_dur", 0.5)))[1]:
+                s.ghost = True
         rows = _finger_rows(data, st, frames, ts, strokes, neck, entry, Mroot) if fingers else []
-        for s in ([] if fingers else strokes):
+        for s in ([] if fingers else [s for s in strokes if not s.ghost]):    # a ghost stroke is made over the strings
             if not (ts[0] <= s.t <= ts[-1]):
                 continue
             c0, w0 = SM.geometry(s, sigma)
@@ -242,6 +245,7 @@ class Strum(Metric):
         worst = sorted(want, key=lambda r: -r["dist_mm"])[:5]
         detail = {"technique": tech, "at_frame": int(round(ctx.project.frame(want[k]["t"]))), "strokes": len(rows),
                   "down": sum(1 for r in rows if r["dir"] > 0), "missed": len(miss), "timing": stats,
+                  "ghost": sum(1 for s in strokes if s.ghost),
                   "sigma_mm": round(sigma * 1000.0, 1), "worst": worst, "missed_strokes": [r["t"] for r in miss][:8]}
         if fingers:
             detail["fingers"] = {f: sum(1 for r in rows if r["finger"] == f) for f in ("index", "middle")}

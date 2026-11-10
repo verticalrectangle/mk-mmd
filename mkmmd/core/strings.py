@@ -168,6 +168,8 @@ def hits(strokes, centres, sigma, p, ring=None):
     SM._timing(strokes, {**SM.DEFAULTS, **p})
     out = []
     for s in strokes:
+        if s.ghost:                                            # made over the strings: nothing rings
+            continue
         if s.string is not None:
             t = s.t if getattr(s, "finger", None) else s.t + 0.5 * float(s.attack)
             out.append((t, int(s.string), float(s.amp)))

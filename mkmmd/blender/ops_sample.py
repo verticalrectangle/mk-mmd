@@ -81,7 +81,13 @@ def _arm(name):
 
 
 def resolve_collider(spec, default_arm):
-    """One collider spec -> list of items {kind, source, tag, geometry...} (geometry in the source frame)."""
+    """One collider spec -> list of items {kind, source, tag, geometry...} (geometry in the source frame). A spec's
+    `families` (the chain families it acts on; default all) goes with each of its items."""
+    items = _collider_items(spec, default_arm)
+    return [dict(it, families=list(spec["families"])) for it in items] if spec.get("families") else items
+
+
+def _collider_items(spec, default_arm):
     t = spec["type"]
     tag = spec.get("tag") or spec.get("object") or spec.get("bone") or t
     rnd = float(spec.get("rnd", 0.0))

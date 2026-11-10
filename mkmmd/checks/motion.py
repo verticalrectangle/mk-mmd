@@ -1,4 +1,4 @@
-"""Metrics on sampled motion: jitter, contact, penetration, clearance, foot_slide, joint_limits."""
+"""Metrics on sampled motion: jitter, contact, penetration, clearance, foot_slide, ground, joint_limits."""
 import numpy as np
 
 from ..core import armtwist as AT
@@ -369,11 +369,23 @@ class Clearance(Metric):
 
 
 # ---------------------------------------------------------------- foot slide
+def _heel(W, rest, A0, floor):
+    """(F, 3): the point of a foot's sole under its ankle, carried by the ankle bone (world matrices `W` (F, 4, 4), rest
+    matrix `rest` in armature space, `A0` the armature's world matrix on the first frame): on the floor at rest."""
+    w = A0[:3, :3] @ rest[:3, 3] + A0[:3, 3]
+    w[2] = floor
+    Ai = np.linalg.inv(A0)
+    return (W @ (np.linalg.inv(rest) @ np.append(Ai[:3, :3] @ w + Ai[:3, 3], 1.0)))[:, :3]
+
+
 @metric
 class FootSlide(Metric):
     name = "foot_slide"
     doc = ("Feet sliding while planted: horizontal speed of ankles/toes on frames where they rest near the floor "
-           "and barely move vertically. Value: the 95th percentile speed in mm per frame over planted frames. Speeds "
+           "and barely move vertically. An ankle is judged by what of its foot is down: the point of the sole under the "
+           "ankle, or the ball of the foot (the toes' joint, where the model has that bone), so a heel lifting about "
+           "planted toes (a soft free leg, a spin on the toes) is not a slide. Value: the 95th percentile speed in mm "
+           "per frame over planted frames. Speeds "
            "are taken between consecutive frames only, so `frames` may have gaps (the stops of a dance, say).")
     args = {"cast": "cast member (or armature)", "points": "bones (default ankle.L ankle.R toe.L toe.R)",
             "floor": "floor height (m, default 0)", "tolerance": "how far above its rest height a point still "
@@ -382,8 +394,9 @@ class FootSlide(Metric):
     def needs(self, args, ctx, need):
         arm, _ = ctx.cast(args)
         pts = _list(args.get("points")) or ["ankle.L", "ankle.R", "?toe.L", "?toe.R"]
-        need.bone(arm, *pts)
-        return {"arm": arm, "pts": pts}
+        soles = {p: "?toe." + p[-1] for p in pts if p.lstrip("?")[:-1] == "ankle."}
+        need.bone(arm, *dict.fromkeys([*pts, *soles.values()]))
+        return {"arm": arm, "pts": pts, "soles": soles}
 
     def compute(self, args, ctx, data, frames, st):
         W, rest, names = data.bones(st["arm"], st["pts"], frames)
@@ -396,15 +409,30 @@ class FootSlide(Metric):
         f = np.asarray(frames)
         adjacent = np.diff(f) == 1                              # a gap in `frames` is not a frame's motion
         runs = np.split(np.arange(len(f)), np.flatnonzero(~adjacent) + 1)
+        toes = {}                    # an ankle's bone: (its toes' joint over the frames, that joint's rest height); None: no toes
+        for a, t in st.get("soles", {}).items():
+            for n in data.resolve(st["arm"], [a]):
+                toes[n] = None
+                if data.has(st["arm"], t):
+                    Wt, rt, _ = data.bones(st["arm"], [t], frames)
+                    toes[n] = (Wt[:, 0, :3, 3], float((A[0][:3, :3] @ rt[0, :3, 3] + A[0][:3, 3])[2]) - floor)
         out, worst, at = {}, 0.0, None
         for j, n in enumerate(names):
-            z = pos[:, j, 2] - floor
+            P, up, base = pos[:, j][:, None], (pos[:, j, 2] - floor)[:, None], hz[j]     # the bone's own head, near its rest
+            if n in toes:                                       # an ankle: the sole under it or the ball of the foot (the
+                heel = _heel(W[:, j], rest[j], A[0], floor)     # toes' joint), whichever is down
+                P, up, base = heel[:, None], (heel[:, 2] - floor)[:, None], 0.0
+                if toes[n] is not None:
+                    ball, rest_up = toes[n]
+                    P, up = np.stack([heel, ball], 1), np.stack([heel[:, 2] - floor, ball[:, 2] - floor - rest_up], 1)
+            low, z = up.argmin(1), up.min(1)
             vz = np.zeros(len(z))
             for r in runs:
                 if len(r) > 1:
                     vz[r] = np.abs(np.gradient(z[r])) * 1000.0
-            planted = (z < hz[j] + tol) & (vz < 2.0)
-            h = np.linalg.norm(np.diff(pos[:, j, :2], axis=0), axis=1) * 1000.0
+            planted = (z < base + tol) & (vz < 2.0)
+            step = np.linalg.norm(np.diff(P[..., :2], axis=0), axis=2) * 1000.0
+            h = np.where(low[1:] == low[:-1], step[np.arange(len(step)), low[1:]], step.min(1))   # heel to ball: either
             pl = planted[1:] & planted[:-1] & adjacent
             if pl.sum() < 3:
                 out[n] = {"planted_frames": int(pl.sum())}
@@ -417,6 +445,86 @@ class FootSlide(Metric):
                       "worst_frames": _peaks(np.where(pl, h, 0.0), frames[1:])}
         out["at_frame"] = at
         return worst, out
+
+
+# ---------------------------------------------------------------- ground
+WALL = 0.2                # a triangle whose normal is flatter than this (its z part) is a wall, not ground
+REACH = 0.25              # m: the ground under a point is the highest surface no more than this above it
+
+
+def surface_height(V, T, pts, reach=REACH):
+    """The height of the ground under each of `pts` (n, 3): of the triangles `T` of the vertices `V` that are not walls,
+    the highest surface straight above or below the point and no more than `reach` over it (a ceiling or a table top
+    overhead is not what a foot stands on); -inf where there is none."""
+    V, pts = np.asarray(V, float), np.asarray(pts, float)
+    tri = V[np.asarray(T, int)]
+    nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    ln = np.linalg.norm(nrm, axis=1)
+    tri = tri[(ln > 1e-12) & (np.abs(nrm[:, 2]) > WALL * np.maximum(ln, 1e-12))]
+    out = np.full(len(pts), -np.inf)
+    if not len(tri) or not len(pts):
+        return out
+    lo, hi = pts[:, :2].min(0), pts[:, :2].max(0)
+    tri = tri[(tri[..., 0].max(1) >= lo[0]) & (tri[..., 0].min(1) <= hi[0])
+              & (tri[..., 1].max(1) >= lo[1]) & (tri[..., 1].min(1) <= hi[1])]
+    for a, b, c in tri:                                         # few after the box test: the patch under the feet
+        v0, v1, p = (b - a)[:2], (c - a)[:2], pts[:, :2] - a[:2]
+        den = v0[0] * v1[1] - v0[1] * v1[0]
+        if abs(den) < 1e-14:
+            continue
+        u = (p[:, 0] * v1[1] - p[:, 1] * v1[0]) / den
+        w = (v0[0] * p[:, 1] - v0[1] * p[:, 0]) / den
+        z = a[2] + u * (b[2] - a[2]) + w * (c[2] - a[2])
+        on = (u >= -1e-9) & (w >= -1e-9) & (u + w <= 1.0 + 1e-9) & (z <= pts[:, 2] + reach)
+        out = np.where(on & (z > out), z, out)
+    return out
+
+
+@metric
+class Ground(Metric):
+    name = "ground"
+    doc = ("Feet under the ground: how deep the skin of a character's feet (what its ankle and toe bones carry) goes "
+           "under the surface of what it stands on, read straight down at every vertex on every frame: the deepest (mm). "
+           "The ground is a set's or a prop's geometry as a render shows it (a studio sweep's floor and the cove it "
+           "curves up into, a stage, a slope), so a step back into a cove counts as what it is. A few millimetres is a "
+           "sole pressed on the floor.")
+    args = {"cast": "cast member (or armature)", "ground": "the set or prop stood on: its root's name, or a list",
+            "reach": f"m: a surface more than this above a foot's vertex is not its ground (default {REACH})"}
+    default_max = 10.0
+
+    def needs(self, args, ctx, need):
+        arm, _ = ctx.cast(args)
+        if not args.get("ground"):
+            raise CheckError("ground: give `ground`, the set or prop the feet stand on (its root's name, or a list)")
+        regions = {f"foot.{s}": {"bones": [f"ankle.{s}"], "stop": []} for s in ("L", "R")}
+        need.bone(arm, "ankle.L", "ankle.R")                    # the armature's own frames come with its bones
+        return {"arm": arm, "skin": need.skin(arm, regions), "mesh": need.mesh(prop=_list(args["ground"]))}
+
+    def compute(self, args, ctx, data, frames, st):
+        m = data.mesh(st["mesh"])
+        sk = data.skin(st["skin"], frames)
+        A = data.arm_world(st["arm"], frames)
+        own = np.flatnonzero(sk["region"] >= 0)
+        if not len(own):
+            raise CheckError("ground: no skin on the ankle and toe bones (a model without feet?)")
+        reach = float(args.get("reach", REACH))
+        deep = np.zeros(len(frames))
+        side = [""] * len(frames)
+        for k in range(len(frames)):
+            X = geom.apply(A[k][None], sk["posed"][k][own])     # the skin is in the armature's space
+            ok = np.isfinite(X).all(1)
+            if not ok.any():
+                continue
+            d = surface_height(m["vertices"], m["triangles"], X[ok], reach) - X[ok][:, 2]
+            j = int(np.argmax(d))
+            deep[k] = max(float(d[j]), 0.0) if np.isfinite(d[j]) else 0.0
+            side[k] = sk["regions"][int(sk["region"][own[ok][j]])]
+        k = int(np.argmax(deep))
+        mm = deep * 1000.0
+        return float(mm[k]), {"at_frame": int(frames[k]), "foot": side[k], "p95_mm": round(float(np.percentile(mm, 95)), 2),
+                              "frames_over_10mm": int((mm > 10.0).sum()), "worst_frames": _peaks(mm, frames),
+                              "ground": m["names"], "vertices": int(len(own))}
+
 
 
 # ---------------------------------------------------------------- joint limits

@@ -152,6 +152,161 @@ def beat_bob(ts, beats, deg=1.5, attack=0.06, decay=0.22, accent=None):
     return math.radians(deg) * beat_pulse(ts, beats, attack, decay, accent)
 
 
+# ---------------------------------------------------------------- groove
+GROOVE = {"every": 2, "shift": 0.03, "dip": 0.018, "light": 0.6, "soft": 8.0, "roll": 4.0, "yaw": 3.0, "still": 0.8,
+          "heel": 7.0, "lean": 1.0, "nod": 1.5, "vary": 0.25, "first": "L", "seed": 1, "ease": 0.4, "downbeat_accent": 1.3}
+GROOVE_KEYS = tuple(GROOVE) + ("from", "to", "timeline", "beats")
+GROOVE_XFER = (0.45, 0.3, 0.9)        # a change of the standing leg takes this share of the time to the next change, and
+                                      # no less / no more than these seconds: a slow sway is a slow change of leg
+GROOVE_ZETA = 0.62        # the weight's damping: under 1, so it runs a little past the leg and settles back
+GROOVE_LAGS = (0.03, 0.06, 0.11)      # s: the pelvis turns, the chest answers, the head follows: each a little later
+GROOVE_KNEE = (0.42, 0.3, 0.42)       # the knees give over this share of the time since the last beat (at most [1] s) and
+                                      # come back up over the rest of the time to the next (at most [2] s)
+GROOVE_POP = 0.15         # the hip goes this share further out over the standing leg as its knee gives
+
+
+def _spring(ts, times, values, omega, zeta):
+    """A damped spring following a target that steps to `values[k]` at `times[k]` (0 before the first), at the times
+    `ts` (ascending): x'' = omega^2 (target - x) - 2 zeta omega x', integrated on a 4 ms step."""
+    ts = np.asarray(ts, float)
+    h = 0.004
+    grid = np.arange(ts[0] - 2.0, ts[-1] + h, h)
+    target = np.zeros(len(grid))
+    for t, v in zip(times, values):
+        target[grid >= t] = v
+    x, v, out = 0.0, 0.0, np.empty(len(grid))
+    for i, g in enumerate(target):                              # semi-implicit Euler: stable at this step
+        v += h * (omega * omega * (g - x) - 2.0 * zeta * omega * v)
+        x += h * v
+        out[i] = x
+    return np.interp(ts, grid, out)
+
+
+def _wander(ts, rng, n=3):
+    """A slow wander in about -1..1: a few sines of 5 to 11 s with random phases (posture never holds still)."""
+    ts = np.asarray(ts, float)
+    out = np.zeros(len(ts))
+    for _ in range(n):
+        out += np.sin(2.0 * np.pi * ts / rng.uniform(5.0, 11.0) + rng.uniform(0.0, 2.0 * np.pi))
+    return out / n * 1.6
+
+
+def _knee_wave(ts, beats, amps):
+    """The beat in the knees over `ts`: `amps[k]` on beat k, where they are bent the most, and 0 where the legs are as
+    straight as they get, between two beats. A body let down onto each beat and coming back up the way a weight on a
+    spring does, a little faster down than up (GROOVE_KNEE), with no corner in it and never above where she stands;
+    beats far apart leave her standing in between."""
+    share, fall_max, rise_max = GROOVE_KNEE
+    ts = np.asarray(ts, float)
+    out = np.zeros(len(ts))
+    for k, (b, a) in enumerate(zip(beats, amps)):
+        fall = min(share * (b - beats[k - 1]), fall_max) if k else fall_max
+        rise = min((1.0 - share) * (beats[k + 1] - b), rise_max) if k + 1 < len(beats) else rise_max
+        x = ts - b
+        for m, span in (((x > -fall) & (x <= 0.0), fall), ((x > 0.0) & (x < rise), rise)):
+            out[m] = np.maximum(out[m], a * (0.5 + 0.5 * np.cos(np.pi * x[m] / span)))
+    return out
+
+
+def leg_reach(hip, knee, ankle, steps=301):
+    """(bends, reach): how far a leg's ankle is from its hip (`reach`, (N,) m, falling) with its knee bent by `bends`
+    ((N,) rad, 0 to 150 degrees) from the rest pose it was modelled in, the knee a hinge about the skeleton's left axis
+    (x); `hip`, `knee`, `ankle` are the rest joints (armature axes). A leg modelled a little knock-kneed or bent is at
+    its longest as modelled: an IK knee only bends from there, so that, and not thigh + shin, is what the leg reaches."""
+    hip, knee, ankle = (np.asarray(v, float) for v in (hip, knee, ankle))
+    bends = np.radians(np.linspace(0.0, 150.0, steps))
+    shin = ankle - knee
+    best = None
+    for way in (1.0, -1.0):                                      # the way that shortens the leg is the knee's
+        c, s = np.cos(bends), way * np.sin(bends)
+        turned = np.stack([np.full(steps, shin[0]), c * shin[1] - s * shin[2], s * shin[1] + c * shin[2]], 1)
+        d = np.linalg.norm(knee + turned - hip, axis=1)
+        if best is None or d[steps // 10] < best[steps // 10]:
+            best = d
+    return bends, np.minimum.accumulate(best)
+
+
+def groove(ts, beats, accent=None, spine=0.5, **table):
+    """A standing body in time with the music, as a person stands in it and not as a buoy bobs: ONE motion of the weight
+    from one foot to the other, with the beat in the knees, in place of a sway and a bounce laid over each other.
+
+    The weight changes foot every `every` beats (2: on 1 and 3; on the accented beats where `accent` marks any), `first`
+    the first foot it goes to. It is a sprung mass: it sets off before the beat, arrives on it, runs a little past the
+    leg and settles (`_spring`), over a time that goes with the sway's own (GROOVE_XFER: a slow sway changes leg slowly),
+    each change a little different in reach and timing (`vary`, drawn from `seed`). Everything else hangs on that one
+    curve w (-1: all on her right foot, +1: all on her left), each part of her a little later than the one below it
+    (GROOVE_LAGS):
+
+      side   the hips go `shift` m toward the standing leg
+      roll   the pelvis tilts: the standing hip up, the free one dropped (`roll` degrees)
+      yaw    and turns: the free hip comes forward (`yaw` degrees)
+      tilt   the chest leans back the other way, the share `still` of what would keep her head where it was (a singer
+             at a mic: her hips move under a head that hardly does); `spine` is the height of her head over her hips
+      turn   the shoulders turn a little against the pelvis
+      head_tilt  the head rights itself, late
+      heel   the free foot's heel comes off the floor (`heel` degrees about its toes) as the weight leaves it, and a
+             little more each time the standing knee gives: the free knee goes soft
+    On every beat (weighted by `accent`, per beat) the knees give: the hips are let down `dip` m onto the beat and come
+    back up before the next (`_knee_wave`: a wave under where she stands, not a pulse), in full on the beats her weight
+    lands on and the share `light` of it on the others; the hip goes a little further out with it (GROOVE_POP), the chest
+    curls `lean` degrees and the head nods `nod` degrees after it. Under it all her posture wanders slowly. Her knees
+    are never locked while she grooves: `soft` is the least bend (degrees) of the straighter one, which the build keeps
+    by lowering her hips (it has her legs). `from`, `to` (clip seconds) window it, eased over `ease` s. Returns {"w",
+    "side", "dip" (m, >= 0), "roll", "yaw", "tilt", "turn", "lean", "nod", "head_tilt" (rad, the build's signs: roll +
+    drops her left hip, yaw / turn / tilt + toward her left, lean / nod + forward), "heel": {"L", "R"} (rad), "soft"
+    (rad), "win" (0..1: how much of her is in it)} over `ts`."""
+    p = {**GROOVE, **{k: v for k, v in table.items() if v is not None}}
+    ts = np.asarray(ts, float)
+    beats = np.asarray(sorted(float(b) for b in beats), float)
+    acc = np.ones(len(beats)) if accent is None else np.asarray(accent, float)
+    lo, hi = float(p.get("from", -1e9)), float(p.get("to", 1e9))
+    ease = max(float(p["ease"]), 1e-3)
+    win = smooth((ts - lo) / ease + 1.0) * smooth((hi - ts) / ease + 1.0)
+    inside = (beats >= lo - 1e-6) & (beats <= hi + 1e-6)
+    beats, acc = beats[inside], acc[inside]
+    rng = np.random.default_rng([int(p["seed"]), 4099])
+    vary = float(p["vary"])
+    every = max(int(p["every"]), 1)
+    zero = np.zeros(len(ts))
+    if not len(beats):
+        return {"w": zero, "side": zero, "dip": zero, "roll": zero, "yaw": zero, "tilt": zero, "turn": zero, "lean": zero,
+                "nod": zero, "head_tilt": zero, "heel": {"L": zero, "R": zero}, "soft": zero, "win": zero}
+    # ---- the weight: a sprung change of leg, landing on every `every`-th beat (the accented ones, where there are any)
+    first = int(np.argmax([acc[o::every].mean() for o in range(min(every, len(beats)))]))
+    change = beats[first::every]
+    gap = float(np.median(np.diff(change))) if len(change) > 1 else 1.0
+    share, x_lo, x_hi = GROOVE_XFER
+    xfer = min(max(share * gap, x_lo), x_hi, 0.8 * gap)
+    omega = 3.2 / xfer                                          # at the leg about 0.9 xfer after it sets off
+    sign = 1.0 if p["first"] == "L" else -1.0
+    values = [sign * (-1.0) ** k * (1.0 + vary * rng.uniform(-0.3, 0.3)) for k in range(len(change))]
+    starts = [t - 0.95 * xfer + vary * rng.uniform(-0.04, 0.04) for t in change]     # on the leg by the beat
+    w_of = lambda lag: _spring(ts - lag, starts, values, omega, GROOVE_ZETA)      # noqa: E731
+    w = w_of(0.0)
+    w_pelvis, w_chest, w_head = (w_of(lag) for lag in GROOVE_LAGS)
+    # ---- the beat in the knees: let down onto each beat and back up, deepest where the weight lands
+    landing = np.zeros(len(beats), bool)
+    landing[first::every] = True
+    amps = acc * (1.0 + vary * rng.uniform(-0.4, 0.4, len(beats))) * np.where(landing, 1.0, float(p["light"]))
+    k_hips, k_chest, k_head = (_knee_wave(ts - lag, beats, amps) for lag in (0.0, 0.045, 0.10))
+    pop = 1.0 + GROOVE_POP * np.minimum(k_hips, 1.5)            # the hip pushed out as the knee under it gives
+    drift_side, drift_turn = _wander(ts, rng), _wander(ts, rng)
+    shift = float(p["shift"])
+    side = shift * (w * pop + 0.3 * vary * drift_side)          # her stance wanders a little under the sway
+    tilt = -float(p["still"]) * np.arctan2(shift * w_chest, max(float(spine), 0.1))
+    yaw = math.radians(float(p["yaw"])) * w_pelvis
+    heel = math.radians(float(p["heel"])) * (0.75 + 0.5 * np.minimum(k_hips, 1.0))
+    out = {"w": w, "side": side, "dip": float(p["dip"]) * k_hips,
+           "roll": -math.radians(float(p["roll"])) * w_pelvis * pop, "yaw": yaw,
+           "tilt": tilt,
+           "turn": -0.4 * math.radians(float(p["yaw"])) * w_chest + math.radians(3.2 * vary) * drift_turn,
+           "lean": math.radians(float(p["lean"])) * k_chest, "nod": math.radians(float(p["nod"])) * k_head,
+           "head_tilt": 0.9 * float(p["still"]) * np.arctan2(shift * w_head, max(float(spine), 0.1)),
+           "heel": {"L": heel * smooth((-w - 0.25) / 0.6), "R": heel * smooth((w - 0.25) / 0.6)},
+           "soft": np.full(len(ts), math.radians(float(p["soft"]))), "win": np.ones(len(ts))}
+    return {k: ({s: a * win for s, a in v.items()} if isinstance(v, dict) else v * win) for k, v in out.items()}
+
+
 def tap(ts, beats, lift=0.16, accent=None):
     """A finger tap landing on each beat (0..1 times the beat's `accent` weight): the finger rises over the first 55 % of
     the `lift` seconds before the beat and falls, faster and faster, onto it (the strike is the fastest moment, on the

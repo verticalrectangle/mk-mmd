@@ -451,3 +451,49 @@ def test_floating_kicks_wander_seeded_and_never_lock_a_knee():
         PF.air_plan(ts, [dict(span, kicks={"amount": 1})], LEGS)
     with pytest.raises(ValueError, match="wander within"):
         PF.air_plan(ts, [dict(span, kicks={"wander": 0.9})], LEGS)
+
+
+# ---------------------------------------------------------------- groove: a body standing in time
+G_BEATS = [0.5 * k for k in range(1, 33)]                 # 120 BPM
+
+
+def test_a_groove_is_one_change_of_leg_and_the_rest_of_her_hangs_on_it():
+    """Her weight goes to the other leg on every second beat, arriving on it and running a little past; settled on a leg
+    her hips are over it with that hip up, her chest leans back the other way and only the free heel is off the floor.
+    Outside its window she stands as posed."""
+    ts = np.arange(0.0, 16.5, 1 / 60)
+    g = PF.groove(ts, G_BEATS, None, spine=0.45, every=2, seed=3)
+    at = lambda x, t: float(np.interp(t, ts, x))            # noqa: E731
+    land = G_BEATS[0::2]
+    on = [at(g["w"], t + 0.12) for t in land[1:-1]]
+    assert all(a * b < 0 for a, b in zip(on, on[1:])) and min(abs(v) for v in on) > 0.85     # a leg, then the other
+    assert max(abs(v) for v in on) > 1.0                                                   # a little past it
+    for t in (b + 0.3 for b in land[2:-2]):
+        s = np.sign(at(g["w"], t))                                                         # +: on her left leg
+        free, stand = ("R", "L") if s > 0 else ("L", "R")
+        assert at(g["side"], t) * s > 0.015 and at(g["tilt"], t) * s < 0 and at(g["roll"], t) * s < 0
+        assert at(g["heel"][free], t) > np.radians(4.0) and at(g["heel"][stand], t) == pytest.approx(0.0, abs=1e-9)
+    w = PF.groove(ts, G_BEATS, None, **{"from": 4.0, "to": 8.0})
+    assert not w["dip"][ts < 3.5].any() and not w["side"][ts > 8.5].any() and w["win"].max() == pytest.approx(1.0)
+    assert w["soft"].max() == pytest.approx(np.radians(PF.GROOVE["soft"]))
+
+
+def test_a_groove_lets_her_down_onto_each_beat_under_where_she_stands_deepest_where_her_weight_lands():
+    ts = np.arange(0.0, 16.5, 1 / 240)
+    d = PF.groove(ts, G_BEATS, None, every=2, dip=0.02, vary=0)["dip"]
+    assert d.min() >= 0.0 and np.abs(np.diff(d, 2)).max() < 1e-4            # never above her stance; a wave, no corner
+    for k in range(2, len(G_BEATS) - 2):
+        near = (ts > G_BEATS[k] - 0.2) & (ts < G_BEATS[k] + 0.2)
+        assert ts[near][np.argmax(d[near])] == pytest.approx(G_BEATS[k], abs=0.006)      # lowest on the beat
+        assert d[near].max() == pytest.approx(0.02 * (1.0 if k % 2 == 0 else PF.GROOVE["light"]), rel=0.01)
+        assert d[(ts > G_BEATS[k] + 0.28) & (ts < G_BEATS[k] + 0.29)].max() < 1e-4       # up again between beats
+
+
+def test_a_leg_reaches_farthest_as_it_was_modelled_and_less_the_more_its_knee_bends():
+    hip, knee, ankle = [0.08, -0.04, 0.78], [0.055, -0.03, 0.44], [0.063, 0.0, 0.10]      # a little knock-kneed, as models are
+    bends, reach = PF.leg_reach(hip, knee, ankle)
+    limbs = np.linalg.norm(np.subtract(knee, hip)) + np.linalg.norm(np.subtract(ankle, knee))
+    assert reach[0] == pytest.approx(np.linalg.norm(np.subtract(ankle, hip))) and reach[0] < limbs - 1e-4
+    assert (np.diff(reach) <= 0).all() and reach[-1] < 0.6 * reach[0] and bends[-1] == pytest.approx(np.radians(150.0))
+    straight = PF.leg_reach([0, 0, 0.8], [0, 0, 0.4], [0, 0, 0.0])[1]
+    assert straight[0] == pytest.approx(0.8) and straight[60] == pytest.approx(0.8 * np.cos(np.radians(15.0)))

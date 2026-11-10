@@ -30,7 +30,9 @@ EST_MB = {50: 0.9, 100: 3.2}          # rough PNG size per 1080-class frame at t
 
 HELP = """Render the project's cut (shot cameras, per output) to PNG frames in
 <project>/renders/<preset>/<output>/<frame>.png (<frame> is the Blender frame, five digits). Frames already on disk are
-skipped, so a stopped render resumes; --jobs N runs N Blender processes that share the frames. Before starting, mk
+skipped, so a stopped render resumes; frames (and their layers) older than the built scene are not: they show the scene
+of an earlier build, so they are drawn again (the report's `stale` counts them; --keep takes them as they are, for a
+scene built again without a change). --jobs N runs N Blender processes that share the frames. Before starting, mk
 checks that the disk can hold the frames.
 
 Presets: draft (50 %, 16 samples, no motion blur), preview (50 %, 32 samples, motion blur), final (100 %, 64 samples,
@@ -92,6 +94,8 @@ def add(sub):
     p.add_argument("--no-styles", action="store_true", help="ignore the shots' silhouette / reflection looks")
     p.add_argument("--no-transitions", action="store_true",
                    help="do not render the layers of [[transition]] / [[insert]] / [[glitch]]")
+    p.add_argument("--keep", action="store_true", help="take the frames on disk that are older than the built scene as "
+                   "they are (by default they are drawn again: they show an earlier build)")
     p.add_argument("--post", action="store_true", help="run `mk post --follow` alongside: the videos are finished as "
                    "the frames come")
     p.add_argument("--post-args", default="", metavar="ARGS", help="more flags for that mk post (one string, e.g. "
@@ -106,6 +110,14 @@ def frames_dir(proj, preset, output):
 
 def on_disk(d):
     return {p.stem for p in d.glob("*.png") if p.stat().st_size > 0} if d.exists() else set()
+
+
+def stale_files(d, frames, built):
+    """The files of `frames` in an output's folder `d` (the frames, and their layers in its sub-folders: <frame>.<ext>)
+    that are older than the scene (`built`: the time it was built): they show the scene of an earlier build."""
+    want = {f"{f:05d}" for f in frames}
+    return sorted(p for p in d.rglob("*") if p.is_file() and p.stem[:5] in want and p.stat().st_mtime < built) \
+        if d.exists() else []
 
 
 def mk_plan(proj, outs, frames, percent):
@@ -167,6 +179,12 @@ def run(args):
     if keep:                                               # the mask of where those materials are seen: keep/<frame>.png
         keep = {"armature": CN.armature_name(next(c for c in proj.cast if c.get("name") == keep["cast"])),
                 "materials": keep["materials"]}
+    stale = {}
+    for o in outs:                                         # frames of an earlier build are not this scene's frames
+        old = stale_files(frames_dir(proj, args.preset, o.name), frames, proj.blend.stat().st_mtime)
+        stale[o.name] = len(old)
+        for p in ([] if args.keep else old):
+            p.unlink()
     need_mb = 0.0
     for o in outs:
         d = frames_dir(proj, args.preset, o.name)
@@ -274,10 +292,11 @@ def run(args):
             return [f.result() for f in futs]
     with GL.held("mk render --post" if args.post else "mk render"):    # the post alongside runs inside this hold
         return finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_frames, engine_run, promised,
-                          blender)
+                          blender, stale)
 
 
-def finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_frames, engine_run, promised, blender):
+def finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_frames, engine_run, promised, blender,
+               stale=None):
     """The drawing of a render (mk's engine's thread `engine_run`, Blender's jobs `blender(o)`) under its manifests,
     with `mk post --follow` alongside when asked; its report emitted, its exit code."""
     for o in outs:                                         # what each frame gets, for mk post --follow
@@ -345,6 +364,8 @@ def finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_fram
             out[own] = engine_run["result"]
     for o in outs:
         report[o.name]["frames_on_disk"] = len(on_disk(frames_dir(proj, args.preset, o.name)))
+        if (stale or {}).get(o.name):
+            report[o.name]["stale"] = {"files": stale[o.name], "kept" if args.keep else "drawn_again": True}
     out["render_seconds"] = round(time.time() - t0, 1)
     if post is not None:                                   # the videos, finished as the frames came
         out["post"], ok = posted(post)

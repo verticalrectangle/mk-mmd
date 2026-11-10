@@ -20,8 +20,12 @@ The whole frame range is simulated (the pre-roll lets the hair settle while the 
 Branching chains (a strand that splits) are decomposed: the trunk follows the deepest subtree, every other subtree
 becomes a chain anchored on the bone it grows from. Trunks and plain chains are solved first and keyed; then the
 branches are solved riding the keyed trunks, level by level. The bodies of every simulated bone are left out of
-the colliders (they move with the hair). Chain bones get LINEAR rotation keys on every frame."""
+the colliders (they move with the hair). Chain bones get LINEAR rotation keys on every frame.
+
+Worn props (with or without a [sim.<cast>] table): `simulate_cables` swings their cords (mkmmd.solvers.cable) and
+`simulate_straps` lets their straps move as bands do (mkmmd.solvers.strap)."""
 import json
+import os
 
 import bpy
 import numpy as np
@@ -237,11 +241,16 @@ def run(ctx):
     cables = simulate_cables(ctx)
     if cables:
         out["cables"] = cables
+    straps = simulate_straps(ctx)
+    if straps:
+        out["straps"] = straps
     return out
 
 
 CABLE_SUBSTEPS = 8
 CABLE_SETTLE_S = 2.0
+CABLE_STEPS = 3               # curve steps between two particles (3 cm apart): 1 cm; the hung curve's 12 were 2.5 mm, and a
+#                               3.4 m lead too many vertices to bake on every frame
 
 
 def simulate_cables(ctx):
@@ -285,6 +294,7 @@ def simulate_cables(ctx):
         sp = cu.splines.new("NURBS")
         sp.points.add(x.shape[1] - 1)
         sp.order_u, sp.use_endpoint_u = 4, True
+        cu.resolution_u = CABLE_STEPS
         k0 = ctx.frame0 - int(ctx.frames[0])
         for pt, p in zip(sp.points, x[k0]):
             pt.co = (float(p[0]), float(p[1]), float(p[2]), 1.0)
@@ -295,4 +305,93 @@ def simulate_cables(ctx):
                 K.set_fcurve(cu, f"splines[0].points[{i}].co", k, ctx.frames, x[:, i, k], interp="LINEAR")
         out[pname] = rep
         ctx.log("cable", pname, json.dumps(rep))
+    return out
+
+
+STRAP_SUBSTEPS = 8
+STRAP_SETTLE_S = 1.0
+
+
+def _skinned_points(arm, points, bones, weights):
+    """A helper mesh of loose points (the armature's rest frame) skinned to `arm` with `weights` (n, len(bones)):
+    evaluated on a frame, it is where her skin takes each point. The caller removes it."""
+    me = bpy.data.meshes.new("mk_strap_points")
+    me.from_pydata([tuple(float(c) for c in p) for p in points], [], [])
+    ob = bpy.data.objects.new("mk_strap_points", me)
+    bpy.context.scene.collection.objects.link(ob)
+    ob.parent = arm                                              # it rides the armature object as her meshes do
+    for j, b in enumerate(bones):
+        vg = ob.vertex_groups.new(name=b)
+        for i in np.flatnonzero(weights[:, j] > 0.0):
+            vg.add([int(i)], float(weights[i, j]), "REPLACE")
+    ob.modifiers.new("armature", "ARMATURE").object = arm
+    return ob
+
+
+def simulate_straps(ctx):
+    """Let the strap of every worn prop whose wear `strap` has not `sim = false` move as a band does (docs/design.md:
+    Playing a worn guitar) with mkmmd.solvers.strap: where it lies on its wearer her skin carries it (a helper mesh
+    skinned like her says where, on every frame), at the buttons the prop holds it, and the runs between hang with the
+    strap's `slack`, swing and settle. The band's mesh is then played from a point cache beside the scene
+    (<blend>.wear/<strap>.pc2, a Mesh Cache modifier), in place of the one stiff shape that rode the prop."""
+    from . import cloth as CLOTH
+    from . import wear as WEAR
+    out = {}
+    sc = bpy.context.scene
+    for pname, prop in ctx.props.items():
+        st = (getattr(prop, "worn", None) or {}).get("strap")
+        if not st or not st["sim"]:
+            continue
+        m = ctx.cast[prop.worn["cast"]]
+        obj = bpy.data.objects[st["object"]]
+        path, normals = st["path"], st["normals"]
+        n, F = len(path), len(ctx.frames)
+        real = np.isfinite(st["under"]).all(1)
+        probe = _skinned_points(m.arm, np.vstack([path, path + 0.02 * normals, np.where(real[:, None], st["under"], path)]),
+                                st["bones"], np.tile(st["weights"], (3, 1)))
+        bpy.context.view_layer.update()
+        T = prop.worn["T"]                                       # the band as built: in the prop's frame (T is orthonormal)
+        own, own_n = (path - T[:3, 3]) @ T[:3, :3], normals @ T[:3, :3]
+        skinned, W = np.zeros((F, 3 * n, 3)), np.zeros((F, 4, 4))
+        co = np.empty(9 * n)
+        try:
+            with SCOPE.only([m.arm, prop.root, obj, probe]):
+                for i, f in enumerate(ctx.frames):
+                    sc.frame_set(int(f))
+                    dg = bpy.context.evaluated_depsgraph_get()
+                    pe = probe.evaluated_get(dg)
+                    pe.to_mesh().vertices.foreach_get("co", co)
+                    pe.to_mesh_clear()
+                    M = np.array(pe.matrix_world)
+                    skinned[i] = co.reshape(-1, 3) @ M[:3, :3].T + M[:3, 3]
+                    W[i] = np.array(obj.evaluated_get(dg).matrix_world)
+        finally:
+            me = probe.data
+            bpy.data.objects.remove(probe)
+            bpy.data.meshes.remove(me)
+        unit = lambda v: v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)   # noqa: E731
+        under = skinned[:, 2 * n:].copy()
+        under[:, ~real] = np.nan
+        res, rep = ctx.solve("mkmmd.solvers.strap",
+                             {"rest": path, "kind": st["kind"],
+                              "held": np.einsum("fij,nj->fni", W[:, :3, :3], own) + W[:, None, :3, 3],
+                              "held_n": unit(np.einsum("fij,nj->fni", W[:, :3, :3], own_n)),
+                              "carried": skinned[:, :n], "carried_n": unit(skinned[:, n:2 * n] - skinned[:, :n]),
+                              "under": under},
+                             {"fps": ctx.fps, "substeps": STRAP_SUBSTEPS, "slack": st["slack"], "standoff": st["standoff"],
+                              "settle_s": STRAP_SETTLE_S}, tag=f"strap-{pname}")
+        Wi = np.linalg.inv(W)                                    # the band on every frame, in the strap object's frame
+        x = np.einsum("fij,fnj->fni", Wi[:, :3, :3], np.asarray(res["x"], float)) + Wi[:, None, :3, 3]
+        nr = np.einsum("fij,fnj->fni", Wi[:, :3, :3], np.asarray(res["n"], float))
+        X = np.stack([WEAR.band_mesh(x[i], nr[i], st["width"], st["thick"]).V for i in range(F)])
+        if X.shape[1] != len(obj.data.vertices):
+            raise BuildError(f"prop {pname!r}: the strap's mesh has {len(obj.data.vertices)} points, its frames {X.shape[1]}")
+        side = os.path.splitext(ctx.path(ctx.out))[0] + ".wear" if ctx.out else os.path.join(ctx.cache, "strap")
+        os.makedirs(side, exist_ok=True)
+        pc2 = os.path.join(side, f"{obj.name}.pc2")
+        CLOTH.write_pc2(pc2, X)
+        mc = obj.modifiers.new("frames", "MESH_CACHE")
+        mc.cache_format, mc.filepath, mc.frame_start = "PC2", pc2, float(ctx.frames[0])
+        out[pname] = rep
+        ctx.log("strap", pname, json.dumps(rep))
     return out

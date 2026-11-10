@@ -443,7 +443,7 @@ def _cone(u, t, cmax):
     """Unit directions u (n,3) turned toward the unit directions t (n,3) until they are within acos(cmax) (n,) of them
     (bend_max); rows already inside are left alone. Returns the rows that moved."""
     c = np.einsum("ij,ij->i", u, t)
-    out = c < cmax
+    out = (c < cmax) & (cmax > -1.0)                    # a cone of half a turn or more is no limit, whatever c says
     if out.any():
         tt, w = t[out], u[out] - c[out, None] * t[out]
         wn = np.linalg.norm(w, axis=1)
@@ -1106,7 +1106,10 @@ if HAVE_NUMBA:
 
     @_jit
     def _nb_min_rot_mul(Dp, a0, a1, a2, b0, b1, b2, out):
-        """out = Dp @ R where R is geom.min_rot's rotation taking unit vector a to unit vector b."""
+        """out = Dp @ R where R is geom.min_rot's rotation taking unit vector a to the direction b (made unit here, as
+        there: see it)."""
+        bn = max(np.sqrt(b0 * b0 + b1 * b1 + b2 * b2), 1e-12)
+        b0, b1, b2 = b0 / bn, b1 / bn, b2 / bn
         vx, vy, vz = a1 * b2 - a2 * b1, a2 * b0 - a0 * b2, a0 * b1 - a1 * b0
         c = a0 * b0 + a1 * b1 + a2 * b2
         R = np.empty((3, 3))
@@ -1164,7 +1167,7 @@ if HAVE_NUMBA:
             if bend:
                 cm = bcos[j]
                 c = u0 * t0 + u1 * t1 + u2 * t2
-                if c < cm:                                # outside the cone: turn it back onto its rim
+                if cm > -1.0 and c < cm:                  # outside the cone: turn it back onto its rim
                     w0, w1, w2 = u0 - c * t0, u1 - c * t1, u2 - c * t2
                     wn = np.sqrt(w0 * w0 + w1 * w1 + w2 * w2)
                     if wn < 1e-9:                         # turned right round: bend toward any side

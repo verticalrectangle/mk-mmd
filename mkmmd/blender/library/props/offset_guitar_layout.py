@@ -113,8 +113,7 @@ def body_control_points():
 
 # strap buttons: where the button leaves the body, and the way it points
 STRAP_TOP = {"point": (-0.1180, BODY_T / 2, 0.2930), "dir": (-0.20, 0.0, 0.98)}     # the long horn's tip
-STRAP_BOTTOM = {"point": (0.0040, BODY_T / 2, -0.1915), "dir": (-0.13, 0.0, -0.99),  # the tail, on the centre line; the strap
-                "leave": (-0.08, 0.80, -0.60)}             # leaves it backward, behind the body: no end sticks out past the tail
+STRAP_BOTTOM = {"point": (0.0040, BODY_T / 2, -0.1915), "dir": (-0.13, 0.0, -0.99)}  # the tail, on the centre line
 
 # the contours: the forearm bevel on the bass edge of the lower bout's front, the belly cut on the back at the bass waist
 FOREARM = {"depth": 0.0080, "width": 0.050, "z": (-0.165, -0.110, 0.010, 0.060)}
@@ -265,7 +264,7 @@ def card(name, roles=None, size=None, arm=None, has_arm=True):
     strum["clear"], strum["hold"] = PICK_CLEAR, PICK_HOLD
     _mouth, jdir, jend = jack_geometry()
     place = {"strap_top": (STRAP_TOP["point"], _unit(STRAP_TOP["dir"])),
-             "strap_bottom": (STRAP_BOTTOM["point"], _unit(STRAP_BOTTOM["leave"])), "jack": (jend, jdir)}
+             "strap_bottom": (STRAP_BOTTOM["point"], _unit(STRAP_BOTTOM["dir"])), "jack": (jend, jdir)}
     for a in c["use"]["anchor"]:
         if a["name"] in place:
             a["point"], a["dir"] = _r(place[a["name"]][0]), _r(place[a["name"]][1])

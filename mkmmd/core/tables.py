@@ -39,12 +39,13 @@ PERFORM = {
     "sing": ("timeline", "lines", "words", "mouth", "lead", "voice"), "expressions": ("morph", "keys"), "mouth": None,
     "twitch": ("bones", "family", "t", "deg", "axis", "dur"),
     "bounce": ("depth", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"), "rise": None, "crouch": None,
+    "groove": PF.GROOVE_KEYS,
     "kick": ("foot", "height", "back", "hold", "timeline", "beats", "downbeat_accent", "from", "to", "attack", "decay"),
     "air": {**{k: None for k in PF.AIR_KEYS}, "kicks": PF.KICKS_KEYS}, "step_turn": PF.TURN_KEYS, "spin": PF.SPIN_KEYS,
     "tumble": PF.TUMBLE_KEYS, "squash": PF.SQUASH_KEYS,
     "walk": {**{k: None for k in PF.WALK_KEYS}, "hops": PF.HOP_KEYS},
-    "strum": tuple(dict.fromkeys(("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "kick",
-                                  "windmill", "windmill_dur", "ring", "technique") + tuple(strum.DEFAULTS)
+    "strum": tuple(dict.fromkeys(("hand", "prop", "grip", "timeline", "sigma", "rhythm", "from", "to", "accent", "hits", "seed",
+                                  "kick", "windmill", "windmill_dur", "ring", "technique") + tuple(strum.DEFAULTS)
                                  + tuple(strum.FINGERS))),
     "drum": ("hand", "fingers", "deg", "lift", "roll", "timeline", "beats", "downbeat_accent", "from", "to"),
 }

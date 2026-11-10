@@ -173,9 +173,12 @@ class Ctx:
             env.pop("PYTHONHOME", None)
             env.pop("PYTHONPATH", None)
             r = subprocess.run([self.python, "-m", module, inp, part], capture_output=True, text=True, env=env)
+            if r.returncode != 0 or not os.path.exists(part):  # the input stays for a rerun by hand (one per tag)
+                kept = os.path.join(d, f"{tag}.failed.in.npz")
+                os.replace(inp, kept)
+                raise BuildError(f"{module} failed ({r.returncode}); its input is kept: `{os.path.basename(self.python)} -m "
+                                 f"{module} {kept} OUT.npz` reruns it:\n{r.stderr[-3000:]}")
             os.unlink(inp)
-            if r.returncode != 0 or not os.path.exists(part):
-                raise BuildError(f"{module} failed ({r.returncode}):\n{r.stderr[-3000:]}")
             os.replace(part, out)                      # whole or not at all for a build that reads it meanwhile
             self.log(f"{module}: solved in {time.time() - t0:.1f}s")
         with np.load(out, allow_pickle=False) as z:

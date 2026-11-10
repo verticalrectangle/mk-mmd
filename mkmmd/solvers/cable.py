@@ -4,13 +4,19 @@ imports bpy, deterministic.
 Model (a position-based rope)
   particles  points SEG apart along the cord, resampled from the hung shape (mkmmd.core.cable.hang's control points,
              smoothed): the first is the plug, the second is held out of the plug along its direction (a cord leaves its
-             socket straight), the last PIN_TAIL lie where they are on the floor (the cord runs on to the amp).
+             socket straight), the last PIN_TAIL lie where they are on the floor (the cord runs on to an amp out of the
+             picture) until the cord is pulled taut on them: then they give and are dragged after the wearer (held for
+             good, the cord had to stretch instead: 30 times its length when its wearer walked a metre off).
   per substep  verlet prediction with gravity and air drag -> ITERS rounds of: segment lengths (even and odd pairs in
-             turn, both ends move unless pinned), a weak pull of every inner particle toward the midpoint of its
+             turn, both ends move unless held), a weak pull of every inner particle toward the midpoint of its
              neighbours (BEND: a lead is springy, it bends in curves, not kinks), the floor and, every COLLIDE_EVERY-th
              round and after the last, the wearer's collision bodies (mkmmd.solvers.geom shapes riding on their bones)
-             -> floor friction (a touching particle's slide under STATIC metres is cancelled, FRICTION of a larger one
-             taken back: a cord lying on the floor stays put until it is pulled).
+             -> floor friction (Coulomb: a touching particle's slide loses MU g dt^2, and one under STICK of that is
+             cancelled: a cord lying on the floor stays put until it is pulled, and then slides as a dragged weight
+             does) -> the cord never stretches: from the
+             plug to the tail, a particle further than a segment (and TAUT of one) from the one before it is brought
+             back onto it along the line between them (what the rounds had not yet passed down a taut cord), then the
+             floor and the bodies once more.
   settle     the first frame is held for `settle_s` seconds, so the cord drops from the designed shape into its own
              before the clip starts.
   enables    particles within ANCHOR_FREE metres of the plug along the cord do not collide with bodies (the jack sits
@@ -34,15 +40,18 @@ import numpy as np
 
 from . import geom
 
-VERSION = 1
+VERSION = 2
 SEG = 0.03            # m between particles
 ITERS = 16            # constraint rounds per substep
 COLLIDE_EVERY = 4     # body collisions every this many rounds, and after the last
 DRAG = 2.5            # 1/s: the cord's velocity relaxes toward still air (a lead is lossy: a swing dies in a second)
 BEND = 0.12           # share of an inner particle's offset from its neighbours' midpoint removed per round
-FRICTION = 0.5        # share of a floor-touching particle's slide taken back per substep ...
-STATIC = 0.00015      # ... and a slide shorter than this (m per substep) is cancelled: the cord grips the floor
-PIN_TAIL = 2          # particles at the far end held where they lie
+MU = 0.5              # the cord's friction on the floor: a slide loses MU g dt^2 per substep, as a weight dragged does (the
+                      # floor took half of any slide back: glue, and a pulled cord lifted taut instead of sliding) ...
+STICK = 1.8           # ... and a slide under this many times that is held: lying still, a cord stays where it lies
+PIN_TAIL = 2          # particles at the far end held where they lie, until the cord is pulled taut on them
+TAUT = 0.02           # share of its length a hanging segment may be over before it is brought in behind the one above it
+DRAG_AT = 0.15        # ... and a segment lying on the floor: that much pull drags it over the floor (less is the rounds')
 ANCHOR_FREE = 0.12    # m along the cord from the plug without body collisions
 MARGIN = 0.002        # m added to the cord's radius for collisions
 GRAVITY = np.array([0.0, 0.0, -9.81])
@@ -96,6 +105,45 @@ class Rope:
             over = (ln > arc) & (self.w > 0) & (ln > 1e-12)
             x[over] = end + d[over] * (arc[over] / ln[over])[:, None]
 
+    def _taut(self, x):
+        """The cord does not stretch. What hangs follows the plug: from the plug down to where the cord first lies on
+        the floor, a particle more than a segment (and TAUT of one) from the one above it comes back onto it along the
+        line between them, without the speed that would add (a cord swung round fast is carried, not thrown: the rounds
+        alone left it metres long behind a twirl). What lies on the floor is not touched: the floor's friction holds it
+        and the rounds pull its curves straight from the pulled end, as a cord on a floor goes (brought in particle by
+        particle it was reeled in whole, like a snake on rails). And the far end gives only when it must: when the plug
+        is further from it than the cord is long it is dragged over the floor toward the plug by what is missing, a
+        segment a substep at most. Returns whether anything moved."""
+        k = len(x) - len(self.tail)
+        moved = False
+        d = x[0] - x[k]
+        short = float(np.linalg.norm(d)) - self.L * k
+        if short > 0.0:
+            if self.floor is not None:
+                d[2] = 0.0
+            ln = float(np.linalg.norm(d))
+            if ln > 1e-9:
+                self.tail = self.tail + d / ln * min(short, self.L)
+                x[k:] = self.tail
+                moved = True
+        hang, drag = self.L * (1.0 + TAUT), self.L * (1.0 + DRAG_AT)
+        lying = -math.inf if self.floor is None else self.floor + 0.004
+        for i in range(2, len(x)):
+            on_floor = x[i, 2] - self.r[i] <= lying             # what lies on the floor is only dragged by a real pull
+            d = x[i] - x[i - 1]
+            ln = math.sqrt(float(d @ d))
+            if ln > (drag if on_floor else hang):
+                to = x[i - 1] + d * ((self.L if not on_floor else drag) / ln)
+                self.prev[i] += to - x[i]
+                x[i] = to
+                moved = True
+        if moved:                                               # a far end the pull reached lies where it was dragged to
+            tail = x[k:]
+            if self.floor is not None:
+                tail[:, 2] = self.floor + self.r[k:]
+            self.tail = tail.copy()
+        return moved
+
     def _lengths(self, x):
         w = self.w
         for par in (0, 1):
@@ -148,18 +196,25 @@ class Rope:
             self._floor(x)
             if W and (k % COLLIDE_EVERY == COLLIDE_EVERY - 1 or k == ITERS - 1):
                 self._bodies(x, W)
-        if self.floor is not None:
-            touch = (x[:, 2] <= self.floor + self.r + 1e-4) & (self.w > 0)
-            slide = x[touch, :2] - self.prev[touch, :2]
-            grip = np.linalg.norm(slide, axis=1) < STATIC
-            x[touch, :2] -= np.where(grip[:, None], 1.0, FRICTION) * slide
+        if self.floor is not None:                              # Coulomb friction: the floor takes back of a touching
+            touch = (x[:, 2] <= self.floor + self.r + 1e-4) & (self.w > 0)     # particle's slide what its weight's grip
+            slide = x[touch, :2] - self.prev[touch, :2]         # can in a substep (MU g dt^2), and holds it still under
+            s = np.linalg.norm(slide, axis=1)                   # STICK of that
+            lim = MU * 9.81 * dt * dt
+            keep = np.where(s < STICK * lim, 0.0, np.maximum(s - lim, 0.0) / np.maximum(s, 1e-12))
+            x[touch, :2] = self.prev[touch, :2] + slide * keep[:, None]
+        if self._taut(x):
+            self._floor(x)
+            if W:
+                self._bodies(x, W)
         self.x = x
 
     def measure(self, W):
-        """(segment stretch as a share of the rest length, deepest body penetration m, deepest floor penetration m)."""
+        """(the longest segment's stretch as a share of the rest length: a cord gives where it is squeezed, it bends,
+        but it does not stretch; deepest body penetration m; deepest floor penetration m)."""
         x = self.x
         ln = np.linalg.norm(np.diff(x, axis=0), axis=1)
-        stretch = float(np.max(np.abs(ln - self.L)) / self.L)
+        stretch = float(max(np.max(ln - self.L), 0.0) / self.L)
         body = 0.0
         if W:
             for p, _n in geom.penetration(x, self.r - MARGIN, W, None).values():

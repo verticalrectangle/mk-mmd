@@ -930,3 +930,20 @@ def test_numba_engine_reproduces_the_numpy_engine_under_changing_gravity():
     g = np.clip(np.linspace(1.5, -0.5, 24), 0.0, 1.0)
     a, b = run(sc, engine="numpy", gravity=g), run(sc, engine="numba", threads=2, gravity=g)
     assert np.abs(a.x - b.x).max() < 1e-9
+
+
+def test_frames_down_a_strand_folded_back_on_itself_stay_rotations():
+    """A zigzag: every segment lies almost opposite its rest direction in its parent's frame (hair wound round a guitar's
+    neck in a spin). The turn onto it is nearly a half turn, where the formula multiplies what its input is off by with
+    1 / (1 + c): with a frame a hair off orthonormal, as a sampled anchor's is, the frames grew a thousandfold a segment
+    into no rotations at all (and a non-finite strand a few substeps on). A strand without a bend limit is never clamped."""
+    rng = np.random.default_rng(3)
+    q = np.array([[0.9, 0.3, 0.2, 0.25]])
+    D = geom.quat_to_mat(q / np.linalg.norm(q))[0] + 4e-9 * rng.normal(size=(3, 3))
+    a = np.array([0.0, 0.0, -1.0])
+    for _ in range(30):
+        u = D @ (-a + 0.03 * rng.normal(size=3))                 # almost straight back
+        D = D @ geom.min_rot(a[None], (D.T @ (u / np.linalg.norm(u)))[None])[0]
+        assert np.abs(D @ D.T - np.eye(3)).max() < 1e-6
+    u = np.array([[0.0, 0.0, 1.0]])
+    assert not strands._cone(u, np.array([[0.0, 0.0, -3.0]]), np.array([-2.0])).any() and np.isfinite(u).all()

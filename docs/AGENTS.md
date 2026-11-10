@@ -112,6 +112,15 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
 - **Perform** ([Perform](design.md#perform)): gaze events over an idle target, eye-only glances, breathing, sway, nods, beat bob, blinks,
   expressions, lip sync from the timeline (`sing`; `words = [[2, -1]]` mouths only chosen words, a partner shouting the line endings), twitches,
   strumming (`strum`: down strokes on the downbeats, the pick meeting the string at each strike).
+  A body that stands and plays, sings or waits gets a `groove`: her weight goes from foot to foot in time (hips over the standing
+  leg, that hip up, the chest back so the head keeps still, the free heel off the floor) and her knees let her down onto each
+  beat. It is ONE motion; a `rock` with a `bounce` over it is a pendulum and a pulse that know nothing of each other, and she
+  bobs like a buoy. At a mic keep `still` high (0.85) and the sway a bar a leg (`every = 4`); off it let her head go
+  (`still = 0.5`) and change leg twice as fast. Window it out of her steps, turns and spins (`from`, `to`), read the report's
+  `knee_deg` (8 to about 50) and look at it in a front strip a beat long and as curves, not in one still: a sway is right or
+  wrong in time. A strum's rhythm comes from the guitar's stem, not from taste: measure the onset energy on each eighth of
+  the bar; where every eighth sounds, strum them all and `accent` the loud ones, and where only some do, play those (`hits`)
+  and let the hand keep time over the strings on the rest (ghost strokes).
   A character that turns round uses `step_turn` (the head, chest and hips in turn, the feet stepping), and one that twirls (in the
   air or on the ground) `spin` (a wind-up, the head spotting the camera and whipping round ahead of the chest, the hips trailing,
   an overshoot settling back), not a `[[key]]` on its root's rotation: that spins it like a figure on a turntable. Look at a spin
@@ -169,6 +178,8 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   the cloth closer to its shape when a move is too fast for it, `mk build --skip cloth` is the fast loop for everything else.
 - **Worn props** (a guitar on its strap, [Playing a worn guitar](design.md#playing-a-worn-guitar)): `wear = "rin"` on the prop, `grip = "guitar:neck"` and
   `grip = "guitar:strum"` on the hands, `strum = {...}` in `perform`; check `strum`, `string_play`, `prop_body` and the arm `contact`. The
+  strap lays itself on her (nothing to tune) and the sim stage makes it a soft band: look at it from the side and from behind
+  in motion; `strap = { slack }` in the wear loosens or tightens its free runs.
   An `offset_guitar` (the shoegaze one) adds `anchor_to = "rin"`: its tremolo arm goes in her picking hand and swings with the
   strum; lay it into her fingers with `slots = { arm = { swing, lift, length } }` and look at the hand. A pick hand's
   `hold = "across"` (the offset guitar's default) is a real plectrum grip, `clear` keeps its skin off the strings: look at the
@@ -327,6 +338,7 @@ A project's `[[check]]` entries define done; `mk check` runs them all in one Ble
 | Hair, ears, tails do not shake | `jitter` per family, `max = 0.5` (side locks that swing: 0.8) |
 | Hair stays out of the body and props | `penetration` with the project's collider set, `max = 5` (mm) |
 | Feet do not skate | `foot_slide`, `max = 1.5` (mm per frame) |
+| Feet stand on the floor, not in it (a step back into a sweep's cove, a slope, a stage) | `ground` with `ground = "<set or prop>"`, `max = 10` (mm; a few millimetres is a sole pressed on the floor) |
 | No broken elbows, knees, necks; no arm turned past a human one | `joint_limits`, `max = 0` (a dance motion that turns the arms' twist bones further: widen `forearm_twist` and `arm_twist` in `limits` and keep `skin_collapse`) |
 | No sleeve or skin collapsing round a twisted arm or leg | `skin_collapse` (default `max` 0.15) |
 | A hand really holds or touches something | `contact` between two points or a point and a track (see Hands above) |
@@ -480,9 +492,10 @@ The build:
 
 Renders and post:
 
-- Delete `renders/<preset>` when text changes; layers and frames are kept by name and a stale one is not redrawn.
-- Frames and layers are claimed with an empty file; a stopped render resumes, but a frame rendered before a change stays until you delete it.
+- Frames and layers are claimed with an empty file, so a stopped render resumes. After a `mk build`, `mk render` draws again every frame and layer that is older than the scene (the report's `stale`; `--keep` takes them as they are): a video is never old frames under a new sound track. A change that does not go through the build is not seen that way: delete `renders/<preset>` then.
 - Use static fonts: Blender reads a variable font's default instance (`python -m mkmmd.fontinst` pins the axes).
+- A fast move (a spin, a windmill, a kick, a step) is judged from every one of its frames at full size, in the shot's own camera, before anyone is shown it: a sheet of small tiles hides an arm across a face, a hand flipped over for three frames, a foot in the floor. A draft has no motion blur, so anything that travels more than a hand's width a frame strobes.
+- `strum`'s `windmill` keeps the hand in the plane of the strings: its circle lies in front of the player, not beside her as a real one does. On a small player or a guitar worn high it crosses her chest and her face; the build warns (`head_cm` in the report) and it is better left out there.
 
 ## Example `mk.toml`
 

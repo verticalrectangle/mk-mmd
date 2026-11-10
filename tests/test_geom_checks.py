@@ -132,6 +132,14 @@ def test_enables_skip_rest_overlap_root_body_and_masks_near_root():
     assert E["capsule"][:, 0].tolist() == [False, True]
     E2 = geom.enable_matrix(ch, P, rig, geom.world(P, R0, p0), use_masks=True)
     assert E2["capsule"][:, 0].tolist() == [False, False]
+    # a scene shape for some families only (a strap the hair lies over, the skirt under it) leaves the other chains alone
+    s.add("capsule", ("world", "", ""), "strap", a=[0, 0, 1.0], b=[0.1, 0, 1.0], R=0.02, families=["skirt"])
+    s.add("capsule", ("world", "", ""), "strap", a=[0, 0, 1.0], b=[0.1, 0, 1.0], R=0.02, families=["back_hair"])
+    P = s.pack()
+    p1 = np.vstack([p0, np.zeros((len(s.sources) - len(p0), 3))])
+    R1 = np.tile(np.eye(3), (len(s.sources), 1, 1))
+    E3 = geom.enable_matrix(ch, P, rig, geom.world(P, R1, p1), anchor_free=0.25)
+    assert not E3["capsule"][:, -2].any() and E3["capsule"][:, -1].all()
 
 
 def test_quaternion_roundtrip():
@@ -202,6 +210,63 @@ def test_foot_slide_measures_consecutive_frames_only():
                                                {"arm": "a", "pts": ["ankle.L", "ankle.R"]})
     assert value == pytest.approx(5.0) and detail["at_frame"] in frames
     assert detail["ankle.L"]["max_mm_per_frame"] == 0.0 and detail["ankle.R"]["max_mm_per_frame"] == pytest.approx(5.0)
+
+
+class FootData:
+    """One foot as Data gives it to foot_slide: its ankle bone's world matrices over the frames and its toes' joint's; at
+    rest the ankle is 0.09 m over the floor, the toes' joint 0.08 m ahead of it (-y) and 0.03 m up."""
+    REST = {"ankle.L": np.array([0.1, 0.0, 0.09]), "toe.L": np.array([0.1, -0.08, 0.03])}
+
+    def __init__(self, ankle, toe):
+        self.W = {"ankle.L": np.asarray(ankle, float), "toe.L": np.asarray(toe, float)}
+
+    def has(self, arm, name):
+        return name.lstrip("?") in self.W
+
+    def resolve(self, arm, names):
+        return [n.lstrip("?") for n in names if n.lstrip("?") in self.W]
+
+    def bones(self, arm, names, frames):
+        got = self.resolve(arm, names)
+        rest = np.tile(np.eye(4), (len(got), 1, 1))
+        rest[:, :3, 3] = [self.REST[n] for n in got]
+        return np.stack([self.W[n] for n in got], 1), rest, got
+
+    def arm_world(self, arm, frames):
+        return np.tile(np.eye(4), (len(frames), 1, 1))
+
+
+def test_foot_slide_does_not_take_a_heel_lifting_about_planted_toes_for_a_slide():
+    """The heel comes up 10 degrees about the toes' joint and the toes stay put: the ankle travels (up and forward) but
+    nothing slides. The same foot pushed 3 mm a frame along the floor does."""
+    frames = list(range(20))
+    ankle_r, toe_r = FootData.REST["ankle.L"], FootData.REST["toe.L"]
+    lifted = np.tile(np.eye(4), (20, 1, 1))
+    for k, deg in enumerate(np.linspace(0.0, 10.0, 20)):
+        lifted[k, :3, :3] = _rx(deg)
+        lifted[k, :3, 3] = toe_r + _rx(deg) @ (ankle_r - toe_r)
+    still = np.tile(np.eye(4), (20, 1, 1))
+    still[:, :3, 3] = toe_r
+    st = {"arm": "a", "pts": ["ankle.L"], "soles": {"ankle.L": "?toe.L"}}
+    assert motion.FootSlide().compute({}, None, FootData(lifted, still), frames, st)[0] == pytest.approx(0.0, abs=1e-9)
+    head_only = motion.FootSlide().compute({}, None, FootData(lifted, still), frames, {"arm": "a", "pts": ["ankle.L"]})[0]
+    assert head_only > 0.4                                       # the ankle's own head goes forward: not what stands
+    push = np.outer(np.arange(20), [0.0, -0.003, 0.0])
+    flat, toes = np.tile(np.eye(4), (20, 1, 1)), np.tile(np.eye(4), (20, 1, 1))
+    flat[:, :3, 3], toes[:, :3, 3] = ankle_r + push, toe_r + push
+    assert motion.FootSlide().compute({}, None, FootData(flat, toes), frames, st)[0] == pytest.approx(3.0)
+
+
+def test_the_ground_under_a_point_is_the_highest_floor_within_reach_not_a_wall_or_a_far_ceiling():
+    """A floor, a cove rising 0.5 m over the metre behind it, the wall above the cove and a ceiling at 2 m."""
+    V = np.array([[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [1, 2, 0.5], [-1, 2, 0.5], [1, 2, 3], [-1, 2, 3],
+                  [-1, -1, 2], [1, -1, 2], [1, 2, 2], [-1, 2, 2]], float)
+    T = [[0, 1, 2], [0, 2, 3], [3, 2, 4], [3, 4, 5], [5, 4, 6], [5, 6, 7], [8, 9, 10], [8, 10, 11]]
+    pts = np.array([[0.0, 0.0, 0.05], [0.0, 1.5, 0.1], [0.0, 1.5, 0.4], [5.0, 0.0, 0.0]])
+    h = motion.surface_height(V, T, pts)
+    assert h[0] == pytest.approx(0.0)                             # on the floor: the ceiling overhead is not its ground
+    assert h[1] == pytest.approx(0.25) and h[2] == pytest.approx(0.25)     # in the cove (15 cm deep) and over it
+    assert h[3] == -np.inf                                        # off the set
 
 
 # ---------------------------------------------------------------- joint limits: how far the arms turn about themselves
