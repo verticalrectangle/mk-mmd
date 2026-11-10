@@ -142,6 +142,17 @@ def test_a_clip_reads_any_frame_in_any_order_and_maps_span_seconds_to_its_frames
     assert clip.picture(0.25, (24, 16), start=0.5) is pic             # the same frame at the same size: kept
 
 
+def test_a_clip_that_opens_and_decodes_nothing_names_its_codec_and_a_way_out(tmp_path, monkeypatch):
+    class Cap:                                    # what OpenCV makes of a codec its build lacks (AV1): a header, no frame
+        props = {cv2.CAP_PROP_FPS: 60.0, cv2.CAP_PROP_FRAME_COUNT: 90.0, cv2.CAP_PROP_FRAME_WIDTH: 64.0,
+                 cv2.CAP_PROP_FRAME_HEIGHT: 36.0, cv2.CAP_PROP_FOURCC: float(int.from_bytes(b"av01", "little"))}
+        isOpened, grab, release, get = (lambda s: True), (lambda s: False), (lambda s: None), (lambda s, p: s.props[p])
+    (tmp_path / "take.mkv").write_bytes(b"\0")
+    monkeypatch.setattr(FT, "_capture", lambda path: Cap())
+    with pytest.raises(FT.FootageError, match=r"take\.mkv: OpenCV here cannot decode it \(codec av01\).*ffmpeg -i"):
+        FT.Clip(tmp_path / "take.mkv")
+
+
 def test_a_later_output_shows_the_clip_frames_an_earlier_one_decoded_as_its_own_fit_makes_them(tmp_path):
     path = tmp_path / "clip.mp4"
     vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (48, 32))

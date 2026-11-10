@@ -13,7 +13,8 @@ over them (mkmmd.framefx); anything else that shows a clip (a split screen's vid
     fitted(rgb, size, fit, focus, mirror)      the part of it that shows, resized (uint8), and where it lands
     fit_box(src, size, fit, focus, mirror)     where: the part that shows, the size it takes, where it lands, how
 
-A FootageError (a FileNotFoundError) says what is wrong: a missing or unreadable clip, a span that starts past its end."""
+A FootageError (a FileNotFoundError) says what is wrong: a missing or unreadable clip, one in a codec the OpenCV here
+does not decode (it names the codec and an ffmpeg line), a span that starts past its end."""
 import math
 from collections import OrderedDict
 from pathlib import Path
@@ -167,6 +168,13 @@ class Clip:
             cap.release()
             raise FootageError(f"{self.path}: no frame rate, frame count or size in it ({self.fps:g} fps, {self.count} "
                                f"frames, {self.size[0]}x{self.size[1]})")
+        if not cap.grab():                              # it opens and no frame comes out: a codec this OpenCV lacks
+            code = int(cap.get(cv2.CAP_PROP_FOURCC))
+            cap.release()
+            codec = "".join(chr(code >> 8 * i & 255) for i in range(4)).strip("\0 ") or "unknown"
+            raise FootageError(f"{self.path}: OpenCV here cannot decode it (codec {codec}): convert it first, for one "
+                               f"`ffmpeg -i IN -c:v libx264 -crf 12 -pix_fmt yuv420p OUT.mp4`")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         self._cap, self._next = cap, 0                  # the frame the next read() returns
         self._frames, self._pictures = OrderedDict(), OrderedDict()
 

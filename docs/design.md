@@ -4135,7 +4135,9 @@ purikura = { write = ["11.01", "kawaii", "BFF ♡", "best friends"], marks = [{ 
 `mkmmd/footage.py` reads the clip with OpenCV as display-space RGB, keeps the last frames it decoded (reading on is fast, a
 jump seeks), and fits each frame to each output's size about that output's `focus`; anything else that shows a clip (a split
 screen's video half) reads it through the same module. A clip that is missing or unreadable, or a span that starts past its
-end without `loop`, is an error before `mk post` encodes anything (in `mk look` when the frame is drawn).
+end without `loop`, is an error before `mk post` encodes anything (in `mk look` when the frame is drawn). So is a clip that
+opens and gives no frame, a codec the OpenCV here does not decode (AV1, what a screen recorder may write): the error names
+the codec and the `ffmpeg` line that converts the file.
 
 | Key | Meaning |
 |---|---|
