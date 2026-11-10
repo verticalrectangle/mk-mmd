@@ -240,10 +240,11 @@ fingertip bone's `.tail` and the prop.
   jumping slices and colour ghosts and vanish by `to`; the build keeps it hidden after that. Start it on a hit; `seed` gives another take.
 - **Frame effects** ([Frame effects](design.md#frame-effects)): `[[fx]]` bends, smears and draws over the finished pictures: `lens` (a black hole's
   lensing about a scene point), `echo` (figure trails), `slitscan` (time smeared across the frame), `push` (zoom into a pupil that shows the
-  first frame: the seam of a loop), `scope` (a stem as an oscilloscope trace), `zoom` (a punch on every kick), `shock` (a pressure ring
+  first frame as the effects before the push finish it: the seam of a loop, so put it last in the table), `scope` (a stem as an
+  oscilloscope trace), `zoom` (a punch on every kick), `shock` (a pressure ring
   running out from a point), `slab` (Persona's slanted panels slamming in and flung off), `tint` (the Dark Hour's green over a stop),
   `halftone` (comic print: Ben-Day dots in the shadows, the plates off register), `split` (a broken signal: torn bands, RGB apart) and
-  `mosh` (a datamosh: the frame before a cut dragged along the new shot's motion; with a `flow`, a drift, zoom, swirl or noise,
+  `mosh` (a datamosh: the frame before a cut, graded as it was, dragged along the new shot's motion; with a `flow`, a drift, zoom, swirl or noise,
   a still's own picture dragged in blocks, and `mask = "ground"` keeps her clean). The collages cut a figure (`objects = "Rin_*"`) out
   onto flat colour and step on the hits: `grid` (a chessboard of clones, a knight hopping across it), `orbit` (clones on a ring round
   her), `mirror` (folded about a line: with `place` beside it, two of her face each other), `panels` (slanted split screen), `stack`
@@ -268,7 +269,8 @@ fingertip bone's `.tail` and the prop.
   flapping at `flap` beats a second, or one beat on every hit with `flap = 0` and `[[key]] prop = "hit", lane = "kick"`) and
   `library:butterflies` (a swarm of them in rings, an orbit, a drift or a burst; see their rows in design.md). A `mandala`
   ([Mandalas and trails](design.md#mandalas-and-trails)) rings her with sticker copies of herself, of registry sprites (`{tag =
-  "butterfly"}`) or of drawn clovers, flowers, hearts, stars and butterflies, the rings turning both ways, blooming on the hits and
+  "butterfly"}`) or of drawn clovers, flowers, hearts, stars and butterflies, and of two kits drawn with a pen's line (a moon, a rabbit,
+  a carrot, dango; a daisy, a cassette, a pedal, cherries: `pen = true` draws the flat ones as they are), the rings turning both ways, blooming on the hits and
   popping in one by one (`grow`); any sprite source takes `eyes = true` (googly eyes whose pupils jiggle on the hits and when
   the sprite moves, `{size, wobble, look, seed}`) and `mouth = true` (a doodled smile; design.md: Googly eyes), and the
   registry's cut-out vegetables are `{tag = "veggie"}`, one colour family with `{tag = ["veggie", "veg_green"]}` (`veg_red`,
@@ -410,7 +412,8 @@ The expression language is listed under [Expressions](design.md#expressions).
 part. A project whose shots are vector looks renders several times faster with `[render] engine = "mk"` (or `--engine mk` for one run): mk draws those shots on the GPU
 from the bake (`mk build --bake` after saving the .blend by hand), as Blender would to a few pixels in a thousand, and Blender the rest; the report's `shots` says which
 engine drew each and why. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song. Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
-layer or frame is an error unless `--allow-gaps`; after changing text, delete the preset's frames. `mk post --to DIR` copies the videos. The grade is `[post]`
+layer or frame is an error unless `--allow-gaps`; after changing text, delete the preset's frames. `mk post --to DIR` copies the videos. A loop for a feed or a
+teaser is an `[[excerpt]] {name, from, to, outputs, loop}` ([Excerpts](design.md#excerpts)): `mk post` writes that span beside each output as it encodes it. The grade is `[post]`
 ([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black. A video watched on phones
 wants `[audio.master]` when its beat lives in the bass (808s, kicks: a phone's speakers play little below 250 Hz): it gives the
 booms of a hits lane overtones a phone can play, and the report's `boom_phone_db` says how far they stand out there, before and after.
