@@ -78,6 +78,7 @@ from . import colorkey as CK
 from . import eralook as ER
 from . import fields as FL
 from . import haze as HZ
+from . import inset as IN
 from . import labels as LB
 from . import lanes as LN
 from . import lasers as LZ
@@ -96,8 +97,8 @@ from . import videosticker as VS
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
          "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS + \
-    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS
-CLIPS = ("footage",) + VS.KINDS + CK.KINDS              # the kinds that show a video `clip` (mkmmd.footage reads it)
+    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS + IN.KINDS
+CLIPS = ("footage",) + VS.KINDS + CK.KINDS + IN.KINDS   # the kinds that show a video `clip` (mkmmd.footage reads it)
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 SILK = "silkscreen"                                     # a collage's fill: the figure printed in flat inks, Warhol's
 BLENDS = ("lighten", "darken")
@@ -196,6 +197,8 @@ KEYS.update({k: _COMMON | own for k, own in HZ.KEYS.items()})
 DEFAULTS.update(HZ.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in MT.KEYS.items()})
 DEFAULTS.update(MT.DEFAULTS)
+KEYS.update({k: (_COMMON - {"strength"}) | own for k, own in IN.KEYS.items()})      # an inset has a view, no strength
+DEFAULTS.update(IN.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in VS.KEYS.items()})
 DEFAULTS.update(VS.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in PR.KEYS.items()})
@@ -279,6 +282,16 @@ def _rect(spec, what):
     if r[2] <= r[0] or r[3] <= r[1]:
         raise FxError(f"{what}: rect = {r}: x1 must be right of x0 and y1 below y0")
     return r, _num(spec.get("feather", 0.0), f"{what} feather", lo=0.0)
+
+
+def _part(v, what):
+    """`[x0, y0, x1, y1]`, a part of a clip's frame in fractions of it (0, 0 its top left), checked."""
+    if not (isinstance(v, (list, tuple)) and len(v) == 4):
+        raise FxError(f"{what} = {v!r}: expected [x0, y0, x1, y1] (fractions of the clip's frame, 0, 0 its top left)")
+    r = [_num(x, what, 0.0, 1.0) for x in v]
+    if r[2] <= r[0] or r[3] <= r[1]:
+        raise FxError(f"{what} = {r}: x1 must be right of x0 and y1 below y0")
+    return r
 
 
 def _colour(v, palette, what):
@@ -422,6 +435,8 @@ def normalize(spec, palette, what="fx"):
         HZ.normalize(spec, out, palette, what)
     elif kind in MT.KINDS:
         MT.normalize(spec, out, palette, what)
+    elif kind in IN.KINDS:
+        IN.normalize(spec, out, palette, what)
     elif kind in VS.KINDS:
         VS.normalize(spec, out, palette, what)
     elif kind in PR.KINDS:

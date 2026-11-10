@@ -202,7 +202,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
 | `[post]` | `mk post` | the grade: see [Rendering and post](#rendering-and-post) |
 | `[[excerpt]]` | `mk post` | spans of the clip written as videos of their own beside each output (`name`, `from`, `to`, `outputs`, `loop`): [Excerpts](#excerpts) |
-| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages, the picture effects pixelsort, film, camcorder, doodle, booth, the haze: mist, fog, bokeh, and mitosis): see [Frame effects](#frame-effects) |
+| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages, the picture effects pixelsort, film, camcorder, doodle, booth, the haze: mist, fog, bokeh, mitosis, and an inset into a recording): see [Frame effects](#frame-effects) |
 | `[[medium]]` | `mk build` (shots), `mk render`, `mk look` | a window of clip seconds drawn in another look whatever shot is in the cut: see [Medium shifts](#medium-shifts) |
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
 | `[colliders]` | sim, checks | named lists of collision shapes: see [Colliders](#colliders) |
@@ -3897,10 +3897,10 @@ entry in its palette colours mixed by that frame's mix, in `mk post` and `mk loo
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)), or the haze: `mist`, `fog` or `bokeh` ([Haze](#haze-mist-fog-bokeh)), or `mitosis` ([Cell division](#cell-division-mitosis)) (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or `inset` ([Insets](#insets-the-picture-on-a-screen-in-a-recording)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)), or the haze: `mist`, `fog` or `bokeh` ([Haze](#haze-mist-fog-bokeh)), or `mitosis` ([Cell division](#cell-division-mitosis)) (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
 | `aspect` | any entry: `[fx.aspect.<output>]`, its own keys for one output ([Each output its own: aspect](#each-output-its-own-aspect)) |
-| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears, the lasers' light, the prints' mix. A push has none |
+| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears, the lasers' light, the prints' mix. A push and an inset have none |
 | `center` | lens and push (required), zoom, shock, orbit, mirror and stack (default the middle): `[x, y]` fractions of the frame (0, 0 the top left), or `{point = "<expression>"}`, a point of the scene ([Expressions](#expressions)) that `mk render` projects through the camera of the shot in the cut on every frame of the span (`point/x<i>/<frame>.json`) |
 | `radius`, `radius_m` | lens and push: the lens's Einstein radius, or the push's disc at the start; `radius` a share of the frame height (default 0.1 for a lens, 0.02 for a push), `radius_m` metres at the depth of a scene point (a hole of a known size, a pupil), one of the two |
 | `shadow` | lens: the share of the Einstein radius painted black about the centre (default 0: the scene draws its own). The lens bends the whole picture, what passes in front of its centre too (a figure there wraps into a ring, as if it were behind): key `strength` down while something passes in front that should stay whole |
@@ -4217,6 +4217,48 @@ keys = [{ t = 0.0, scale = 0.35, turn = -24 }, { t = 0.5, scale = 1.0, turn = 8,
 [fx.aspect.9x16]              # the tall frame: above her, smaller
 at = [0.5, 0.2]
 size = 0.24
+```
+
+#### Insets: the picture on a screen in a recording
+
+`kind = "inset"` sets the picture, as it reached the effect, into a part of a video's frame: the cut playing on a screen in
+a recording (a window on a recorded desktop, a phone in a hand, a monitor on a desk), the recording round it. The clip
+covers the frame as footage does (`focus`, `mirror`; read by `mkmmd/footage.py`), and `into` is the screen in it, in
+fractions of the clip's own frame as the file has it: the same place in every output. `view` runs the frame between the
+recording as a whole (0) and the picture alone (1); keyed, it is a push into the screen or a pull back out of it. In
+between, the frame is a window on the recording between its whole frame and `into`: its size on a log scale (a view keyed
+linearly is a steady push) and its middle moving with its size, so every point of the recording keeps its heading, as under
+a zoom lens. At 1 the frame is exactly the picture that reached the effect, whatever shape `into` has; a part of another
+shape than the frame's shows the picture squeezed to it, as a player stretched to its window does, and the squeeze goes
+with the view.
+
+`mkmmd/core/inset.py` checks the entry and works the window out (tested), `mkmmd/inset.py` draws it: the clip's frame, read
+at its own size, resampled once through the window, and the picture shrunk by area to its place and set there to the part
+of a pixel, its edge antialiased, so it neither shimmers in a small screen nor steps as the view moves. Record the take at
+the output's shape and no smaller than it: what is round the screen is enlarged as the view comes in. About 0.2 s a 1080p
+frame on the CPU (nothing at view 1); `--gpu` leaves it to it. The clip counts for the credits as a footage collage's does.
+
+The effects after an inset in the table work on the whole frame, the recording with the picture in it: a key on the
+recording's flat ground, a gradient map over a `rect` of it, a mandala over its window; those before it stay in the picture
+on the screen. One after it that reads a figure's layer or a scene point reads them in the picture's own frame, not where
+the screen shows them: give it a figure from a `shot` of its own (a plate) set in by `at` and `height`, which is how she
+steps out of the screen.
+
+| Key | Meaning |
+|---|---|
+| `clip`, `in`, `rate`, `loop`, `focus`, `mirror` | the recording, as footage's ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)): a file or an asset slug (required), its second on the span's first frame (0), its speed (1), `loop` (false), its point `focus` kept near the frame's middle where the frame crops it, `mirror` (false). Always fitted to cover the frame (no `fit`) |
+| `into` | required: `[x0, y0, x1, y1]`, the part of the clip's frame the picture is set into, fractions of the clip (0, 0 its top left; x1 right of x0, y1 below y0) |
+| `view` | a number or `[[t, v], ...]` keys over clip seconds, linear between them and held outside: 0 (default) the clip's whole frame with the picture in its part, 1 the picture alone. An inset has no `strength` |
+
+```toml
+[[fx]]                        # the cut opens on the desktop it was made on and goes into the player's pane in two beats
+kind = "inset"
+from = 0.0
+to = 0.93
+clip = "footage/take.mp4"
+in = 26.5                     # the take's second on the cut's first frame: the player has just opened
+into = [0.548, 0.372, 0.832, 0.664]
+view = [[0.0, 0.0], [0.93, 1.0]]
 ```
 
 #### Dividing grids and silkscreen prints

@@ -15,6 +15,7 @@ from . import eralook as ERF
 from . import fields as FL
 from . import footage as FT
 from . import haze as HZF
+from . import inset as INF
 from . import labels as LBF
 from . import lasers as LZF
 from . import mandala as MDF
@@ -891,7 +892,7 @@ def check_footage(fxs, footage_of):
 # ================================================================================================= over a cut
 class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
               SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx, CKF.KeyFx, SHF.ShapesFx,
-              HZF.HazeFx, MTF.MitosisFx):
+              HZF.HazeFx, MTF.MitosisFx, INF.InsetFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
