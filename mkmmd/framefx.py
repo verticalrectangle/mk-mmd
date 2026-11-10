@@ -18,6 +18,7 @@ from . import haze as HZF
 from . import labels as LBF
 from . import lasers as LZF
 from . import mandala as MDF
+from . import mitosis as MTF
 from . import paintapp as PAF
 from . import picturefx as PF
 from . import prints as PRF
@@ -890,7 +891,7 @@ def check_footage(fxs, footage_of):
 # ================================================================================================= over a cut
 class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
               SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx, CKF.KeyFx, SHF.ShapesFx,
-              HZF.HazeFx):
+              HZF.HazeFx, MTF.MitosisFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
@@ -956,6 +957,7 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         self._paintapp_init()
         self._prints_init()
         self._key_init()
+        self._mitosis_init()
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))

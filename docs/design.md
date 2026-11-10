@@ -201,7 +201,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
 | `[post]` | `mk post` | the grade: see [Rendering and post](#rendering-and-post) |
-| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages, the picture effects pixelsort, film, camcorder, doodle, booth, and the haze: mist, fog, bokeh): see [Frame effects](#frame-effects) |
+| `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages, the picture effects pixelsort, film, camcorder, doodle, booth, the haze: mist, fog, bokeh, and mitosis): see [Frame effects](#frame-effects) |
 | `[[medium]]` | `mk build` (shots), `mk render`, `mk look` | a window of clip seconds drawn in another look whatever shot is in the cut: see [Medium shifts](#medium-shifts) |
 | `[credits]` | `mk assets credits` | `assets` (slugs the credits must name besides the cast's), `lines` (the project's own lines) |
 | `[colliders]` | sim, checks | named lists of collision shapes: see [Colliders](#colliders) |
@@ -3896,7 +3896,7 @@ entry in its palette colours mixed by that frame's mix, in `mk post` and `mk loo
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)), or the haze: `mist`, `fog` or `bokeh` ([Haze](#haze-mist-fog-bokeh)) (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)), or the haze: `mist`, `fog` or `bokeh` ([Haze](#haze-mist-fog-bokeh)), or `mitosis` ([Cell division](#cell-division-mitosis)) (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
 | `aspect` | any entry: `[fx.aspect.<output>]`, its own keys for one output ([Each output its own: aspect](#each-output-its-own-aspect)) |
 | `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears, the lasers' light, the prints' mix. A push has none |
@@ -5117,6 +5117,44 @@ from = 0.0
 to = 33.5
 radius = 0.035
 diffuse = 0.4
+```
+
+#### Cell division: mitosis
+
+`kind = "mitosis"` lets a figure divide as a cell does, made cute: she sits in a soft cell of her own (a membrane round
+her outline, a little light on its upper left), and on each hit the cell is pulled long, pinches in the middle and
+comes apart into two smaller copies of her, each in its own cell, that wobble for a moment; `max` hits later there are
+2 ** max of her. `mkmmd/core/mitosis.py` checks it, paces the divisions and lays the cells out (tested), `mkmmd/mitosis.py`
+draws it: the figure cut out of the picture by its layer (`objects`, the figure layer `mk render` draws), a copy in every
+cell, and the membrane where the blurred outlines of all the copies sum past a level, so two cells still close share one
+skin and it pinches as they part. Odd divisions pull apart sideways, even ones up and down, each off true by up to
+`tilt`; daughters end `gap` of the figure's own box further apart than they are wide, each 0.68 the size of its mother;
+the figure's box on the span's first frame sizes all of it, and the colony is scaled and moved to stay inside `fit` of
+the frame. A hit that falls while a cell divides is passed over. With `back = "picture"` her place in the picture is
+closed from the ground round her (seamless on a plain ground, a blur on a busy one); best where the whole figure is in
+the frame. A function of the entry, its hits and the clip second: any frame comes out the same in any order. About
+0.2 s a 1080p frame on the CPU; `--gpu` leaves it to it.
+
+| Key | Meaning |
+|---|---|
+| `objects` | the figure that divides (required: object patterns, as a collage's) |
+| `times`, `lane`, `min_db`, `every` | the hits the cell divides on (none: one cell, never dividing) |
+| `split`, `max` | how long a division takes, seconds (0.6, 0.1 .. 10); how many there are at most (4: sixteen cells; 0 .. 6) |
+| `gap`, `tilt`, `seed` | the space between daughters, a share of the figure's box (0.06); how far off true each division pulls, degrees (10); the deal of those (1) |
+| `fit` | the share of the frame the colony stays inside (0.92) |
+| `body`, `cytoplasm`, `alpha`, `membrane` | how far the cell stands round the figure, short sides (0.03); its colour (`rose`) and how much of it covers the ground (0.5); the colour of its skin (`love`) |
+| `wobble` | how much a freed cell wobbles, a share of its size (0.12), dying over a quarter of a second |
+| `back` | `"picture"` (default: the picture, her place closed) or a colour |
+
+```toml
+[[fx]]                        # she divides on the four snares of the last bar: sixteen of her
+kind = "mitosis"
+from = 44.7
+to = 48.4
+objects = "Reisen*"
+lane = "snare"
+cytoplasm = "#FFF4F7"
+membrane = "#E84A7A"
 ```
 
 #### Each output its own: aspect
