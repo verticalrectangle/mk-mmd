@@ -828,16 +828,24 @@ def uses_figure(fx):
 
 def holds(fx):
     """Whether an effect shows frames of the cut from before as they reached it (a film's held frame, a booth's
-    captures, the first frame a mosh with a `flow` holds, the frame a paint app's eraser rubs out): the effects before it
-    in the table are applied to such a frame again when it was not kept."""
-    return fx["kind"] in PF.HOLDS or (fx["kind"] == "mosh" and fx["flow"] is not None) or (
-        fx["kind"] in PA.KINDS and PA.holds(fx))
+    captures, the frame a mosh holds, the frame a paint app's eraser rubs out, the frame inside a push): the effects
+    before it in the table are applied to such a frame again when it was not kept."""
+    return fx["kind"] in PF.HOLDS or fx["kind"] in ("push", "mosh") or (fx["kind"] in PA.KINDS and PA.holds(fx))
+
+
+def held(fx, frame):
+    """Whether `frame`, one the effect reads (`sources`), is shown as it reached the effect: any a holder reads, but for
+    a mosh along the cut's own motion, which holds the frame it starts from (the one before its span, or its first
+    where the clip starts there) and reads those after it for their motion alone."""
+    return holds(fx) and (fx["kind"] != "mosh" or fx["flow"] is not None or frame <= fx["f0"])
 
 
 def points_before(fx):
-    """Whether an effect reads its own scene points on the frames before that it reads, besides its own frame: a key
-    whose `spread` opens from a point keys each frame of its `burn` trail about that point there."""
-    return fx["kind"] in CK.KINDS and fx["spread"] > 0 and fx["burn"] > 0
+    """Whether an effect reads its own scene points on the frames before that it reads, besides its own frame: a
+    holder works on the frame it holds (a paint app paints that frame's fills on it; a push only shows the frame
+    inside, its centre is of the frame it is drawn on), and a key whose `spread` opens from a point keys each frame of
+    its `burn` trail about that point there."""
+    return (holds(fx) and fx["kind"] != "push") or (fx["kind"] in CK.KINDS and fx["spread"] > 0 and fx["burn"] > 0)
 
 
 def at(fxs, frame):

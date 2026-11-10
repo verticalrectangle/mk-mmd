@@ -776,15 +776,15 @@ def fx_frames(pl, frames, hits=None, before=None):
                     continue
                 bucket = out.setdefault(g, [])
                 items = ([] if fx.get("shot") else [{"kind": "plate", "shot": shot}]) + _figure_reads(pl, fx, g)
-                for e in FX.at(fxs, g) if FX.holds(fx) else []:
+                for e in FX.at(fxs, g) if FX.held(fx, g) else []:
                     if e["index"] >= fx["index"]:
                         break
                     items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(e)]
                     items += _figure_reads(pl, e, g)
-                if FX.holds(fx) or FX.points_before(fx):
+                if FX.points_before(fx):
                     items += [{"kind": "point", "key": k, "expr": x, "shot": shot} for k, x in FX.points(fx)]
                 bucket += [it for it in items if it not in bucket]
-                if FX.holds(fx):                         # the held frame is drawn again: what its effects read too
+                if FX.held(fx, g):                       # the held frame is drawn again: what its effects read too
                     for g2, more in fx_frames(pl, [g], hits, before=fx["index"]).items():
                         b2 = out.setdefault(g2, [])
                         b2 += [it for it in more if it not in b2]

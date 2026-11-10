@@ -98,8 +98,9 @@ def test_a_flow_reads_its_first_frame_and_a_mask_its_figure_there_and_on_each_fr
     assert {f for f, items in TR.demands(pl).items() if figure in items} == set(range(F0, F0 + 30))
     assert TR.fx_frames(pl, [F0 + 10]) == {F0: [{"kind": "plate", "shot": "a"}, figure]}   # what mk look renders beside
     assert TR.fx_frames(pl, [F0]) == {}                        # a still reads nothing beside itself
-    cut = plan(mosh(block=8))["fx"][0]                         # without a flow: the cut's frames, as before
-    assert FX.sources(cut, F0 + 3, F0) == [F0, F0 + 1, F0 + 2, F0 + 3] and not FX.holds(cut)
+    cut = plan(mosh(block=8))["fx"][0]                         # without a flow: the cut's frames
+    assert FX.sources(cut, F0 + 3, F0) == [F0, F0 + 1, F0 + 2, F0 + 3]
+    assert FX.held(cut, F0) and not FX.held(cut, F0 + 2)       # it holds the one it starts from; the rest are motion
     assert not FX.uses_figure(cut) and TR.demands(plan(mosh())) == {}
 
 
@@ -265,6 +266,17 @@ def test_strength_mixes_the_held_picture_and_zero_leaves_the_frame():
     half = runner(still(flow=f, strength=0.5), {F0: img}).frame(F0, img)
     assert not np.allclose(full, img, atol=1e-3) and np.allclose(half, 0.5 * img + 0.5 * full, atol=1e-6)
     assert runner(still(flow=f, strength=0.0), {F0: img}).frame(F0, img) is img
+
+
+def test_the_frame_before_a_cut_is_held_as_it_reached_the_mosh():
+    grey, white = np.full((H, W, 3), 0.5, np.float32), np.ones((H, W, 3), np.float32)
+    pl = plan({"kind": "tint", "from": 0.0, "to": 0.5, "color": "#FF0000"},
+              {"kind": "mosh", "from": 0.5, "to": 1.0, "block": BLOCK})
+    f0 = F0 + 15
+    frames = {f0 - 1: grey, f0: white}
+    tinted = runner(pl, frames).frame(f0 - 1, grey)                # the outgoing picture, the tint of its own time on it
+    assert float(np.abs(tinted - grey).max()) > 0.3
+    assert runner(pl, frames).frame(f0, white) == pytest.approx(tinted, abs=1e-5)      # held whole on the cut
 
 
 def test_without_a_flow_the_cut_s_own_motion_carries_the_frame_before_as_it_always_did():

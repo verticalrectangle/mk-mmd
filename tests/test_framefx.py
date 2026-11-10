@@ -100,7 +100,19 @@ def test_look_renders_the_frames_an_echo_and_a_push_read_and_none_before_the_cli
     pl = plan([{"kind": "echo", "from": 0.0, "to": 1.0, "count": 3, "every": 2},
                {"kind": "push", "from": 3.0, "to": 3.5, "center": [0.5, 0.5], "inside": 0.5}])
     assert TR.fx_frames(pl, [F0 + 3]) == {F0 + 1: [{"kind": "plate", "shot": "a"}]}      # F0 - 1, F0 - 3 do not exist
-    assert TR.fx_frames(pl, [F0 + 95]) == {F0 + 15: [{"kind": "plate", "shot": "a"}]}    # a still, frame 0.5 s
+    # a still, frame 0.5 s, finished by the echo of its own time: the echo's copies there are read too
+    assert TR.fx_frames(pl, [F0 + 95]) == {F0 + g: [{"kind": "plate", "shot": "a"}] for g in (15, 13, 11, 9)}
+    pl = plan([{"kind": "push", "from": 3.0, "to": 3.5, "center": {"point": "p"}, "radius": 0.05, "inside": 0.5}])
+    assert TR.fx_frames(pl, [F0 + 95]) == {F0 + 15: [{"kind": "plate", "shot": "a"}]}    # its centre is not read there
+
+
+def test_the_frame_inside_a_push_wears_the_effects_before_the_push_at_its_own_time():
+    grey, black = np.full((H, W, 3), 0.5, np.float32), np.zeros((H, W, 3), np.float32)
+    pl = plan([{"kind": "tint", "from": 0.0, "to": 1.0, "color": "#FF0000"},
+               {"kind": "push", "from": 3.0, "to": 3.5, "center": [0.5, 0.5], "inside": 0.5}])
+    tinted = runner(pl, {F0 + 15: grey}).frame(F0 + 15, grey)                 # the cut's frame at 0.5 s, finished
+    last = runner(pl, {F0 + 15: grey}).frame(F0 + 104, black)                 # the push's last frame: a loop's seam
+    assert last == pytest.approx(tinted, abs=1e-5) and float(np.abs(tinted - grey).max()) > 0.3
 
 
 def test_strength_is_linear_between_keys_and_held_outside_them():

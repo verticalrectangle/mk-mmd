@@ -100,7 +100,9 @@ def _flowing(ffx, fx, frame):
 
 
 def _cut_motion(ffx, fx, frame):
-    """A mosh along the cut's own motion: the picture it starts from and every step since the span's start."""
+    """A mosh along the cut's own motion: the picture it starts from and every step since the span's start. None (the
+    CPU) when that picture, the frame before the span as it reached the mosh at its own time, is no file of the cut:
+    an effect before the mosh in the table acts on it."""
     paths = ffx.paths
 
     def cut(g):                             # the cut's frame g, as FrameFx._get reads it
@@ -109,6 +111,8 @@ def _cut_motion(ffx, fx, frame):
         return None
     f0 = fx["f0"]
     start = cut(f0 - 1) or cut(f0)
+    if any(e["index"] < fx["index"] for e in ffx.entries(f0 - 1 if cut(f0 - 1) is not None else f0)):
+        return None
     held = start is not None or frame == f0
     for g in (f0 - 1, f0, frame):
         if cut(g) is not None and not paths.fits(cut(g)):

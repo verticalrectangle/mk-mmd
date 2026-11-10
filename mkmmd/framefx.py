@@ -1086,8 +1086,13 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         return c, r0, FX.sources(fx, frame, self.frame0)[0], FX.progress(fx, frame)
 
     def _push(self, fx, frame, img):
+        """The frame inside is the cut's as it reached the push at its own time (the effects before the push in the
+        table on it, PictureFx._reached): at the span's last frame the picture is that finished frame, the seam of a
+        loop. A still is finished once and kept; one that plays is finished again on every frame."""
         c, r0, g, u = self.push_at(fx, frame)
-        inner = self._get(g)
+        if fx["play"]:
+            self._seen.pop(fx["index"], None)
+        inner = self._reached(fx, g, frame, img)
         if inner is None:
             raise FileNotFoundError(f"fx {fx['index']} (push): the frame inside, {fx['inside_frame']}, is not there")
         return push(img, inner, c, r0, u, fx["ease"])
@@ -1204,9 +1209,10 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         """The picture a mosh holds at `frame`. With a `flow`: the span's first frame as it reached the mosh, carried
         `steps` steps along the flow's block moves on that frame and as many more on each frame after (a P-frame played
         again and again: a still moshes too). Without: the cut's frame before its span (its first when the clip starts
-        inside it), carried along the cut's own motion from each frame to the next since its first frame (the motion
-        across the cut itself is the key frame a mosh loses). One step on from the frame before when that was the last
-        asked, else worked out again from the start."""
+        inside it) as it reached the mosh at its own time (the effects before the mosh in the table on it: the
+        outgoing picture keeps its grade), carried along the cut's own motion from each frame to the next since its
+        first frame (the motion across the cut itself is the key frame a mosh loses). One step on from the frame before
+        when that was the last asked, else worked out again from the start."""
         i, f0 = fx["index"], fx["f0"]
         state = self._held.get(i)
         if fx["flow"] is not None:
@@ -1223,9 +1229,9 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         if state is not None and state[0] == frame - 1:
             held, first = state[1], frame
         else:
-            held, first = self._get(f0 - 1), f0 + 1
+            held, first = self._reached(fx, f0 - 1, frame, img), f0 + 1
             if held is None:
-                held = pic(f0)
+                held = self._reached(fx, f0, frame, img)
         for g in range(max(first, f0 + 1), frame + 1):
             a, b = pic(g - 1), pic(g)
             if a is not None and b is not None and held is not None:
