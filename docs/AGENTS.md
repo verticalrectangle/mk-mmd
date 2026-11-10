@@ -316,6 +316,12 @@ fingertip bone's `.tail` and the prop.
   `shapes` ([Shapes](design.md#shapes)) redraws the picture as flat circles, squares, triangles and diamonds, a cell each in the colour
   under it (or `inks`, one per shape kind with `pick = "shape"`); on a flat `back` the ground stays empty, so a silhouette comes
   apart, and a `cell` keyed down on a `lane` assembles her out of shapes, finer on every hit.
+  An `inset` ([Insets](design.md#insets-the-picture-on-a-screen-in-a-recording)) sets the picture into a screen in a recording (a
+  player's pane on a recorded desktop: `clip`, `into`), and its `view` keyed from 0 to 1 drives into that screen or pulls back out of
+  it; the effects after it work on the recording too (a `key` burning out of the pane over the desktop), and a `stack` or a `mitosis`
+  with a `shot` (a plate), `at` and `height` lets her step out of the screen. A `clip` sticker with a `crop` lifts a piece of the
+  recording over the picture (a notification), and a `push` that falls into the recording takes `border = "extend"` (its wallpaper
+  goes on round it; mirrored, a second window shows). Convert a recorder's AV1 take with `ffmpeg` first.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
   nib, and screen type laid over the picture (`negative = true` makes it a photographic negative of the picture under its glyphs). Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
   Delete `renders/<preset>` when type changes: a stale `screen/` or `negative/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
