@@ -8,7 +8,8 @@ over them (mkmmd.framefx); anything else that shows a clip (a split screen's vid
     Clip(path)                   .path .fps .count .size (w, h) .duration
       .index(t, start, rate, loop)    the clip frame shown t s into a span that starts `start` s into the clip
       .frame(i)                       frame i decoded, RGB uint8 (h, w, 3)
-      .picture(t, size, start, rate, loop, fit, focus, mirror, back)   float32 RGB 0..1 (h, w, 3) at size (w, h)
+      .picture(t, size, start, rate, loop, fit, focus, mirror, back, crop)   float32 RGB 0..1 (h, w, 3) at size (w, h),
+                                      the whole frame or a `crop` of it
     fit(rgb, size, fit, focus, mirror, back)   one decoded frame fitted to a size
     fitted(rgb, size, fit, focus, mirror)      the part of it that shows, resized (uint8), and where it lands
     fit_box(src, size, fit, focus, mirror)     where: the part that shows, the size it takes, where it lands, how
@@ -231,15 +232,22 @@ class Clip:
         return rgb
 
     def picture(self, t, size, start=0.0, rate=1.0, loop=False, fit="cover", focus=(0.5, 0.5), mirror=False,
-                back=(0.0, 0.0, 0.0)):
+                back=(0.0, 0.0, 0.0), crop=None):
         """The clip's picture `t` seconds into a span (`index`) fitted to `size` (`fit()`): float32 RGB 0..1 (h, w, 3), the
-        same array again while the same frame is asked at the same size (do not write into it)."""
+        same array again while the same frame is asked at the same size (do not write into it). With `crop` (x0, y0, x1,
+        y1: fractions of the frame as the file has it) that part alone is the picture fitted, and `focus` a point of it."""
         i = self.index(t, start, rate, loop)
+        crop = None if crop is None else tuple(float(v) for v in crop)
         key = (i, int(size[0]), int(size[1]), fit, float(focus[0]), float(focus[1]), bool(mirror),
-               tuple(float(c) for c in back))
+               tuple(float(c) for c in back), crop)
         got = self._pictures.get(key)
         if got is None:
-            got = self._pictures[key] = _fit(self.frame(i), size, fit, focus, mirror, back)
+            rgb = self.frame(i)
+            if crop is not None:
+                w, h = self.size
+                x0, y0 = int(round(crop[0] * w)), int(round(crop[1] * h))
+                rgb = rgb[y0:max(int(round(crop[3] * h)), y0 + 1), x0:max(int(round(crop[2] * w)), x0 + 1)]
+            got = self._pictures[key] = _fit(rgb, size, fit, focus, mirror, back)
             while len(self._pictures) > PICTURES:
                 self._pictures.popitem(last=False)
         else:

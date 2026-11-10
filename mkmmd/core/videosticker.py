@@ -4,7 +4,8 @@ The picture work is mkmmd/videosticker.py.
 A video clip cut out in a shape and laid over the picture as a die-cut sticker: the picture stays and the clip is the
 sticker, where a `footage` collage lays a figure over a clip that fills the frame. The clip is read and fitted by
 mkmmd.footage with a footage collage's own keys (`clip`, `in`, `rate`, `loop`, `focus`, `mirror`), always to cover the
-sticker's box. Its `shape`: a rounded `rect` (its corners `radius` of the box's short side), a `circle` (an ellipse by
+sticker's box; with `crop` a part of its frame alone is the sticker's video (a notification lifted off a screen
+recording). Its `shape`: a rounded `rect` (its corners `radius` of the box's short side), a `circle` (an ellipse by
 the box), a `heart` or a `star`. The box stands with its middle at `at` (frame fractions), `size` frame heights tall and
 `ratio` times as wide (by default the shape's own proportions), and `keys` move it about its middle as they move a
 collage's figure (mkmmd.core.framefx `move_at`, `move_matrix`). A die-cut `edge` is grown round the shape and the sticker
@@ -26,14 +27,14 @@ OUTLINED = ("rect", "circle", "heart", "star")             # shapes with an outl
 SHAPES = OUTLINED + ("text",)                              # and keyed type: the letters of a text are the shape
 BLENDS = ("over", "screen", "add", "negative")   # an opaque sticker, a face of light (the clip's black vanishes), or the
                                                  # picture under it inverted, no clip
-VIDEO = ("clip", "in", "rate", "loop", "focus", "mirror")  # the clip's own keys, which a negative sticker has none of
+VIDEO = ("clip", "in", "rate", "loop", "focus", "mirror", "crop")  # the clip's own keys: a negative sticker has none
 STAR = (0.5, 0.11)                      # a star's inner radius over its outer, its corners' rounding over its outer
 STEP = 1.5                              # px: an outline's points lie about this far apart along its curves
-KEYS = {"clip": {"clip", "in", "rate", "loop", "focus", "mirror", "shape", "radius", "at", "size", "ratio", "keys",
-                 "edge", "shadow", "blend", "text", "font"}}
-DEFAULTS = {"clip": {"in": 0.0, "rate": 1.0, "loop": False, "focus": [0.5, 0.5], "mirror": False, "shape": "rect",
-                     "radius": 0.12, "at": [0.5, 0.5], "size": 0.4, "ratio": None, "keys": None, "edge": None,
-                     "shadow": None, "blend": "over", "text": None, "font": None}}
+KEYS = {"clip": {"clip", "in", "rate", "loop", "focus", "mirror", "crop", "shape", "radius", "at", "size", "ratio",
+                 "keys", "edge", "shadow", "blend", "text", "font"}}
+DEFAULTS = {"clip": {"in": 0.0, "rate": 1.0, "loop": False, "focus": [0.5, 0.5], "mirror": False, "crop": None,
+                     "shape": "rect", "radius": 0.12, "at": [0.5, 0.5], "size": 0.4, "ratio": None, "keys": None,
+                     "edge": None, "shadow": None, "blend": "over", "text": None, "font": None}}
 
 
 def _fx():
@@ -53,6 +54,8 @@ def normalize(spec, out, palette, what):
                              f"{', '.join(given)}")
     else:
         FX._clip_keys(out, what)
+        if out["crop"] is not None:
+            out["crop"] = FX._part(out["crop"], f"{what}: crop")
     if out["shape"] not in SHAPES:
         raise FX.FxError(f"{what}: shape {out['shape']!r} is none of {', '.join(SHAPES)}")
     if out["shape"] != "rect" and "radius" in spec:

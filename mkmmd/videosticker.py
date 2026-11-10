@@ -176,8 +176,9 @@ class StickerFx:
         return memo[fx["index"]]
 
     def _clip(self, fx, frame, img):
-        """The clip's picture at this frame fitted (cover) into the sticker's box at the size it shows at (none for a
-        negative sticker, whose face is the picture under it), laid on the picture in its shape, edge and shadow (lay)."""
+        """The clip's picture at this frame (its `crop` of it) fitted (cover) into the sticker's box at the size it shows
+        at (none for a negative sticker, whose face is the picture under it), laid on the picture in its shape, edge and
+        shadow (lay)."""
         M, box, scale, s = self.sticker_at(fx, frame)
         if s <= 0.0:
             return img
@@ -188,6 +189,6 @@ class StickerFx:
             clip = _ff().clip_of(fx, self._footage_of)
             tile = clip.picture((frame - fx["f0"]) / self.fps, (max(int(round(box[0] * scale)), 1),
                                                                  max(int(round(box[1] * scale)), 1)),
-                                fx["in"], fx["rate"], fx["loop"], "cover", fx["focus"], fx["mirror"])
+                                fx["in"], fx["rate"], fx["loop"], "cover", fx["focus"], fx["mirror"], crop=fx["crop"])
         return lay(img, tile, M, box, fx["shape"], fx["radius"], fx["blend"], self._edge(fx), self._shadow(fx), scale, s,
                    self._letters(fx) if fx["shape"] == "text" else None)

@@ -50,7 +50,7 @@ class Clip:
         return 0
 
     def picture(self, t, size, start=0.0, rate=1.0, loop=False, fit="cover", focus=(0.5, 0.5), mirror=False,
-                back=(0.0, 0.0, 0.0)):
+                back=(0.0, 0.0, 0.0), crop=None):
         self.asked.append({"t": round(t, 4), "size": tuple(size), "start": start, "rate": rate, "loop": loop,
                            "fit": fit, "focus": tuple(focus), "mirror": mirror})
         return np.full((size[1], size[0], 3), self.colour, np.float32)
@@ -107,6 +107,7 @@ def box_of(m, at=0.5):
     (entry(focus=[1.5, 0.5]), "[x, y] in 0..1 of the video"),
     (entry(rate=20), "rate = 20: expected 0..16"),
     (entry(loop="yes"), "loop is true or false"),
+    (entry(crop=[0.5, 0.2, 0.4, 0.6]), "x1 must be right of x0"),
     (entry(keys=[{"turn": 30}]), "has no `t`"),
     (entry(keys=[{"t": 1.2, "scale": 0}]), "expected a positive number"),
     (entry(aspect={"9x16": {"from": 1.5}}), "may not set ['from']"),
@@ -223,6 +224,20 @@ def test_a_real_clip_shows_its_frame_of_the_time_in_the_sticker(tmp_path):
         t = 0.25 + 0.5 * k / FPS                                       # `in` on the span's first frame, half speed
         assert which(out[38:52, 72:88]) == int(np.floor(t * 24 + 1e-6))
         assert out[5, 5].tolist() == pytest.approx(list(GREY))         # round it: the picture
+
+
+def test_a_crop_makes_a_part_of_the_clip_s_frame_the_sticker_s_video(tmp_path):
+    vw = cv2.VideoWriter(str(tmp_path / "desk.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (64, 32))
+    for _ in range(4):                                # a white screen with a black note, the crop well inside the note
+        pic = np.full((32, 64, 3), 255, np.uint8)
+        pic[0:16, 32:64] = 0
+        vw.write(pic)
+    vw.release()
+    pl = plan(entry(clip="desk.mp4", crop=[40 / 64, 4 / 32, 60 / 64, 12 / 32], ratio=2.5, radius=0.0, size=0.4))
+    ffx = FF.FrameFx(pl["fx"], (W, H), fps=FPS, frame0=F0, frame_of=lambda g: None, point_of=None, output="16x9",
+                     footage_of=FT.source(tmp_path))
+    out = ffx.frame(frame(1.0), grey())
+    assert out[30:60, 40:120].max() < 0.1 and out[5, 5].tolist() == pytest.approx(list(GREY))   # the note alone
 
 
 # ================================================================================================= how it is laid on
