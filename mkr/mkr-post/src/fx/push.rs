@@ -13,7 +13,8 @@ use crate::pngio::Kind;
 const SRC: &str = concat!(include_str!("../shaders/sample.wgsl"), "\n", include_str!("../shaders/fx_push.wgsl"));
 
 /// float32 as numpy uses them: `c` the zoom's centre in the picture, `p` the disc's centre on screen, `m` the frame's
-/// middle, `z` the zoom, `s` the inner frame's scale, `rr` the disc's radius + 0.5; `inner` the frame inside.
+/// middle, `z` the zoom, `s` the inner frame's scale, `rr` the disc's radius + 0.5; `inner` the frame inside and
+/// `border` how it goes on past its edges (cv2.BORDER_REFLECT or cv2.BORDER_REPLICATE).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Push {
     pub inner: String,
@@ -23,6 +24,7 @@ pub struct Push {
     pub z: f32,
     pub s: f32,
     pub rr: f32,
+    pub border: u32,
 }
 
 #[repr(C)]
@@ -30,7 +32,8 @@ pub struct Push {
 struct Params {
     w: u32,
     h: u32,
-    pad0: [u32; 2],
+    border: u32,
+    pad0: u32,
     c: [f32; 2],
     p: [f32; 2],
     m: [f32; 2],
@@ -49,8 +52,8 @@ impl Effect for Push {
         let k = cx.kernel("fx_push", SRC, "push");
         let inner = cx.upload(&self.inputs()[0], &inputs[0]);
         let p = cx.uniform(&Params {
-            w: cx.w, h: cx.h, pad0: [0; 2], c: self.c, p: self.p, m: self.m, z: self.z, s: self.s, rr: self.rr,
-            pad1: [0.0; 3],
+            w: cx.w, h: cx.h, border: self.border, pad0: 0, c: self.c, p: self.p, m: self.m, z: self.z, s: self.s,
+            rr: self.rr, pad1: [0.0; 3],
         });
         let (src, dst, lut) = (cx.src.clone(), cx.dst.clone(), cx.lut.clone());
         let groups = cx.tiles();

@@ -104,6 +104,7 @@ SILK = "silkscreen"                                     # a collage's fill: the 
 BLENDS = ("lighten", "darken")
 EDGES = ("left", "right", "top", "bottom")
 EASES = ("log", "smooth", "linear")
+BORDERS = ("mirror", "extend")      # a push's disc round the frame inside it: that frame mirrored, or its edge drawn on
 STEMS = ("drums", "bass", "other", "vocals", "mix")
 _COMMON = {"kind", "from", "to", "strength", "aspect", "rect", "feather"}
 _HITS = {"times", "lane", "min_db", "every"}            # zoom and shock fire on these, a collage steps on them
@@ -114,7 +115,7 @@ _FOOTAGE = {"clip", "in", "rate", "loop", "fit", "focus", "mirror"}
 KEYS = {"lens": _COMMON | {"center", "radius", "radius_m", "shadow"},
         "echo": _COMMON | {"count", "every", "fade", "blend", "tint"},
         "slitscan": _COMMON | {"depth", "now"},
-        "push": (_COMMON - {"strength"}) | {"center", "radius", "radius_m", "inside", "play", "ease"},
+        "push": (_COMMON - {"strength"}) | {"center", "radius", "radius_m", "inside", "play", "ease", "border"},
         "scope": _COMMON | {"stem", "at", "size", "color", "width", "glow", "window", "lag", "gain", "timeline"},
         "zoom": _COMMON | _HITS | {"center", "amount", "attack", "decay"},
         "shock": _COMMON | _HITS | {"center", "speed", "width", "amount", "life", "color", "glow"},
@@ -145,7 +146,7 @@ _FIGURE_DEFAULTS = {"back": "base", "fill": PICTURE, "edge": None, "shadow": Non
 DEFAULTS = {"lens": {"radius": 0.1, "shadow": 0.0},
             "echo": {"count": 4, "every": 3, "fade": 0.55, "blend": "lighten", "tint": None},
             "slitscan": {"depth": 24, "now": "right"},
-            "push": {"radius": 0.02, "inside": 0.0, "play": False, "ease": "log"},
+            "push": {"radius": 0.02, "inside": 0.0, "play": False, "ease": "log", "border": "mirror"},
             "scope": {"stem": "bass", "at": [0.5, 0.5], "size": 0.3, "color": "text", "width": 2.0, "glow": 0.6,
                       "window": 0.04, "lag": 0.0025, "gain": 1.0, "timeline": "audio/timeline.json"},
             "zoom": {"center": [0.5, 0.5], "amount": 0.06, "attack": 0.02, "decay": 0.16, "min_db": None, "every": 1},
@@ -354,6 +355,8 @@ def normalize(spec, palette, what="fx"):
             raise FxError(f"{what}: play is true or false")
         if out["ease"] not in EASES:
             raise FxError(f"{what}: ease {out['ease']!r} is none of {', '.join(EASES)}")
+        if out["border"] not in BORDERS:
+            raise FxError(f"{what}: border {out['border']!r} is none of {', '.join(BORDERS)}")
     elif kind == "scope":
         if out["stem"] not in STEMS:
             raise FxError(f"{what}: stem {out['stem']!r} is none of {', '.join(STEMS)}")

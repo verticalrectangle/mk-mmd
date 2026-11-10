@@ -1,13 +1,14 @@
 // needs sample.wgsl
 // mkmmd.framefx.push: the picture zooming into a disc that shows another frame (`inner`, packed 8-bit). With d the
-// pixel's offset from the disc's centre p: outer = the picture at c + d / z, inside = the inner frame at m + d / s
-// (cv2.remap, INTER_LINEAR, BORDER_REFLECT), cov = clip(rr - |d|, 0, 1) (rr the disc's radius + 0.5), the pixel
-// outer * (1 - cov) + inside * cov; each step in numpy's order and float32.
+// pixel's offset from the disc's centre p: outer = the picture at c + d / z (BORDER_REFLECT), inside = the inner frame
+// at m + d / s (its `border`: BORDER_REFLECT or BORDER_REPLICATE; both cv2.remap, INTER_LINEAR), cov = clip(rr - |d|,
+// 0, 1) (rr the disc's radius + 0.5), the pixel outer * (1 - cov) + inside * cov; each step in numpy's order and
+// float32.
 
 struct Params {
     w: u32,
     h: u32,
-    pad0: u32,
+    border: u32,
     pad1: u32,
     c: vec2<f32>,
     p: vec2<f32>,
@@ -42,7 +43,7 @@ fn push(@builtin(global_invocation_id) id: vec3<u32>) {
     let dx = f32(id.x) - P.p.x;
     let dy = f32(id.y) - P.p.y;
     let outer = sample_bilinear(0u, P.c.x + dx / P.z, P.c.y + dy / P.z, P.w, P.h, BORDER_REFLECT, vec4<f32>(0.0));
-    let inside = sample_bilinear(1u, P.m.x + dx / P.s, P.m.y + dy / P.s, P.w, P.h, BORDER_REFLECT, vec4<f32>(0.0));
+    let inside = sample_bilinear(1u, P.m.x + dx / P.s, P.m.y + dy / P.s, P.w, P.h, P.border, vec4<f32>(0.0));
     let cov = clamp(P.rr - sqrt(dx * dx + dy * dy), 0.0, 1.0);
     dst[id.y * P.w + id.x] = vec4<f32>(outer.xyz * (1.0 - cov) + inside.xyz * cov, outer.w);
 }

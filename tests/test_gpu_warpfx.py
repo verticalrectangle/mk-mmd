@@ -130,6 +130,7 @@ def test_shock(gpu, tmp_path, keys):
 
 @pytest.mark.parametrize("keys", [
     {"ease": "linear", "play": True, "inside": 0.3, "center": [0.9, 0.2], "radius": 0.05},    # six frames behind
+    {"border": "extend", "radius": 0.04},                                                    # the inside's edge drawn on
 ])
 def test_push(gpu, tmp_path, keys):
     spec = {"kind": "push", "from": 0.5, "to": 1.5, "center": [0.3, 0.4], **keys}

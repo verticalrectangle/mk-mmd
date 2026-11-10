@@ -70,6 +70,7 @@ def runner(pl, frames=None, points=None):
     ({"kind": "orbit", "from": 0, "to": 1, "objects": "a", "back": ["picture", "nope"]}, "colour 'nope'"),
     ({"kind": "stack", "from": 0, "to": 1, "objects": "a", "mirror": 1}, "mirror is true or false"),
     ({"kind": "grid", "from": 0, "to": 1, "objects": "a", "mirror": True}, "unknown keys ['mirror']"),
+    ({"kind": "push", "from": 0, "to": 1, "center": [0.5, 0.5], "border": "wrap"}, "border 'wrap' is none of mirror, extend"),
 ])
 def test_bad_fx_say_what_is_wrong(spec, frag):
     with pytest.raises(TR.TransitionError, match=frag.replace("[", r"\[").replace("]", r"\]")):
@@ -141,6 +142,16 @@ def test_a_push_starts_as_the_picture_grows_its_disc_and_ends_as_the_inside_fram
     flat0, flat1 = np.zeros((H, W, 3), np.float32), np.ones((H, W, 3), np.float32)       # the inside is all 1
     cover = [float(FF.push(flat0, flat1, (20.0, 10.0), 2.0, u).mean()) for u in (0.0, 0.25, 0.5, 0.75, 1.0)]
     assert cover[0] < 0.01 and cover[-1] == pytest.approx(1.0) and all(a < b for a, b in zip(cover, cover[1:]))
+
+
+def test_round_the_frame_inside_a_push_shows_it_mirrored_or_its_edge_drawn_on():
+    inner = np.zeros((H, W, 3), np.float32)
+    inner[4:12] = [0.0, 0.0, 1.0]                                 # the frame inside: black, a blue band near its top
+    img, mid, u = np.zeros((H, W, 3), np.float32), ((W - 1) / 2.0, (H - 1) / 2.0), 0.8
+    s = FF.push_terms((W, H), mid, 2.0, u)[4]
+    row = int(mid[1] - s * H / 2.0) - 4                           # in the disc, 8.6 of its rows above the frame inside
+    mirror, extend = (FF.push(img, inner, mid, 2.0, u, border=b)[row, W // 2] for b in ("mirror", "extend"))
+    assert mirror[2] > 0.9 and extend[2] < 0.02                   # the band again, mirrored; the top row drawn on
 
 
 def test_an_echo_never_touches_the_ground_and_tints_the_figure():

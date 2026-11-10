@@ -213,9 +213,11 @@ def push_terms(size, c, r0, u, ease="log"):
     return z, p, m, r, r / R                                                         # s: the inner frame's scale
 
 
-def push(img, inner, c, r0, u, ease="log"):
+def push(img, inner, c, r0, u, ease="log", border="mirror"):
     """The picture zooming into a disc of radius r0 (px) about `c` that shows `inner`: at u = 0 the picture as it is, at
-    u = 1 the disc, its centre glided to the frame's middle, covers the frame and `inner` is shown at its own size."""
+    u = 1 the disc, its centre glided to the frame's middle, covers the frame and `inner` is shown at its own size. On
+    the way `inner` stands whole in the disc, which is larger than it: round it the disc shows `inner` mirrored about
+    its edges (`border` "mirror"), or its edge pixels drawn on outwards ("extend": a flat ground goes on)."""
     h, w = img.shape[:2]
     z, p, m, r, s = push_terms((w, h), c, r0, u, ease)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
@@ -223,7 +225,8 @@ def push(img, inner, c, r0, u, ease="log"):
     outer = cv2.remap(np.ascontiguousarray(img, np.float32), np.float32(c[0]) + dx / np.float32(z),
                       np.float32(c[1]) + dy / np.float32(z), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
     inside = cv2.remap(np.ascontiguousarray(inner, np.float32), np.float32(m[0]) + dx / np.float32(s),
-                       np.float32(m[1]) + dy / np.float32(s), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+                       np.float32(m[1]) + dy / np.float32(s), cv2.INTER_LINEAR,
+                       borderMode=cv2.BORDER_REPLICATE if border == "extend" else cv2.BORDER_REFLECT)
     cov = np.clip(r + 0.5 - np.sqrt(dx * dx + dy * dy), 0.0, 1.0)[..., None]        # a one-pixel soft edge
     return outer * (1.0 - cov) + inside * cov
 
@@ -1096,7 +1099,7 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         inner = self._reached(fx, g, frame, img)
         if inner is None:
             raise FileNotFoundError(f"fx {fx['index']} (push): the frame inside, {fx['inside_frame']}, is not there")
-        return push(img, inner, c, r0, u, fx["ease"])
+        return push(img, inner, c, r0, u, fx["ease"], fx["border"])
 
     def scope_at(self, fx, frame):
         """(trace points, centre px, radius px, line width px, opacity) of a scope on `frame` (draw_trace's)."""
