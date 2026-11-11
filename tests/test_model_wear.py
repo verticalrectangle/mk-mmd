@@ -272,11 +272,13 @@ def test_a_bent_elbow_keeps_the_sleeve_round(posable):
 
 
 def test_a_raised_arm_keeps_her_armpit_covered(posable):
-    """Raised 90 degrees out to her side, an arm shows little of the skin under it between the sleeve and the body (the
+    """Raised 90 degrees out to her side, an arm shows none of the skin under it between the sleeve and the body: the
     helper bone at the shoulder turns half the arm's turn, so the cloth there spreads instead of the band and the knit
-    parting): seen from in front, from behind and from her side, under 1000 pixels of that skin show (3300 did)."""
+    parting, and where they still part the lining lies on the skin. Seen from in front, from behind and from her
+    side, no pixel of that skin shows (3300 did without the helper, under 1000 with it and no lining)."""
     m = posable
-    keep = [m.mat_names.index(n) for n in ("skin", SW.MAT_KNIT, SW.MAT_RIB)]
+    names = sorted(("skin", SW.MAT_KNIT, SW.MAT_RIB, SW.MAT_LINING), key=m.mat_names.index)
+    keep = [m.mat_names.index(n) for n in names]
     on = np.isin(m.tri_mat, keep)
     for jp, sg in (("左", 1.0), ("右", -1.0)):
         j = m.heads[m.bones.index(f"{jp}腕")]
@@ -284,7 +286,7 @@ def test_a_raised_arm_keeps_her_armpit_covered(posable):
         geo = {"posed": P, "rest": m.V, "tris": m.T[on], "tri_object": np.zeros(int(on.sum()), np.int32),
                "tri_material": np.searchsorted(keep, m.tri_mat[on]).astype(np.int32),
                "tri_face": np.zeros(int(on.sum()), np.int32), "objects": np.array(["model"]),
-               "materials": np.array(["skin", SW.MAT_KNIT, SW.MAT_RIB])}
+               "materials": np.array(names)}
         at = j + np.array([-sg * 0.01, 0.0, -0.07])
         shown = 0
         for eye in ((sg * 0.12, -0.35, -0.12), (sg * 0.12, 0.35, -0.12), (sg * 0.35, 0.0, -0.2)):
@@ -294,7 +296,25 @@ def test_a_raised_arm_keeps_her_armpit_covered(posable):
             Q, Qr = mp.points(xs, ys), mp.points(xs, ys, rest=True)
             shown += int(((np.linalg.norm(Q - at, axis=1) < 0.06) & (Qr[:, 2] < j[2] - 0.035)
                           & (sg * Qr[:, 0] > abs(j[0]) - 0.04)).sum())
-        assert shown < 1000, (jp, shown)
+        assert shown == 0, (jp, shown)
+
+
+def test_the_lining_wears_the_band_under_the_band_and_the_knit_below(dressed):
+    """Her skin under the sweater wears the sweater's picture (the lining), so what of her comes through the cloth in a
+    pose shows the sweater: down the middle of her chest the band's rib from under the band's top as far down as the
+    band's own face reaches (within 1 cm), the knit below."""
+    _, parts, fit = dressed
+    m, lin = parts["sweater"].meshes
+
+    def front(mesh, mat):
+        ids = np.unique([i for f, k in zip(mesh.faces, mesh.face_mat) if k == mesh.mats.index(mat) for i in f])
+        P = np.asarray(mesh.verts)[ids]
+        return P[(np.abs(P[:, 0]) < 0.02) & (P[:, 1] < 0.0), 2]
+    band = front(m, SW.MAT_RIB)
+    band = band[band > float(fit.L["bust_front"][2]) - 0.05]               # not the waistband
+    rib, knit = front(lin, SW.MAT_RIB), front(lin, SW.MAT_LINING)
+    assert rib.min() > knit.max() - 0.001 and abs(rib.min() - band.min()) < 0.01
+    assert band.max() - 0.03 < rib.max() < band.max()
 
 
 def test_the_sleeves_bag_hangs_from_its_chains(posable):

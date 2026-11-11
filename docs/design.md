@@ -7034,8 +7034,12 @@ back as an arm reaches forward, above the waistband as she leans, her sides as s
 keys them from her pose, MMD has them as sliders. A cloth copy of the knit body and sleeves (`[sweater.cloth]`,
 `mkmmd.model.cloth`: every other ring and column, held under the band, inside the waistband and the cuffs, the sleeves
 held toward their shape, with the skin of her torso to collide with) lets mk's [cloth stage](#cloth) simulate the knit
-instead. Sizes are metres x S like the dress's. With `[sweater.waistband] above_hip` below zero the waistband sits on her
-thighs and the sweater is a dress; `[sweater.lace] enabled` hangs a pleated frill of lace under it (material
+instead. Under it all lies a lining (`[sweater.lining]`: the skin the sweater covers as a layer just over it, with the
+skin's own weights, showing what lies over it at rest: the band's rib under the band, the knit below; material
+セーター裏 for the knit, mesh `sweater_lining`): the sweater's pieces have weights of their own, so in a pose they part
+(the band stays with her chest as an arm rises) and her skin comes through them, and what shows there is the sweater,
+not skin. Sizes are metres x S like the dress's. With `[sweater.waistband] above_hip` below zero the waistband sits
+on her thighs and the sweater is a dress; `[sweater.lace] enabled` hangs a pleated frill of lace under it (material
 セーターレース). Colours come from `[colors.<part>]`, materials from `outfit_wear` (a toon ramp, a dark outline; the
 knit's texture a stockinette, the bands' a rib). A cloth colour may be a gradient down the garment, stops `[[share,
 "#rrggbb"], ...]` instead of one colour: the sweater's `knit` runs it from the band's top line to the hem and along each
