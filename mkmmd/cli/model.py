@@ -125,6 +125,21 @@ Examples:
   mk model glb rin.pmx --info
 """
 
+SHOOT_HELP = """Pictures of a built model in the renderer its videos are drawn with (mkr): a small studio project is
+written round the model (a grey paper sweep, key, fill and rim light), built, and one frame drawn per view; she turns
+on a turntable between the views, so each is lit alike. The studio shows her colours as they are painted (the
+Standard view transform); --view AgX shows them as a video does that keeps mk's default. A MODEL is a .pmx (its
+rig.json beside it frames the views by her own measures) or a spec whose [model] out holds its build (--build builds
+it first). Writes OUT/<view>.jpg and the sheets OUT/sheet.jpg, sheet_turn.jpg, sheet_head.jpg and, with --morphs,
+sheet_expressions.jpg (her face once per morph). About 15 s for sixteen views; nothing is rendered in Blender.
+Views: {views}; sets of them: {sets}.
+
+Examples:
+  mk model shoot ~/mk-assets/models/mika/mika.pmx                    # every view, into the model's folder /shoot
+  mk model shoot model.toml --build --views turn,face,face_3q
+  mk model shoot mika.pmx --views face --morphs まばたき,笑い,あ,にこり --out /work/mika_faces
+"""
+
 
 def add(sub):
     p = sub.add_parser("model", help="build an original character (parts -> PMX, rig.json, review .blend)",
@@ -224,6 +239,55 @@ def add(sub):
     vr.add_argument("--no-cache", action="store_true", help="build every part of a spec again (see mk model build)")
     vr.add_argument("--unit", type=float, default=0.08, help="metres per PMX unit of a .pmx (default: 0.08)")
     vr.set_defaults(func=run_vrm)
+    from ..model import shoot as SHOOT
+    sh = ss.add_parser("shoot", help="pictures of a built model through mk's renderer: turnaround, bust, face, expressions",
+                       description=SHOOT_HELP.format(views=", ".join(SHOOT.VIEWS), sets=", ".join(SHOOT.SETS)),
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    sh.add_argument("model", metavar="MODEL", help="a .pmx, or a spec (model.toml, base:NAME) whose build is in its "
+                                                   "[model] out")
+    sh.add_argument("--views", metavar="V,..", help="comma list of views and sets (default: all)")
+    sh.add_argument("--morphs", metavar="M,..", help="comma list of the model's morph names: her face once with each")
+    sh.add_argument("--build", action="store_true", help="a spec: build it first (mk model build)")
+    sh.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="overrides",
+                    help="with --build: override a spec value (TOML syntax, repeatable)")
+    sh.add_argument("--size", type=int, default=1080, help="the pictures' side in pixels (default: 1080)")
+    sh.add_argument("--color", default="#cfd2da", help="the paper's colour (default: #cfd2da)")
+    sh.add_argument("--view", default="Standard", choices=["Standard", "AgX", "Filmic"],
+                    help="the view transform (default: Standard, her colours as painted)")
+    sh.add_argument("--unit", type=float, default=0.08, help="metres per PMX unit of a .pmx (default: 0.08)")
+    sh.add_argument("--out", metavar="DIR", help="where the pictures go (default: <the model's folder>/shoot)")
+    sh.set_defaults(func=run_shoot)
+
+
+def run_shoot(args):
+    from ..model import shoot as SHOOT
+    t0 = time.time()
+    src = args.model
+    try:
+        if src.endswith(".pmx"):
+            pmx = Path(src).expanduser()
+            if args.build:
+                raise UsageError("--build builds a spec; a .pmx is shot as it is")
+        else:
+            try:
+                spec = SP.load(src, args.overrides)
+                cfg = SP.model_cfg(spec)
+            except SP.SpecError as e:
+                raise UsageError(str(e)) from None
+            pmx = cfg["out"].resolve() / f"{cfg['name']}.pmx"
+            if args.build:
+                pmx.parent.mkdir(parents=True, exist_ok=True)
+                over = [x for o in args.overrides for x in ("--set", o)]
+                SHOOT.run_mk(["model", "build", src, "--no-blend", *over], Path.cwd(), pmx.parent / "shoot_build.log")
+        rep = SHOOT.shoot(pmx, args.out or pmx.parent / "shoot", views=args.views, size=args.size, unit=args.unit,
+                          expressions=[m.strip() for m in (args.morphs or "").split(",") if m.strip()], color=args.color,
+                          view=args.view)
+    except SHOOT.ShootError as e:
+        raise UsageError(str(e)) from None
+    rep["model"] = str(pmx)
+    rep["seconds"] = round(time.time() - t0, 1)
+    emit(rep)
+    return 0
 
 
 def _lab_parts(args):

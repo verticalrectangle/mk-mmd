@@ -99,7 +99,10 @@ the base's size.
    `--set hair.bangs.count=9` tries a value without editing. A full build takes about 40 s the first time; after that a
    part whose inputs did not change comes from the part cache (the report says `cached` per part), so a hair change
    builds only the hair and the outfit after it. `--no-cache` builds every part again.
-3. Look: `mk model lab model.toml --region hand --poses rest,fist,spread` (seconds, no Blender: views and poses with the
+3. Look: `mk model shoot model.toml --build --views turn,face,face_3q,face_back` (about 30 s: her pictures in the
+   renderer her videos are drawn with, a turntable in a grey studio, `<out>/shoot/<view>.jpg` and sheets; `--morphs
+   まばたき,あ,笑い` her face once per morph; docs/design.md: Characters). Shape and numbers:
+   `mk model lab model.toml --region hand --poses rest,fist,spread` (seconds, no Blender: views and poses with the
    model's own weights, numbers under them; give it the base or a reference .pmx too and they stand side by side at one
    scale). A spec builds only the body by default (the head for `--region head`): `--parts all` adds the hair and the
    dress, as a .pmx always has them, so its head height, width and depth include its hair and ears; girths are cut on
