@@ -6,11 +6,12 @@ head: theta round it from the front toward her left, phi down from the crown; th
 her back, and turns by `curl` degrees over its `length`, up and `inward` (0: straight up, 1: as much toward the middle
 as up), faster toward its point (`curl_power`). Its section is an ellipse, `base` = [across the curl, thickness] metres
 at the root, drawn to a point by `taper` (1 a cone; larger keeps it full longer); `rings` ridges `ring_depth` deep run
-round its lower `ring_span`.
+round its lower `ring_span`; `bands` are rings worn on it: `[[where along it 0..1, how long a share of it], ...]`,
+standing `band_raise` (a share of its radius) proud.
 
 It is painted along its length (`[colors.horns]`): `base`, going to `tip` at its point, `shadow` on the inside of the
-curl and in the grooves between the ridges, `light` in a stripe along the outside of the curl. It rides the head bone
-(`bone`, 頭). Materials 角; landmarks horn.L / horn.R (the roots) and horn_tip.L / horn_tip.R."""
+curl and in the grooves between the ridges, `light` in a stripe along the outside of the curl, the bands `band`. It
+rides the head bone (`bone`, 頭). Materials 角; landmarks horn.L / horn.R (the roots) and horn_tip.L / horn_tip.R."""
 import numpy as np
 
 from .. import spec as SP
@@ -22,10 +23,20 @@ from .hair_geo import MeshAccum
 
 DEFAULTS = {"at": [62.0, 40.0], "sink": 0.015, "rise": 25.0, "sweep": 8.0, "curl": 105.0, "curl_power": 1.25,
             "inward": 0.45, "length": 0.20, "base": [0.058, 0.042], "taper": 1.7, "rings": 5, "ring_depth": 0.05,
-            "ring_span": 0.5, "around": 20, "along": 44, "bone": "頭"}
-COLORS = {"base": "#d42ad2", "shadow": "#77187a", "light": "#f96af4", "tip": "#e84ee6"}
+            "ring_span": 0.5, "bands": [], "band_raise": 0.07, "around": 20, "along": 44, "bone": "頭"}
+COLORS = {"base": "#d42ad2", "shadow": "#77187a", "light": "#f96af4", "tip": "#e84ee6", "band": "#f0c050"}
 MAT = "角"
 TEX = (128, 512)                # the horn's texture: round it, along it
+
+
+def banded(t, bands):
+    """How much of a band lies at shares `t` (n,) of the way along a horn, 0 .. 1 (soft at a band's two ends)."""
+    t = np.asarray(t, float)
+    out = np.zeros_like(t)
+    for at, long in bands:
+        half = 0.5 * float(long)
+        out = np.maximum(out, np.clip((half - np.abs(t - float(at))) / max(0.25 * half, 1e-6), 0.0, 1.0))
+    return out
 
 
 def spine(root, head, curl, toward, length, n, power):
@@ -51,6 +62,7 @@ def horn(root, head, toward, c):
     scale = 1.0 - t ** c["taper"]
     ridge = 1.0 + c["ring_depth"] * 0.5 * (1.0 - np.cos(2.0 * np.pi * c["rings"] * t / max(c["ring_span"], 1e-6))) * \
         (t < c["ring_span"])
+    ridge = ridge + c["band_raise"] * banded(t, c["bands"])
     out = unit(np.cross(D, axis))                       # the outside of the curl
     phi = 2.0 * np.pi * np.arange(m + 1) / m
     a, b = 0.5 * c["base"][0], 0.5 * c["base"][1]
@@ -84,6 +96,9 @@ def texture(col, c):
     rgb = rgb + (col["shadow"][None, None, :] - rgb) * dark[..., None]
     stripe = np.clip((face - 0.80) / 0.20, 0.0, 1.0) ** 2 * np.clip(1.2 - t, 0.0, 1.0)[:, None]
     rgb = rgb + (col["light"][None, None, :] - rgb) * (0.75 * stripe)[..., None]
+    band = banded(t, c["bands"])[:, None]               # the bands: lit on the outside of the curl, a line at each end
+    worn = col["band"][None, None, :] * ((0.80 + 0.25 * (0.5 + 0.5 * face)) * (1.0 - 1.4 * band * (1.0 - band)))[..., None]
+    rgb = rgb + (worn - rgb) * np.clip(band * 2.0, 0.0, 1.0)[..., None]
     img = np.empty((h, w, 4), np.uint8)
     img[..., :3] = np.rint(np.clip(rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
     img[..., 3] = 255

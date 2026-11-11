@@ -26,6 +26,16 @@ def test_a_horn_faces_out_tapers_to_its_point_and_curls():
     width = np.linalg.norm(rings[:, :-1].max(1) - rings[:, :-1].min(1), axis=1)
     assert width[0] > 0.9 * c["base"][0] and (np.diff(width) < 1e-9).all() and width[-1] < 0.25 * width[0]
     assert tip[2] > root[2] + 0.05 and np.linalg.norm(tip - root) < c["length"]      # it turned upward on its way
+    worn = SP.merge(c, {"bands": [[0.3, 0.1]]})                           # a ring worn 30 % of the way along
+    Vb = horns.horn(root, heading, np.array([0.0, 0.0, 1.0]), worn)[0][:-1].reshape(n, k, 3)
+    grown = np.linalg.norm(Vb - rings, axis=2).max(1)
+    at = int(round(0.3 * n))
+    assert grown[at] > 0.0005 and grown[: at - 4].max() < 1e-12 and grown[at + 5:].max() < 1e-12
+    col = {key: np.array(v) for key, v in (("base", (0.8, 0.1, 0.8)), ("tip", (0.9, 0.3, 0.9)), ("shadow", (0.4, 0.1, 0.4)),
+                                         ("light", (1.0, 0.5, 1.0)), ("band", (1.0, 0.8, 0.2)))}
+    img = horns.texture(col, worn).astype(float) / 255.0                  # row 0 its root; u 0 the outside of the curl
+    ring_row, bare_row = img[int(0.3 * img.shape[0]), 2], img[int(0.6 * img.shape[0]), 2]
+    assert ring_row[1] > 0.6 > ring_row[2] and bare_row[2] > 0.6 > bare_row[1]      # gold on the ring, the horn's own off it
 
 
 def test_the_pair_is_mirrored_and_rides_the_head(tmp_path):
