@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from mkmmd import pixmap as PX
+from mkmmd.core import families
 from mkmmd.core import folds as FD
 from mkmmd.model import assemble as AS
 from mkmmd.model import build as BD
@@ -184,6 +185,22 @@ def test_the_sweater_leaves_the_shoulders_bare_and_ends_at_the_wrists(dressed):
         assert ((V[sg * V[:, 0] > 0.15] - wrist) @ ax).max() < 0.008 * fit.S
     w = parts["sweater"].meshes[0].weights
     assert any(b.endswith("腕") for b in w) and "上半身2" in w
+
+
+def test_a_sweater_that_swings_hangs_its_lower_part_on_a_ring_of_chains(dressed, tmp_path):
+    _, parts, _ = dressed
+    assert not any(b.name.startswith("上着") for b in parts["sweater"].bones)      # none unless asked
+    spec = SP.load("base:girl", ['model.parts=["body", "sweater"]', "sweater.swing.enabled=true",
+                                 "sweater.waistband.offset=0.03"])
+    part = next(p for p in BD.run(spec, ctx=BD.BuildCtx(spec, tmp_path, seed=1)) if p.name == "sweater")
+    mesh, info = part.meshes[0], part.info["swing"]
+    V = np.asarray(mesh.verts)
+    hem = [b for b in part.bones if b.name.startswith("上着")]
+    assert len(hem) == 36 and hem[0].parent == "下半身" and families.classify(hem[0].name) == "coat"
+    share = sum(w for b, w in mesh.weights.items() if b.startswith("上着"))
+    torso = np.abs(V[:, 0]) < 0.12                                        # not her sleeves
+    assert share[V[:, 2] > info["z_hold"] + 0.002].max() < 1e-6           # the knit keeps its skin's weights above
+    assert share[torso & (V[:, 2] < part.info["z_waistband"])].min() > 0.999      # the waistband hangs on the chains
 
 
 def _hung(mesh, fit):

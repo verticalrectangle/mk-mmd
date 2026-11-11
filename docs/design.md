@@ -6987,13 +6987,20 @@ names, parents, weights, materials, bodies, joints).
 `[proportions.head] crown_skull` (after leg_extra): vertices, morph offsets, bones, rigid bodies and joints
 (`part.scaled`); the builders, `ctx.parts` and `Part.info` stay at the spec's own size, so every proportion the base
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
-listing it in `[model] parts`: `sweater` (off-shoulder knitwear, below), `pants` (skinny), `socks` (ribbed crew),
+listing it in `[model] parts`: `sweater` (off-shoulder knitwear, below), `skirt` (a short A-line denim skirt hung from
+her hips: `[skirt] top length ease flare`, painted whole as denim with its seams, pockets and topstitching, a frill of
+lace under its hem, and a ring of tied chains, family `skirt`, that shares its lower part with the skin under it
+(`[skirt.chains] follow`: at 0.5 a lifting thigh carries a fitted skirt half the way while the chains swing it; at 0 a
+full skirt only swings); `[colors.skirt] denim thread lace`; `mkmmd/model/parts/skirt.py`), `pants` (skinny), `socks`
+(ribbed crew),
 `sneakers` (high-tops: the Mary-Jane's foot fitting with a sneaker's settings and a painted face), `choker` (band and
 flower), `hair_bow` (a bow on the side of the head with two tails on chains), `horns` (a mirrored pair of curved,
-tapering horns on the head bone: `[horns] at length base taper rise sweep curl inward rings`, and `bands`, rings worn
-on them; `[colors.horns]`; `mkmmd/model/parts/horns.py`) and `bangles` (rings round a limb, an anklet or a bracelet:
-`[bangles] rings = [{on, toward, at, width, thick, offset, color}, ...]`, each round the limb from the landmark `on`
-toward the landmark `toward`, following the skin's section there and carrying its weights; `[colors.bangles]`). The
+tapering horns on the head bone: `[horns] at length base taper rise sweep curl inward back twist rings`, the curl going
+up, `inward` and toward her `back`, and turning toward her back along the horn by `twist` degrees, and `bands`, rings
+worn on them; `[colors.horns]`; `mkmmd/model/parts/horns.py`) and `bangles` (rings round a limb, an anklet or a
+bracelet: `[bangles] rings = [{on, toward, at, width, thick, offset, color}, ...]`, each round the limb from the
+landmark `on` toward the landmark `toward`, following the skin's section there and carrying its weights;
+`[colors.bangles]`). The
 hair is combed in one of two hairdos (`[hair] style`: `clumps`, the bases'; `locks`,
 groups of locks laid from guides, partings and ties, any hairdo that can be written down the way it is combed, hair
 gathered to a tie and the tail or braid that hangs from it included: [hair_part.md](hair_part.md)). Pants and socks are
@@ -7015,7 +7022,11 @@ shoulder girdle's share, so they stay with her body when an arm moves, and a hel
 (`[sweater.helpers]`, `mkmmd.model.helpers`) takes what the joint's two sides share, so a bent elbow keeps the sleeve
 round and a raised arm spreads the cloth at the armpit instead of parting it. Under each sleeve rows of short chains,
 tied sideways to their neighbours (`[sweater.chains]`, family `sleeve`), carry the bag of cloth hanging under the arm:
-MMD's physics or mk's solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. Fold shapes
+MMD's physics or mk's solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. With `[sweater.swing]
+enabled` the sweater's lower part (from `from` metres above the waistband down to its hem) hangs on a ring of tied
+chains from her hips (上着cc_r, family `coat`; `outfit_rig.Rig.ring`, the skirt's too: a short first bone, capsules
+as thin as the room to her colliders at rest asks), so a loose sweater (`[sweater.waistband] offset`, `[sweater.body]
+ease_*`) sways and bounces round her hips. Fold shapes
 (`[sweater.folds]`) bunch the knit as her joints turn (the crook of a bending elbow, the shoulder as an arm rises, her
 back as an arm reaches forward, above the waistband as she leans, her sides as she twists): mk's [folds stage](#folds)
 keys them from her pose, MMD has them as sliders. A cloth copy of the knit body and sleeves (`[sweater.cloth]`,

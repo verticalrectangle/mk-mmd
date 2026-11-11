@@ -55,6 +55,15 @@ only in their colour:
              sideways to its neighbours (joints in the PMX, `ties` in the rig description): the bag under the sleeve
              goes to them (`peak` of it straight under the arm, none at her skin), so it hangs and swings where MMD's
              physics or mk's solver ([sim] families "sleeve") moves them; `enabled` false leaves them out
+  swing      (`enabled`) the lower part hangs from chains and swings: `columns` chains of `rows` bones round her
+             (上着cc_r, family coat; column 0 at the middle of her front, counted toward her left), hung from her hips
+             (下半身), their heads `from` metres above the waistband: above them the knit keeps its skin's
+             weights (letting go over SWING_HOLD), below it goes over to the chains. The first bone is `root` long (a
+             chain's first capsule collides with nothing of her body, so it is short), the others share the rest of
+             the way evenly, the last ending at the hem (the lace's when it has one); capsules `radius` thick, or as
+             thin as the room to the body's colliders at rest asks, each chain tied sideways to its neighbours round
+             the ring (outfit_rig.Rig.ring). A loose sweater (`waistband.offset`, the body's `ease_*`) then sways and
+             bounces round her hips where MMD's physics or mk's solver ([sim] families "coat") moves them
   folds      shapes a joint angle drives (morphs in panel "other", the rig description's `folds`, mkmmd.core.folds):
              セーター肘左/右 the crook of the elbow bunching into ridges as it bends (25 to 115 degrees), セーター腕上げ
              左/右 the sleeve's top bunching by the shoulder and the knit standing out over the armpit as the arm rises
@@ -117,6 +126,7 @@ DEFAULTS = {
     "lace": {"enabled": False, "height": 0.028, "pleat": 0.012, "depth": 0.0035, "flare": 0.004},
     "helpers": {"elbow": 0.5, "shoulder": 0.5, "peak": 0.8},
     "chains": {"enabled": True, "upper": 4, "fore": 3, "radius": 0.007, "gap": 0.03, "peak": 1.0},
+    "swing": {"enabled": False, "columns": 12, "rows": 3, "from": 0.10, "root": 0.02, "radius": 0.020},
     "folds": {"enabled": True, "depth": 2.0},
     "cloth": {"enabled": True, "every": 2, "inset": 0.002, "sleeve_hold": 0.9, "mass": 0.3, "tension": 10.0,
               "shear": 5.0, "bending": 0.5, "air": 1.0, "quality": 10, "distance": 0.003, "hold": 0.3},
@@ -126,6 +136,7 @@ COLORS = {"knit": "#e7a7eb", "rib": "#9f75b0", "band": None, "cuff": None, "hem"
           "lace": "#fbf7f2"}
 RIBS = ("band", "cuff", "hem")       # the rib pieces' bands in the rib picture (WR.rib_bands), in this order
 LACE_TILE = 0.04                     # metres of lace per texture tile (four scallops)
+SWING_HOLD = 0.03                    # metres above its hem chains' heads over which the knit lets go of her skin's weights
 MAT_KNIT = "セーター"
 MAT_RIB = "セーターリブ"
 MAT_LACE = "セーターレース"
@@ -782,6 +793,36 @@ def with_chains(W, share):
     return out
 
 
+def hem_chains(fit, c, centre_y, body_rings, wb_rings, lace_rings, patches, rig, find_body, statics):
+    """Chains round the sweater's lower part (module docstring: swing), and their share of every patch of `patches`
+    (the knit body, the waistband, the lace): hung from 下半身, clear of the static colliders `statics` at rest.
+    Returns {chains, rows, radii, z_free (their heads), z_hold (down to there the knit keeps its skin's weights)}."""
+    sw, S = c["swing"], fit.S
+    C, R = max(int(sw["columns"]), 3), max(int(sw["rows"]), 1)
+    names = [[f"上着{col:02d}_{r + 1}" for col in range(C)] for r in range(R)]
+    face = wb_rings[face_rows("waistband", wb_rings)]
+    z_wb = float(face[0][:, 2].mean())
+    end = face[-1] if lace_rings is None else lace_rings[-1]
+    z_free = z_wb + sw["from"] * S
+    hold = z_free + SWING_HOLD * S
+    nodes = ORIG.hung_heights(z_free, float(end[:, 2].min()), R, sw["root"] * S)
+    surface = np.concatenate([body_rings[body_rings[..., 2].mean(1) > z_wb].reshape(-1, 3), face.reshape(-1, 3)])
+    th_s, th_e = G.theta_of(surface, centre_y), G.theta_of(end, centre_y)
+    pts = np.zeros((C, R + 1, 3))
+    for col in range(C):
+        turn = (th_s - col * TAU / C + np.pi) % TAU - np.pi
+        for r, z in enumerate(nodes):
+            pts[col, r] = surface[int(np.argmin((surface[:, 2] - z) ** 2 + (0.12 * S * turn) ** 2))]
+        pts[col, R] = end[int(np.argmin(np.abs((th_e - col * TAU / C + np.pi) % TAU - np.pi)))]
+    body = find_body("下半身") if find_body else None
+    rad = rig.ring(names, pts, "下半身", "coat", sw["radius"] * S, statics, body.name if body is not None else None,
+                   "SweaterHem")
+    for p in patches:
+        p.w = with_chains(p.w, ORIG.ring_weights(G.theta_of(p.v, centre_y), p.v[:, 2], names, nodes, hold, {}, C))
+    return {"chains": C, "rows": R, "radii": [float(rad.min()), float(rad.max())], "z_free": float(z_free),
+            "z_hold": float(hold)}
+
+
 # ---------------------------------------------------------------- ribbed bands
 def ribbed(face, out, thick, rib_depth):
     """Rings of a rib band from its outer face (K, M, 3) (top to bottom) and outward unit directions: a lip at the top
@@ -979,9 +1020,10 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None, gradient=False)
         return P
     # ---- the waistband, then the knit body going in under it
     wb_rings, wb_top, info["z_waistband"] = waistband(fit, c, centre_y)
-    soup.add(_patch(wb_rings, _rib_u(wb_rings), WR.band_v(_rib_v(wb_rings), 2, len(RIBS)), 1, "waistband",
-                    _axis_points(wb_rings, centre_y), fit, donors, "下半身"))
+    wb_patch = soup.add(_patch(wb_rings, _rib_u(wb_rings), WR.band_v(_rib_v(wb_rings), 2, len(RIBS)), 1, "waistband",
+                               _axis_points(wb_rings, centre_y), fit, donors, "下半身"))
     pieces["waistband"] = wb_rings
+    lace = None
     if c["lace"]["enabled"]:                     # a frill of lace sewn inside the hem, hanging under it
         lc = c["lace"]
         hem = wb_rings[face_rows("waistband", wb_rings)][-1]
@@ -1017,6 +1059,10 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None, gradient=False)
                                        _body_mix(kr, skin_field, h, drop), spread=c["body"]["spread"] * S))
     if c["folds"]["enabled"]:
         body_patch.m = {k: d.reshape(-1, 3) for k, d in body_folds(fit, c, kr, kd, z_wb).items()}
+    if rig is not None and c["swing"]["enabled"]:            # its lower part hangs from chains round her and swings
+        info["swing"] = hem_chains(fit, c, centre_y, kr, wb_rings, pieces.get("lace"),
+                                   [p for p in (body_patch, wb_patch, lace) if p is not None], rig, find_body,
+                                   [rb for rb in body_part.bodies if rb.mode == "static"])
     soup.add(body_patch)
     pieces["body"] = kr
     z_in = info["z_waistband"] - 0.012 * S                   # the knit is held inside the waistband below its lip,
@@ -1139,7 +1185,7 @@ def build(ctx):
         mats.append(WR.material(ctx, MAT_LACE, "lace", col["lace"], WR.lace(col["lace"]), shadow=(0.86, 0.84, 0.92),
                                 edge_size=0.5))
     mesh = soup.mesh()
-    info["chains"] = sum(1 for b in rig.bones if b.name.endswith("_1"))
+    info["chains"] = sum(1 for b in rig.bones if "袖下" in b.name and b.name.endswith("_1"))
     english = {f"{jp_}{jp}": f"{en} {side}" for jp_, en in FOLD_NAMES.values() for side, jp in SIDES}
     english.update({jp_: en for jp_, en in FOLD_NAMES.values()})
     morphs = [Morph(n, "other", english.get(n, n)) for n in mesh.morphs]
@@ -1154,6 +1200,7 @@ def build(ctx):
         layers["cloth"] = [cloth_copy(fit, cfg, soup, held, hung, info)]
     ctx.log(f"band top {info['band_top_z']:.3f} m on the chest, waistband top {info['z_waistband']:.3f} m, closest to "
             f"the skin {info['min_gap'] * 1000:.1f} mm, {info['chains']} chains under the sleeves, {len(morphs)} folds"
+            + (f", {info['swing']['chains']} chains of {info['swing']['rows']} round its hem" if "swing" in info else "")
             + (f", a cloth copy of {len(layers['cloth'][0]['pins'])} vertices" if "cloth" in layers else ""))
     return Part("sweater", meshes=[mesh], materials=[m for m in mats if m.name in mesh.mats], bones=bones + rig.bones,
                 morphs=morphs, bodies=rig.bodies, joints=rig.joints, info=info, rig=layers)
