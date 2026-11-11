@@ -16,7 +16,11 @@ is, so locks lying side by side carry one picture:
     strands   streaks running down the lock, coarse and fine, wavering a little, and a few fine dark lines in its free
               part
     sheen     the crown ring (`Sheen`): one band round the head, toothed above and below, `tooth` metres a tooth,
-              brighter at its heart; each lock paints its piece of it; faint on the rows under
+              brighter at its heart; each lock paints its piece of it; faint on the rows under. `bands` are more
+              such bands of any colour: `[{drop, width, colour, strength, tooth}, ...]`, `drop` metres below the
+              hair's top (a second sheen, a toothed shade under the first: how a cel shades hair)
+    tips      `{colour, length, strength}`: every lock's last `length` metres go to `colour` (hair that ends in
+              another colour, each lock on its own, not by its height)
     under     the rows under (`under`) a shade darker
 
 `[hair.paint]` sets how strong each is (PAINT), `hard` how crisp (0 airbrushed, 1 cut like a cel). `Atlas` packs the
@@ -29,8 +33,9 @@ from .hair_tex import _grad, _noise1, _sm
 
 PAINT = {"strands": 0.10, "lines": 5, "line": 0.22, "edge": 0.30, "edge_width": 0.34, "rim": 0.30, "form": 0.05,
          "root": 0.12, "tip": 0.14, "sheen": 0.85, "sheen_width": 1.0, "glow": 0.30, "tooth": 0.012, "hard": 0.0,
-         "under": 0.84, "cap": 0.80,
+         "under": 0.84, "cap": 0.80, "bands": [], "tips": {"colour": None, "length": 0.06, "strength": 0.85},
          "ramp": [[0.0, "shadow:base:0.5"], [0.22, "base"], [0.62, "base:tip:0.4"], [1.0, "tip"]]}
+BAND = {"drop": 0.10, "width": 0.015, "colour": "shadow", "strength": 0.6, "tooth": 0.012}
 ROOT_SHADE = 0.02               # metres from the root over which `root` fades
 TIP_SHADE = 0.04                # metres before the point over which `tip` grows
 HEAD_R = 0.15                   # metres: the radius the sheen's teeth are counted round
@@ -155,13 +160,13 @@ def _edge(t, hard):
 
 
 class Sheen:
-    """The crown's sheen: one band round the head at height `z`, `width` its half thickness in metres, toothed above
-    and below (a tooth `look["tooth"]` metres wide round a head of HEAD_R), its height and its strength wandering as
-    it goes round. Every lock that crosses it paints its piece of the same band (`on`), so the band runs unbroken over
-    locks that lie side by side."""
+    """A band round the head at height `z`, `width` its half thickness in metres, toothed above and below (a tooth
+    `tooth` metres wide round a head of HEAD_R), its height and its strength wandering as it goes round; `glow` a soft
+    halo round it. The crown's sheen is one, a toothed shade under it another. Every lock that crosses it paints its
+    piece of the same band (`on`), so the band runs unbroken over locks that lie side by side."""
 
-    def __init__(self, z, width, look, rng):
-        self.z, self.hw, self.glow = float(z), float(width) * float(look["sheen_width"]), float(look["glow"])
+    def __init__(self, z, width, tooth, glow, rng):
+        self.z, self.hw, self.glow = float(z), float(width), float(glow)
         self.grid = np.linspace(-np.pi, np.pi, 2049)
 
         def table(waves):                                   # smooth noise in -1 .. 1 that closes round the head
@@ -169,7 +174,7 @@ class Sheen:
             amp, ph = rng.uniform(0.3, 1.0, waves) / np.sqrt(k), rng.uniform(0.0, 2.0 * np.pi, waves)
             return np.sin(np.multiply.outer(self.grid, k) + ph) @ amp / amp.sum()
         self.wander, self.uneven, self.ragged = table(7), table(11), table(23)
-        self.teeth = max(int(round(2.0 * np.pi * HEAD_R / max(float(look["tooth"]), 1e-3))), 3)
+        self.teeth = max(int(round(2.0 * np.pi * HEAD_R / max(float(tooth), 1e-3))), 3)
         self.shift = rng.uniform(0.0, 1.0, 2)
 
     def on(self, z, around, hard):
@@ -186,15 +191,20 @@ class Sheen:
         return _edge(1.0 - d, hard), _edge(1.0 - d / 0.5, hard), glow, 0.65 + 0.35 * np.interp(th, self.grid, self.uneven)
 
 
-def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=None, under=False):
+def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=None, under=False, bands=()):
     """The picture (h, w, 3) of a lock's cell. `z` and `around` (h, w): each point's height and its angle round the
     head (radians: 0 the front, her left positive); `arc` (h,) the metres from the root down the lock and `free` (h,)
-    how free it hangs there (0 lying with its neighbours .. 1 on its own); `sheen` the crown's Sheen (None: none)."""
+    how free it hangs there (0 lying with its neighbours .. 1 on its own); `sheen` the crown's Sheen (None: none);
+    `bands` [(a Sheen, its colour, its strength)] drawn under it."""
     h, w = cell.h, cell.w
     x = np.linspace(-1.0, 1.0, w)
     hard = float(look["hard"])
     col = height_colour(pal, np.clip((z_top - np.asarray(z, float)) / max(z_top - z_bot, 1e-6), 0.0, 1.0), look["ramp"])
     arc = np.asarray(arc, float)
+    tips = look["tips"]
+    if tips["colour"]:
+        t = _sm((arc - (arc[-1] - float(tips["length"]))) / max(float(tips["length"]), 1e-6))[:, None, None]
+        col = col + (colour(pal, tips["colour"]) - col) * (float(tips["strength"]) * t)
     free = np.asarray(free, float)[:, None]
     shade = 1.0 + look["form"] * free * (1.0 - x * x)[None, :]
     shade = shade - look["root"] * (1.0 - _sm(arc / ROOT_SHADE))[:, None]
@@ -219,6 +229,9 @@ def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=N
         along = _sm((rows - r0) / 0.15)[:, None] * np.maximum(free, 0.25)
         shade = shade - look["line"] * along * across[None, :]
     rgb = _tone(col, shade, pal)
+    for band, tint, k in bands:
+        on = band.on(z, around, hard)[0] * (0.4 if under else 1.0)
+        rgb = rgb + (np.asarray(tint, float) - rgb) * np.clip(float(k) * on, 0.0, 1.0)[..., None]
     if sheen is not None and look["sheen"] > 0.0:
         band, core, glow, strength = sheen.on(z, around, hard)
         amp = look["sheen"] * (0.3 if under else 1.0) * strength * (1.0 - 0.7 * free * rim[None, :])

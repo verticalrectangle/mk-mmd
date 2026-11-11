@@ -156,7 +156,7 @@ def test_a_hairdo_that_cannot_be_laid_says_what_is_wrong(tmp_path):
 def test_the_sheen_is_one_band_round_the_head():
     look = {**HP.PAINT, "strands": 0.0, "lines": 0}
     pal = hair_tex.palette({})
-    sheen = HP.Sheen(1.40, 0.018, look, np.random.default_rng(3))
+    sheen = HP.Sheen(1.40, 0.018, look["tooth"], look["glow"], np.random.default_rng(3))
     band = sheen.on(np.array([1.40, 1.48, 1.32]), np.zeros(3), 0.0)[0]
     assert band[0] > 0.9 and band[1] == 0.0 and band[2] == 0.0
     seam = [sheen.on(np.full(40, 1.40) + np.linspace(-0.02, 0.02, 40), np.full(40, a), 0.0) for a in (np.pi, -np.pi)]
@@ -171,3 +171,20 @@ def test_the_sheen_is_one_band_round_the_head():
                              np.random.default_rng(1), 1.45, 1.20, sheen)
     left, right = cell(0.10, 0.20), cell(0.20, 0.30)
     assert np.abs(left[:, -1] - right[:, 0]).max() < 1e-9                 # two locks side by side carry one picture
+
+
+def test_a_lock_can_end_in_another_colour_and_cross_a_band_of_shade():
+    pal = hair_tex.palette({"base": "#2060c0", "shadow": "#102050", "tip": "#c020c0"})
+    plain = {**HP.PAINT, "strands": 0.0, "lines": 0, "root": 0.0, "tip": 0.0, "ramp": [[0.0, "base"], [1.0, "base"]]}
+    z = np.broadcast_to(np.linspace(1.40, 1.20, 100)[:, None], (100, 16))
+    around, arc = np.zeros((100, 16)), np.linspace(0.0, 0.20, 100)
+
+    def paint(look, **more):
+        return HP.paint_lock(HP.Cell(0, 0, 16, 100, 256), z, around, arc, np.zeros(100), pal, look,
+                             np.random.default_rng(1), 1.45, 1.15, None, **more)
+    flat = paint(plain)
+    tipped = paint({**plain, "tips": {"colour": "tip", "length": 0.05, "strength": 1.0}})
+    assert np.allclose(tipped[:70], flat[:70]) and np.allclose(tipped[-1, 8], pal["tip"], atol=0.02)   # its last 5 cm
+    shade = HP.Sheen(1.30, 0.02, 0.012, 0.0, np.random.default_rng(2))
+    banded = paint(plain, bands=[(shade, pal["shadow"], 1.0)])
+    assert np.allclose(banded[50, 8], pal["shadow"], atol=0.05) and np.allclose(banded[[5, 95]], flat[[5, 95]])

@@ -579,7 +579,13 @@ class LockHair(HH.HeadHair):
         ring = self.cfg["ring"]
         sheen = None
         if ring["enabled"]:
-            sheen = PT.Sheen(self.z_top - ring["drop"], ring["width"], look, self.ctx.rng_for("hair.paint.sheen"))
+            sheen = PT.Sheen(self.z_top - ring["drop"], ring["width"] * look["sheen_width"], look["tooth"], look["glow"],
+                             self.ctx.rng_for("hair.paint.sheen"))
+        bands = []
+        for k, raw in enumerate(look["bands"]):
+            bd = SP.merge(PT.BAND, raw)
+            bands.append((PT.Sheen(self.z_top - bd["drop"], bd["width"], bd["tooth"], 0.0,
+                                   self.ctx.rng_for(f"hair.paint.band{k}")), PT.colour(self.pal, bd["colour"]), bd["strength"]))
         c = self.skull.center
         for lk in locks:
             cell = lk.extra["cell"]
@@ -591,7 +597,7 @@ class LockHair(HH.HeadHair):
             rgb = PT.paint_lock(cell, X[..., 2], np.arctan2(X[..., 0] - c[0], c[1] - X[..., 1]), at,
                                 freedom(at, float(arc[-1]), lk.extra["free"]), self.pal, look,
                                 self.ctx.rng_for(f"hair.paint.{lk.name}"), self.z_top, self.z_bot, sheen,
-                                under=lk.extra["under"])
+                                under=lk.extra["under"], bands=bands)
             self.atlas.put(cell, rgb)
         self.atlas.put(self._cap_cell, PT.paint_cap(self._cap_cell, self.pal, look, self.ctx.rng_for("hair.paint.cap")))
         return self.atlas.image(self.pal["base"] * look["cap"])

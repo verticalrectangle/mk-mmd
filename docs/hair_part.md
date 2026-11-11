@@ -143,9 +143,12 @@ How a group lies (the group's keys and their defaults: `hair_locks.GROUP`):
 The texture (`hair_paint.py`) is an atlas with a cell per lock, painted by where each point of the lock is on the head: its colour down
 `[hair.paint] ramp` by its height (`[[share of the way down the hair, colour], ...]`, a colour a name of `[colors.hair]`, a mix
 `"base:shadow:0.6"` or `"#rrggbb"`), and the crown's sheen as one toothed band round the head (`Sheen`; `[hair.ring]`, `[hair.paint]
-sheen sheen_width tooth glow`) of which every lock paints its piece. So locks lying side by side carry one picture. A lock's own
-marks (shaded edges, a lighter middle, strand lines, `root` and `tip` shades; `[hair.paint] edge rim form lines line strands`) are
-drawn only where it hangs free. `hard` makes the paint crisp like a cel.
+sheen sheen_width tooth glow`) of which every lock paints its piece. So locks lying side by side carry one picture. `bands =
+[{drop, width, colour, strength, tooth}, ...]` draws more such bands in any colour of the family, `drop` metres below the hair's
+top (a toothed band of shade under the sheen, a second sheen: how a cel shades hair). A lock's own marks (shaded edges, a lighter
+middle, strand lines, `root` and `tip` shades; `[hair.paint] edge rim form lines line strands`) are drawn only where it hangs
+free, and `tips = {colour, length, strength}` turns every lock's last `length` metres to another colour (hair that ends violet,
+each lock on its own, whatever its height). `hard` makes the paint crisp like a cel.
 
 A side parting with a long fringe (on the girl base the hairline is at phi 29 in front and 42 at theta 30):
 
