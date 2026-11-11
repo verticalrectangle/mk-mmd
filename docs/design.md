@@ -6996,8 +6996,10 @@ full skirt only swings); `[colors.skirt] denim thread lace`; `mkmmd/model/parts/
 `sneakers` (high-tops: the Mary-Jane's foot fitting with a sneaker's settings and a painted face), `choker` (band and
 flower), `hair_bow` (a bow on the side of the head with two tails on chains), `horns` (a mirrored pair of curved,
 tapering horns on the head bone: `[horns] at length base taper rise sweep curl inward back twist rings`, the curl going
-up, `inward` and toward her `back`, and turning toward her back along the horn by `twist` degrees, and `bands`, rings
-worn on them; `[colors.horns]`; `mkmmd/model/parts/horns.py`) and `bangles` (rings round a limb, an anklet or a
+up, `inward` and toward her `back`, and turning toward her back along the horn by `twist` degrees; a flat `base` with
+`edge` (its narrow ends drawn to keels), `spin` (degrees its section turns about the horn) and `wind` (its middle line
+wound off the curve as the section turns, an open spiral) makes an antelope's twisted horn; `bands`, rings worn on
+them; `[colors.horns]`; `mkmmd/model/parts/horns.py`) and `bangles` (rings round a limb, an anklet or a
 bracelet: `[bangles] rings = [{on, toward, at, width, thick, offset, color}, ...]`, each round the limb from the
 landmark `on` toward the landmark `toward`, following the skin's section there and carrying its weights;
 `[colors.bangles]`). The

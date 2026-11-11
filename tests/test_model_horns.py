@@ -38,6 +38,30 @@ def test_a_horn_faces_out_tapers_to_its_point_and_curls():
     assert ring_row[1] > 0.6 > ring_row[2] and bare_row[2] > 0.6 > bare_row[1]      # gold on the ring, the horn's own off it
 
 
+def test_a_flat_horn_spins_its_keels_round_it():
+    c = SP.merge(horns.DEFAULTS, {"rings": 0, "curl": 0.0, "base": [0.08, 0.03], "edge": 1.0})
+    n, k = int(c["along"]), int(c["around"]) + 1
+    V = horns.horn(np.array([0.0, 0.0, 1.5]), np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0]), c, spin=np.pi)[0]
+    rings = V[:-1].reshape(n, k, 3)
+    keels = rings[:, 0] - rings[:, (k - 1) // 2]                          # from keel to keel across each ring
+    keels = keels / np.linalg.norm(keels, axis=1, keepdims=True)
+    turned = np.degrees(np.arccos(np.clip(keels @ keels[0], -1.0, 1.0)))
+    assert turned[n // 2] == pytest.approx(90.0, abs=3.0) and (np.diff(turned[: n // 2]) > 0.0).all()   # half of half a turn
+    ring = rings[0, :-1] - rings[0, :-1].mean(0)
+    off = np.linalg.norm(ring - np.outer(ring @ keels[0], keels[0]), axis=1)
+    assert np.abs(ring @ keels[0]).max() == pytest.approx(0.04, rel=0.02) and off.max() == pytest.approx(0.015, rel=0.05)
+    assert off[3] < 0.75 * 0.015                                          # thinner toward a keel than an ellipse (0.81)
+    Vw, _, _, Nw, _ = horns.horn(np.array([0.0, 0.0, 1.5]), np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0]), c,
+                                 spin=np.pi, wind=0.5)
+    wound = Vw[:-1].reshape(n, k, 3)
+    mid = wound[:, :-1].mean(1)
+    away = (mid - [0.0, 0.0, 1.5]) * [1.0, 1.0, 0.0]                      # off the straight line it would have run
+    far = np.linalg.norm(away, axis=1)
+    assert far[0] < 1e-12 and 0.7 * 0.02 < far.max() < 0.02               # wound: up to half its half width off it
+    assert np.abs(np.einsum("ij,ij->i", away, wound[:, 0] - wound[:, (k - 1) // 2])).max() < 1e-9      # toward its flat
+    assert (np.einsum("ij,ij->i", Nw[:-1], Vw[:-1] - np.repeat(mid, k, 0)) > 0.0).all()               # and faces out
+
+
 def test_the_pair_is_mirrored_and_rides_the_head_and_a_twist_takes_the_tips_back(tmp_path):
     def built(where, **more):
         ctx = HF.make_ctx(tmp_path / where, {"horns": {"at": [70, 40], "length": 0.2, **more},
@@ -45,7 +69,7 @@ def test_the_pair_is_mirrored_and_rides_the_head_and_a_twist_takes_the_tips_back
         ctx.part = "horns"
         return horns.build(ctx)
     plain = built("plain").info["landmarks"]
-    part = built("twisted", twist=70.0, back=0.3)
+    part = built("twisted", twist=70.0, back=0.3, spin=200.0, wind=0.6, edge=0.7, base=[0.08, 0.035])
     PT.check(part)
     mesh, land = part.meshes[0], part.info["landmarks"]
     half = len(mesh.verts) // 2
