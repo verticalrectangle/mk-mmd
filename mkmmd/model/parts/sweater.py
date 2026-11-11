@@ -40,7 +40,10 @@ only in their colour:
              Its vertices stay `gap` off the skin
   waistband  `above_hip` (its top) over the hip joints (landmark leg.L), `height` deep, `offset` off the convex section
              of her hips, `thick`, ribbed (`rib`, `rib_depth`), its hem rolled to the inside and its top a lip the knit
-             goes in under
+             goes in under. With `above_hip` below zero it sits on her thighs and the sweater is a dress: its body
+             hangs from her hips down into it
+  lace       (`enabled`) a frill of lace sewn inside the waistband and hanging `height` under it, in soft pleats
+             every `pleat` metres, `depth` deep, standing `flare` out at its hem
   cuffs      `length` up the forearm from the wrist, `past` beyond it, the same make as the waistband
   helpers    a helper bone at each elbow (左ひじ補助, turning `elbow` of the elbow's bend) and each shoulder (左腕補助,
              `shoulder` of the upper arm's turn): the knit and ribs the joint's two sides share go to it (`peak` of
@@ -71,9 +74,11 @@ only in their colour:
 Sizes are metres x S (S = head_tip.z / 1.7 with leg_extra left out). Every piece carries the weights of the skin nearest
 to it, smoothed round its rings over `spread` metres (band, body), so the sweater moves with her in any pose; on her
 body away from her arms the band and the knit leave out the shoulder girdle's share, so they stay with her chest when
-an arm moves. Spec: `[sweater]` (DEFAULTS below, tables merge key by key) and `[colors.sweater]` knit (the body and
-sleeves) and rib (the band, waistband and cuffs). Materials セーター (knit) and セーターリブ (ribs), double sided,
-outlined dark."""
+an arm moves. Spec: `[sweater]` (DEFAULTS below, tables merge key by key) and `[colors.sweater]`: `knit` (the body and
+sleeves; one colour, or a gradient `[[share, "#rrggbb"], ...]` down the body from the band's top line to the hem, a
+sleeve running through it from `sleeve.ramp_from` at the shoulder to its cuff), `rib` (the band, waistband and cuffs;
+`band`, `cuff` and `hem` give one a colour of its own, `line` a thin dark line along the band's lower edge) and `lace`.
+Materials セーター (knit), セーターリブ (ribs) and セーターレース (the lace), double sided, outlined dark."""
 import numpy as np
 
 from .. import cloth as CL
@@ -89,6 +94,7 @@ from . import outfit_ink as INK
 from . import outfit_rig as ORIG
 from . import outfit_shell as SH
 from . import outfit_wear as WR
+from .outfit_dress import frill_base, hang_frill
 
 TAU = 2.0 * np.pi
 
@@ -104,10 +110,11 @@ DEFAULTS = {
     "sleeve": {"ease": [[0.0, 0.009], [0.35, 0.010], [0.6, 0.012], [0.85, 0.015], [1.0, 0.016]], "sag": 0.016,
                "puff": 0.004, "pleats": 9, "pleat_depth": 0.0025, "gather": 0.06, "elbow_fold": 0.0025,
                "elbow_at": [-0.012, 0.012], "gathers": 11, "gather_depth": 0.003, "gather_fade": 0.04,
-               "start_depth": 0.006, "underarm": 0.045},
+               "start_depth": 0.006, "underarm": 0.045, "ramp_from": 0.12},
     "waistband": {"above_hip": 0.095, "height": 0.034, "offset": 0.004, "thick": 0.005, "rib": 0.008,
                   "rib_depth": 0.0010},
     "cuff": {"length": 0.062, "past": 0.004, "offset": 0.004, "thick": 0.005, "rib": 0.007, "rib_depth": 0.0008},
+    "lace": {"enabled": False, "height": 0.028, "pleat": 0.012, "depth": 0.0035, "flare": 0.004},
     "helpers": {"elbow": 0.5, "shoulder": 0.5, "peak": 0.8},
     "chains": {"enabled": True, "upper": 4, "fore": 3, "radius": 0.007, "gap": 0.03, "peak": 1.0},
     "folds": {"enabled": True, "depth": 2.0},
@@ -115,9 +122,13 @@ DEFAULTS = {
               "shear": 5.0, "bending": 0.5, "air": 1.0, "quality": 10, "distance": 0.003, "hold": 0.3},
     "seed": 7,
 }
-COLORS = {"knit": "#e7a7eb", "rib": "#9f75b0"}
+COLORS = {"knit": "#e7a7eb", "rib": "#9f75b0", "band": None, "cuff": None, "hem": None, "line": None,
+          "lace": "#fbf7f2"}
+RIBS = ("band", "cuff", "hem")       # the rib pieces' bands in the rib picture (WR.rib_bands), in this order
+LACE_TILE = 0.04                     # metres of lace per texture tile (four scallops)
 MAT_KNIT = "セーター"
 MAT_RIB = "セーターリブ"
+MAT_LACE = "セーターレース"
 
 
 # ---------------------------------------------------------------- plane helpers
@@ -917,10 +928,13 @@ def _axis_points(rings, centre_y):
     return np.concatenate([np.zeros_like(rings[..., :1]), np.full_like(rings[..., :1], centre_y), rings[..., 2:3]], -1)
 
 
-def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
-    """Build the sweater into `soup` (material 0 knit, 1 rib), its sleeves' chains into `rig` (an outfit_rig.Rig; none:
-    no chains) anchored on the bodies `find_body(bone)` gives. Returns info: the band's top height at the middle of her
-    front, the waistband's top, the closest each piece comes to the skin, and the pieces' vertex counts."""
+def sweater(fit, body_part, cfg, soup, rig=None, find_body=None, gradient=False):
+    """Build the sweater into `soup` (material 0 knit, 1 rib, 2 the lace when it has one), its sleeves' chains into
+    `rig` (an outfit_rig.Rig; none: no chains) anchored on the bodies `find_body(bone)` gives. `gradient`: the knit's
+    v is the share of the way down each piece (the body 0 .. 1, a sleeve from `sleeve.ramp_from`) instead of tiles,
+    for a knit picture coloured down a gradient (WR.knit_ramp, `knit_tiles` tiles of it). Returns info: the band's
+    top height at the middle of her front, the waistband's top, the closest each piece comes to the skin, the pieces'
+    vertex counts, `knit_tiles` and `line_v` (where along the rib picture's v the band's lower edge lies)."""
     c = SP.merge(DEFAULTS, cfg)
     S = fit.S
     rng = np.random.default_rng(int(c["seed"]))
@@ -941,8 +955,11 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
     over = depth < h + drop
     band_off[over] = np.linalg.norm(inner.near(sh.verts[over])[0] - sh.verts[over], axis=1)
     skin_field = Surface(sh.verts, sh.tris, {"band": depth, "blend": blend, "near": near_arm, "band_off": band_off})
-    band_patch = _patch(rings, u, v, 1, "band", inside, fit, donors, "上半身2", _body_mix(rings, skin_field, h, drop),
-                        spread=c["band"]["spread"] * S)
+    rows = face_rows("band", rings)              # a dark line may be drawn along the band's lower edge: the last of
+    edge = [v[rows][0] + 0.84 * np.ptp(v[rows]), v[rows.stop + 2]]         # its face and its rounded lip
+    info["line_v"] = tuple(float(x) for x in np.interp(edge, v[[0, -1]], WR.band_v(v[[0, -1]], 0, len(RIBS))))
+    band_patch = _patch(rings, u, WR.band_v(v, 0, len(RIBS)), 1, "band", inside, fit, donors, "上半身2",
+                        _body_mix(rings, skin_field, h, drop), spread=c["band"]["spread"] * S)
     soup.add(band_patch)
     pieces["band"] = rings
     face = rings[face_rows("band", rings)]
@@ -962,9 +979,28 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
         return P
     # ---- the waistband, then the knit body going in under it
     wb_rings, wb_top, info["z_waistband"] = waistband(fit, c, centre_y)
-    soup.add(_patch(wb_rings, _rib_u(wb_rings), _rib_v(wb_rings), 1, "waistband",
+    soup.add(_patch(wb_rings, _rib_u(wb_rings), WR.band_v(_rib_v(wb_rings), 2, len(RIBS)), 1, "waistband",
                     _axis_points(wb_rings, centre_y), fit, donors, "下半身"))
     pieces["waistband"] = wb_rings
+    if c["lace"]["enabled"]:                     # a frill of lace sewn inside the hem, hanging under it
+        lc = c["lace"]
+        hem = wb_rings[face_rows("waistband", wb_rings)][-1]
+        axis = np.array([0.0, centre_y, float(hem[:, 2].mean())])
+        ring = hem - G.unit((hem - axis) * [1.0, 1.0, 0.0]) * 0.7 * c["waistband"]["thick"] * S
+        around = float(np.linalg.norm(np.roll(ring, -1, 0) - ring, axis=1).sum())
+        pleats = max(int(round(around / (lc["pleat"] * S))), 8)
+        base, out, _ = frill_base(ring, axis, pleats)
+        prof = np.array([(0.0, 0.0), (0.3, 0.33), (0.7, 0.67), (1.0, 1.0)]) * [lc["flare"] * S, lc["height"] * S]
+        lace, lace_rings = hang_frill(base, out, np.array([0.0, 0.0, -1.0]), prof, pleats, lc["depth"] * S, 2, "lace",
+                                      axis, tile_u=LACE_TILE * S, seed=int(c["seed"]) + 3, fit=fit,
+                                      margin=c["body"]["gap"] * S, hem_wobble=0.08 * lc["height"] * S)
+        lace.w = fit.weights_for(lace.v, donors, default="下半身", faces=lace.f, smooth=2)
+        soup.add(lace)
+        pieces["lace"] = lace_rings
+
+    def knit_v(rings, top):                      # the knit's v: tiles down it, or the share of the gradient
+        v = _rib_v(rings)
+        return top + (1.0 - top) * v / max(float(v[-1]), 1e-9) if gradient else v
     Mb = 144
     wb_inner = G.resample_ring(wb_top, Mb)[0]
     out = G.unit(np.concatenate([wb_inner[:, :2] - np.array([0.0, centre_y]), np.zeros((Mb, 1))], 1))
@@ -975,9 +1011,10 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
     kr = edge_gathers(kr, kd, skin_field, h, bd["gathers"], bd["gather_depth"] * S, bd["gather_fade"] * S, rng)
     kr = under_band(kr.reshape(-1, 3), skin_field, fit, c).reshape(kr.shape)
     kr = fit.conform(kr, bd["gap"] * S)
-    body_patch = under_the_band(_patch(kr, _circ_u(kr, WR.TILE), _rib_v(kr), 0, "body", _axis_points(kr, centre_y), fit,
-                                       donors, "上半身", _body_mix(kr, skin_field, h, drop),
-                                       spread=c["body"]["spread"] * S))
+    info["knit_tiles"] = max(int(round(float(_rib_v(kr)[-1]))), 1)
+    body_patch = under_the_band(_patch(kr, _circ_u(kr, WR.TILE), knit_v(kr, 0.0), 0, "body",
+                                       _axis_points(kr, centre_y), fit, donors, "上半身",
+                                       _body_mix(kr, skin_field, h, drop), spread=c["body"]["spread"] * S))
     if c["folds"]["enabled"]:
         body_patch.m = {k: d.reshape(-1, 3) for k, d in body_folds(fit, c, kr, kd, z_wb).items()}
     soup.add(body_patch)
@@ -991,8 +1028,8 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
         sr = edge_gathers(sr, sd, skin_field, h, sl["gathers"], sl["gather_depth"] * S, sl["gather_fade"] * S, rng)
         sr = under_band(sr.reshape(-1, 3), skin_field, fit, c).reshape(sr.shape)
         sr = fit.conform(sr, c["body"]["gap"] * S)
-        sleeve_patch = under_the_band(_patch(sr, _circ_u(sr, WR.TILE), _rib_v(sr), 0, f"sleeve_{side}",
-                                             sr - sd * 0.02 * S, fit, donors, f"{pre}腕"))
+        sleeve_patch = under_the_band(_patch(sr, _circ_u(sr, WR.TILE), knit_v(sr, float(sl["ramp_from"])), 0,
+                                             f"sleeve_{side}", sr - sd * 0.02 * S, fit, donors, f"{pre}腕"))
         if rig is not None:
             share = sleeve_chains(fit, c, side, pre, sr, s_ring, h_arm, rig, find_body, fit.bone_names)
             sleeve_patch.w = with_chains(sleeve_patch.w, share)
@@ -1005,7 +1042,7 @@ def sweater(fit, body_part, cfg, soup, rig=None, find_body=None):
             G.smoothstep(np.clip((s_ring - s_in) / (0.04 * S) + 1.0, 0.0, 1.0))[:, None], sr.shape[:2])))
         per = float(np.linalg.norm(np.diff(sr[-1], axis=0), axis=1).sum())
         cr = cuff(fit, c, side, arm_skin, 4 * max(8, round(per / (c["cuff"]["rib"] * S))))
-        soup.add(_patch(cr, _rib_u(cr), _rib_v(cr), 1, f"cuff_{side}",
+        soup.add(_patch(cr, _rib_u(cr), WR.band_v(_rib_v(cr), 1, len(RIBS)), 1, f"cuff_{side}",
                         np.broadcast_to(cr.mean(1, keepdims=True), cr.shape), fit, donors, f"{pre}手首"))
         pieces[f"cuff_{side}"] = cr
     gaps = {}
@@ -1085,14 +1122,22 @@ def build(ctx):
     cfg = SP.merge(DEFAULTS, ctx.cfg)
     fit = OU.make_fit(ctx)
     col = WR.colours(ctx, "sweater", COLORS)
-    soup = G.Soup("sweater", [MAT_KNIT, MAT_RIB])
+    ramp = WR.stops(ctx, "sweater", "knit")
+    laced = bool(cfg["lace"]["enabled"])
+    soup = G.Soup("sweater", [MAT_KNIT, MAT_RIB] + ([MAT_LACE] if laced else []))
     body = ctx.need("body")
     rig = ORIG.Rig()
-    info = sweater(fit, body, cfg, soup, rig, ctx.find_body)
+    info = sweater(fit, body, cfg, soup, rig, ctx.find_body, gradient=ramp is not None)
     held = info.pop("cloth")
     bones = joint_helpers(fit, soup, cfg, {b.name: b.parent for b in body.bones})
-    mats = [WR.material(ctx, MAT_KNIT, "knit", col["knit"], WR.knit(col["knit"]), shadow=(0.82, 0.74, 0.88)),
-            WR.material(ctx, MAT_RIB, "rib", col["rib"], WR.rib(col["rib"]), shadow=(0.78, 0.72, 0.86))]
+    ribs = [col["rib"] if col[k] is None else col[k] for k in RIBS]
+    line = [] if col["line"] is None else [(*info["line_v"], col["line"])]
+    mats = [WR.material(ctx, MAT_KNIT, "knit", col["knit"],
+                        WR.knit_ramp(ramp, info["knit_tiles"]) if ramp else WR.knit(col["knit"]), shadow=(0.82, 0.74, 0.88)),
+            WR.material(ctx, MAT_RIB, "rib", col["rib"], WR.rib_bands(ribs, line), shadow=(0.78, 0.72, 0.86))]
+    if laced:
+        mats.append(WR.material(ctx, MAT_LACE, "lace", col["lace"], WR.lace(col["lace"]), shadow=(0.86, 0.84, 0.92),
+                                edge_size=0.5))
     mesh = soup.mesh()
     info["chains"] = sum(1 for b in rig.bones if b.name.endswith("_1"))
     english = {f"{jp_}{jp}": f"{en} {side}" for jp_, en in FOLD_NAMES.values() for side, jp in SIDES}

@@ -591,6 +591,66 @@ def test_the_knit_spans_the_cleavage(dressed):
     assert K[middle, 1].min() - K[beside, 1].min() < 0.0015, (K[middle, 1].min(), K[beside, 1].min())
 
 
+def _painted(part, tex_dir, material):
+    """(points (n, 3), their colours (n, 3) 0..1) of a material's face corners, read from its texture at their UVs
+    (v up: v 1 is the picture's top row)."""
+    from PIL import Image
+    m = part.meshes[0]
+    mat = next(x for x in part.materials if x.name == material)
+    img = np.asarray(Image.open(tex_dir / mat.texture).convert("RGB"), float) / 255.0
+    of_corner = np.repeat(np.asarray(m.face_mat), [len(f) for f in m.faces]) == m.mats.index(material)
+    uv = np.asarray(m.uv)[of_corner]
+    x = np.floor((uv[:, 0] % 1.0) * img.shape[1]).astype(int) % img.shape[1]
+    y = np.clip(np.floor((1.0 - uv[:, 1]) * img.shape[0]).astype(int), 0, img.shape[0] - 1)
+    return np.asarray(m.verts)[np.concatenate([np.asarray(f) for f in m.faces])[of_corner]], img[y, x]
+
+
+def test_the_sweater_worn_as_a_dress_is_coloured_down_its_length_and_trimmed_with_lace(tmp_path):
+    """With its waistband on her thighs the sweater is a dress. A gradient colours the knit from the band down to the
+    hem and along each sleeve to its cuff; the band takes a colour of its own and a dark line along its lower edge, the
+    hem keeps the rib's; a frill of lace hangs under the hem."""
+    spec = SP.load("base:girl", ['model.parts=["body", "sweater"]', "sweater.waistband.above_hip=-0.11",
+                                 "sweater.lace.enabled=true", 'colors.sweater.knit=[[0.0, "#ffe000"], [1.0, "#2020ff"]]',
+                                 'colors.sweater.rib="#20c040"', 'colors.sweater.band="#ff2020"',
+                                 'colors.sweater.line="#101010"'])
+    ctx = BD.BuildCtx(spec, tmp_path, seed=1)
+    part = next(p for p in BD.run(spec, ctx=ctx) if p.name == "sweater")
+    hip = float(ctx.land["leg.L"][2])
+    P, C = _painted(part, tmp_path, SW.MAT_KNIT)
+    body = np.abs(P[:, 0]) < 0.05
+    top, low = body & (P[:, 2] > P[body, 2].max() - 0.06), body & (P[:, 2] < hip - 0.05)
+    assert top.sum() > 50 and low.sum() > 50                              # the knit goes on below her hips
+    assert C[top].mean(0)[0] > 0.7 and C[top].mean(0)[2] < 0.35           # yellow under the band
+    assert C[low].mean(0)[2] > 0.7 and C[low].mean(0)[0] < 0.4            # blue by the hem
+    cuffs = np.abs(P[:, 0]) > 0.8 * np.abs(P[:, 0]).max()
+    assert C[cuffs].mean(0)[2] > 0.6 > C[cuffs].mean(0)[0]                # and blue where a sleeve ends
+    R, RC = _painted(part, tmp_path, SW.MAT_RIB)
+    band, hem = (R[:, 2] > hip + 0.2) & (np.abs(R[:, 0]) < 0.08), R[:, 2] < hip - 0.05
+    lined = RC[band].max(1) < 0.2
+    assert lined.any() and not (RC[hem].max(1) < 0.2).any()                 # the dark line is the band's alone
+    assert RC[band][~lined].mean(0)[0] > 0.7 > RC[band][~lined].mean(0)[1]  # the band red
+    assert RC[hem].mean(0)[1] > 0.5 > RC[hem].mean(0)[0]                    # the hem the rib's green
+    L, _ = _painted(part, tmp_path, SW.MAT_LACE)
+    assert 0.015 < R[hem][:, 2].min() - L[:, 2].min() < 0.04 and L[:, 2].max() < hip
+
+
+def test_cloth_pictures_take_gradients_and_bands_of_colour():
+    from mkmmd.model.parts import outfit_wear as WR
+    ramp = WR.gradient([[1.0, "#0000ff"], [0.0, "#ff0000"]])
+    assert WR.gradient("#ff0000") is None and np.allclose(WR.at(ramp, [0.0, 0.5, 1.0]), [[1, 0, 0], [0.5, 0, 0.5], [0, 0, 1]])
+    with pytest.raises(ValueError, match="two stops"):
+        WR.gradient([[0.0, "#ff0000"]])
+    knit = WR.knit_ramp(ramp, 3, size=64).astype(float)
+    assert knit.shape == (192, 64, 4) and knit[-1, :, 0].mean() > 200 > 60 > knit[0, :, 0].mean()   # v 0: the bottom row
+    ribs = WR.rib_bands([(1.0, 0.0, 0.0), (0.0, 1.0, 0.0)], lines=[(0.10, 0.15, (0.0, 0.0, 1.0))], rows=40).astype(float)
+    assert ribs.shape == (80, 256, 4) and ribs[60, :, 0].mean() > 200 and ribs[20, :, 1].mean() > 200   # band 0 at v 0
+    assert ribs[int(80 * (1.0 - 0.125)), :, 2].mean() > 200                                           # the line in band 0
+    v = WR.band_v(np.array([-0.3, 0.2, 1.4]), 1, 3)
+    assert (np.diff(v) > 0).all() and 1 / 3 < v.min() and v.max() < 2 / 3
+    lace = WR.lace((1.0, 1.0, 1.0)).astype(float)
+    assert lace.shape == (256, 256, 4) and lace[:100, :, :3].mean() > lace[200:, :, :3].mean() > 200   # a hem drawn darker
+
+
 def _breast_fronts(parts, fit):
     """The most forward point of her skin on each side within 3 cm of the bust_front landmark's height."""
     sh = SH.Shell.from_part(parts["body"])
