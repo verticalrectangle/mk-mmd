@@ -44,6 +44,12 @@ def tangent_ccw(theta):
     return np.stack([np.cos(t), np.sin(t), np.zeros_like(t)], -1)
 
 
+def theta_of(P, centre_y=0.0):
+    """Angles (n,) in 0 .. 2 pi of points P (n, 3) round the vertical axis through (0, `centre_y`): `hdir`'s inverse."""
+    P = np.asarray(P, float)
+    return np.arctan2(P[..., 0], centre_y - P[..., 1]) % TAU
+
+
 def frame_from_axis(axis, ref=(0.0, -1.0, 0.0)):
     """Orthonormal (u, v) with u x v = axis; u is the projection of `ref` perpendicular to the axis."""
     a = unit(axis)

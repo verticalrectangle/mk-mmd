@@ -4,8 +4,8 @@
 or name another module in `[model.builders]` (`tails = "mkmmd.model.parts.hair"`). Modules are imported lazily by
 `mkmmd.model.build.get_builder`."""
 
-KNOWN = ("mannequin", "body", "head", "hair", "outfit", "sweater", "pants", "socks", "sneakers", "choker", "hair_bow",
-         "horns", "bangles")
+KNOWN = ("mannequin", "body", "head", "hair", "outfit", "sweater", "skirt", "pants", "socks", "sneakers", "choker",
+         "hair_bow", "horns", "bangles")
 
 
 def module_for(name, overrides=None):

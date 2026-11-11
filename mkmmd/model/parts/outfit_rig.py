@@ -24,6 +24,7 @@ PHYSICS = {
     "coat": dict(mass=0.10, damp=(0.92, 0.94), friction=0.35, swing=(0.45, 0.30), twist=0.10, spring=(10.0, 10.0, 5.0)),
 }
 TIE = dict(swing=0.6, stretch=0.25, spring_move=(10.0, 10.0, 10.0), spring_rot=(4.0, 4.0, 4.0))
+MIN_RADIUS = 0.004              # a capsule sized by the room it has (Rig.ring) is never thinner than this
 
 
 def euler_xyz(R):
@@ -165,6 +166,49 @@ class Rig:
                     move_hi=(st, st, st), rot_lo=(-sw, -sw, -sw), rot_hi=(sw, sw, sw),
                     spring_move=tuple(tp["spring_move"]), spring_rot=tuple(tp["spring_rot"])))
         return out
+
+    def ring(self, names, pts, anchor, kind, radius, statics=(), anchor_body=None, english="Chain"):
+        """Chains round her like a skirt's: `names[r][c]` (row r, column c; column 0 at the middle of her front, counted
+        toward her left) through `pts` (C, R + 1, 3), hung from the bone `anchor`, each tied sideways to its neighbours
+        round the ring. A capsule is `radius` thick, or as thin as the room to the static colliders `statics` at rest
+        leaves it (MIN_RADIUS at least); a capsule inside one at rest is thrown out by physics, so past a chain's
+        first bone (which collides with nothing of the body) its points are moved level away from the ring's middle
+        until a capsule of MIN_RADIUS has room. Without `anchor_body` they are bones alone. Returns the radii (C, R)."""
+        pts = np.array(pts, float)
+        C, R = pts.shape[0], pts.shape[1] - 1
+        room = np.full((C, R), np.inf)
+        if len(statics):
+            away = pts[..., :2] - pts[..., :2].mean((0, 1))
+            away = np.concatenate([away / np.maximum(np.linalg.norm(away, axis=2, keepdims=True), 1e-9),
+                                   np.zeros((C, R + 1, 1))], 2)
+            for _ in range(8):
+                room = np.array([chain_clearance(pts[c], 0.0, statics) for c in range(C)])
+                short = np.maximum(MIN_RADIUS + 0.0015 - room, 0.0)
+                short[:, 0] = 0.0
+                if not short.any():
+                    break
+                push = np.zeros((C, R + 1))
+                push[:, 1:] = short                         # a bone's two ends, but never a chain's head
+                push[:, 1:-1] = np.maximum(push[:, 1:-1], short[:, 1:])
+                pts += away * push[..., None]
+        rad = np.clip(room - 0.001, MIN_RADIUS, radius)
+        for c in range(C):
+            self.chain([names[r][c] for r in range(R)], pts[c], anchor, kind, rad[c], anchor_body=anchor_body,
+                       x_hint=G.tangent_ccw(c * G.TAU / C), name_en=[f"{english}{c:02d}_{r + 1}" for r in range(R)],
+                       dynamic=anchor_body is not None)
+        if anchor_body is not None:
+            self.tie([[names[r][c] for r in range(R)] for c in range(C)], closed=True)
+        return rad
+
+
+def hung_heights(z_free, z_end, rows, root):
+    """Heights (rows,) of the heads of the rows of a ring of chains, from `z_free` (the first row's heads: where what
+    hangs lets go of the body) down toward `z_end` (where the last bone ends): the first bone is `root` metres long, the
+    others share the rest evenly. A chain's first capsule collides with nothing of the body (ROOT_GROUP), so a short
+    root leaves what swings to the capsules that do."""
+    if rows < 2:
+        return np.array([float(z_free)])
+    return np.concatenate([[float(z_free)], np.linspace(z_free - root, z_end, rows)[:-1]])
 
 
 def ring_weights(theta, z, names, z_nodes, z_top, w_top, columns):
