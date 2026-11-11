@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import hair_fixtures as HF
+from mkmmd.core import families
 from mkmmd.model import part as PT
 from mkmmd.model.parts import hair, hair_locks as HL, hair_paint as HP, hair_tex
 from mkmmd.model.parts.hair_fit import HeadFit, unit
@@ -117,6 +118,28 @@ def test_the_part_is_built_and_rigged(tmp_path):
     fit = HeadFit(ctx.parts["head"].info)
     r = np.linalg.norm(mesh.verts - fit.skull.center, axis=1) - fit.skull.radius(unit(mesh.verts - fit.skull.center))
     assert r[mesh.verts[:, 2] > fit.skull.center[2]].min() > 0.0          # no hair inside the head
+
+
+def test_a_lock_can_be_a_plait_on_a_chain_of_its_own(tmp_path):
+    braid = {"family": "braid", "count": 1, "width": 0.040, "lift": [-0.012, -0.006], "tuck": 0.0,
+             "guides": [{"root": [-112, 96], "to": [-96, 116], "length": 0.40}],
+             "plait": {"enabled": True, "pitch": 0.04}, "chain": {"bones": 6, "radius": 0.012}}
+    part = hair.build(HF.make_ctx(tmp_path, spec({**LOCKS, "braid": braid})))
+    PT.check(part)
+    assert {"髪", "三つ編", "髪リボン"} <= {m.name for m in part.materials}
+    chain = [b.name for b in part.bones if b.name.startswith("三つ編")]
+    assert chain == [f"三つ編右1_{k}" for k in range(1, 7)] and families.classify(chain[0]) == "braid"
+    mesh = next(m for m in part.meshes if m.name == "hair_braid")
+    z, x = mesh.verts[:, 2], mesh.verts[:, 0]
+    assert x.max() < 0.0 and 0.33 < z.max() - z.min() < 0.42              # on her right, from under her ear down
+    low = mesh.verts[(z > z.min() + 0.08) & (z < z.min() + 0.18)]         # where it hangs straight, above its tuft
+    turn = np.radians(np.arange(0.0, 180.0, 15.0))
+    across = max(np.ptp(low[:, 0] * np.cos(a) + low[:, 1] * np.sin(a)) for a in turn)
+    assert 0.030 < across < 0.050                                         # a plait as wide as the lock was to be
+    assert set(mesh.weights) <= {"頭", *chain} and mesh.weights[chain[-1]].max() > 0.9
+    short = {**braid, "guides": [{"root": [-112, 96], "to": [-96, 116], "length": 0.10}]}
+    with pytest.raises(ValueError, match="too short to plait"):
+        hair.build(HF.make_ctx(tmp_path, spec({"braid": short})))
 
 
 def test_a_hairdo_that_cannot_be_laid_says_what_is_wrong(tmp_path):

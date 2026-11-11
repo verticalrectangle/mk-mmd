@@ -105,9 +105,9 @@ How a group lies (the group's keys and their defaults: `hair_locks.GROUP`):
   (`[[0, 0], [0.025, 0.018], [0.09, 0.012]]`) rises as one wave. `swell` (the group's, or a guide's own) scales the lift: a parting
   that rises more at its front than at its back.
 - **Roots.** Every root starts 4 mm under the scalp cap and the hair comes out of it over its first 10 mm (`ROOT`), so a row of roots
-  shows as one clean line. A lock of a line-rooted group first goes the way that takes it furthest from the line (`LEAVE`,
-  `LockHair.combed`): straight across the middle of a parting, toward its goal from the parting's end, fanning in between. Two
-  groups rooted on the same parting and combed to either side make the parting.
+  shows as one clean line. A lock of a line-rooted group first goes (`LEAVE`, `LockHair.combed`) the way that leads it away from
+  the line and toward where it is going, each weighed: across the middle of a parting, leaning toward its goal, and from the
+  parting's end straight toward its goal. Two groups rooted on the same parting and combed to either side make the parting.
 - **Widths.** Without a `width` of its own a lock is as wide as the room to its neighbours (the nearest points of their paths) times
   `overlap`, all along its way over the head: a fan starts as narrow as its roots are close, and the group is a sheet without holes.
   `rhythm = [1.0, 0.7]` makes wide and narrow locks in turn.
@@ -118,8 +118,27 @@ How a group lies (the group's keys and their defaults: `hair_locks.GROUP`):
 - **Rows under** (`under = {enabled = true}`): a second, darker row half a place aside under the group's own: what shows between its
   locks.
 - **Chains** (`chain = {bones, every, radius}`): every `every`-th lock is a chain from where it leaves the head, named by `family`
-  (`bangs` 前髪i_k, `side` 横髪左i_k / 横髪右i_k by the side it hangs on, `back` 後髪i_k, `top` and `strand` 髪i_k); the locks between
-  ride the nearest. A capsule is as thin as the room to the body's colliders at rest asks.
+  (`bangs` 前髪i_k, `side` 横髪左i_k / 横髪右i_k and `braid` 三つ編左i_k / 三つ編右i_k by the side it hangs on, `back` 後髪i_k, `top` and
+  `strand` 髪i_k); the locks between ride the nearest. A capsule is as thin as the room to the body's colliders at rest asks.
+- **Plaits** (`plait = {enabled = true, pitch, start, ties}`): the group's locks are braids. Each lock's path becomes a three-strand
+  plait (`hair_braids`' weave: `LockHair.plait`), woven from where the lock leaves the head (or `start` metres from its root) with a
+  crossing every `pitch` metres, to a tie and a tuft of loose locks at its end (`ties`: `"end"`, `"both"`, `"none"`; `ribbon` the
+  tie's colour). The plait is the lock's `width` wide and rests its own thickness off the body; `hair_braids`' weave keys (`taper`,
+  `strand_wid`, `tuft_len` ...) may be given in the table and scale with the width. The plaits are a mesh of their own
+  (`hair_braid`, materials 三つ編 and 髪リボン). One long braid from behind an ear down in front of the shoulder:
+
+  ```toml
+  [hair.locks.braid]
+  family = "braid"
+  count = 1
+  width = 0.050
+  lift = [-0.012, -0.006]                 # under the other hair
+  lean = -0.25                            # forward, over the shoulder
+  tuck = 0.0
+  guides = [{ root = [-112, 96], to = [-96, 116], length = 0.56 }]
+  plait = { enabled = true, pitch = 0.046 }
+  chain = { bones = 9, every = 1, radius = 0.016 }
+  ```
 
 The texture (`hair_paint.py`) is an atlas with a cell per lock, painted by where each point of the lock is on the head: its colour down
 `[hair.paint] ramp` by its height (`[[share of the way down the hair, colour], ...]`, a colour a name of `[colors.hair]`, a mix
