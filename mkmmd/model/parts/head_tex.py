@@ -151,12 +151,19 @@ def under_v(h):
     return UV_PAD + np.clip((np.asarray(h, float) - UNDER_H0) / (UNDER_H1 - UNDER_H0), 0.0, 1.0) * (UNDER_V - UV_PAD)
 
 
+CHEEK_AT = (0.50, 0.016)          # the cheek blush's middle: radians round the head from its front, metres up (head-local)
+CHEEK_SIZE = (0.14, 0.0085)       # ... and its spread: radians round, metres up
+CHEEK_R = 0.075                   # metres from the head's axis to a cheek (what a radian round the head is there)
+
+
 def face_skin(base, cheek="#f09a96", nose="#d79a8c", w=1024, h=512, cheek_k=0.34, nose_k=0.40, nose_z=0.0240, band="#e3aa95",
-              band_w=(0.9, 1.0, 0.35)):
+              band_w=(0.9, 1.0, 0.35), cheek_at=CHEEK_AT, cheek_size=CHEEK_SIZE, cheek_lines=0, line=None):
     """The face skin texture (see face_v / under_v; row 0 is the top, v = 1): the face is the base colour with a soft warm
-    blush on each cheek and a faint warm shade under the nose tip (permanent; the 照れ morph adds a stronger overlay); the
-    skin under the jaw is in shadow up to SHADOW_EDGE over the underside, with the weight the body's baked neck shadow has at
-    its seam ring (strength x (back + (front - back) (0.5 + 0.5 cos theta)^1.5)), so the two meet without a step."""
+    blush on each cheek (`cheek_k` strong, at `cheek_at`, `cheek_size` wide; `cheek_lines` short slanted strokes of
+    `line` across each, as a drawing marks a blush) and a faint warm shade under the nose tip (permanent; the 照れ morph
+    adds a stronger overlay); the skin under the jaw is in shadow up to SHADOW_EDGE over the underside, with the weight
+    the body's baked neck shadow has at its seam ring (strength x (back + (front - back) (0.5 + 0.5 cos theta)^1.5)),
+    so the two meet without a step."""
     b, ck, nk = hex_rgb(base), hex_rgb(cheek), hex_rgb(nose)
     r, c = np.mgrid[0:h, 0:w]
     th = ((c + 0.5) / w - 0.5) * 2 * np.pi
@@ -165,10 +172,20 @@ def face_skin(base, cheek="#f09a96", nose="#d79a8c", w=1024, h=512, cheek_k=0.34
 
     def blob(th0, z0, sth, sz):
         return np.exp(-0.5 * (((th - th0) / sth) ** 2 + ((z - z0) / sz) ** 2))
-    a = np.maximum(blob(0.50, 0.016, 0.14, 0.0085), blob(-0.50, 0.016, 0.14, 0.0085))
+    (th0, z0), (sth, sz) = cheek_at, cheek_size
+    a = np.maximum(blob(th0, z0, sth, sz), blob(-th0, z0, sth, sz))
     img = np.empty((h, w, 3))
     img[:] = b
     img = img * (1 - cheek_k * a[..., None]) + ck * (cheek_k * a[..., None])
+    if cheek_lines:                                # strokes 7 mm long and 1 mm wide, 4 mm apart, leaning 25 degrees
+        lc, lean = hex_rgb(line or cheek), np.radians(25.0)
+        for sg in (1.0, -1.0):
+            for k in range(int(cheek_lines)):
+                x = (th - sg * th0) * CHEEK_R - (k - 0.5 * (cheek_lines - 1)) * 0.004
+                along = x * np.sin(lean) + (z - z0) * np.cos(lean)
+                across = x * np.cos(lean) - (z - z0) * np.sin(lean)
+                s = _smooth(1.0 - np.abs(across) / 0.0006) * _smooth((0.0035 - np.abs(along)) / 0.0012)
+                img = img * (1 - 0.75 * s[..., None]) + lc * (0.75 * s[..., None])
     a2 = blob(0.0, nose_z, 0.030, 0.0026)
     img = img * (1 - nose_k * a2[..., None]) + nk * (nose_k * a2[..., None])
     under = v < UNDER_V + 0.5 * UV_GAP

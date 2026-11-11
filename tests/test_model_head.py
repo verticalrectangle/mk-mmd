@@ -445,3 +445,24 @@ def test_a_band_that_drops_less_closes_into_a_shorter_flick():
     assert tuple(rin) == HL.CLOSED_FLICK
     assert np.linalg.norm(soft) == pytest.approx(0.6 * np.linalg.norm(rin))
     assert soft @ rin == pytest.approx(np.linalg.norm(soft) * np.linalg.norm(rin))     # same direction
+
+
+def test_the_cheeks_blush_is_as_strong_and_where_it_is_asked_and_may_be_hatched():
+    """The face texture's blush: stronger with `cheek_k`, moved by `cheek_at`, and with `cheek_lines` strokes of the
+    line's colour across each cheek (as many dark runs along a row through the blush's middle)."""
+    from mkmmd.model.parts import head_tex as TX
+    base, red = "#ffffff", "#ff0000"
+
+    def redness(img):                                                     # how much the green is gone: (h, w) 0 .. 1
+        return 1.0 - img[..., 1].astype(float) / 255.0
+    soft, strong = (redness(TX.face_skin(base, red, cheek_k=k, nose_k=0.0)) for k in (0.3, 0.8))
+    y, x = np.unravel_index(int(strong.argmax()), strong.shape)
+    assert strong[y, x] == pytest.approx(0.8, abs=0.03) and soft[y, x] == pytest.approx(0.3, abs=0.03)
+    assert strong[y, strong.shape[1] - 1 - x] == pytest.approx(strong[y, x], abs=0.01)     # the other cheek, mirrored
+    moved = redness(TX.face_skin(base, red, cheek_k=0.8, nose_k=0.0, cheek_at=(TX.CHEEK_AT[0] + 0.3, TX.CHEEK_AT[1])))
+    side = np.unravel_index(int(moved[:, : moved.shape[1] // 2].argmax()), (moved.shape[0], moved.shape[1] // 2))
+    left = np.unravel_index(int(strong[:, : strong.shape[1] // 2].argmax()), (strong.shape[0], strong.shape[1] // 2))
+    assert side[0] == pytest.approx(left[0], abs=2) and abs(side[1] - left[1]) == pytest.approx(0.3 / (2 * np.pi) * 1024, abs=3)
+    lined = TX.face_skin(base, "#ffc0c0", cheek_k=0.3, nose_k=0.0, cheek_lines=3, line="#800000").astype(float)
+    row = lined[y, x - 40:x + 40, 1] < 150.0                              # the strokes' dark red along the row
+    assert int((np.diff(row.astype(int)) == 1).sum()) == 3

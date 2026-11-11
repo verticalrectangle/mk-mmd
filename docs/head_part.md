@@ -84,7 +84,11 @@ The eyes sit on the planes, their outer corners further back than the inner ones
   profile exponent `p` > 1) the lip rises off them: their roots ride the lip, their tips rise `SMIRK["teeth"]` (0.45) as
   much, so the bared teeth stand a little taller (not long blocks) and no gap opens above them. The 照れ blush patches wait
   1.2 mm under the cheeks and follow the skin through every mouth shape (each vertex the mix of its four nearest skin vertices'
-  offsets), so a shape that pulls the cheeks in (ω) never shows them.
+  offsets), so a shape that pulls the cheeks in (ω) never shows them. The skin texture itself carries a soft blush on each
+  cheek, always there (`head_tex.face_skin`): `[head.skin] cheek` its colour (else `[colors.skin] cheek`, the body's blush),
+  `cheek_strength` (0.40), `cheek_at` (`[radians round the head from its front, metres up]`, `head_tex.CHEEK_AT`),
+  `cheek_size`, and `cheek_lines`, that many short slanted strokes of `cheek_line` across each cheek, as a drawing marks a
+  blush.
 - **Eyes** (`head_eye`, `[head.eye]`): an anime eye, not an eyeball. The opening (`CORNER_IN/OUT`, `UPPER`, `LOWER`): the upper lid
   a flat-topped arch that comes down an almost vertical outer side into the outer corner at mid-height, the lower lid a round bowl
   rising into it; seen from the side the lower lid runs straight back and the eye's outer end tucks into the head. Each lid moves

@@ -555,8 +555,10 @@ def build(ctx):
         "toon", TX.toon(toon_mult, height=32, edge=float(own.get("toon_edge", 0.30)), soft=float(own.get("toon_soft", 0.14))))
     nz = shape.face.c["nose"]
     skin_tex = ctx.save_png("skin", TX.face_skin(
-        skin_base, cheek_col, cheek_k=0.40, nose_z=0.5 * (float(nz["base_z"]) + float(nz["tip"][1])),
-        band=nsh.get("color", "#e3aa95"),
+        skin_base, cheek_col, cheek_k=float(own.get("cheek_strength", 0.40)),
+        cheek_at=tuple(own.get("cheek_at", TX.CHEEK_AT)), cheek_size=tuple(own.get("cheek_size", TX.CHEEK_SIZE)),
+        cheek_lines=int(own.get("cheek_lines", 0)), line=own.get("cheek_line") or cheek_col,
+        nose_z=0.5 * (float(nz["base_z"]) + float(nz["tip"][1])), band=nsh.get("color", "#e3aa95"),
         band_w=(float(nsh.get("strength", 0.9)), float(nsh.get("front", 1.0)), float(nsh.get("back", 0.35)))))
     iris_tex = ctx.save_png("iris", TX.iris(col["eyes"]))
     sclera_cols = SP.merge(col["eyes"], None)
