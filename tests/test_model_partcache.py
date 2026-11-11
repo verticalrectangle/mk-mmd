@@ -69,7 +69,7 @@ def test_a_part_is_given_back_while_what_it_read_is_unchanged(registry, tmp_path
     assert build(6, body={"mesh": str(mesh)})[2] == []
     mesh.write_text("abcdef")
     assert build(7, body={"mesh": str(mesh)})[2] == ["body", "hair"]
-    monkeypatch.setitem(PC._CODE, "d", "another version of the code")
+    monkeypatch.setattr(PC, "stamp", lambda path: [0, 0])          # every file of the code is another version
     assert build(8, body={"mesh": str(mesh)})[2] == ["body", "hair"]
     first = BD.REGISTRY["body"].fn
 
@@ -78,3 +78,39 @@ def test_a_part_is_given_back_while_what_it_read_is_unchanged(registry, tmp_path
         return first(ctx)
     BD.builder("body")(stand_in)
     assert build(9, body={"mesh": str(mesh)})[2] == ["stand-in", "body", "hair"]
+
+
+def test_code_loaded_for_a_later_part_never_builds_an_earlier_one_again(registry, tmp_path, monkeypatch):
+    runs = []
+    make_parts(runs)
+    stamps = {"framework.py": [1, 1], "hair_code.py": [5, 5]}
+    files = {}                                          # the modules "loaded": the hair's builder loads its own
+    monkeypatch.setattr(PC, "loaded", lambda: {f: stamps[f] for f in files})
+    monkeypatch.setattr(PC, "stamp", lambda path: stamps.get(path.name))
+    hair = BD.REGISTRY["hair"].fn
+
+    def lazy(ctx):
+        files["hair_code.py"] = True
+        return hair(ctx)
+    BD.builder("hair", needs=("body",))(lazy)
+    cache = PC.PartCache(tmp_path / "cache")
+
+    def build(i):                                       # as a new process: only the framework is loaded
+        files.clear()
+        files["framework.py"] = True
+        s = SP.from_dict({"model": {"name": "t", "parts": ["body", "hair"], "out": "unused"}})
+        runs.clear()
+        BD.run(s, ctx=BD.BuildCtx(s, tmp_path / f"b{i}" / "tex", seed=1), cache=cache)
+        return list(runs)
+
+    assert build(0) == ["body", "hair"] and build(1) == []
+    stamps["hair_code.py"] = [6, 6]
+    assert build(2) == ["hair"]
+    stamps["framework.py"] = [2, 2]
+    assert build(3) == ["body", "hair"]
+
+
+def test_the_command_lines_modules_are_no_parts_code():
+    import mkmmd.cli.model  # noqa: F401  (loaded in every `mk model` process)
+    code = PC.loaded()
+    assert "model/partcache.py" in code and not any(f.startswith("cli/") for f in code)
