@@ -49,37 +49,51 @@ def strand_uv(tile, q, t):
 
 
 # ---------------------------------------------------------------- the strand tile
+def tipped(pal, tip, strength):
+    """The palette of hair that ends in another colour: every colour of `pal` turned the way `tip` turns its base,
+    `strength` of the way."""
+    turn, k = np.asarray(tip, float) / np.maximum(pal["base"], 1e-3), float(strength)
+    return {name: v + (np.clip(v * turn, 0.0, 1.0) - v) * k if np.shape(v) == (3,) else v for name, v in pal.items()}
+
+
 def _strand_tile(pal, rng, w, h, i, weave):
     """(h, w, 3) shading of plait strand i: crest highlight where it lies on top, dark where it passes under, creases along
-    both edges, fibres along v. `weave` = dict(K crossings, phase deg, dz deg) as used by the geometry."""
+    both edges, fibres along v. `weave` = dict(K crossings, phase deg, dz deg) as used by the geometry, and `tips` (a
+    colour, the share of the strand's end that goes to it, how far: the plait of hair that ends in another colour)."""
     u = (np.arange(w) + 0.5) / w
     v = (np.arange(h) + 0.5) / h
     U, V = np.meshgrid(u, v)
-    ramp = TEX._grad(U, [(0.0, pal["light"]), (0.22, pal["base"]), (0.50, pal["base"] * 0.80 + pal["shadow"] * 0.20),
-                         (0.80, pal["shadow"]), (1.0, pal["shadow"] * 0.7 + pal["deep"] * 0.3)])
     theta = np.radians(weave["phase"]) + np.pi / 3.0 * weave["K"] * V + 2.0 * np.pi * i / 3.0
     top = 0.5 * (1.0 + np.sin(2.0 * theta + np.radians(weave["dz"])) * -1.0)      # 1 = on top, 0 = right underneath
     under = _smooth((0.55 - top) / 0.55)
-    col = _lerp(ramp, np.broadcast_to(pal["deep"], ramp.shape), 0.62 * under)
     edge = np.exp(-(((U - 0.50) / 0.075) ** 2))
-    col = _lerp(col, np.broadcast_to(pal["deep"], col.shape), 0.62 * edge)
     ends = 1.0 - _smooth(np.minimum(V, 1.0 - V) / 0.035)
-    col = _lerp(col, np.broadcast_to(pal["deep"], col.shape), 0.85 * ends)
     win = 1.0 - under
     hi = np.exp(-(((U - 0.10) / 0.085) ** 2)) * win
-    col = _lerp(col, np.broadcast_to(pal["highlight"], col.shape), 0.55 * hi)
-    hot = pal["highlight_core"] if "highlight_core" in pal else pal["highlight"]
     core = np.exp(-(((U - 0.06) / 0.03) ** 2)) * win ** 2
-    col = _lerp(col, np.broadcast_to(hot, col.shape), 0.32 * core)
+
+    def shaded(p):
+        col = TEX._grad(U, [(0.0, p["light"]), (0.22, p["base"]), (0.50, p["base"] * 0.80 + p["shadow"] * 0.20),
+                            (0.80, p["shadow"]), (1.0, p["shadow"] * 0.7 + p["deep"] * 0.3)])
+        col = _lerp(col, np.broadcast_to(p["deep"], col.shape), 0.62 * under)
+        col = _lerp(col, np.broadcast_to(p["deep"], col.shape), 0.62 * edge)
+        col = _lerp(col, np.broadcast_to(p["deep"], col.shape), 0.85 * ends)
+        col = _lerp(col, np.broadcast_to(p["highlight"], col.shape), 0.55 * hi)
+        hot = p["highlight_core"] if "highlight_core" in p else p["highlight"]
+        return _lerp(col, np.broadcast_to(hot, col.shape), 0.32 * core)
+    col = shaded(pal)
+    tips = weave.get("tips")
+    if tips is not None:
+        col = _lerp(col, shaded(tipped(pal, tips[0], tips[2])), _smooth((V - (1.0 - tips[1])) / max(tips[1], 1e-6)))
     S = TEX.streaks(rng, w, h, 1.1)
     return np.clip(col * S[..., None], 0.0, 1.0)
 
 
-
-
 def braid_atlas(pal, rng, weave):
-    """The braid atlas as (1024, 512, 4) uint8: the three strand tiles over hair_tex's strand region."""
-    base = TEX.make_atlas(pal, rng)
+    """The braid atlas as (1024, 512, 4) uint8: the three strand tiles over hair_tex's strand region (the tuft's
+    tiles: in the tips' colours when the plait ends in another colour, `weave["tips"]`)."""
+    tips = weave.get("tips")
+    base = TEX.make_atlas(pal if tips is None else tipped(pal, tips[0], tips[2]), rng)
     img = base[..., :3].astype(float) / 255.0
     rows = HEAD_ROWS
     for k in range(N_TILES):

@@ -1,14 +1,15 @@
 """bpy-free invariants of the lock hairdo (hair_locks, hair_paint): hair combed from a parting is rooted on it and
-leaves it across, a group's locks lie in one surface and cover the room between them, the sheen is one band round the
-head. The head and body are the stand-ins of hair_fixtures.py."""
+leaves it across, a group's locks lie in one surface and cover the room between them, hair gathered to a tie ends in
+it and a tail hangs from it, the sheen is one band round the head. The head and body are the stand-ins of
+hair_fixtures.py."""
 import numpy as np
 import pytest
 
 import hair_fixtures as HF
 from mkmmd.core import families
 from mkmmd.model import part as PT
-from mkmmd.model.parts import hair, hair_locks as HL, hair_paint as HP, hair_tex
-from mkmmd.model.parts.hair_fit import HeadFit, unit
+from mkmmd.model.parts import hair, hair_braids_tex as HBT, hair_locks as HL, hair_paint as HP, hair_tex
+from mkmmd.model.parts.hair_fit import HeadFit, Volume, unit
 from mkmmd.model.parts.hair_geo import arclen
 from mkmmd.model.parts.hair_rig import Rig
 
@@ -27,10 +28,10 @@ LOCKS = {
 }
 
 
-def spec(locks=None, partings=None):
+def spec(locks=None, partings=None, ties=None):
     off = {"enabled": False}                             # the head hair alone: the other slices have their own tests
     return {"hair": {"style": "locks", "partings": partings or {"part": PART}, "locks": LOCKS if locks is None else locks,
-                     "braids": off, "ears": off, "tails": off}}
+                     "ties": ties or {}, "braids": off, "ears": off, "tails": off}}
 
 
 @pytest.fixture(scope="module")
@@ -142,15 +143,83 @@ def test_a_lock_can_be_a_plait_on_a_chain_of_its_own(tmp_path):
         hair.build(HF.make_ctx(tmp_path, spec({"braid": short})))
 
 
+def test_hair_gathered_to_a_tie_ends_in_it_and_a_tail_hangs_from_it(tmp_path):
+    locks = {"drawn": {"count": 7, "layer": 1, "lift": LIFT,
+                       "guides": [{"root": ["part", 0.0], "via": [[100, 80], [170, 100]], "to": "knot"},
+                                  {"root": ["part", 1.0], "to": "knot"},
+                                  {"root": ["part", 0.5], "via": [[-80, 50]], "to": "knot"}]},
+             "tail": {"count": 3, "width": 0.03, "chain": {"bones": 3},
+                      "guides": [{"root": "knot", "length": 0.25}, {"root": "knot", "out": [180, 150], "length": 0.20}]}}
+    ctx = HF.make_ctx(tmp_path, spec(locks, ties={"knot": {"at": [-130, 100]}}))
+    hh = HL.LockHair(ctx, HeadFit(ctx.parts["head"].info), ctx.cfg, Rig(), hair_tex.palette(ctx.get("colors.hair")))
+    groups = {name: got for name, _, got in hh.plan()}
+    knot = hh.on_hull(hh.ties["knot"]["dir"][None])[0]
+    c = hh.skull.center
+    for lk in groups["drawn"]:                                            # it lies on the head all its way into the tie
+        assert np.linalg.norm(lk.path[-1] - knot) < 0.035 and not lk.chain and lk.extra["free"] == 0.0
+        head = lk.path[arclen(lk.path) < lk.extra["s_leave"] - 0.01]
+        over = np.linalg.norm(head - c, axis=1) - np.linalg.norm(hh.on_hull(unit(head - c)) - c, axis=1)
+        assert -0.02 < over.min() and over.max() < 0.03
+    tails = groups["tail"]
+    for lk in tails:                                                      # it starts in the tie and hangs on a chain
+        assert np.linalg.norm(lk.path[0] - knot) < 0.02 and lk.path[0, 2] - lk.path[-1, 2] > 0.15 and lk.chain
+    first, last = (unit(lk.path[3] - lk.path[0]) for lk in (tails[0], tails[-1]))
+    assert first @ last < 0.99 and last[1] > first[1]                     # each the way its guide's `out` points
+    part = hair.build(HF.make_ctx(tmp_path / "built", spec(locks, ties={"knot": {"at": [-130, 100]}})))
+    PT.check(part)
+
+
+def test_a_plaits_crossings_are_as_close_as_it_is_wide(tmp_path):
+    def crossings(width):                                                 # of 0.42 m of plait over a tuft as long as it is wide
+        braid = {"family": "braid", "count": 1, "width": width, "jitter": {"length": 0.0},
+                 "guides": [{"root": "knot", "length": 0.42 + width}], "plait": {"enabled": True, "tuft_len": 0.034}}
+        ctx = HF.make_ctx(tmp_path / f"w{width}", spec({"braid": braid}, ties={"knot": {"at": [-130, 100]}}))
+        hh = HL.LockHair(ctx, HeadFit(ctx.parts["head"].info), ctx.cfg, Rig(), hair_tex.palette(ctx.get("colors.hair")))
+        (_, g, (lk,)), = hh.plan()
+        return hh.plait(lk, g, None)[1]["lobes"]
+    assert crossings(0.03) == pytest.approx(2 * crossings(0.06), abs=1)   # the same length: twice as many
+    assert 0.2 * 0.06 < 0.42 / crossings(0.06) < 0.4 * 0.06               # a crossing every third of its width or so
+
+
+def test_a_plait_of_hair_that_ends_in_another_colour_ends_in_it():
+    pal = hair_tex.palette({"base": "#2060c0", "shadow": "#102050", "deep": "#081030", "light": "#4080e0",
+                            "highlight": "#80b0ff", "highlight_core": "#c0d8ff", "rim": "#6090f0", "tip": "#c020c0"})
+    weave = {"K": 30.0, "phase": 0.0, "dz": 0.0}
+    plain = HBT.braid_atlas(pal, np.random.default_rng(1), weave).astype(float)
+    ended = HBT.braid_atlas(pal, np.random.default_rng(1), {**weave, "tips": (pal["tip"], 0.3, 0.9)}).astype(float)
+    rows, tile = hair_tex.HEAD_ROWS, hair_tex.TILE_PX                     # a strand's tile: the strand runs down it
+
+    def red(img, part):
+        return img[part, :tile, 0].mean() / img[part, :tile, 2].mean()
+    above, end, tuft = slice(0, int(0.6 * rows)), slice(int(0.9 * rows), int(0.96 * rows)), slice(rows, None)
+    assert np.array_equal(plain[above, :tile], ended[above, :tile])       # its own colour down to its last third
+    assert red(ended, end) > 2.0 * red(plain, end) and red(ended, tuft) > 2.0 * red(plain, tuft)
+
+
+def test_the_hull_comes_in_to_the_nape_behind_the_ears_only(planned):
+    hh, _ = planned
+    loose = Volume(hh.skull, side=0.04, back=0.04, taper=0.0)
+    drawn = Volume(hh.skull, side=0.04, back=0.04, taper=0.0, nape=0.012, hairline=hh.fit.cap_phi)
+    back, side = np.pi, 0.5 * np.pi
+    low = float(hh.fit.cap_phi(back))
+    assert drawn(back, low) == pytest.approx(0.012) and loose(back, low) == pytest.approx(0.04)
+    assert drawn(back, low - np.radians(35.0)) == loose(back, low - np.radians(35.0))     # the back of her head keeps its volume
+    assert drawn(side, float(hh.fit.cap_phi(side))) == loose(side, float(hh.fit.cap_phi(side)))   # and so do her ears' sides
+
+
 def test_a_hairdo_that_cannot_be_laid_says_what_is_wrong(tmp_path):
     one = [{"root": [0, 20], "to": [0, 80]}]
     for locks, partings, said in (({}, None, "needs groups of locks"),
                                   ({"a": {"guides": [{"root": ["seam", 0.5], "to": [0, 80]}]}}, None, "no parting 'seam'"),
                                   ({"a": {"count": 1, "guides": one}}, None, "needs a `width`"),
                                   ({"a": {"family": "mane", "guides": one}}, None, "family"),
-                                  (LOCKS, {"hairline": [[0, 30], [20, 30]]}, "head's own line")):
+                                  (LOCKS, {"hairline": [[0, 30], [20, 30]]}, "head's own line"),
+                                  ({"a": {"guides": [{"root": [0, 20], "to": "bun"}]}}, None, "no tie 'bun'"),
+                                  ({"a": {"guides": [{"root": [0, 20], "to": "knot", "length": 0.1}]}}, None, "ends in it"),
+                                  ({"a": {"width": 0.02, "guides": [{"root": "knot", "to": [0, 80]}]}}, None, "no `to`"),
+                                  ({"a": {"guides": [{"root": [0, 20], "to": "knot"}, *one]}}, None, "one tie")):
         with pytest.raises(ValueError, match=said):
-            hair.build(HF.make_ctx(tmp_path, spec(locks, partings)))
+            hair.build(HF.make_ctx(tmp_path, spec(locks, partings, {"knot": {"at": [180, 100]}})))
 
 
 def test_the_sheen_is_one_band_round_the_head():

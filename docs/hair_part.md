@@ -90,9 +90,10 @@ the number of locks laid between them (`count`). A guide is one lock's course:
 
 | Guide key | Meaning |
 |---|---|
-| `root` | where it is rooted: `[theta, phi]` in degrees, `["hairline", theta]` (on the hairline at theta), or `["part", 0.3]` (0.3 of the way along the parting `part`). Locks between two guides rooted on one line are rooted on it too |
-| `to` | where it leaves the head; from the root to here it lies on the head, combed the short way, through `via = [[theta, phi], ...]` if given |
+| `root` | where it is rooted: `[theta, phi]` in degrees, `["hairline", theta]` (on the hairline at theta), or `["part", 0.3]` (0.3 of the way along the parting `part`). Locks between two guides rooted on one line are rooted on it too. `"tail"`, a tie's name: the lock hangs from the tie (below) |
+| `to` | where it leaves the head; from the root to here it lies on the head, combed the short way, through `via = [[theta, phi], ...]` if given. `"tail"`, a tie's name: the lock is gathered to the tie and ends in it |
 | `length` | metres it falls after that (0: it ends there) |
+| `out` | a tail's guide only: `[theta, phi]`, the way it leaves its tie (phi 180 is straight down) |
 | a number of the group | `width tuck lean flare stiff thick cup tip_len tip_power free finger swell`: the locks near that guide take it |
 
 How a group lies (the group's keys and their defaults: `hair_locks.GROUP`):
@@ -121,23 +122,49 @@ How a group lies (the group's keys and their defaults: `hair_locks.GROUP`):
   (`bangs` 前髪i_k, `side` 横髪左i_k / 横髪右i_k and `braid` 三つ編左i_k / 三つ編右i_k by the side it hangs on, `back` 後髪i_k, `top` and
   `strand` 髪i_k); the locks between ride the nearest. A capsule is as thin as the room to the body's colliders at rest asks.
 - **Plaits** (`plait = {enabled = true, pitch, start, ties}`): the group's locks are braids. Each lock's path becomes a three-strand
-  plait (`hair_braids`' weave: `LockHair.plait`), woven from where the lock leaves the head (or `start` metres from its root) with a
-  crossing every `pitch` metres, to a tie and a tuft of loose locks at its end (`ties`: `"end"`, `"both"`, `"none"`; `ribbon` the
-  tie's colour). The plait is the lock's `width` wide and rests its own thickness off the body; `hair_braids`' weave keys (`taper`,
-  `strand_wid`, `tuft_len` ...) may be given in the table and scale with the width. The plaits are a mesh of their own
-  (`hair_braid`, materials 三つ編 and 髪リボン). One long braid from behind an ear down in front of the shoulder:
+  plait (`hair_braids`' weave: `LockHair.plait`), woven from where the lock leaves the head (or `start` metres from its root), to a
+  band and a tuft of loose locks at its end (`ties`: `"end"`, `"both"` bands its top too, `"none"`; `ribbon` the bands' colour).
+  Its crossings are 0.28 of its width apart (`hair_locks.PITCH`; `pitch`, metres, says otherwise): a plait reads as one by its
+  crossings being close, further apart it reads as a twist. The plait is the lock's `width` wide and rests its own thickness off
+  the body; `hair_braids`' weave keys (`taper`, `strand_wid`, `thick`, `tuft_len` ...) may be given in the table and scale with the
+  width. With `[hair.paint] tips` its last `tip_len` metres (the tips' `length` unless given) and its tuft go to the tips' colour.
+  The plaits are a mesh of their own (`hair_braid`, materials 三つ編 and 髪リボン).
+- **Ties** (`[hair.ties] tail = {at = [theta, phi]}`): hair that is tied back. A group whose guides all go `to = "tail"` is
+  **gathered**: its locks lie on the head all their way, run on into the tie and end there (no `length`, no free ends, no points);
+  give them `via` points to comb them round the head. A group whose guides are rooted there (`root = "tail"`) is the **tail**: it
+  leaves the head at the tie the way `out` points (the guide's, else the tie's `out`; by default out from the head and down in equal
+  parts) and falls `length` metres; it has a `width` and no `to`, and with `plait` it is a braid (`ties = "both"` bands it at the
+  tie). Two guides with different `out` fan a loose tail's locks. Gathered hair lies close at the back of the head: `[hair.volume]
+  nape` (metres) is how far the hull stands off the skin at the hairline behind the ears, and the hull comes in to it over the
+  30 degrees above (the ears stay covered; without it the hull keeps its volume down to the neck, as loose hair needs).
+
+  A braided ponytail, low behind her right ear, down to her knees:
 
   ```toml
+  [hair.volume]
+  nape = 0.016
+
+  [hair.ties]
+  tail = { at = [-128, 102] }
+
+  [hair.locks.gathered]                   # from the part round her head to the tie
+  count = 29
+  layer = 1
+  lift = [[0.0, 0.0], [0.025, 0.018], [0.09, 0.012], [0.17, 0.006]]
+  guides = [
+      { root = ["part", 0.0], via = [[60, 70], [94, 104], [140, 104], [180, 104]], to = "tail" },   # her left side, the nape
+      { root = ["part", 1.0], via = [[150, 58], [178, 86]], to = "tail" },                            # the back
+      { root = ["part", 1.0], via = [[-128, 58]], to = "tail" },
+      { root = ["part", 0.5], via = [[-72, 46], [-98, 84]], to = "tail" },                            # over the top, her right
+  ]
+
   [hair.locks.braid]
   family = "braid"
   count = 1
-  width = 0.050
-  lift = [-0.012, -0.006]                 # under the other hair
-  lean = -0.25                            # forward, over the shoulder
-  tuck = 0.0
-  guides = [{ root = [-112, 96], to = [-96, 116], length = 0.56 }]
-  plait = { enabled = true, pitch = 0.046 }
-  chain = { bones = 9, every = 1, radius = 0.016 }
+  width = 0.085
+  guides = [{ root = "tail", length = 0.88 }]
+  plait = { enabled = true, ties = "both", ribbon = "#e25ad8", taper = 0.35 }
+  chain = { bones = 14, every = 1, radius = 0.030 }
   ```
 
 The texture (`hair_paint.py`) is an atlas with a cell per lock, painted by where each point of the lock is on the head: its colour down
@@ -195,11 +222,12 @@ thrown out by MMD's physics, so the build logs `WARNING hair chain <name>: <bone
 
 ## Spec (`hair.toml`)
 
-`[hair] seed, dynamic, style`, `[hair.volume] top front side back`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]`
+`[hair] seed, dynamic, style`, `[hair.volume] top front side back nape`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]`
 (`[hair.side.front]` the lock in front of a shoulder), `[hair.back] count width thick delta end_above_chin sway`, `[hair.ring] enabled drop
 width`, `[hair.lines] count strength`, `[hair.crown]`, `[hair.cap]`, `[hair.braids] enabled ...`, `[hair.ears] enabled ...`, `[hair.tails]
-enabled ...` (`false` removes the slice); with `style = "locks"`: `[hair.partings]`, `[hair.locks.<name>]`, `[hair.paint]` (and `volume`,
-`ring`, `cap` as above). Every key has a default in `DEFAULTS` of the module that reads it (`hair_head.py`, `hair_locks.py` and its `GROUP`,
+enabled ...` (`false` removes the slice); with `style = "locks"`: `[hair.partings]`, `[hair.ties]`, `[hair.locks.<name>]`, `[hair.paint]`
+(and `volume`, `ring`, `cap` as above). Every key has a default in `DEFAULTS` of the module that reads it (`hair_head.py`, `hair_locks.py`
+and its `GROUP` and `TIE`,
 `hair_paint.PAINT`, `hair_braids.py`, `ears.py`, `tails.py`). Colours: `[colors.hair]` (base shadow deep light highlight highlight_core rim
 toon_shadow_multiplier, and ring ring_core, tip), `[colors.ears]`, `[colors.black]`.
 

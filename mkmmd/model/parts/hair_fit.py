@@ -397,6 +397,10 @@ class HeadFit:
         return (np.asarray(e["top"], float) + np.asarray(e["lobe"], float)) / 2
 
 
+NAPE_BEHIND = (np.radians(100.0), np.radians(135.0))    # `nape` comes in from behind the ears to all the way round
+NAPE_RISE = np.radians(30.0)                            # ... and from this far above the hairline down to it
+
+
 class Volume:
     """How far the hair stands off the skin: radial offset `vol(theta, phi)` of the hair hull over `skull`. Built from
     the head's own shape: per azimuth the polar angle phi_eq of the widest part (max of R sin(phi)); the offset grows from
@@ -404,10 +408,12 @@ class Volume:
     a + b cos(theta) + c cos(2 theta)), stays there down to `taper_from` (below the human ears, which the hair must
     hide) and then tapers off towards the neck. `lift` adds a crown puff: a Gaussian bump in the polar angle around
     `lift_phi` (width `lift_width`), stronger on the back of the crown (`lift_back`: 0 = all round, 1 = back only), so the
-    hair rises over the skull instead of lying on it like a smooth dome."""
+    hair rises over the skull instead of lying on it like a smooth dome. `nape` (metres, with `hairline(theta)` the
+    hairline's polar angle) is the offset at the hairline behind the ears: the hull comes in to it over NAPE_RISE above
+    the hairline, as hair lies that is gathered at the back of the head (loose hair hangs from the widest part: None)."""
 
     def __init__(self, skull, top=0.028, front=0.020, side=0.034, back=0.027, taper=0.55, taper_from=None,
-                 lift=0.0, lift_phi=np.radians(32.0), lift_width=np.radians(24.0), lift_back=0.5):
+                 lift=0.0, lift_phi=np.radians(32.0), lift_width=np.radians(24.0), lift_back=0.5, nape=None, hairline=None):
         self.skull = skull
         self.top = top
         a_plus_c = 0.5 * (front + back)
@@ -419,6 +425,7 @@ class Volume:
         self.taper_from = np.radians(100.0) if taper_from is None else float(taper_from)
         self.lift, self.lift_phi = float(lift), float(lift_phi)
         self.lift_width, self.lift_back = float(lift_width), float(lift_back)
+        self.nape, self.hairline = (None, None) if nape is None or hairline is None else (float(nape), hairline)
         th = -np.pi + np.arange(skull.nth) * skull.dth
         ph = np.arange(skull.nphi) * skull.dphi
         h = skull.R * np.sin(ph)[:, None]                         # horizontal reach per (phi, theta)
@@ -446,7 +453,13 @@ class Volume:
             g = np.exp(-(((phi - self.lift_phi) / self.lift_width) ** 2))
             v = v + self.lift * g * (1.0 + self.lift_back * np.cos(theta - np.pi)) / (1.0 + self.lift_back)
         p0 = np.maximum(peq, self.taper_from)
-        return v * (1.0 - self.taper * smoothstep((phi - p0) / 0.8))
+        v = v * (1.0 - self.taper * smoothstep((phi - p0) / 0.8))
+        if self.nape is not None:
+            a, b = NAPE_BEHIND
+            behind = smoothstep((np.abs((theta + np.pi) % TAU - np.pi) - a) / (b - a))
+            low = smoothstep((phi - (self.hairline(theta) - NAPE_RISE)) / NAPE_RISE)
+            v = v + (np.minimum(v, self.nape) - v) * behind * low
+        return v
 
     def max_z(self, step_deg=3.0):
         """Height (m) of the highest point of the hull (skin + volume)."""

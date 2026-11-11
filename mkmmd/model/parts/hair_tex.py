@@ -25,6 +25,11 @@ def srgb(h):
     return np.array([int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)])
 
 
+def to_hex(rgb):
+    """Float rgb in 0..1 (sRGB encoded values) -> '#rrggbb'."""
+    return "#%02x%02x%02x" % tuple(int(v) for v in np.rint(np.clip(np.asarray(rgb, float), 0.0, 1.0) * 255.0))
+
+
 DEFAULTS = {
     "base": "#dc2a2e", "shadow": "#8e1418", "deep": "#5a0c12", "light": "#f0503f", "highlight": "#ff9b7c",
     "highlight_core": "#ffd6c0", "rim": "#ff7a62",

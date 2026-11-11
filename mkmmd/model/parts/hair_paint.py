@@ -191,24 +191,25 @@ class Sheen:
         return _edge(1.0 - d, hard), _edge(1.0 - d / 0.5, hard), glow, 0.65 + 0.35 * np.interp(th, self.grid, self.uneven)
 
 
-def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=None, under=False, bands=()):
+def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=None, under=False, bands=(), ends=True):
     """The picture (h, w, 3) of a lock's cell. `z` and `around` (h, w): each point's height and its angle round the
     head (radians: 0 the front, her left positive); `arc` (h,) the metres from the root down the lock and `free` (h,)
     how free it hangs there (0 lying with its neighbours .. 1 on its own); `sheen` the crown's Sheen (None: none);
-    `bands` [(a Sheen, its colour, its strength)] drawn under it."""
+    `bands` [(a Sheen, its colour, its strength)] drawn under it; `ends` False for a lock that ends in a tie: it has
+    no point of its own (no `tip` shade, no `tips` colour)."""
     h, w = cell.h, cell.w
     x = np.linspace(-1.0, 1.0, w)
     hard = float(look["hard"])
     col = height_colour(pal, np.clip((z_top - np.asarray(z, float)) / max(z_top - z_bot, 1e-6), 0.0, 1.0), look["ramp"])
     arc = np.asarray(arc, float)
     tips = look["tips"]
-    if tips["colour"]:
+    if tips["colour"] and ends:
         t = _sm((arc - (arc[-1] - float(tips["length"]))) / max(float(tips["length"]), 1e-6))[:, None, None]
         col = col + (colour(pal, tips["colour"]) - col) * (float(tips["strength"]) * t)
     free = np.asarray(free, float)[:, None]
     shade = 1.0 + look["form"] * free * (1.0 - x * x)[None, :]
     shade = shade - look["root"] * (1.0 - _sm(arc / ROOT_SHADE))[:, None]
-    shade = shade - look["tip"] * _sm((arc - (arc[-1] - TIP_SHADE)) / TIP_SHADE)[:, None]
+    shade = shade - (look["tip"] if ends else 0.0) * _sm((arc - (arc[-1] - TIP_SHADE)) / TIP_SHADE)[:, None]
     # streaks: two draws of noise across, one wavering into the other down the lock
     a = 0.6 * _noise1(w, rng, 14.0) + 0.4 * _noise1(w, rng, 4.0)
     b = 0.6 * _noise1(w, rng, 14.0) + 0.4 * _noise1(w, rng, 4.0)

@@ -37,7 +37,7 @@ def hex_rgb(h):
 
 DEFAULTS = {
     "volume": {"top": 0.036, "front": 0.020, "side": 0.034, "back": 0.027, "lift": 0.016, "lift_deg": 28.0,
-               "lift_width_deg": 20.0, "lift_back": 0.5},
+               "lift_width_deg": 20.0, "lift_back": 0.5, "nape": None},
     "ring": {"enabled": True, "drop": 0.050, "width": 0.018},  # baked crown sheen: on/off, metres below the hair top, half thickness
     "cap": {"delta": -0.014, "cols": 72, "rows": 15},
     "crown": {"count": 9, "width": 0.070, "thick": 0.016, "delta": -0.004, "swirl": 0.45, "inner_delta": -0.011},
@@ -173,7 +173,7 @@ class HeadHair:
         v = self.cfg["volume"]
         fit.vol = Volume(self.skull, v["top"], v["front"], v["side"], v["back"], taper_from=fit.vol.taper_from,
                          lift=v["lift"], lift_phi=np.radians(v["lift_deg"]), lift_width=np.radians(v["lift_width_deg"]),
-                         lift_back=v["lift_back"])                          # shared with the other builders
+                         lift_back=v["lift_back"], nape=v["nape"], hairline=fit.cap_phi)  # shared with the other builders
         self.vol = fit.vol
         self.head_body = ctx.find_body("頭")
         body = getattr(ctx, "parts", {}).get("body")

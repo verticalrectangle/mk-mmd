@@ -6995,8 +6995,9 @@ on them; `[colors.horns]`; `mkmmd/model/parts/horns.py`) and `bangles` (rings ro
 `[bangles] rings = [{on, toward, at, width, thick, offset, color}, ...]`, each round the limb from the landmark `on`
 toward the landmark `toward`, following the skin's section there and carrying its weights; `[colors.bangles]`). The
 hair is combed in one of two hairdos (`[hair] style`: `clumps`, the bases'; `locks`,
-groups of locks laid from guides and partings, any hairdo that can be written down the way it is combed:
-[hair_part.md](hair_part.md)). Pants and socks are cut out of the
+groups of locks laid from guides, partings and ties, any hairdo that can be written down the way it is combed, hair
+gathered to a tie and the tail or braid that hangs from it included: [hair_part.md](hair_part.md)). Pants and socks are
+cut out of the
 body's own skin (`outfit_shell.Shell`: fields on the skin such as a height or a limb's length coordinate, clipped exactly
 along their level lines, moved out along the normals, smoothed, kept off the skin at the vertices and the triangles'
 centres; loose cloth is `outfit_shell.drape`d round an axis, coming in under the widest part above it no faster than a

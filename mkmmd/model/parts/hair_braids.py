@@ -88,10 +88,13 @@ class Textures:
         cb = ctx.get("colors.black", {}) or {}                       # ribbon / ribbon_shade / ribbon_sheen
         colors = {"base": cb.get("ribbon", TX.RIBBON["base"]), "shade": cb.get("ribbon_shade", TX.RIBBON["shade"]),
                   "sheen": cb.get("ribbon_sheen", TX.RIBBON["sheen"])}
-        if cfg.get("ribbon"):
-            colors["base"] = cfg["ribbon"]
+        if cfg.get("ribbon"):                                        # a colour of its own: shaded and lit as that colour
+            rgb = hair_tex.srgb(cfg["ribbon"])
+            colors = {"base": cfg["ribbon"], "shade": hair_tex.to_hex(0.78 * rgb),
+                      "sheen": hair_tex.to_hex(rgb + 0.45 * (1.0 - rgb))}
         rng = ctx.rng_for("hair.braids.tex")
-        weave = dict(K=float(cfg["lobes"]), phase=float(cfg["weave_phase"]), dz=float(cfg["weave_dz"]))
+        weave = dict(K=float(cfg["lobes"]), phase=float(cfg["weave_phase"]), dz=float(cfg["weave_dz"]),
+                     tips=cfg.get("tips"))                           # a lock's plait that ends in another colour
         self.hair_png = ctx.save_png("braid_atlas", TX.braid_atlas(pal, rng, weave))
         self.ribbon_png = ctx.save_png("braid_ribbon", TX.ribbon_texture(colors, rng=rng))
         hair_colors = ctx.get("colors.hair", {}) or {}
