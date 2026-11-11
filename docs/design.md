@@ -6989,7 +6989,11 @@ names, parents, weights, materials, bodies, joints).
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
 listing it in `[model] parts`: `sweater` (off-shoulder knitwear, below), `pants` (skinny), `socks` (ribbed crew),
 `sneakers` (high-tops: the Mary-Jane's foot fitting with a sneaker's settings and a painted face), `choker` (band and
-flower), and `hair_bow` (a bow on the side of the head with two tails on chains). Pants and socks are cut out of the
+flower), `hair_bow` (a bow on the side of the head with two tails on chains) and `horns` (a mirrored pair of curved,
+tapering horns on the head bone: `[horns] at length base taper rise sweep curl inward rings`, `[colors.horns]`;
+`mkmmd/model/parts/horns.py`). The hair is combed in one of two hairdos (`[hair] style`: `clumps`, the bases'; `locks`,
+groups of locks laid from guides and partings, any hairdo that can be written down the way it is combed:
+[hair_part.md](hair_part.md)). Pants and socks are cut out of the
 body's own skin (`outfit_shell.Shell`: fields on the skin such as a height or a limb's length coordinate, clipped exactly
 along their level lines, moved out along the normals, smoothed, kept off the skin at the vertices and the triangles'
 centres; loose cloth is `outfit_shell.drape`d round an axis, coming in under the widest part above it no faster than a
@@ -7090,7 +7094,9 @@ arrays of rig.json's `cloth`, when a part makes a cloth copy), `build.json`. `--
 need into `<out>/only_<parts>/`;
 `--no-export` only runs and checks the builders, into `<out>/no_export/` (an exported model's files stay as they are).
 **Part cache** (`mkmmd.model.partcache`, in `~/.cache/mk/model_parts`): a part is reused, with its textures and its log
-lines, while all it read is unchanged: the code (the package's .py files and the bases' files, by size and time), its
+lines, while all it read is unchanged: the code that can have made it (the package's modules loaded when it was built,
+by size and time, without the command line's: a builder's module is loaded when its part is first built, so a change
+to the hair's code builds the hair again and never the body; and the bases' meshes), its
 builder (module, name and file: a project's own builder too), the seed, the parts built before it (chained, so a part
 built again builds every part after it again) and what it read from the spec (the values of its keys, a file a value
 names by its size and time, the keys it looked up that were not set, the key sets of the tables it listed). The report
@@ -7113,6 +7119,18 @@ depth) lack the hair a .pmx carries. Beside the PNG: `.json` (each cell's camera
 and `.mask.png` (coverage). `mk model trace MARKED.png --sheet SHEET.png` reads a pure red line drawn on the sheet, or on
 a screenshot of part of it (any zoom, window borders), back in model space: the cell, and how far inside (+) or outside
 (-) the outline the line runs every 2 mm, with its place along the region (from the wrist, from the floor).
+`mk model shoot MODEL [--views V,..] [--morphs M,..] [--build] [--set K=V] [--size PX] [--view Standard|AgX|Filmic]
+[--color HEX] [--out DIR]` (`mkmmd.model.shoot`) takes a model's pictures in the renderer its videos are drawn with: it
+writes a small project round the .pmx (a grey paper sweep, key, fill and rim lights and two shadowless ones for the
+ambient light a scene has), turns her on her root between the shots as on a turntable (the lights and the camera stay,
+so every view is lit alike), runs `mk build` and `mk look` (mkr, 64 samples: one frame per view) and writes
+`OUT/<view>.jpg` and the sheets `sheet.jpg`, `sheet_turn.jpg`, `sheet_head.jpg`, with `--morphs` her face once per
+morph (`sheet_expressions.jpg`). A view frames a region by the model's own measures (her rig.json's, or the .pmx's
+extent and eye bones): `front 3q side back back_3q right_3q` the whole figure, `bust bust_3q bust_back`, `face face_3q
+face_side face_right face_low face_high face_back`, `legs`, `feet`; the sets `turn`, `head` and `all`. The studio is lit
+so that a texture's colours show as painted under the Standard view transform (its default); `--view AgX` shows her as a
+video does that keeps `[look]`'s default, which pales what is bright and saturated. A spec is shot from its `[model]
+out` (`--build` builds it first). About 30 s for sixteen views; nothing is rendered in Blender.
 `mk model glb MODEL [--pose tpose] [--morph NAME[=W]] [--region R --side S] [--parts PARTS] [--set K=V] [--out F.glb]`
 (`mkmmd.model.glb`, no Blender) writes a .pmx or a spec, posed with its own weights (T-pose by default), as one binary
 glTF with its textures inside: what Tern's 3D block turns, pans and zooms (it opens OBJ, PLY, STL, glTF, FBX, USD and
