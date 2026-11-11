@@ -144,11 +144,15 @@ def verify(root, arm, exp, meta, tol=None):
         me.polygons.foreach_get("area", area)
         live = np.repeat(area > 1e-12, 3)[:nl] if nl == 3 * len(area) else np.ones(nl, bool)
         out["degenerate_faces"] = int((area <= 1e-12).sum())      # Blender has no normal for a zero-area face
+        bad_at = np.flatnonzero(live & (dots < t["normal_dot"]))
         dots = dots[live]
         out["normal_min_dot"] = round(float(dots.min()), 5) if len(dots) else 1.0
-        out["normal_bad_corners"] = int((dots < t["normal_dot"]).sum())
-        if out["normal_bad_corners"]:
-            bad(f"{out['normal_bad_corners']} corner normals deviate (min dot {dots.min():.4f})")
+        out["normal_bad_corners"] = int(len(bad_at))
+        if len(bad_at):
+            where = np.unique(np.round(exp["pos"][lv[bad_at]], 4), axis=0)[:5]
+            out["normal_bad_at"] = where.tolist()
+            bad(f"{len(bad_at)} corner normals deviate (min dot {dots.min():.4f}), at "
+                + ", ".join(str(tuple(p)) for p in where.tolist()))
     except Exception as e:  # noqa: BLE001 - reported, not fatal
         out["normal_check"] = f"skipped: {type(e).__name__}"
     # winding: Blender's polygon normals against the assembled triangles' own (CCW from outside) normals

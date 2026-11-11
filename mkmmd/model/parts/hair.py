@@ -1,10 +1,13 @@
-"""Hair part: scalp cap, crown clumps, bangs, side locks and back hair (hair_head), twin braids with bows and tufts
-(hair_braids), cat ears (ears) and cat tails (tails), with their bones, dynamic chains, rigid bodies and joints.
+"""Hair part: the head hair in one of two hairdos (`[hair] style`: `clumps`, hair_head's scalp cap, crown clumps, bangs,
+side locks and back hair; `locks`, hair_locks' groups of locks combed over the head from guides), twin braids with bows
+and tufts (hair_braids), cat ears (ears) and cat tails (tails), with their bones, dynamic chains, rigid bodies and
+joints.
 
 Spec: `[hair]` in hair.toml (see there; every key has a default in the module that uses it). Reads the head part's info
 (skin shell, hairline, ears, cat-ear anchors, eyes ...) through `HeadFit` and the body part's landmarks; colours from
-`[colors.hair]`. Chains: 前髪i_k (bangs), 横髪左/右1_k (side locks), 後髪i_k (back hair), 三つ編左/右k (braids), 猫耳左/右(k) (ears;
-the ear base bone is the twitch bone), 尻尾1_k / 尻尾2_k (tails), リボン* (bow tails). Hair meshes are closed thin shells."""
+`[colors.hair]`. Chains: 前髪i_k (bangs), 横髪左/右i_k (side locks), 後髪i_k (back hair), 髪i_k (other locks), 三つ編左/右k
+(braids), 猫耳左/右(k) (ears; the ear base bone is the twitch bone), 尻尾1_k / 尻尾2_k (tails), リボン* (bow tails). Hair
+meshes are closed thin shells."""
 import importlib
 
 import numpy as np
@@ -12,13 +15,14 @@ import numpy as np
 from ..build import builder
 from ..part import Part
 from . import cat_common as CC
-from . import hair_head
 from . import hair_tex as TEX
 from .hair_fit import HeadFit
 from .hair_rig import Rig
 
 # sub-builders: spec table -> (module, function); each takes (ctx, fit, cfg, rig, pal) and returns a Piece
 SUB = (("braids", "hair_braids", "build_braids"), ("ears", "ears", "build_ears"), ("tails", "tails", "build_tails"))
+# the head hair's hairdos: [hair] style -> (module, function), each taking (ctx, fit, cfg, rig, pal) and returning a Piece
+STYLES = {"clumps": ("hair_head", "build_head_hair"), "locks": ("hair_locks", "build_lock_hair")}
 # which table sets each chain family (by the chain's name), for the warnings
 TABLE = (("前髪", "[hair.bangs]"), ("横髪", "[hair.side]"), ("後髪", "[hair.back] (delta moves it out, end_above_chin "
          "sets its length)"), ("三つ編", "[hair.braids]"), ("リボン", "[hair.braids]"), ("猫耳", "[hair.ears]"),
@@ -56,7 +60,11 @@ def build(ctx):
     colors = ctx.get("colors.hair") or {}
     pal = TEX.palette(colors)
     rig = Rig()
-    pieces = [("head", hair_head.build_head_hair(ctx, fit, cfg, rig, pal))]
+    style = cfg.get("style", "clumps")
+    if style not in STYLES:
+        raise ValueError(f"[hair] style = {style!r}: one of {', '.join(STYLES)}")
+    mod, fn = STYLES[style]
+    pieces = [("head", getattr(importlib.import_module(f"{__package__}.{mod}"), fn)(ctx, fit, cfg, rig, pal))]
     for key, mod, fn in SUB:
         sub = cfg.get(key, {})
         if not sub.get("enabled", True):

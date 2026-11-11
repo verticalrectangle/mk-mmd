@@ -1,18 +1,23 @@
 # The hair part (`mkmmd/model/parts/hair*.py`)
 
-One part, `hair`, built by `mk model build` after the body and head (`needs = ["body", "head"]`). It makes the scalp cap, bangs, side
-locks and back hair, twin braids with bows and tufts, black cat ears and two cat tails, with their bones, dynamic chains, rigid bodies and
-joints. Everything is bpy-free (numpy only) and driven by `[hair]` in `hair.toml` ([Characters in design.md](design.md#characters-mk-model) has
-the spec and the builder framework).
+One part, `hair`, built by `mk model build` after the body and head (`needs = ["body", "head"]`). It makes the head hair in one of two
+hairdos (`[hair] style`): `clumps` (default; a scalp cap, bangs, side locks and back hair as a few big clumps, what the bases wear) or
+`locks` (groups of locks combed over the head from guides: [the lock hairdo](#the-lock-hairdo-hair-style--locks)); then twin braids with
+bows and tufts, black cat ears and two cat tails, with their bones, dynamic chains, rigid bodies and joints. Everything is bpy-free (numpy
+only) and driven by `[hair]` in `hair.toml` ([Characters in design.md](design.md#characters-mk-model) has the spec and the builder
+framework).
 
 | Module | What |
 |---|---|
 | `hair.py` | the builder: `HeadFit` from the head part's info, palette from `[colors.hair]`, head hair, then the slices below, merged into one `Part` (materials de-duplicated, display frames 髪 三つ編 猫耳 尻尾) |
 | `hair_fit.py` | `Skull` (radial skin surface about the head centre, ray-cast from the head part's closed `info["skin"]` shell), `HeadFit` (hairline, lower cap boundary `cap_phi(theta)`, eyes, ears, cat-ear anchors), `Volume` (how far the hair stands off the skin) |
-| `hair_geo.py` | swept clumps (`sweep`: lens-shaped closed shells with pointed / round / blunt tips), polylines, `MeshAccum`, `strip_normals`, `Piece` |
+| `hair_geo.py` | swept clumps (`sweep`: lens-shaped closed shells with pointed / round / blunt tips; `place` lays a clump's rings on a surface), polylines, `MeshAccum`, `strip_normals`, `split_shell` and `shell_normals` (a thin shell whose two sides are shaded apart), `Piece` |
 | `hair_rig.py` | `Rig.chain`: connected bones, one dynamic capsule per bone, joints, collision groups; `Chain.weights` (smooth partition of unity along a chain) |
 | `hair_tex.py` | hair atlas (height gradient + fibre tiles), warm toon ramp, additive sphere ring, palette |
-| `hair_head.py` | scalp cap, crown clumps, bangs (two staggered layers + long strands), side locks, back hair |
+| `hair_head.py` | the clump hairdo: scalp cap, crown clumps, bangs (two staggered layers + long strands), side locks, back hair; `HeadHair`, what both hairdos share (the hull, the cap, chains, the shading proxy) |
+| `hair_locks.py` | the lock hairdo: partings, guides, the surface a group lies in, widths, free ends, chains (`LockHair`) |
+| `hair_paint.py` | the lock hairdo's texture: an atlas with a cell per lock (`Atlas`, `Cell`), painted by where each point is on the head (`paint_lock`), the sheen as one band (`Sheen`) |
+| `hair_clear.py` | `Surround`: the body's skin and the garments built before the hair as one field falling locks slide over and keep off |
 | `hair_braids*.py` | braids: three-strand weave, bows (band, knot, wings, notched tails), tuft, gather clumps |
 | `ears.py`, `tails.py`, `cat_*.py` | cat ears (twitch bone + chain) and tails |
 
@@ -77,6 +82,79 @@ length, so the outline is slightly irregular.
   stays below the shoulder line, so they do not frame the face from the front. They anchor on the body's `tail_root.L/R` and `tail_normal` as published (the first
   free bone starts 5 cm behind the root on 下半身; the first 2-4 cm of the tube are buried in the back and hidden by the dress).
 
+## The lock hairdo (`[hair] style = "locks"`)
+
+A hairdo written down the way it is combed (`hair_locks.py`). `[hair.partings]` names lines on the scalp (`part = [[theta, phi], ...]`, a
+curve through those points; the head's own `hairline` is always there). `[hair.locks.<name>]` is a group of locks: a few **guides** and
+the number of locks laid between them (`count`). A guide is one lock's course:
+
+| Guide key | Meaning |
+|---|---|
+| `root` | where it is rooted: `[theta, phi]` in degrees, `["hairline", theta]` (on the hairline at theta), or `["part", 0.3]` (0.3 of the way along the parting `part`). Locks between two guides rooted on one line are rooted on it too |
+| `to` | where it leaves the head; from the root to here it lies on the head, combed the short way, through `via = [[theta, phi], ...]` if given |
+| `length` | metres it falls after that (0: it ends there) |
+| a number of the group | `width tuck lean flare stiff thick cup tip_len tip_power free finger swell`: the locks near that guide take it |
+
+How a group lies (the group's keys and their defaults: `hair_locks.GROUP`):
+
+- **One surface.** Where a group's locks lie on the head they lie in one surface (`LockHair.lying`): the hull (`[hair.volume]`) plus
+  `lift`, and `layer` steps of 2.5 mm (what lies over what). `lift` is numbers spread from the root to where the lock leaves the head
+  (`[-0.012, 0]`: tucked under at the root, the default) or pairs `[[metres from the root, metres off the hull], ...]`, level after the
+  last. For a group whose guides are all rooted on one line the metres are measured from that line, at every point of every lock, so
+  the locks agree exactly wherever they overlap (no steps, no shadow lines between them) and hair that rises out of a parting
+  (`[[0, 0], [0.025, 0.018], [0.09, 0.012]]`) rises as one wave. `swell` (the group's, or a guide's own) scales the lift: a parting
+  that rises more at its front than at its back.
+- **Roots.** Every root starts 4 mm under the scalp cap and the hair comes out of it over its first 10 mm (`ROOT`), so a row of roots
+  shows as one clean line. A lock of a line-rooted group first goes the way that takes it furthest from the line (`LEAVE`,
+  `LockHair.combed`): straight across the middle of a parting, toward its goal from the parting's end, fanning in between. Two
+  groups rooted on the same parting and combed to either side make the parting.
+- **Widths.** Without a `width` of its own a lock is as wide as the room to its neighbours (the nearest points of their paths) times
+  `overlap`, all along its way over the head: a fan starts as narrow as its roots are close, and the group is a sheet without holes.
+  `rhythm = [1.0, 0.7]` makes wide and narrow locks in turn.
+- **Free ends.** Over its last `free` metres a lock parts from the sheet: `finger` of its width, its own thickness (`thick`) and `cup`,
+  its point (`tip_len`, `tip_power`), and it is shaded more by its own form (`OWN`). `wave` and `flip` shape the fall (`wave.depth = 0.9`
+  a corkscrew), `stiff`, `tuck`, `flare`, `lean` how it hangs. Falling locks slide over the body and the garments built before the hair
+  and face as those do under them (`hair_clear.Surround`).
+- **Rows under** (`under = {enabled = true}`): a second, darker row half a place aside under the group's own: what shows between its
+  locks.
+- **Chains** (`chain = {bones, every, radius}`): every `every`-th lock is a chain from where it leaves the head, named by `family`
+  (`bangs` 前髪i_k, `side` 横髪左i_k / 横髪右i_k by the side it hangs on, `back` 後髪i_k, `top` and `strand` 髪i_k); the locks between
+  ride the nearest. A capsule is as thin as the room to the body's colliders at rest asks.
+
+The texture (`hair_paint.py`) is an atlas with a cell per lock, painted by where each point of the lock is on the head: its colour down
+`[hair.paint] ramp` by its height (`[[share of the way down the hair, colour], ...]`, a colour a name of `[colors.hair]`, a mix
+`"base:shadow:0.6"` or `"#rrggbb"`), and the crown's sheen as one toothed band round the head (`Sheen`; `[hair.ring]`, `[hair.paint]
+sheen sheen_width tooth glow`) of which every lock paints its piece. So locks lying side by side carry one picture. A lock's own
+marks (shaded edges, a lighter middle, strand lines, `root` and `tip` shades; `[hair.paint] edge rim form lines line strands`) are
+drawn only where it hangs free. `hard` makes the paint crisp like a cel.
+
+A side parting with a long fringe (on the girl base the hairline is at phi 29 in front and 42 at theta 30):
+
+```toml
+[hair]
+style = "locks"
+
+[hair.partings]
+part = [[30, 41], [44, 31], [64, 24], [100, 18], [150, 13]]
+
+[hair.locks.fringe]                       # rises out of the part, sweeps across her forehead to her right
+family = "bangs"
+count = 8
+layer = 2
+lift = [[0.0, 0.0], [0.025, 0.018], [0.09, 0.012], [0.17, 0.006]]
+free = 0.05
+finger = 0.85
+guides = [
+    { root = ["part", 0.0], to = [-1, 76], length = 0.04 },
+    { root = ["part", 0.27], to = [-60, 84], length = 0.13 },
+    { root = ["part", 0.47], to = [-90, 94], length = 0.19, swell = 0.8 },
+]
+chain = { bones = 3, every = 2, radius = 0.006 }
+```
+
+The other side (`root = ["part", ...]` again, `to` on her left), the back (every guide rooted at `["part", 1.0]`, the whorl) and a row
+on the hairline under the fringe (`root = ["hairline", theta]`, `layer = 1`) are groups like it.
+
 ## Chains (what `mk model` hands the sim stage)
 
 | Family | Bones | Notes |
@@ -95,19 +173,22 @@ thrown out by MMD's physics, so the build logs `WARNING hair chain <name>: <bone
 
 ## Spec (`hair.toml`)
 
-`[hair] seed, dynamic`, `[hair.volume] top front side back`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]` (`[hair.side.front]` the
-lock in front of a shoulder), `[hair.back] count width thick delta end_above_chin sway`, `[hair.ring] enabled drop width`, `[hair.lines] count
-strength`, `[hair.crown]`, `[hair.cap]`, `[hair.braids] enabled ...`, `[hair.ears] enabled ...`, `[hair.tails] enabled ...` (`false` removes the
-slice). Every key has a default in `DEFAULTS` of the module that reads it (`hair_head.py`, `hair_braids.py`, `ears.py`,
-`tails.py`). Colours: `[colors.hair]` (base shadow deep light highlight highlight_core rim toon_shadow_multiplier, and ring ring_core), `[colors.ears]`,
-`[colors.black]`.
+`[hair] seed, dynamic, style`, `[hair.volume] top front side back`, `[hair.bangs] count above_eye long_strands ...`, `[hair.side]`
+(`[hair.side.front]` the lock in front of a shoulder), `[hair.back] count width thick delta end_above_chin sway`, `[hair.ring] enabled drop
+width`, `[hair.lines] count strength`, `[hair.crown]`, `[hair.cap]`, `[hair.braids] enabled ...`, `[hair.ears] enabled ...`, `[hair.tails]
+enabled ...` (`false` removes the slice); with `style = "locks"`: `[hair.partings]`, `[hair.locks.<name>]`, `[hair.paint]` (and `volume`,
+`ring`, `cap` as above). Every key has a default in `DEFAULTS` of the module that reads it (`hair_head.py`, `hair_locks.py` and its `GROUP`,
+`hair_paint.PAINT`, `hair_braids.py`, `ears.py`, `tails.py`). Colours: `[colors.hair]` (base shadow deep light highlight highlight_core rim
+toon_shadow_multiplier, and ring ring_core, tip), `[colors.ears]`, `[colors.black]`.
 
 ## Run and test
 
 ```sh
 mk model build model.toml --only hair --out /tmp/hair      # PMX + rig.json + review .blend
+mk model shoot model.toml --build --views head             # her head from six sides as mk's renderer draws it (~30 s)
 mk look /tmp/hair/<name>.blend --view front,3q,left,back --frames 1 --target "bone('head').head" --dist 1.15 --sheet
-pytest -q tests/test_model_hair.py tests/test_model_hair_braids.py tests/test_model_hair_cats.py tests/test_model_hair_real.py
+pytest -q tests/test_model_hair.py tests/test_model_hair_locks.py tests/test_model_hair_braids.py tests/test_model_hair_cats.py \
+    tests/test_model_hair_real.py
 ```
 
 Tests run on stand-in head and body parts (`tests/hair_fixtures.py`) and cover chain families (`mkmmd.core.families.classify`), weight normalisation, scalp

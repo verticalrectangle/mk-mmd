@@ -34,7 +34,8 @@ TOON_SHADOW = (0.42, 0.44, 0.54)          # colors.hair.toon_shadow_multiplier: 
 
 def palette(colors=None):
     """name -> float rgb (sRGB values) for the hair, from the `[colors.hair]` table (DEFAULTS fill the gaps). Extra
-    names derived here: `root` (deep), `tip` (light shifted towards the highlight), and the crown sheen `ring` and
+    names derived here: `root` (deep), `tip` (the `tip` key, the lowest hair's colour, for hair of two colours; without
+    it `light`), and the crown sheen `ring` and
     `ring_core`: given as keys of their own, else Rin's light pink-coral sheen (SHEEN, SHEEN_CORE) following the family's
     highlight (`follow`), so a whole colour family brings its own sheen."""
     colors = colors or {}
@@ -42,7 +43,8 @@ def palette(colors=None):
     pal.update({k: colors[k] for k in DEFAULTS if isinstance(colors.get(k), str)})   # unknown keys stay unread
     out = {k: srgb(v) for k, v in pal.items()}
     out["root"] = out["deep"]
-    out["tip"] = out["light"]
+    tip = colors.get("tip")
+    out["tip"] = srgb(tip) if isinstance(tip, str) else out["light"]
     for key, sheen, ref in (("ring", SHEEN, "highlight"), ("ring_core", SHEEN_CORE, "highlight_core")):
         given = colors.get(key)
         out[key] = srgb(given) if isinstance(given, str) else follow(sheen, out[ref], srgb(DEFAULTS[ref]))

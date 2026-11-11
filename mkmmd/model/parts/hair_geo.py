@@ -150,17 +150,19 @@ class Strip:
 
 def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, root_w=1.0, root_len=0.15, curv=0.0,
           rings=None, ring_step=0.018, k_outer=5, outer_frac=0.6, bulge=0.7, tilt=0.0, close_root=True,
-          width_fn=None, thick_fn=None, end_taper=0.0):
+          width_fn=None, thick_fn=None, end_taper=0.0, curv_fn=None, place=None):
     """Sweep a clump along the centreline P (m,3) with outward hint N.
 
     width, thick   full width / thickness (m) of the clump; width_fn(s') / thick_fn(s') -> multipliers (s' in 0..1)
     tip            "point" (concave needle), "round" or "blunt" (flat cut, `tilt` slants it: fraction of the width)
     tip_start      where the taper starts (fraction of the length); tip_power the needle sharpness
     root_w         width multiplier at the very root, easing to 1 at root_len (fraction of the length)
-    curv           lateral cupping (1/m): the edges bend towards the head; 0 = flat across
+    curv           lateral cupping (1/m): the edges bend towards the head; 0 = flat across; curv_fn(s') -> multiplier
     rings          number of rings (default: one per ring_step metres, at least 7)
     outer_frac     share of the thickness on the outer side of the centreline; bulge shapes the lens (< 1 = fuller)
-    end_taper      blunt tips only: the width falls by this fraction over the last 15 % (rounded corners)"""
+    end_taper      blunt tips only: the width falls by this fraction over the last 15 % (rounded corners)
+    place          place(points (R, 3) across a ring's middle surface, the ring's s') -> where they lie: a clump laid
+                   on a surface (the hair on a head) instead of swept flat across; the thickness is added after"""
     P = np.asarray(P, float)
     L = float(arclen(P)[-1])
     if rings is None:
@@ -187,6 +189,7 @@ def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, roo
     th = thick * taper_factor(sp, tip, tip_start, 1.0) ** 0.6
     if thick_fn is not None:
         th = th * thick_fn(sp)
+    cv = curv * (np.ones(n_r) if curv_fn is None else curv_fn(sp))
     # cross-section
     m = k_outer
     qo = np.linspace(-1.0, 1.0, m)
@@ -199,8 +202,11 @@ def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, roo
     verts = np.empty((n_r * Rn, 3))
     for i in range(n_r):
         x = qs * w[i] * 0.5
-        y = np.where(sd >= 0, th[i] * outer_frac, -th[i] * (1.0 - outer_frac)) * lens - 0.5 * curv * x * x
-        verts[i * Rn:(i + 1) * Rn] = Pc[i] + np.outer(x, Bc[i]) + np.outer(y, Nn[i])
+        mid = Pc[i] + np.outer(x, Bc[i]) - np.outer(0.5 * cv[i] * x * x, Nn[i])
+        if place is not None:
+            mid = place(mid, float(sp[i]))
+        y = np.where(sd >= 0, th[i] * outer_frac, -th[i] * (1.0 - outer_frac)) * lens
+        verts[i * Rn:(i + 1) * Rn] = mid + np.outer(y, Nn[i])
     if tip == "blunt" and tilt:
         i = n_r - 1
         verts[i * Rn:(i + 1) * Rn] -= np.outer(qs * w[i] * 0.5 * tilt, Tc[i])
@@ -277,6 +283,30 @@ def strip_normals(st, hint, mix=0.6, edge_mix=None):
         last = (st.ring == st.rings - 1) & outer
         n[tip] = unit(n[last].mean(0))[None, :]
     return n
+
+
+def split_shell(st):
+    """A `Strip` with its edge and tip vertices doubled, so the outer side and the inner side of the shell share no
+    vertex and each carries normals of its own: a thin shell folds by nearly 180 degrees at its edges, and one normal
+    there cannot face both ways (Blender keeps a custom normal within a quarter turn of the faces it shades). Returns
+    (verts, faces, q, arc, side), side +1 on the outer side (edges and tip included), -1 on the inner."""
+    shared = np.flatnonzero(st.side == 0)
+    twin = np.full(len(st.verts), -1)
+    twin[shared] = len(st.verts) + np.arange(len(shared))
+    inner = st.side < 0
+    faces = [[int(twin[i]) if twin[i] >= 0 else int(i) for i in f] if inner[list(f)].any() else list(f) for f in st.faces]
+    side = np.concatenate([np.where(inner, -1.0, 1.0), -np.ones(len(shared))])
+    return (np.vstack([st.verts, st.verts[shared]]), faces, np.concatenate([st.q, st.q[shared]]),
+            np.concatenate([st.arc, st.arc[shared]]), side)
+
+
+def shell_normals(verts, faces, side, hint, mix):
+    """Unit normals of a split shell (`split_shell`): each side's own geometric normals blended `mix` of the way (a
+    number, or one per vertex) toward `hint` (n, 3) on the outer side and away from it on the inner."""
+    geo = vertex_normals(verts, faces)
+    m = np.asarray(mix, float)
+    m = m[:, None] if m.ndim else m
+    return unit(m * np.asarray(side, float)[:, None] * unit(hint) + (1.0 - m) * geo)
 
 
 # ---------------------------------------------------------------- accumulate into Mesh objects

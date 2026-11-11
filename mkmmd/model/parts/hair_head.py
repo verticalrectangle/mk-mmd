@@ -159,9 +159,15 @@ class Lock:
 
 
 class HeadHair:
+    """The head hair as clumps: the helpers every hairdo shares (the hull, the cap, a lock's mesh, its UVs and normals,
+    keeping it off the body, its chain, the fringe's shadow) and the clump layouts (crown, bangs, side, back, ahoge).
+    `DEFAULTS` is the table merged under `[hair]`; `lowest` the height of the lowest hair, which the texture's gradient
+    spans down to."""
+    DEFAULTS = DEFAULTS
+
     def __init__(self, ctx, fit, cfg, rig, pal):
         self.ctx, self.fit, self.rig, self.pal = ctx, fit, rig, pal
-        self.cfg = SP.merge(DEFAULTS, cfg)
+        self.cfg = SP.merge(self.DEFAULTS, cfg)
         self.rng = ctx.rng_for("hair.head")
         self.skull = fit.skull
         v = self.cfg["volume"]
@@ -179,15 +185,23 @@ class HeadHair:
         self.chains = {}
         self.top_z = self.vol.max_z()
         self.z_top = self.top_z + 0.004
-        fr = self.cfg["side"]["front"]
-        low = min(0.0, self.cfg["back"]["end_above_chin"] - 0.020, self.cfg["side"]["chin_gap"],
-                  fr["end_above_chin"] if fr["sides"] else 0.0)
-        self.z_bot = float(fit.chin[2]) - max(0.05, 0.03 - low)          # the lowest hair: the gradient spans it all
-        span = self.z_top - self.z_bot
-        self.ring_f, self.ring_w = self.cfg["ring"]["drop"] / span, self.cfg["ring"]["width"] / span
+        self.span_to(self.lowest())
         self.rng_tex = ctx.rng_for("hair.head.tex")
         self.mat = "髪"
         self.stats = {}
+
+    def lowest(self):
+        """The height (m) of the lowest hair this hairdo will have."""
+        fr = self.cfg["side"]["front"]
+        low = min(0.0, self.cfg["back"]["end_above_chin"] - 0.020, self.cfg["side"]["chin_gap"],
+                  fr["end_above_chin"] if fr["sides"] else 0.0)
+        return float(self.fit.chin[2]) - max(0.05, 0.03 - low)
+
+    def span_to(self, z_bot):
+        """The texture's height gradient spans from the hair's top down to `z_bot`; the crown sheen sits in it."""
+        self.z_bot = float(z_bot)
+        span = self.z_top - self.z_bot
+        self.ring_f, self.ring_w = self.cfg["ring"]["drop"] / span, self.cfg["ring"]["width"] / span
 
     # ---- helpers
     def height_uv(self, V, q, win, dz=0.0):
@@ -197,6 +211,10 @@ class HeadHair:
 
     def tint(self):
         return TEX.clump_u(self.rng)
+
+    def cap_uv(self, theta, z):
+        """The scalp cap's UVs at azimuths `theta` and heights `z`."""
+        return np.stack([TEX.cap_u(theta), TEX.head_v(z, self.z_top, self.z_bot)], -1)
 
     def phi_at_z(self, theta, z):
         """Polar angle at which the hull in direction theta reaches height z (None when it does not)."""
@@ -239,6 +257,11 @@ class HeadHair:
         return smooth_polyline(self.skull.push_out(P + lat * d[:, None], 0.009), 1)
 
     # ---- the cap
+    def cap_off(self, theta, phi):
+        """How far off the skin the scalp cap's outer face is: `[hair.cap] delta` from the hull, never closer than 6 mm
+        (below the head's widest part the volume tapers off)."""
+        return np.maximum(self.vol(theta, phi) + self.cfg["cap"]["delta"], 0.006)
+
     def cap(self, acc):
         c = self.cfg["cap"]
         sk, fit = self.skull, self.fit
@@ -249,12 +272,11 @@ class HeadHair:
         PH = t[:, None] * phi_cap[None, :]
         TH = np.broadcast_to(th[None, :], PH.shape)
         D = dirs(TH, PH)
-        dl = c["delta"]
-        off = np.maximum(self.vol(TH, PH) + dl, 0.006)             # never closer than 6 mm to the skin (below the head's
-        Po = sk.point(D, off)                                       # widest part the volume tapers off)
+        off = self.cap_off(TH, PH)
+        Po = sk.point(D, off)
         Pi = sk.point(D, off - 0.003)
         top = np.array([0, 0, 1.0])
-        off_top = max(float(self.vol(0.0, 0.0)) + dl, 0.006)
+        off_top = float(self.cap_off(0.0, 0.0))
         pole_o, pole_i = sk.point(top, off_top), sk.point(top, off_top - 0.003)
         verts = [pole_o, pole_i, *Po.reshape(-1, 3), *Pi.reshape(-1, 3)]
         n_o = rows * nth
@@ -272,7 +294,7 @@ class HeadHair:
             faces.append([io(rows - 1, j), ii(rows - 1, j), ii(rows - 1, j + 1), io(rows - 1, j + 1)])
         V = np.array(verts)
         thv = np.concatenate([[0.0, 0.0], np.tile(th, rows), np.tile(th, rows)])
-        uv = np.stack([TEX.cap_u(thv), TEX.head_v(V[:, 2], self.z_top, self.z_bot)], -1)
+        uv = self.cap_uv(thv, V[:, 2])
         nrm = self.proxy_normals(V)
         nrm[1 + n_o + 1:] *= -1.0                                    # the inner surface faces the skin
         nrm[1] *= -1.0
@@ -680,6 +702,37 @@ class HeadHair:
         self.stats["ahoge_top_z"] = float(P[:, 2].max())
 
 
+def hair_material(ctx, hh, cfg, pal, atlas=None):
+    """The head hair's material 髪 for the hairdo `hh`: its atlas (`atlas`, a picture the hairdo painted itself; else the
+    clumps' tiles with the crown sheen at the hairdo's own height), its toon ramp, and an outline in the hair's own
+    deep colour (`[colors.hair] edge` sets another)."""
+    if atlas is None:
+        ln = hh.cfg["lines"]
+        atlas = TEX.make_atlas(pal, ctx.rng_for("hair.atlas"), ring_f=hh.ring_f, ring_w=hh.ring_w,
+                               ring=bool(hh.cfg["ring"]["enabled"]), lines=int(ln["count"]),
+                               line_strength=float(ln["strength"]), line_rng=ctx.rng_for("hair.lines"))
+    tex = ctx.save_png("atlas", atlas)
+    tn = hh.cfg["toon"]
+    toon = ctx.save_png("toon_warm", TEX.toon_ramp(cfg.get("toon_shadow", TEX.toon_multiplier(ctx.get("colors.hair"))),
+                                                   edge=tn["edge"], soft=tn["soft"]))
+    edge = ctx.get("colors.hair.edge")
+    edge = TEX.srgb(edge) if isinstance(edge, str) else np.clip(pal["deep"] * 0.85, 0.0, 1.0)
+    return Material(hh.mat, name_en="hair", diffuse=(0.9, 0.9, 0.9, 1.0), specular=(0.0, 0.0, 0.0), shininess=0.0,
+                    ambient=(0.5, 0.5, 0.5), texture=tex, toon=toon, edge=True,
+                    edge_color=(*(float(x) for x in edge), 1.0), edge_size=0.8)
+
+
+def hair_info(hh):
+    """What a hairdo publishes: its numbers (`stats`), its chains' bones, the volume, the hair's top and the sheen's
+    height."""
+    info = dict(hh.stats)
+    info["chains"] = {k: list(v.names) for k, v in hh.chains.items()}
+    info["volume"] = {"top": hh.cfg["volume"]["top"], "side": hh.cfg["volume"]["side"], "lift": hh.cfg["volume"]["lift"]}
+    info["top_z"] = hh.top_z
+    info["ring_z"] = hh.z_top - hh.cfg["ring"]["drop"]
+    return info
+
+
 def build_head_hair(ctx, fit, cfg, rig, pal, layers=("cap", "crown", "bangs", "side", "back", "ahoge")):
     """Head hair -> Piece (mesh `hair_head` with material 髪, the forehead shadow decal `hair_shadow` with 髪影) and
     bones/bodies/joints in `rig`."""
@@ -687,25 +740,9 @@ def build_head_hair(ctx, fit, cfg, rig, pal, layers=("cap", "crown", "bangs", "s
     acc = MeshAccum("hair_head", [hh.mat])
     for name in layers:
         getattr(hh, name)(acc)
-    ln = hh.cfg["lines"]
-    atlas = TEX.make_atlas(pal, ctx.rng_for("hair.atlas"), ring_f=hh.ring_f, ring_w=hh.ring_w,
-                           ring=bool(hh.cfg["ring"]["enabled"]), lines=int(ln["count"]), line_strength=float(ln["strength"]),
-                           line_rng=ctx.rng_for("hair.lines"))
-    tex = ctx.save_png("atlas", atlas)
-    tn = hh.cfg["toon"]
-    toon = ctx.save_png("toon_warm", TEX.toon_ramp(cfg.get("toon_shadow", TEX.toon_multiplier(ctx.get("colors.hair"))),
-                                                   edge=tn["edge"], soft=tn["soft"]))
-    mat = Material(hh.mat, name_en="hair", diffuse=(0.9, 0.9, 0.9, 1.0), specular=(0.0, 0.0, 0.0), shininess=0.0,
-                   ambient=(0.5, 0.5, 0.5), texture=tex, toon=toon, edge=True,
-                   edge_color=(0.30, 0.05, 0.07, 1.0), edge_size=0.8)
-    meshes, mats = [acc.to_mesh()], [mat]
+    meshes, mats = [acc.to_mesh()], [hair_material(ctx, hh, cfg, pal)]
     if hh.cfg["bangs"]["shadow"]["enabled"] and "bangs" in layers:
         sm, smats = hh.forehead_shadow(ctx)
         meshes.append(sm)
         mats += smats
-    info = dict(hh.stats)
-    info["chains"] = {k: list(v.names) for k, v in hh.chains.items()}
-    info["volume"] = {"top": hh.cfg["volume"]["top"], "side": hh.cfg["volume"]["side"], "lift": hh.cfg["volume"]["lift"]}
-    info["top_z"] = hh.top_z
-    info["ring_z"] = hh.z_top - hh.cfg["ring"]["drop"]
-    return Piece(meshes=meshes, materials=mats, info=info)
+    return Piece(meshes=meshes, materials=mats, info=hair_info(hh))
