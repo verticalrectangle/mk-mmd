@@ -38,10 +38,14 @@ def test_a_horn_faces_out_tapers_to_its_point_and_curls():
     assert ring_row[1] > 0.6 > ring_row[2] and bare_row[2] > 0.6 > bare_row[1]      # gold on the ring, the horn's own off it
 
 
-def test_the_pair_is_mirrored_and_rides_the_head(tmp_path):
-    ctx = HF.make_ctx(tmp_path, {"horns": {"at": [70, 40], "length": 0.2}, "colors": {"horns": {"base": "#d020d0"}}})
-    ctx.part = "horns"
-    part = horns.build(ctx)
+def test_the_pair_is_mirrored_and_rides_the_head_and_a_twist_takes_the_tips_back(tmp_path):
+    def built(where, **more):
+        ctx = HF.make_ctx(tmp_path / where, {"horns": {"at": [70, 40], "length": 0.2, **more},
+                                             "colors": {"horns": {"base": "#d020d0"}}})
+        ctx.part = "horns"
+        return horns.build(ctx)
+    plain = built("plain").info["landmarks"]
+    part = built("twisted", twist=70.0, back=0.3)
     PT.check(part)
     mesh, land = part.meshes[0], part.info["landmarks"]
     half = len(mesh.verts) // 2
@@ -50,6 +54,7 @@ def test_the_pair_is_mirrored_and_rides_the_head(tmp_path):
     assert apart.min(0).max() < 1e-4 and apart.min(1).max() < 1e-4        # each is the other's mirror
     assert np.allclose(mesh.weights["頭"], 1.0) and list(mesh.weights) == ["頭"]
     assert land["horn.L"][0] > 0.0 > land["horn.R"][0] and land["horn_tip.L"][2] > land["horn.L"][2]
+    assert land["horn_tip.L"][1] > plain["horn_tip.L"][1] + 0.03          # y grows toward her back
 
     def volume(faces, origin):                                            # signed: positive when the faces look outward
         tri = [(mesh.verts[f[0]] - origin, mesh.verts[f[i]] - origin, mesh.verts[f[i + 1]] - origin)
