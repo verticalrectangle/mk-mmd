@@ -6989,9 +6989,12 @@ names, parents, weights, materials, bodies, joints).
 tunes holds at any height. **Garments** other than the dress (`outfit`, Rin's) are parts of their own, each picked by
 listing it in `[model] parts`: `sweater` (off-shoulder knitwear, below), `pants` (skinny), `socks` (ribbed crew),
 `sneakers` (high-tops: the Mary-Jane's foot fitting with a sneaker's settings and a painted face), `choker` (band and
-flower), `hair_bow` (a bow on the side of the head with two tails on chains) and `horns` (a mirrored pair of curved,
-tapering horns on the head bone: `[horns] at length base taper rise sweep curl inward rings`, `[colors.horns]`;
-`mkmmd/model/parts/horns.py`). The hair is combed in one of two hairdos (`[hair] style`: `clumps`, the bases'; `locks`,
+flower), `hair_bow` (a bow on the side of the head with two tails on chains), `horns` (a mirrored pair of curved,
+tapering horns on the head bone: `[horns] at length base taper rise sweep curl inward rings`, and `bands`, rings worn
+on them; `[colors.horns]`; `mkmmd/model/parts/horns.py`) and `bangles` (rings round a limb, an anklet or a bracelet:
+`[bangles] rings = [{on, toward, at, width, thick, offset, color}, ...]`, each round the limb from the landmark `on`
+toward the landmark `toward`, following the skin's section there and carrying its weights; `[colors.bangles]`). The
+hair is combed in one of two hairdos (`[hair] style`: `clumps`, the bases'; `locks`,
 groups of locks laid from guides and partings, any hairdo that can be written down the way it is combed:
 [hair_part.md](hair_part.md)). Pants and socks are cut out of the
 body's own skin (`outfit_shell.Shell`: fields on the skin such as a height or a limb's length coordinate, clipped exactly
