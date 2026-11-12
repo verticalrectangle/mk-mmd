@@ -155,10 +155,25 @@ def _new_tree(name):
     return nt
 
 
+STC_MENUS = {"align_x": "Align X", "align_y": "Align Y", "pivot_mode": "Pivot Point", "overflow": "Overflow"}
+
+
+def _stc_set(n, key, value):
+    """A String to Curves option: a node property on 4.2, a menu input (by display name) from 5 on."""
+    if hasattr(n, key):
+        setattr(n, key, value)
+    elif key == "font":
+        n.inputs["Font"].default_value = value
+    else:
+        n.inputs[STC_MENUS[key]].default_value = value.replace("_", " ").title() if isinstance(value, str) else value
+
+
 def _string_to_curves(g, font, align_x, tracking, word_spacing):
-    n = g.node("GeometryNodeStringToCurves", align_x=align_x, align_y="TOP_BASELINE", overflow="OVERFLOW")
+    n = g.node("GeometryNodeStringToCurves")
+    for k, v in (("align_x", align_x), ("align_y", "TOP_BASELINE"), ("overflow", "OVERFLOW")):
+        _stc_set(n, k, v)
     if font is not None:
-        n.font = font
+        _stc_set(n, "font", font)
     n.inputs["Character Spacing"].default_value = tracking
     n.inputs["Word Spacing"].default_value = word_spacing
     return n
@@ -205,8 +220,12 @@ class _Measure:
         key = (s, round(line_spacing, 6))
         if key in self._cache:
             return self._cache[key]
-        self.mod[self.s_id] = s
-        self.mod[self.l_id] = float(line_spacing)
+        if hasattr(self.mod, "properties"):                     # Blender 5: inputs are groups with a `value`
+            getattr(self.mod.properties.inputs, self.s_id).value = s
+            getattr(self.mod.properties.inputs, self.l_id).value = float(line_spacing)
+        else:
+            self.mod[self.s_id] = s
+            self.mod[self.l_id] = float(line_spacing)
         self.ob.update_tag()
         ev = self.ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
         me = ev.to_mesh()

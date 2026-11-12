@@ -263,8 +263,10 @@ def run(args):
         if kept is not None:
             kept.close()
     if args.to:
+        dest_dir = Path(args.to).expanduser()
+        dest_dir.mkdir(parents=True, exist_ok=True)
         for t in todo:
-            dest = Path(args.to).expanduser() / t["out"].name
+            dest = dest_dir / t["out"].name
             dest.write_bytes(t["out"].read_bytes())
             for e in t["excerpts"]:
                 (dest.parent / e["out"].name).write_bytes(e["out"].read_bytes())

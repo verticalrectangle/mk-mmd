@@ -1143,7 +1143,11 @@ def _screen_key(o, reads, k0, k1, frame0, n):
     used = {"groups": set(), "images": set(), "objects": set()}
     mods, trees, fonts = [], {}, []
     for md in o.modifiers:
-        mods.append({"type": md.type, "props": _props(md, depth=0), "inputs": {k: _val(md[k]) for k in md.keys()}})
+        try:
+            props = {k: _val(md[k]) for k in md.keys()}
+        except TypeError:                        # Blender 5: a modifier has no IDProperties
+            props = {}
+        mods.append({"type": md.type, "props": _props(md, depth=0), "inputs": props})
         if md.type == "NODES" and md.node_group is not None:
             used["groups"].add(md.node_group.name)
     todo = sorted(used["groups"])
@@ -1580,7 +1584,7 @@ class Lit:
                 "cameras": {o["name"]: {"type": "ORTHO", "ortho_scale": SR.ortho_scale(tuple(o["size"])),
                                         "sensor_fit": "AUTO", "clip": [0.1, 100.0], "size": list(o["size"]),
                                         "matrix": _affine(_gl4(M)).tolist()} for o in outputs},
-                "pass": {"engine": "BLENDER_EEVEE_NEXT", "film_transparent": True, "lights": False, "world": "black",
+                "pass": {"engine": "BLENDER_EEVEE", "film_transparent": True, "lights": False, "world": "black",
                          "motion_blur": False, "dither": 0.0, "compositing": False, "use_raytracing": False,
                          "samples": {"default": 16, "looks": samples}},
                 "format": {"file_format": "PNG", "color_mode": "RGBA", "color_depth": 8, "alpha": "STRAIGHT"},
