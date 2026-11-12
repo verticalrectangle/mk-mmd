@@ -7022,9 +7022,15 @@ puffed and gathered into the cuffs, folds at the elbow), ribbed waistband and cu
 the skin nearest to it, smoothed round its rings; round her chest and back the band and the knit near it leave out the
 shoulder girdle's share, so they stay with her body when an arm moves, and a helper bone at each elbow and shoulder
 (`[sweater.helpers]`, `mkmmd.model.helpers`) takes what the joint's two sides share, so a bent elbow keeps the sleeve
-round and a raised arm spreads the cloth at the armpit instead of parting it. Under each sleeve rows of short chains,
+round and a raised arm spreads the cloth at the armpit instead of parting it. The body's top rings go round her
+shoulders under the band; what of them runs out onto an arm lies on her skin (`[sweater.body] arm_gap`), inside the
+sleeve in any pose (loose, a raised arm took that web up through its own sleeve). Under each sleeve rows of short chains,
 tied sideways to their neighbours (`[sweater.chains]`, family `sleeve`), carry the bag of cloth hanging under the arm:
-MMD's physics or mk's solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. With `[sweater.swing]
+MMD's physics or mk's solver (`[sim.<cast>] families` with `sleeve`) makes it hang and swing. Their capsules are as
+thick as the bag and end at its lowest point, and the sweater wears colliders the size of its knit body
+(`[sweater.colliders]`: a stack of capsules lying across her, `outfit_rig.Rig.shell`, PMX group 12; her own colliders
+are her skin's, 2 to 3 cm inside a loose knit), so with `[sim.<cast>.params.sleeve] radius = 1` a bag lies on the knit
+when an arm comes to her side or across her chest instead of hanging in it. With `[sweater.swing]
 enabled` the sweater's lower part (from `from` metres above the waistband down to its hem) hangs on a ring of tied
 chains from her hips (上着cc_r, family `coat`; `outfit_rig.Rig.ring`, the skirt's too: a short first bone, capsules
 as thin as the room to her colliders at rest asks), so a loose sweater (`[sweater.waistband] offset`, `[sweater.body]

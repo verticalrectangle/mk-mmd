@@ -3,17 +3,22 @@
 Same conventions as the hair part (PMX collision groups 0..15): the body's static colliders are group 0 and ignore
 themselves; dynamic chain bodies of the outfit live in groups 7 (ribbons), 9 (skirt), 10 (sleeves), 11 (collar), the
 first body of every chain in group 8 which also ignores group 0 (a root never fights the body it hangs from, exactly the
-pairs mk's strand solver skips near a chain root). All dynamic groups ignore each other."""
+pairs mk's strand solver skips near a chain root). All dynamic groups ignore each other. The static colliders a
+garment wears for its own cloth (Rig.shell: the surface of a loose knit, which the body's colliders lie well inside)
+are group 12 and ignore every group but the sleeves': in MMD they stop a sleeve's bag and nothing else (a skirt's
+chains start inside them); mk's strand solver, which skips what overlaps at rest, lets the hair lie on them too."""
 import itertools
 
 import numpy as np
 
+from .. import geo as MG
 from ..part import Bone, Joint, RigidBody
 from . import outfit_geo as G
 
 GROUPS = {"ribbon": 7, "skirt": 9, "sleeve": 10, "coat": 11}
 ROOT_GROUP = 8
 DYNAMIC = (4, 5, 6, 7, 8, 9, 10, 11)
+WORN = 12
 
 # per kind: mass, damping (lin, ang), friction, swing limits about the two bend axes (rad), twist (rad), spring; `tie`:
 # the sideways joints between neighbouring chains (Rig.tie): their swing (rad), stretch (x their length) and springs
@@ -104,9 +109,11 @@ class Rig:
         self.bones, self.bodies, self.joints = [], [], []
 
     def chain(self, names, pts, anchor, kind, radius, anchor_body=None, x_hint=(1.0, 0.0, 0.0), name_en=None,
-              physics=None, dynamic=True, layer=0):
+              physics=None, dynamic=True, layer=0, stout=False):
         """A line of connected bones names[k]: pts[k] -> pts[k + 1] (len(pts) == len(names) + 1), the first one a child of
-        `anchor`; a capsule body for every bone and a spring joint to its predecessor (the first to `anchor_body`)."""
+        `anchor`; a capsule body for every bone and a spring joint to its predecessor (the first to `anchor_body`). A
+        capsule is `radius` thick but fits in its bone (0.45 of its length at most), unless `stout`: a bag's, thicker
+        than its bones are long."""
         pts = np.asarray(pts, float)
         n = len(names)
         ph = dict(PHYSICS[kind])
@@ -122,7 +129,7 @@ class Rig:
             if not dynamic:
                 continue
             length = float(np.linalg.norm(b - a))
-            r = float(min(rad[k], 0.45 * length))
+            r = float(rad[k] if stout else min(rad[k], 0.45 * length))
             R = frame_z(b - a, x_hint)
             root = k == 0
             self.bodies.append(RigidBody(
@@ -139,6 +146,14 @@ class Rig:
                     rot_lo=(-sx, -sy, -tw), rot_hi=(sx, sy, tw), spring_rot=(kx, ky, kz)))
             prev = names[k]
         return names
+
+    def shell(self, name, bone, a, b, radius):
+        """A static capsule from a to b (its hemispheres' centres) riding `bone`: a piece of the surface of a garment
+        that stands off her body, for what hangs beside it to lie on (module docstring: group 12). Returns the body."""
+        self.bodies.append(RigidBody(name=name, bone=bone, shape="capsule", **MG.capsule_between(a, b, radius),
+                                     mode="static", group=WORN,
+                                     no_collide=tuple(g for g in range(16) if g != GROUPS["sleeve"])))
+        return self.bodies[-1]
 
     def tie(self, chains, closed=False, physics=None):
         """Sideways joints between the bodies of neighbouring chains (`chains`: lists of bone names in order along a row,

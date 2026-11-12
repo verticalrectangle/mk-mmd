@@ -167,8 +167,10 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
 - **Sim** ([Sim](design.md#sim)): hair, ears, tails, skirts and the chains under a garment's sleeves (`sleeve`) are solved outside Blender
   and baked. List the families, give the colliders (the seat, the car, the fingers, the floor), and `wind = { carrier = "car", ... }` in a
   moving vehicle. A simulated skirt with a hand resting on it (`place = "dainty"`) wants `bend_max = 30`, and one on a dancer who whips
-  round faster than cloth could follow wants `inertia = 0.5` (`[sim.<cast>.params.skirt]`). `mk build --skip sim` is the fast loop for
-  poses and performance.
+  round faster than cloth could follow wants `inertia = 0.5` (`[sim.<cast>.params.skirt]`). An mk-built sweater's sleeves want
+  `[sim.<cast>.params.sleeve] radius = 1`: their chains' capsules are as thick as the bag they carry, and the sweater wears colliders the
+  size of its knit, so at that radius a bag lies on the knit when an arm comes to her side instead of hanging in it. `mk build --skip sim`
+  is the fast loop for poses and performance.
 - **Folds** ([Folds](design.md#folds)): a model whose rig.json has fold shapes (an mk-built garment's crook of the elbow, the knit bunching
   as she leans or twists) gets them keyed from her pose with no table; `[folds.<cast>] depth` scales them, `enabled = false` turns them off.
 - **Cloth** ([Cloth](design.md#cloth)): a model whose rig.json has a cloth copy (an mk-built garment: the sweater's knit) is simulated with
