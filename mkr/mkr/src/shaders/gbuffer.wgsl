@@ -16,6 +16,7 @@
 const GB_SURFACE: u32 = 1u;     // a surface is there (the cleared record says background)
 const GB_EXTRAS: u32 = 2u;      // emission, translucent, coat or a reflection normal of its own: read the extras
 const GB_SLAB: u32 = 4u;        // its translucency is a slab's (thickness mode SLAB), not a sphere's
+const GB_UNSHADOWED: u32 = 8u;  // no light's shadow falls on it (its material receives none: render.wgsl g_unshadowed)
 
 fn gb_rgb9e5(c_in: vec3f) -> u32 {
   let c = clamp(c_in, vec3f(0.0), vec3f(65408.0));

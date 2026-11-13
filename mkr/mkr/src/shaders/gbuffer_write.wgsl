@@ -19,7 +19,8 @@ fn gbuffer_write(c_in: Closures, s: Surface, in: VsOut) -> GOut {
     let own_refl_N = has_refl && has_diffuse && any(abs(refl_N - N) > vec3<f32>(1e-5));
     let has_extras = any(c.emission > vec3<f32>(0.0)) || any(c.translucent > vec3<f32>(0.0))
                   || any(c.coat > vec3<f32>(0.0)) || own_refl_N;
-    let flags = GB_SURFACE | select(0u, GB_EXTRAS, has_extras) | select(0u, GB_SLAB, c.translucent_slab > 0.5);
+    let flags = GB_SURFACE | select(0u, GB_EXTRAS, has_extras) | select(0u, GB_SLAB, c.translucent_slab > 0.5)
+              | select(0u, GB_UNSHADOWED, g_unshadowed);
     var o: GOut;
     o.base = vec4<u32>(gb_rgb9e5(c.diffuse), gb_rgb9e5(c.reflection), gb_pack_n16(N),
                        gb_pack_n8(to_gltf(s.Ng)) | (gb_pack_rough12(c.reflection_roughness) << 16u) | (flags << 28u));

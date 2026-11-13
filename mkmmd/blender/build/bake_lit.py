@@ -26,7 +26,10 @@ bake.json "lit":
             shines: local -Z), right 3 (local +X), up 3 (local +Y), colour 3 (linear), energy (W), size_x, size_y (area
             lights, m, the object's scale applied), spot_size (rad), spot_blend, radius (point, spot and area:
             shadow_soft_size as Blender uses it, not scaled; sun: its angle, rad), shown (1/0)
-  materials {name: {settings (every Material value), tree: GRAPH (null without nodes), anim: [ANIM], keyed}}
+  materials {name: {settings (every Material value), tree: GRAPH (null without nodes), anim: [ANIM], keyed,
+            receives_shadow}}: receives_shadow is false where no light's shadow falls on the material (an MMD
+            material whose PMX flag "self shadow" is off: `_receives_shadow`; mkr honours it, Blender's engines do
+            not), true for every other one; a bake from before it has none, which mkr reads as true
   groups    {name: {interface: [[in_out, name, identifier, socket_type, default]], tree: GRAPH, anim: [ANIM], keyed}}
             keyed: the data paths keyed or driven on it that the bake does not carry per frame and that change what
             EEVEE draws (`_keyed`: a colour ramp's stops, a node's setting, a material's or a world's own settings when
@@ -390,6 +393,21 @@ def _keyed(kind, owner, nt):
     if nodes and nt is not None:
         out.update(p for p in _anim_paths(nt) if not p.startswith("[") and not _PATH.match(p))
     return sorted(out)
+
+
+def _receives_shadow(mat):
+    """Whether lights' shadows fall on the material: an MMD material's PMX flag "self shadow" (bit 3 of its flags,
+    which mmd_tools keeps as `mmd_material.enabled_self_shadow`); any other material, or every one without mmd_tools,
+    takes them."""
+    return bool(getattr(getattr(mat, "mmd_material", None), "enabled_self_shadow", True))
+
+
+def _material_doc(mat, used):
+    """The bake's record of material `mat` (`materials` in the module docstring; `anim` is filled while the frames are
+    sampled). What its tree uses (node groups, images, objects) goes into `used`."""
+    return {"settings": _props(mat, skip=_skip("id") | {"node_tree", "grease_pencil", "preview"}),
+            "tree": graph(mat.node_tree, used) if mat.use_nodes and mat.node_tree else None,
+            "anim": [], "keyed": _keyed("material", mat, mat.node_tree), "receives_shadow": _receives_shadow(mat)}
 
 
 def _reads(trees):
@@ -1783,10 +1801,7 @@ class Lit:
         used = {"groups": set(), "images": set(), "objects": set()}
         self.mat_docs = {}
         for m in mats:
-            mat = bpy.data.materials[m]
-            self.mat_docs[m] = {"settings": _props(mat, skip=_skip("id") | {"node_tree", "grease_pencil", "preview"}),
-                                "tree": graph(mat.node_tree, used) if mat.use_nodes and mat.node_tree else None,
-                                "anim": [], "keyed": _keyed("material", mat, mat.node_tree)}
+            self.mat_docs[m] = _material_doc(bpy.data.materials[m], used)
         w = self.sc.world
         self.world_doc = None
         if w is not None:

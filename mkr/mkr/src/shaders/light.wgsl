@@ -1,8 +1,9 @@
 // The scene's lights on a point's closures, as EEVEE Next lights them: per light the unshadowed analytic integral of
 // each lobe over the light's shape (Lambert polygon integral for diffuse and translucent, GGX through linearly
 // transformed cosines for reflection and coat: ltc.wgsl), times its visibility (shadow_map.wgsl: EEVEE's tracing
-// through shadow maps; or shadow_rays.wgsl: ray queries toward a random point of the light). The deferred lighting pass
-// (deferred.wgsl) and the forward entries (blended materials, Shader to RGB) share it.
+// through shadow maps; or shadow_rays.wgsl: ray queries toward a random point of the light), which is 1 on a surface
+// whose material receives no shadow (g_unshadowed). The deferred lighting pass (deferred.wgsl) and the forward entries
+// (blended materials, Shader to RGB) share it.
 
 const VIS_DIFFUSE: u32 = 1u;
 const VIS_GLOSSY: u32 = 2u;
@@ -378,9 +379,10 @@ fn light_point_above(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>) -> vec3<f32
 }
 
 // Light li's visibility from P (shadow_visibility: the maps' tracing, or ray queries), the mean of its rays: Ng the
-// geometric normal on the side it lights, N the shading normal there.
+// geometric normal on the side it lights, N the shading normal there. None of its shadow falls on a surface whose
+// material receives none (g_unshadowed).
 fn light_visibility(l: Light, li: u32, P: vec3<f32>, Ng: vec3<f32>, N: vec3<f32>) -> f32 {
-    if (l.spot.z < 0.5 || frame.shadow.w < 0.5) {
+    if (l.spot.z < 0.5 || frame.shadow.w < 0.5 || g_unshadowed) {
         return 1.0;
     }
     let k = u32(frame.sampling.x);

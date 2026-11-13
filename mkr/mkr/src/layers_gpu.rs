@@ -682,8 +682,8 @@ impl Renderer<'_> {
                     remap,
                     param_base: ml.param_base,
                     image_base: ml.image_base,
-                    pad0: 0,
-                    pad1: 0,
+                    flags: ml.draw_flags(),
+                    pad: 0,
                 });
             }
         }

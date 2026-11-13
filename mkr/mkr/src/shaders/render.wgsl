@@ -42,9 +42,11 @@ struct Draw {
     remap: array<u32, 8>,           // the mesh attribute slot behind each of the material's attributes
     param_base: u32,                // the material's first slot in mat_params (its mkr_param slots count from 0)
     image_base: u32,                // the material's first entry in image_map (its mkr_image indices count from 0)
-    pad0: u32,
-    pad1: u32,
+    flags: u32,                     // DRAW_UNSHADOWED: no light's shadow falls on it (its material receives none)
+    pad: u32,
 }
+
+const DRAW_UNSHADOWED: u32 = 1u;
 
 struct Immediate {
     draw: u32,
@@ -115,11 +117,13 @@ fn unit(h: u32) -> f32 {
     return f32(h >> 8u) * (1.0 / 16777216.0);
 }
 
-// Per-pixel state of the point being shaded (randoms hang off it) and of the material evaluating it.
+// Per-pixel state of the point being shaded (randoms hang off it) and of the material evaluating it; g_unshadowed: no
+// light's shadow falls on it (the camera's surface: its draw's DRAW_UNSHADOWED, or the G-buffer's GB_UNSHADOWED).
 var<private> g_pixel: vec2<u32>;
 var<private> g_sample: u32;
 var<private> g_param_base: u32;
 var<private> g_image_base: u32;
+var<private> g_unshadowed: bool;
 
 // The sample's low-discrepancy number for dimension `dim`, rotated per pixel (Cranley-Patterson): each pixel sees the
 // samples' stratification, neighbouring pixels decorrelated.
@@ -437,6 +441,7 @@ fn fragment_surface(in: VsOut, front: bool, prim: u32) -> Surface {
     let m = meshes[d.mesh];
     g_pixel = vec2<u32>(in.pos.xy);
     g_sample = samples[imm.sample].info.y;
+    g_unshadowed = (d.flags & DRAW_UNSHADOWED) != 0u;
     let ng = face_normal(m, tri_vertices(d, m, prim));
     let attr = array<vec4<f32>, 8>(in.a0, in.a1, in.a2, in.a3, in.a4, in.a5, in.a6, in.a7);
     let screen = vec2<f32>(in.pos.x * frame.size.z, 1.0 - in.pos.y * frame.size.w);

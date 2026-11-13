@@ -1,6 +1,6 @@
 //! The scene's materials through mkr-shade (Blender node graphs to WGSL closures), with what mkr needs to draw each:
 //! its render method (DITHERED: hashed coverage, BLENDED: sorted and blended), back-face culling, whether its shadow
-//! is alpha-tested, and the per-frame values of its animated sockets.
+//! is alpha-tested, whether lights' shadows fall on it, and the per-frame values of its animated sockets.
 
 use std::collections::BTreeMap;
 
@@ -13,6 +13,9 @@ use crate::bake::{Bake, ImageRec};
 
 /// The id of the default surface (empty material slots).
 const DEFAULT: &str = "\u{0}default";
+
+/// A draw's flag (render.wgsl Draw.flags): no light's shadow falls on its surface.
+pub const DRAW_UNSHADOWED: u32 = 1;
 
 pub struct Material {
     pub name: String,
@@ -31,6 +34,9 @@ pub struct Material {
     pub transparent_shadow: bool,
     /// It calls Shader to RGB (its module lights closures itself).
     pub uses_shader_to_rgb: bool,
+    /// Lights' shadows fall on it (bake `receives_shadow`: false for an MMD material whose "self shadow" is off). It
+    /// casts its shadow either way.
+    pub receives_shadow: bool,
     /// Its animated sockets; their slots count from 0, at `param_base` in the scene's parameter buffer.
     pub params: Vec<mkr_shade::ParamSlot>,
     pub param_base: u32,
@@ -44,6 +50,11 @@ impl Material {
     /// Its shadow follows its opacity: shadow maps test it, and so do shadow rays (its BLAS geometry is not opaque).
     pub fn casts_alpha_shadow(&self) -> bool {
         self.transparent && self.transparent_shadow
+    }
+
+    /// Its draws' flags (render.wgsl Draw.flags).
+    pub fn draw_flags(&self) -> u32 {
+        if self.receives_shadow { 0 } else { DRAW_UNSHADOWED }
     }
 
     /// Its slots that hold a value per object (Attribute nodes of type Object, Instancer, View Layer): (slot, the
@@ -306,6 +317,7 @@ impl MaterialSet {
                 show_back: flag("show_transparent_back", true),
                 transparent_shadow: flag("use_transparent_shadow", true),
                 uses_shader_to_rgb: c.uses_shader_to_rgb,
+                receives_shadow: lit.materials.get(name).is_none_or(|m| m.receives_shadow),
                 params: c.params,
                 param_base,
                 image_ids,
@@ -692,6 +704,35 @@ mod tests {
         assert!(!support.materials.contains_key("driven"), "a driven socket is mkr's: {:?}", support.materials);
         let scene = support.scene.clone().unwrap_or_default();
         assert!(scene.starts_with("world w:") && scene.ends_with("color"), "{scene:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A material whose record says no light's shadow falls on it (an MMD material whose "self shadow" is off) flags
+    /// its draws; one whose record says it receives them, one from a bake made before the field and the default
+    /// surface do not.
+    #[test]
+    fn a_material_that_receives_no_shadow_flags_its_draws() {
+        let dir = std::env::temp_dir().join(format!("mkr_materials_unshadowed_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let flat = |receives: Option<bool>| {
+            let mut m = json!({"settings": {}, "tree": null, "anim": []});
+            if let Some(r) = receives {
+                m["receives_shadow"] = json!(r);
+            }
+            m
+        };
+        let doc = json!({"version": 5, "fps": 30.0, "frame0": 1, "frames": 1,
+            "outputs": [{"name": "o", "size": [4, 4]}],
+            "lit": {"view": {"lut": {"file": "view_lut.bin", "n": 2, "lo": -1.0, "hi": 1.0}},
+                    "materials": {"off": flat(Some(false)), "on": flat(Some(true)), "old": flat(None)}}});
+        std::fs::write(dir.join("bake.json"), doc.to_string()).unwrap();
+        std::fs::write(dir.join("bake.bin"), b"").unwrap();
+        std::fs::write(dir.join("lit.bin"), b"").unwrap();
+        let bake = Bake::open(&dir).unwrap();
+        let mats = MaterialSet::compile(&bake).unwrap();
+        let flags = |name: &str| mats.list[mats.index(name).unwrap()].draw_flags();
+        assert_eq!(flags("off"), DRAW_UNSHADOWED);
+        assert_eq!([flags("on"), flags("old"), mats.list[mats.default_index()].draw_flags()], [0, 0, 0]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

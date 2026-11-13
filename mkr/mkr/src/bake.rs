@@ -357,6 +357,10 @@ pub struct MaterialRec {
     pub tree: Option<Value>,
     #[serde(default)]
     pub anim: Vec<AnimRec>,
+    /// False: no light's shadow falls on it (an MMD material whose PMX flag "self shadow" is off); a bake from before
+    /// the field: true.
+    #[serde(default = "yes")]
+    pub receives_shadow: bool,
 }
 
 /// An animated node socket: `size` floats per frame at `offset + size k` (k = 0 when `frames` is 1).

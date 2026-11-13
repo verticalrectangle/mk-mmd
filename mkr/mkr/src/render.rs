@@ -118,8 +118,9 @@ pub(crate) struct DrawGpu {
     pub(crate) remap: [u32; 8],
     pub(crate) param_base: u32,
     pub(crate) image_base: u32,
-    pub(crate) pad0: u32,
-    pub(crate) pad1: u32,
+    /// Material::draw_flags (materials.rs DRAW_UNSHADOWED).
+    pub(crate) flags: u32,
+    pub(crate) pad: u32,
 }
 
 #[repr(C)]
@@ -554,8 +555,8 @@ impl<'b> Renderer<'b> {
                     remap,
                     param_base: param_layout.draw_base(&mats, mat, mi),
                     image_base: ml.image_base,
-                    pad0: 0,
-                    pad1: 0,
+                    flags: ml.draw_flags(),
+                    pad: 0,
                 });
             }
         }

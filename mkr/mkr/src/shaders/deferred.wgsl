@@ -149,6 +149,7 @@ fn light_pixel(px: vec2<u32>, base: vec4<u32>, P: vec3<f32>, sd: SampleData, til
     let flags = base.w >> 28u;
     g_pixel = px;
     g_sample = sd.info.y;
+    g_unshadowed = (flags & GB_UNSHADOWED) != 0u;
     var h: Shading;
     h.P = P;
     h.V = view_dir(P);
