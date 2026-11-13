@@ -204,6 +204,43 @@ chain = { bones = 3, every = 2, radius = 0.006 }
 The other side (`root = ["part", ...]` again, `to` on her left), the back (every guide rooted at `["part", 1.0]`, the whorl) and a row
 on the hairline under the fringe (`root = ["hairline", theta]`, `layer = 1`) are groups like it.
 
+Hair can be **cut**: `cut` (a height, metres) ends every lock of a group there, level, whether it is still lying on the head (a blunt
+fringe) or falling (hair cut straight across below the hips); `tip = "round"` rounds each end off over `tip_len` (its own rings go round
+it, `hair_geo.ring_places`, so a short round end is round on any length of lock). A group that hangs as **one heavy mass**
+(`mass = {enabled = true, thin}`) keeps its own thickness from where it leaves the head (not paper-flat down to its free ends), thins
+to `thin` of it at its ends, is as wide as the room to its neighbours all down its way (no holes), and lies on a **drape**
+(`hair_clear.Drape`): the body and the garments built before the hair seen as one smooth surface round a vertical axis through her
+neck, the arms left out, folds, frills and seams bridged, receding no faster than a slope going down; each point of the mass moves
+straight out from that axis, a whole column at a time, so the mass never slides sideways along a fold or tears on a frill. A group's
+`under` row lies `under.lift` closer in the fall too (its upper row rests that much further out). `lean` and `flare` act only until a
+falling lock is past her shoulders (they fade out over `SETTLE` down to the shoulder joints); below them it hangs. A lock can be
+**tied with a bow** `above` metres over its end (`bow = {enabled, above, span, ribbon, shade, pinch, fan, tails}`): a band round the
+lock, a knot, two loops, two short tails (hair_braids_bow's pieces in `BOW_SHAPE`'s proportions of `span`), a material per ribbon colour
+(結びリボン1, 2 ...), riding the lock's chain; the lock is gathered to `pinch` at the tie and fans out to `fan` below it. `thick_max`
+lets a lock be thicker than 10 mm (a flat oval lock). `[hair] cloth` is the room falling hair leaves over skin that no garment built
+before it covers (a hair build without the clothes she wears). `[hair.volume] band = {z, fall, off, ease}` keeps the hull thin
+(`off`) above the line a cap is fitted at (z in front, `fall` lower at the back) and full `ease` below it. The sheen can be a **plain
+soft band** (`[hair.paint] tooth = 0`: straight, even, fading to nothing `width` off its middle) that comes down by `[hair.ring] fall`
+between `turn` degrees round from the front (across a fringe, then round at ear height); `bands` take `fall` and `turn` too. Chains
+keep `CLEAR` (5 mm) off the static colliders of every part built before the hair (the body's and the garments'), as far as
+`MIN_RADIUS` allows, and the build warns about a chain inside any of them. A `mass` hangs straight under the head: from where a
+strand leaves the head down to the shoulder joints' height its distance from the neck's vertical axis never decreases (hair hangs
+from the head's widest part onto the shoulders, it does not hug the neck); below the shoulders it lies on the drape.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `[hair.locks.<g>] tip` | `"point"` | `"round"`: ends rounded off over `tip_len` |
+| `[hair.locks.<g>] cut` | none | height (m) every lock of the group ends at, level |
+| `[hair.locks.<g>] thick_max` | 0.010 | the thickest a free lock gets (m) |
+| `[hair.locks.<g>] mass` | `{enabled = false, thin = 1.0, over = none}` | one heavy mass: own thickness off the head, thinning to `thin` (over its last `over` m), no holes, lies on the drape, its strands shaded by their own form |
+| `[hair.locks.<g>] jitter.cut` | 0.0 | metres each lock ends above or below the group's `cut` |
+| `[hair.locks.<g>] hug` | none | metres a falling lock is drawn in to off her face, down to her chin |
+| `[hair.locks.<g>] bow` | `{enabled = false, above = 0.05, span = 0.055, ribbon = "#d8344a", shade = none, pinch = 0.6, fan = 1.15, tails = 0.024}` | a satin bow tied round each lock |
+| `[hair] cloth` | 0.0 | room (m) left over skin no garment built before the hair covers |
+| `[hair.volume] band` | `{z = none, fall = 0, off = 0.016, ease = 0.020}` | thin hull above a cap's band line |
+| `[hair.ring] fall`, `turn` | 0, `[0, 180]` | the sheen comes down `fall` m between `turn` degrees round |
+| `[hair.paint] tooth = 0` | 0.012 | a plain soft sheen band (no teeth, no wander) |
+
 ## Chains (what `mk model` hands the sim stage)
 
 | Family | Bones | Notes |

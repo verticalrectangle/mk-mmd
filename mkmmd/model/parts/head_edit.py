@@ -1,4 +1,5 @@
-"""Small, smooth edits of an imported face (bpy-free, numpy only): a tilt of the eyes, a softer jaw, a fang, a narrower highlight.
+"""Small, smooth edits of an imported face (bpy-free, numpy only): a tilt of the eyes, a softer jaw, a fang, a narrower
+highlight, shares of morphs baked into the rest shape, and new morphs mixed from the imported ones.
 
 They keep the vertex morphs of the imported face working: a deformation is applied to the vertices AND to the morph offsets of
 the vertices it moves (rotated by the same local rotation), so a blink still closes the lids on each other, and the edits that
@@ -15,6 +16,9 @@ Spec (`[head.edit]`, every part switchable with `enabled = false`):
             eyes, the nose, the lips and the chin point, and at the neck and the back of the head)
   fang      {material, side, ...}   see `add_fang`
   highlight {material, scale_x}   narrow the largest highlight shape of each eye
+  lids, mouth   {rest, morph}   `bake_rest`: a share of a morph (the blink; a mouth shape) baked into the rest shape,
+            every morph of its panel compensated so that it still ends where it ended
+  blush     {rest, morph}   `fade_copy`: a decal that a morph pushes through the skin (a blush) shown faintly at rest
 """
 import numpy as np
 
@@ -230,3 +234,115 @@ def make_fang(skin, mouth_loop_ids, morph_names, cfg, teeth, mats):
         morphs[name] = arr
     return Mesh(str(cfg.get("name", "fang")), verts=V, faces=faces, uv=np.tile(corner_uv if corner_uv is not None else np.zeros(2), (6, 1)),
                 face_mat=np.array([0, 1]), mats=list(mats), weights=weights, normals=np.tile([0.0, -1.0, 0.0], (6, 1)), morphs=morphs)
+
+
+# ------------------------------------------------------------------------------------------------------- morph bakes
+def mix_morphs(pieces, name, mix, move=None):
+    """A new vertex morph `name` in every piece: the weighted sum of the piece's offsets of the morphs in `mix` ({morph:
+    weight}; a morph a piece does not have counts as zero), plus `move` ({piece name: (dx, dy, dz)}): that whole piece
+    moved rigidly (the eye highlights following a lowered lid). A piece none of them moves gets none. Returns the number
+    of pieces it is in."""
+    n = 0
+    for key, p in pieces.items():
+        acc = None
+        for m, w in mix.items():
+            off = p.morphs.get(m)
+            if off is not None:
+                acc = float(w) * off if acc is None else acc + float(w) * off
+        if move and key in move:
+            shift = np.broadcast_to(np.asarray(move[key], float), p.verts.shape)
+            acc = shift.copy() if acc is None else acc + shift
+        if acc is not None and np.abs(acc).max() > 0.0:
+            p.morphs[name] = acc
+            n += 1
+    return n
+
+
+def compensated_sides(pieces, morph, other, side_min=0.25):
+    """The sides (+1 = +x, -1) on which the morph `other` moves the vertices that `morph` moves: by the mean length of
+    its offsets on them, every side where that is at least `side_min` of the larger of the two (a wink closes one eye
+    and barely touches the other: only its own side counts; a half-closed lid moves both)."""
+    tot = {1.0: [0.0, 0], -1.0: [0.0, 0]}
+    for p in pieces.values():
+        b, o = p.morphs.get(morph), p.morphs.get(other)
+        if b is None or o is None:
+            continue
+        on = np.linalg.norm(b, axis=1) > 1e-9
+        for sg in (1.0, -1.0):
+            sel = on & (sg * p.verts[:, 0] > 0)
+            tot[sg][0] += float(np.linalg.norm(o[sel], axis=1).sum())
+            tot[sg][1] += int(sel.sum())
+    mean = {sg: (s / n if n else 0.0) for sg, (s, n) in tot.items()}
+    top = max(mean.values())
+    return [sg for sg in (1.0, -1.0) if top > 0.0 and mean[sg] >= side_min * top]
+
+
+def bake_rest(pieces, morph, share, compensate, side_min=0.25):
+    """Bake `share` (0..1) of the vertex morph `morph` into the rest shape of every piece: its vertices move by share
+    times its offsets and the morph keeps the rest of the way ((1 - share) times them), so at full weight it still ends
+    where it ended. Every morph in `compensate` gives back that share on each side where it moves the baked vertices
+    (`compensated_sides`): it loses share times the baked offsets on that side's vertices (those it did not move as
+    well), so it too ends where it ended (a half-closed lid, a smile's closed eyes, a wink's closed eye); on a side it
+    leaves alone the new rest stays (a wink's open eye keeps the heavier lid). Returns {morph: sides} of the compensated
+    morphs."""
+    share = float(share)
+    sides = {o: compensated_sides(pieces, morph, o, side_min) for o in compensate if o != morph}
+    for p in pieces.values():
+        b = p.morphs.get(morph)
+        if b is None:
+            continue
+        side = np.sign(p.verts[:, 0])
+        p.verts = p.verts + share * b
+        for o, sg in sides.items():
+            give = np.where(np.isin(side, sg)[:, None], share * b, 0.0)
+            if not (sg and np.abs(give).max() > 0.0):
+                continue
+            p.morphs[o] = (p.morphs[o] if o in p.morphs else np.zeros_like(b)) - give
+        p.morphs[morph] = (1.0 - share) * b
+    return {o: sg for o, sg in sides.items() if sg}
+
+
+def _painted(uv, alpha, samples=4):
+    """Whether the texture's alpha (h, w; v from the top) is above zero anywhere on a face with corner uv (k, 2; v up):
+    sampled at the corners and on a grid of points inside its fan."""
+    h, w = alpha.shape
+    t = np.linspace(0.0, 1.0, samples + 1)
+    a, b = np.meshgrid(t, t)
+    ok = a + b <= 1.0
+    a, b = a[ok], b[ok]
+    pts = [uv[0] + a[:, None] * (uv[j] - uv[0]) + b[:, None] * (uv[j + 1] - uv[0]) for j in range(1, len(uv) - 1)]
+    P = np.concatenate(pts, 0)
+    x = np.clip((P[:, 0] * w).astype(int), 0, w - 1)
+    y = np.clip(((1.0 - P[:, 1]) * h).astype(int), 0, h - 1)
+    return bool((alpha[y, x] > 0).any())
+
+
+def fade_copy(piece, morph, alpha=None):
+    """A copy of the faces of `piece` whose vertices the morph `morph` all moves, placed where that morph takes them: a
+    decal that the morph pushes out through the skin (a blush) is seen at rest through the copy, which its own material
+    makes faint. The copy carries every other morph of the piece as the original does, and `morph` reversed: at full
+    weight it sinks back to where the original rested (behind the skin) while the original comes out, so the morph still
+    ends where it ended. With the texture's `alpha` (h, w; v from the top) the faces whose painting is transparent all
+    over are left out (a renderer may still shade a transparent face). Returns a `pmx_take.Piece` (vertices renumbered,
+    `ids` the original indices) or None when the morph moves no whole (painted) face."""
+    from ..pmx_take import Piece
+    off = piece.morphs.get(morph)
+    if off is None:
+        return None
+    moved = np.linalg.norm(off, axis=1) > 1e-9
+    starts = np.cumsum([0] + [len(f) for f in piece.faces])
+    keep = [k for k, f in enumerate(piece.faces) if all(moved[int(i)] for i in f)
+            and (alpha is None or _painted(piece.uv[starts[k]:starts[k + 1]], alpha))]
+    if not keep:
+        return None
+    used = np.unique([int(i) for k in keep for i in piece.faces[k]])
+    local = np.full(len(piece.verts), -1, int)
+    local[used] = np.arange(len(used))
+    faces = [tuple(int(local[int(i)]) for i in piece.faces[k]) for k in keep]
+    corner = np.concatenate([piece.uv[starts[k]:starts[k + 1]] for k in keep], 0)
+    morphs = {n: o[used] for n, o in piece.morphs.items() if n != morph and np.abs(o[used]).max() > 0.0}
+    morphs[morph] = -off[used]
+    return Piece(list(piece.mats), piece.verts[used] + off[used], faces, corner, piece.normals[used],
+                 np.asarray(piece.face_mat)[keep] if len(piece.face_mat) else np.zeros(len(keep), int),
+                 {b: w[used] for b, w in piece.weights.items() if np.any(w[used] > 0)}, morphs,
+                 np.asarray(piece.ids)[used], np.asarray(piece.vert_uv)[used])

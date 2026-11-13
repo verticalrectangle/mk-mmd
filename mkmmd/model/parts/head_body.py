@@ -24,6 +24,8 @@ cap, generated from the parametric skull (head_shape) and starting exactly on th
 and what the hair is fitted to); a radial map of the closed shell (head_shell.RadialShape) stands in for the implicit head
 shape when the hairline, the ear anchors and the face outline are computed. Ears are generated on the shell.
 """
+from pathlib import Path
+
 import numpy as np
 
 from .. import pmx_take as TK
@@ -85,6 +87,155 @@ def _samples(img, uv):
     x = np.clip((uv[:, 0] * w).astype(int), 0, w - 1)
     y = np.clip((uv[:, 1] * h).astype(int), 0, h - 1)
     return img[y, x, :3].astype(float)
+
+
+def ring_index(n, faces, start):
+    """Edge rings of a mesh's vertices counted from the vertices `start` (0 there, 1 next to them ...; -1 where none
+    reaches)."""
+    nbr = [set() for _ in range(n)]
+    for f in faces:
+        for k in range(len(f)):
+            a, b = int(f[k]), int(f[(k + 1) % len(f)])
+            nbr[a].add(b)
+            nbr[b].add(a)
+    ring = np.full(n, -1)
+    front = [int(i) for i in start]
+    ring[front] = 0
+    r = 0
+    while front:
+        r += 1
+        nxt = [b for a in front for b in nbr[a] if ring[b] < 0]
+        nxt = list(dict.fromkeys(nxt))
+        ring[nxt] = r
+        front = nxt
+    return ring
+
+
+def surface_distance(verts, faces, start):
+    """Shortest distance along the mesh's edges from the vertices `start` to every vertex (inf where none reaches), and
+    the start vertex each one is nearest to (-1 where none reaches)."""
+    import heapq
+    n = len(verts)
+    nbr = [dict() for _ in range(n)]
+    for f in faces:
+        for k in range(len(f)):
+            a, b = int(f[k]), int(f[(k + 1) % len(f)])
+            d = float(np.linalg.norm(verts[a] - verts[b]))
+            nbr[a][b] = nbr[b][a] = d
+    dist, owner = np.full(n, np.inf), np.full(n, -1)
+    heap = [(0.0, int(i)) for i in start]
+    dist[[int(i) for i in start]] = 0.0
+    owner[[int(i) for i in start]] = [int(i) for i in start]
+    while heap:
+        d, a = heapq.heappop(heap)
+        if d > dist[a]:
+            continue
+        for b, e in nbr[a].items():
+            if d + e < dist[b]:
+                dist[b], owner[b] = d + e, owner[a]
+                heapq.heappush(heap, (d + e, b))
+    return dist, owner
+
+
+def _raster(shape, polys, values=None, window=None):
+    """Rasterise convex polygons (uv, v from the top) at texel centres into an image of `shape` (h, w), inside `window`
+    (x0, y0, x1, y1). Without `values`: a coverage mask (bool). With `values` (per polygon, (corners, c)): the values
+    interpolated over a fan of triangles at each texel, (h, w, c); where polygons overlap the one whose first channel is
+    smallest wins; inf where nothing lies."""
+    h, w = shape
+    x0, y0, x1, y1 = window or (0, 0, w, h)
+    if values is None:
+        out = np.zeros((y1 - y0, x1 - x0), bool)
+    else:
+        out = np.full((y1 - y0, x1 - x0, np.shape(values[0])[1]), np.inf)
+    for k, pts in enumerate(polys):
+        x, y = pts[:, 0] * w - x0, pts[:, 1] * h - y0
+        a0, a1 = int(max(np.floor(x.min()), 0)), int(min(np.ceil(x.max()), x1 - x0))
+        b0, b1 = int(max(np.floor(y.min()), 0)), int(min(np.ceil(y.max()), y1 - y0))
+        if a1 <= a0 or b1 <= b0:
+            continue
+        qx, qy = np.meshgrid(np.arange(a0, a1) + 0.5, np.arange(b0, b1) + 0.5)
+        for j in range(1, len(pts) - 1):                                      # a fan of triangles
+            ax, ay, bx, by, cx, cy = x[0], y[0], x[j], y[j], x[j + 1], y[j + 1]
+            det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+            if abs(det) < 1e-12:
+                continue
+            l1 = ((by - cy) * (qx - cx) + (cx - bx) * (qy - cy)) / det
+            l2 = ((cy - ay) * (qx - cx) + (ax - cx) * (qy - cy)) / det
+            l3 = 1.0 - l1 - l2
+            inside = (l1 >= -1e-9) & (l2 >= -1e-9) & (l3 >= -1e-9)
+            if values is None:
+                out[b0:b1, a0:a1] |= inside
+                continue
+            v = np.asarray(values[k], float)
+            val = l1[..., None] * v[0] + l2[..., None] * v[j] + l3[..., None] * v[j + 1]
+            cur = out[b0:b1, a0:a1]
+            win = inside & (val[..., 0] < cur[..., 0])
+            cur[win] = val[win]
+    return out
+
+
+def scalp_tint(img, uv_px, verts, faces, loop, other_polys, color, band=6, margin=3):
+    """The hairline band of an imported face shell turned into `color`, in a copy of the skin texture (RGBA uint8). Such
+    a shell is often painted in a tint of its source's hair along its outer boundary (where that hair began), fading
+    into the skin a few edge rings in; under other hair that tint shows through. Every texel of the skin's faces takes
+    `color` by a weight that is 1 on the boundary and fades smoothly to 0 at the distance (along the surface) of the
+    vertices `band` edge rings in, mixed into the texel with the source's tint taken out: its share of the line from the
+    skin there (the colour of the nearest vertex of that inner ring) to the tint (the median colour of the boundary). So
+    the boundary is `color`, the band fades into the skin as it is painted beyond the band, with no trace of the old
+    tint, and a piece of the skin the boundary does not reach keeps its colours. The `margin` texels round the faces
+    (not on another piece: `other_polys`) follow their neighbours, so filtering shows no old colour at the edge. `uv_px`
+    (n, 2) the skin's vertex uv with v from the top, `verts` (n, 3), `faces` its faces, `loop` the boundary's vertex
+    ids. Returns (image, skin colour (3,) 0..255: the inner ring's median)."""
+    out = np.array(img, copy=True)
+    h, w = out.shape[:2]
+    dist, _ = surface_distance(verts, faces, loop)
+    rings = ring_index(len(verts), faces, loop)
+    inner = np.nonzero(rings == min(band, rings.max()))[0]
+    reach = max(float(np.median(dist[inner])), 1e-6)
+    tint = np.median(_samples(out, uv_px[loop]), axis=0)
+    ring_cols = _samples(out, uv_px[inner])
+    skin = np.median(ring_cols, axis=0)
+    _, owner = surface_distance(verts, faces, inner)
+    row = np.full(len(verts), -1)
+    row[inner] = np.arange(len(inner))
+    skin_v = np.where((owner >= 0)[:, None], ring_cols[row[np.maximum(owner, 0)]], skin)
+    # the old tint is taken out a little beyond the band
+    far = 1.6 * reach
+    near = [f for f in faces if min(dist[int(i)] for i in f) < far]
+    if not near:
+        return out, skin
+    polys = [uv_px[list(f)] for f in near]
+    allp = np.concatenate(polys, 0) * [w, h]
+    win = (int(max(allp[:, 0].min() - margin - 1, 0)), int(max(allp[:, 1].min() - margin - 1, 0)),
+           int(min(allp[:, 0].max() + margin + 2, w)), int(min(allp[:, 1].max() + margin + 2, h)))
+    R = _raster((h, w), polys, [np.column_stack([dist[list(f)], skin_v[list(f)]]) for f in near], win)
+    own = np.isfinite(R[..., 0])
+    keep = own | (_raster((h, w), other_polys, window=win) & ~own)
+    # the margin takes its nearest neighbour's values
+    for _ in range(margin):
+        for sl_to, sl_from in (((slice(1, None),), (slice(None, -1),)), ((slice(None, -1),), (slice(1, None),)),
+                               ((slice(None), slice(1, None)), (slice(None), slice(None, -1))),
+                               ((slice(None), slice(None, -1)), (slice(None), slice(1, None)))):
+            src = R[sl_from]
+            dst = R[sl_to]
+            take = (src[..., 0] < dst[..., 0]) & ~keep[sl_to]
+            dst[take] = src[take]
+    gy, gx = np.nonzero(np.isfinite(R[..., 0]) & (R[..., 0] < far))
+    d = R[gy, gx, 0]
+    # the new colour: 1 on the boundary, 0 at the reach
+    wt = 1.0 - HE.smooth3(d / reach)
+    # the old tint's removal, fading out by `far`
+    out_w = 1.0 - HE.smooth3((d - 0.5 * reach) / (far - 0.5 * reach))
+    base = R[gy, gx, 1:]
+    gy, gx = gy + win[1], gx + win[0]
+    rgb = out[gy, gx, :3].astype(float)
+    axis = tint[None] - base
+    a = np.clip(((rgb - base) * axis).sum(1) / np.maximum((axis * axis).sum(1), 1e-6), 0.0, 1.0)
+    plain = rgb - (out_w * a)[:, None] * axis                                # the old tint taken out
+    new = plain * (1.0 - wt[:, None]) + TK.hex_rgb(color) * 255.0 * wt[:, None]
+    out[gy, gx, :3] = np.clip(new + 0.5, 0, 255).astype(np.uint8)
+    return out, skin
 
 
 def _normals(V, faces):
@@ -175,6 +326,8 @@ def build(ctx):
     pieces = {n: tk.piece([n]) for n in names}
     skin = pieces[skin_name]
     sk_mat = tk.materials[skin_name]
+    panel_of = {m.name: m.panel for m in tk.morphs if m.kind == "vertex"}
+    mixed = _mix_morphs(pieces, cfg.get("morphs") or (), panel_of)
 
     # ---- boundary loops of the skin shell (head-local)
     V = skin.verts - pivot
@@ -206,6 +359,11 @@ def build(ctx):
         HE.soften_jaw(skin, ez, float(V[neck[1]][:, 2].mean() + pivot[2]), float(centre[1] + pivot[1]), ed["jaw"])
     if edit_on("highlight") and ed["highlight"].get("material") in pieces:
         HE.narrow_highlight(pieces[ed["highlight"]["material"]], float(ed["highlight"].get("scale_x", 0.8)))
+    for key, default in (("lids", "まばたき"), ("mouth", "口角下げ")):
+        if edit_on(key):
+            _bake(ctx, pieces, ed[key], default, panel_of, key)
+    if edit_on("move"):
+        _move(pieces, ed["move"])
     V = skin.verts - pivot                                                       # the edited skin (the loops keep their vertex ids)
     turn = np.unwrap(CP.azimuth(V[outer[1]], centre))
     if abs(abs(turn[-1] - turn[0]) - 2 * np.pi) > 1.2:
@@ -223,14 +381,17 @@ def build(ctx):
     n_all = len(all_loc)
 
     # ---- generated colour patches, painted into a free corner of the skin texture: a flat colour for the ears and a gradient for the
-    # cap that starts in the colours the shell ends in (so the seam does not show) and relaxes to their mean at the crown
+    # cap that starts in the colours the shell ends in (so the seam does not show) and relaxes to their mean at the
+    # crown, or to [head.take.scalp] crown; with [head.take.scalp] color the shell's own hairline band is tinted first
+    # (scalp_tint)
     uv_px = np.stack([skin.vert_uv[:, 0], 1.0 - skin.vert_uv[:, 1]], -1)       # v from the top
     cp = dict(width=96, rows=16, pad=0.35)
     cp.update(tc.get("patch") or {})
+    sc = tc.get("scalp") or {}
     patch = {}
 
     def paint(img):
-        polys = []
+        polys, own = [], []
         for name, pm in pieces.items():
             tx = tk.materials[name].texture
             if tx is not None and tx.read_bytes() == sk_mat.texture.read_bytes():
@@ -238,8 +399,14 @@ def build(ctx):
                 for fc in pm.faces:
                     q = pm.uv[c:c + len(fc)]
                     polys.append(np.stack([q[:, 0], 1.0 - q[:, 1]], -1))
+                    own.append(name == skin_name)
                     c += len(fc)
         out = np.array(img, copy=True)
+        skin_col = None
+        if sc.get("color"):
+            others = [p for p, o in zip(polys, own) if not o]
+            out, skin_col = scalp_tint(out, uv_px, skin.verts, skin.faces, outer[1], others, sc["color"],
+                                       int(sc.get("band", 6)))
         h, w = out.shape[:2]
         res = min(256, w, h)
         cell = w // res
@@ -248,8 +415,9 @@ def build(ctx):
         (cx, cy), (gx, gy) = free_blocks(uv_occupancy(polys, res), [(4, 4), gsize])
         loop_cols = _samples(out, uv_px[outer[1]])
         col = loop_cols.mean(0)
+        flat = col if skin_col is None else skin_col                             # a tinted hairline: the ears stay skin
         x0, y0 = cx * cell + cell // 2, cy * cell + cell // 2
-        out[y0:y0 + 3 * cell, x0:x0 + 3 * cell, :3] = np.clip(col + 0.5, 0, 255).astype(np.uint8)
+        out[y0:y0 + 3 * cell, x0:x0 + 3 * cell, :3] = np.clip(flat + 0.5, 0, 255).astype(np.uint8)
         out[y0:y0 + 3 * cell, x0:x0 + 3 * cell, 3] = 255
         patch["flat"] = np.array([(x0 + 1.5 * cell) / w, 1.0 - (y0 + 1.5 * cell) / h])
         th = np.linspace(-np.pi - cp["pad"], np.pi + cp["pad"], wpx)
@@ -259,7 +427,8 @@ def build(ctx):
         tt = np.linspace(0.0, 1.0, hpx)[:, None, None]
         wg = np.clip(tt / 0.6, 0.0, 1.0)
         wg = wg * wg * (3.0 - 2.0 * wg)
-        grad = edge_col[None] * (1 - wg) + col[None, None, :] * wg
+        top = TK.hex_rgb(sc["crown"]) * 255.0 if sc.get("crown") else col
+        grad = edge_col[None] * (1 - wg) + top[None, None, :] * wg
         X1, Y1 = gx * cell, gy * cell
         out[Y1:Y1 + hpx, X1:X1 + wpx, :3] = np.clip(grad + 0.5, 0, 255).astype(np.uint8)
         out[Y1:Y1 + hpx, X1:X1 + wpx, 3] = 255
@@ -270,6 +439,10 @@ def build(ctx):
     if edit_on("pupil"):
         rules += list(ed["pupil"].get("rules") or [])
     mats = TK.part_materials(tk, ctx, names, recolor=rules, hooks={str(sk_mat.texture): paint} if sk_mat.texture else None)
+    for name, over in (tc.get("material") or {}).items():                    # [head.take.material.<name>] overrides
+        if name not in mats:
+            raise ValueError(f"[head.take.material.{name}]: not a face material (have {names})")
+        mats[name] = override(mats[name], over, f"[head.take.material.{name}]")
 
     # ---- the face mesh: the imported skin + the cap
     faces = list(skin.faces) + cap_faces
@@ -330,7 +503,7 @@ def build(ctx):
     # ---- the other face materials, one mesh each
     meshes = [face_mesh]
     extra_mats = []
-    vertex_morphs = [m.name for m in tk.morphs if m.kind == "vertex"]
+    vertex_morphs = list(panel_of)
     for name in names:
         if name == skin_name:
             continue
@@ -344,11 +517,150 @@ def build(ctx):
             meshes.append(HE.make_fang(skin, mouth[0][1], vertex_morphs, fc, m, [white_name, line_name]))
             extra_mats += [_glow_material(white_name, "fang", ctx.save_png("white_sphere", TX.white_sphere())),
                            _flat_material(line_name, "fang outline", str(fc.get("outline", "#b9566b")))]
+    if edit_on("blush"):
+        rest_meshes, rest_mats = _blush_rest(ctx, tk, pieces, skin, mats, ed["blush"], panel_of)
+        meshes += rest_meshes
+        extra_mats += rest_mats
     meshes.append(ears)
 
     info = _published(ctx, H, tk, tc, rshape, frame, pivot, nc, nt, ear_info, shell_V, shell_T, holes, V)
-    declared = [Morph(m.name, m.panel, m.name_en) for m in tk.morphs if m.kind == "vertex"]
+    declared = [Morph(m.name, m.panel, m.name_en) for m in tk.morphs if m.kind == "vertex"] + mixed
     return Part("head", meshes=meshes, materials=[mats[n] for n in names] + extra_mats, bones=[], morphs=declared, info=info)
+
+
+def _mix_morphs(pieces, defs, panel_of):
+    """[[head.morphs]]: new vertex morphs mixed from the imported ones (head_edit.mix_morphs), each {name, en, panel,
+    mix = {morph: weight}, move = {material: [dx, dy, dz]}}; they join `panel_of` (so a bake compensates them like the
+    others). Returns their part.Morph declarations."""
+    out = []
+    for d in defs:
+        name, mix, move = str(d.get("name") or ""), dict(d.get("mix") or {}), dict(d.get("move") or {})
+        bad = [k for k in mix if k not in panel_of] + [k for k in move if k not in pieces]
+        if not name or not (mix or move) or bad or name in panel_of:
+            raise ValueError(f"[[head.morphs]] {name!r}: needs a new name and a mix of the face's vertex morphs and/or "
+                             f"moves of its materials (unknown: {bad}; morphs: {sorted(panel_of)}; "
+                             f"materials: {sorted(pieces)})")
+        HE.mix_morphs(pieces, name, mix, move)
+        panel = str(d.get("panel", "other"))
+        panel_of[name] = panel
+        out.append(Morph(name, panel, str(d.get("en", ""))))
+    return out
+
+
+def _bake(ctx, pieces, cfg, default, panel_of, key):
+    """[head.edit.lids] / [head.edit.mouth] {rest, morph}: `rest` of the morph baked into the rest shape, every morph of
+    its panel compensated (head_edit.bake_rest)."""
+    morph, share = str(cfg.get("morph", default)), float(cfg.get("rest", 0.0))
+    if morph not in panel_of:
+        raise ValueError(f"[head.edit.{key}] morph {morph!r} is not a vertex morph of the face "
+                         f"(have {sorted(panel_of)})")
+    if not 0.0 <= share < 1.0:
+        raise ValueError(f"[head.edit.{key}] rest = {share}: a share from 0 to below 1")
+    if share > 0.0:
+        comp = [n for n, p in panel_of.items() if p == panel_of[morph] and n != morph]
+        done = HE.bake_rest(pieces, morph, share, comp)
+        ctx.log(f"{morph} baked in at {share:g}; compensated: "
+                + ", ".join(f"{k} ({'+'.join('LR'[s < 0] for s in v)})" for k, v in done.items()))
+
+
+def _move(pieces, cfg):
+    """[head.edit.move] {material = [dx, dy, dz]}: whole materials moved rigidly at rest (the eye highlights lowered
+    under heavier lids); their morph offsets stay, so every morph still moves them as it did."""
+    for name, vec in cfg.items():
+        if name == "enabled":
+            continue
+        if name not in pieces:
+            raise ValueError(f"[head.edit.move] {name!r}: not a face material (have {sorted(pieces)})")
+        pieces[name].verts = pieces[name].verts + np.asarray(vec, float).reshape(1, 3)
+
+
+def override(mat, over, where):
+    """A copy of the part.Material `mat` with the fields in `over` replaced (lists become tuples); an unknown field is
+    an error. `[head.take.material.<name>] self_shadow = false`: the material takes no cast shadow (the eyes' whites).
+    """
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(mat)}
+    bad = [k for k in over if k not in fields or k == "name"]
+    if bad:
+        raise ValueError(f"{where}: {bad} are not material fields (have {sorted(fields - {'name'})})")
+    return dataclasses.replace(mat, **{k: tuple(v) if isinstance(v, list) else v for k, v in over.items()})
+
+
+def decal_weights(verts, faces, behind, feather=0.0, middle=1.0):
+    """Per vertex of a decal mesh (a fade copy): 1 inside, fading smoothly to 0 over `feather` metres (along its
+    surface) toward its open edges and toward its vertices in `behind` (where it passes behind the skin: a hard edge
+    otherwise), times `middle` over the middle third of its width (x), easing back to 1 over the next sixth on each side
+    (the nose between the cheeks)."""
+    n = len(verts)
+    w = np.ones(n)
+    if feather > 0.0:
+        count = {}
+        for f in faces:
+            for k in range(len(f)):
+                e = tuple(sorted((int(f[k]), int(f[(k + 1) % len(f)]))))
+                count[e] = count.get(e, 0) + 1
+        edge = {i for e, c in count.items() if c == 1 for i in e} | {int(i) for i in np.nonzero(behind)[0]}
+        if edge:
+            d, _ = surface_distance(verts, faces, sorted(edge))
+            w *= HE.smooth3(np.where(np.isfinite(d), d, feather) / feather)
+    if middle != 1.0 and n:
+        x = verts[:, 0]
+        mid, width = 0.5 * (x.min() + x.max()), max(float(np.ptp(x)), 1e-9)
+        t = (np.abs(x - mid) - width / 6.0) / (width / 6.0)
+        w *= middle + (1.0 - middle) * HE.smooth3(t)
+    return w
+
+
+def _blush_rest(ctx, tk, pieces, skin, mats, cfg, panel_of):
+    """[head.edit.blush] {rest, morph, material, feather, middle}: a faint copy of what the morph (照れ) pushes through
+    the skin, shown at rest (head_edit.fade_copy), in a copy of its material `rest` as opaque, without its sphere map
+    (an additive sphere brightens the transparent texels round the painted blush into a pale band); faces painted
+    transparent all over are left out. With `feather` / `middle` the copy gets its own texture, its alpha times
+    `decal_weights` (a soft lower edge where the decal meets the skin; less over the nose). Returns (meshes, materials).
+    """
+    import dataclasses
+    morph, share = str(cfg.get("morph", "照れ")), float(cfg.get("rest", 0.0))
+    feather, middle = float(cfg.get("feather", 0.0)), float(cfg.get("middle", 1.0))
+    if morph not in panel_of:
+        raise ValueError(f"[head.edit.blush] morph {morph!r} is not a vertex morph of the face "
+                         f"(have {sorted(panel_of)})")
+    if not 0.0 <= share <= 1.0 or not 0.0 <= middle <= 1.0 or feather < 0.0:
+        raise ValueError(f"[head.edit.blush] rest = {share}, middle = {middle}: shares from 0 to 1; "
+                         f"feather = {feather} >= 0")
+    meshes, out = [], []
+    if share <= 0.0:
+        return meshes, out
+    for name, pm in pieces.items():
+        tex = tk.materials[name].texture
+        if morph not in pm.morphs:
+            continue
+        cp = HE.fade_copy(pm, morph, None if tex is None else TK._image(tex)[..., 3])
+        if cp is None:
+            continue
+        mat_name = str(cfg.get("material", f"{morph}常")) + ("" if not out else str(len(out) + 1))
+        src = mats[name]
+        texture = src.texture
+        if (feather > 0.0 or middle < 1.0) and texture:
+            behind = np.array([(HE.front_y(skin, float(p[0]), float(p[2])) or -1.0) < float(p[1]) + 0.0001
+                               for p in cp.verts])
+            wv = decal_weights(cp.verts, cp.faces, behind, feather, middle)
+            img = np.array(TK._image(ctx.tex_dir / texture), copy=True)
+            h, w = img.shape[:2]
+            starts = np.cumsum([0] + [len(f) for f in cp.faces])
+            polys = [np.stack([cp.uv[starts[k]:starts[k + 1], 0], 1.0 - cp.uv[starts[k]:starts[k + 1], 1]], -1)
+                     for k in range(len(cp.faces))]
+            R = _raster((h, w), polys, [wv[list(f)][:, None] for f in cp.faces])[..., 0]
+            hit = np.isfinite(R)
+            img[..., 3] = np.where(hit, np.clip(img[..., 3] * np.where(hit, R, 1.0) + 0.5, 0, 255), img[..., 3])
+            texture = ctx.save_png(f"{Path(texture).stem}_rest", img.astype(np.uint8))
+        out.append(dataclasses.replace(src, name=mat_name, name_en=f"{src.name_en or name} at rest", texture=texture,
+                                       diffuse=tuple(src.diffuse[:3]) + (float(src.diffuse[3]) * share,),
+                                       sphere="", sphere_mode="none", alpha_blend=True, edge=False, drop_shadow=False,
+                                       self_shadow_map=False))
+        meshes.append(Mesh(f"{name}_rest", verts=cp.verts, faces=cp.faces, uv=cp.uv,
+                           face_mat=np.zeros(len(cp.faces), int), mats=[mat_name], weights=cp.weights,
+                           normals=cp.normals, morphs=cp.morphs))
+    return meshes, out
 
 
 def _glow_material(name, name_en, sphere):

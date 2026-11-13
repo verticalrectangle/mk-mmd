@@ -35,7 +35,8 @@ PAINT = {"strands": 0.10, "lines": 5, "line": 0.22, "edge": 0.30, "edge_width": 
          "root": 0.12, "tip": 0.14, "sheen": 0.85, "sheen_width": 1.0, "glow": 0.30, "tooth": 0.012, "hard": 0.0,
          "under": 0.84, "cap": 0.80, "bands": [], "tips": {"colour": None, "length": 0.06, "strength": 0.85},
          "ramp": [[0.0, "shadow:base:0.5"], [0.22, "base"], [0.62, "base:tip:0.4"], [1.0, "tip"]]}
-BAND = {"drop": 0.10, "width": 0.015, "colour": "shadow", "strength": 0.6, "tooth": 0.012}
+BAND = {"drop": 0.10, "width": 0.015, "colour": "shadow", "strength": 0.6, "tooth": 0.012, "fall": 0.0,
+        "turn": [0.0, 180.0]}
 ROOT_SHADE = 0.02               # metres from the root over which `root` fades
 TIP_SHADE = 0.04                # metres before the point over which `tip` grows
 HEAD_R = 0.15                   # metres: the radius the sheen's teeth are counted round
@@ -160,13 +161,17 @@ def _edge(t, hard):
 
 
 class Sheen:
-    """A band round the head at height `z`, `width` its half thickness in metres, toothed above and below (a tooth
-    `tooth` metres wide round a head of HEAD_R), its height and its strength wandering as it goes round; `glow` a soft
-    halo round it. The crown's sheen is one, a toothed shade under it another. Every lock that crosses it paints its
-    piece of the same band (`on`), so the band runs unbroken over locks that lie side by side."""
+    """A band round the head at height `z` in front (`fall` metres lower round the sides and the back: it comes down
+    between `turn` degrees round from the front, as a band under a hat or across a fringe and round at ear height),
+    `width` its half thickness in metres, toothed above and below (a tooth `tooth` metres wide round a head of HEAD_R),
+    its height and its strength wandering as it goes round; `glow` a soft halo round it. With `tooth` 0 it is a plain
+    soft band: straight, even, fading to nothing `width` above and below its middle. The crown's sheen is one, a
+    toothed shade under it another. Every lock that crosses it paints its piece of the same band (`on`), so the band
+    runs unbroken over locks that lie side by side."""
 
-    def __init__(self, z, width, tooth, glow, rng):
-        self.z, self.hw, self.glow = float(z), float(width), float(glow)
+    def __init__(self, z, width, tooth, glow, rng, fall=0.0, turn=(0.0, 180.0)):
+        self.z, self.hw, self.glow, self.fall = float(z), float(width), float(glow), float(fall)
+        self.turn = tuple(np.radians(float(x)) for x in turn)
         self.grid = np.linspace(-np.pi, np.pi, 2049)
 
         def table(waves):                                   # smooth noise in -1 .. 1 that closes round the head
@@ -174,21 +179,34 @@ class Sheen:
             amp, ph = rng.uniform(0.3, 1.0, waves) / np.sqrt(k), rng.uniform(0.0, 2.0 * np.pi, waves)
             return np.sin(np.multiply.outer(self.grid, k) + ph) @ amp / amp.sum()
         self.wander, self.uneven, self.ragged = table(7), table(11), table(23)
-        self.teeth = max(int(round(2.0 * np.pi * HEAD_R / max(float(tooth), 1e-3))), 3)
+        self.plain = float(tooth) <= 0.0
+        self.teeth = 0 if self.plain else max(int(round(2.0 * np.pi * HEAD_R / max(float(tooth), 1e-3))), 3)
         self.shift = rng.uniform(0.0, 1.0, 2)
+
+    def at(self, around):
+        """The band's middle height at angles round the head `around` (radians)."""
+        th = (np.asarray(around, float) + np.pi) % (2.0 * np.pi) - np.pi
+        a, b = self.turn
+        z = self.z - self.fall * _sm((np.abs(th) - a) / max(b - a, 1e-6))
+        return z if self.plain else z + 0.35 * self.hw * np.interp(th, self.grid, self.wander)
 
     def on(self, z, around, hard):
         """(the band, its heart, its glow, its strength there), each 0 .. 1 and shaped as `z`: at heights `z` and
         angles round the head `around` (radians)."""
         th = (np.asarray(around, float) + np.pi) % (2.0 * np.pi) - np.pi
-        turn = th / (2.0 * np.pi)
-        ragged = np.interp(th, self.grid, self.ragged)
-        up = np.abs(2.0 * ((turn * self.teeth + 0.8 * ragged + self.shift[0]) % 1.0) - 1.0)
-        down = np.abs(2.0 * ((turn * round(1.7 * self.teeth) + 1.3 * ragged + self.shift[1]) % 1.0) - 1.0)
-        dz = np.asarray(z, float) - (self.z + 0.35 * self.hw * np.interp(th, self.grid, self.wander))
-        d = np.where(dz >= 0.0, dz / (self.hw * (0.35 + 0.65 * up)), -dz / (self.hw * (0.25 + 0.45 * down)))
+        dz = np.asarray(z, float) - self.at(th)
+        if self.plain:
+            d = np.abs(dz) / self.hw
+            strength = np.ones_like(d)
+        else:
+            turn = th / (2.0 * np.pi)
+            ragged = np.interp(th, self.grid, self.ragged)
+            up = np.abs(2.0 * ((turn * self.teeth + 0.8 * ragged + self.shift[0]) % 1.0) - 1.0)
+            down = np.abs(2.0 * ((turn * round(1.7 * self.teeth) + 1.3 * ragged + self.shift[1]) % 1.0) - 1.0)
+            d = np.where(dz >= 0.0, dz / (self.hw * (0.35 + 0.65 * up)), -dz / (self.hw * (0.25 + 0.45 * down)))
+            strength = 0.65 + 0.35 * np.interp(th, self.grid, self.uneven)
         glow = self.glow * np.exp(-(dz / (1.6 * self.hw)) ** 2) * (1.0 - hard)
-        return _edge(1.0 - d, hard), _edge(1.0 - d / 0.5, hard), glow, 0.65 + 0.35 * np.interp(th, self.grid, self.uneven)
+        return _edge(1.0 - d, hard), _edge(1.0 - d / 0.5, hard), glow, strength
 
 
 def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=None, under=False, bands=(), ends=True):

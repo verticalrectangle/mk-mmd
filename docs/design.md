@@ -359,7 +359,7 @@ it; MMD has the PMX's own chains and fold shapes.
 `leg_ik`, `toe_ik`, `leg_ik_parent`, `leg_d`, `knee_d`, `ankle_d`, `toe_ex`, `waist_cancel`. `required` ones (head, arms, legs ...)
 are listed under `missing_required` when a character lacks them. **Semantic morphs** (`morphs`): `blink`, `wink_l`, `wink_r`,
 `wink2_l`, `wink2_r`, `smile_eyes`, `a`, `i`, `u`, `e`, `o`, `a2`, `n`, `cheerful`, `serious`, `troubled`, `angry`, `sad`,
-`surprised`, `brow_up`, `brow_down`, `jito`, `calm`, `hau`, `star_eyes`, `heart_eyes`, `pupils_small`, `mouth_smile`,
+`surprised`, `brow_up`, `brow_down`, `jito`, `calm`, `sleepy`, `hau`, `star_eyes`, `heart_eyes`, `pupils_small`, `mouth_smile`,
 `mouth_down`, `mouth_wide`, `omega`, `tongue`, `blush`, `tears`, `pale` (each found by the PMX names a model commonly uses).
 
 ## Prop card
@@ -1866,8 +1866,8 @@ all of the turn (they spot where she faced, [Body](#body)).
 
 | Key | Meaning |
 |---|---|
-| `blink` | `{per_min = 15, seed = 0, extra = [[t, dur], ...]}`: natural blinks at a mean interval of 60 / `per_min` seconds (±45 %, at least 1.2 s apart, drawn from `seed`), each 0.157 s (no key sets the duration of the natural ones); `extra` adds blinks of the given duration at chosen times |
-| `lids` | 0..1, the lids' base lowering: a floor under the `blink` morph, eased in over the settle and open while a gaze event holds the head away and during a glance (default 0) |
+| `blink` | `{per_min = 15, seed = 0, dur = 0.157, extra = [[t, dur], ...]}`: natural blinks at a mean interval of 60 / `per_min` seconds (±45 %, at least 1.2 s apart, drawn from `seed`), each `dur` seconds long, as the blinks that follow a gaze event and a glance are (0.3 and more: the slow blinks of someone half asleep); `extra` adds blinks of the given duration at chosen times |
+| `lids` | 0..1, the lids' base lowering: a floor under the `blink` morph, eased in over the settle and open while a gaze event holds the head away and during a glance (default 0). Or keys `[[t, value], ...]`, eased between them as `lean`'s are and held before the first and after the last: heavy lids that sink in a doze and open again at a start |
 | `expressions` | `[{morph, keys = [[t, value], ...]}]`: a morph's value over time, Bezier between the keys. `morph` is a semantic name (rig.json `morphs`) or the model's own, of any kind (a group or material morph through the bound sliders, see [Cast](#cast)); the stage raises when the model has no such morph. An expression on the `blink` morph replaces the blinks, and lip sync replaces an expression on a vowel morph |
 | `sing` | lip sync, below |
 | `twitch` | `[{bones, family, t, deg = 14, axis = [1, 0, 0], dur = 0.22}]`: a quick flick (out to `deg`, back past rest by a quarter of it, home) about an axis in the armature's frame. `bones` lists semantic or Blender names, `family` (`"ears"`, `"tail"`) takes the top bone of every chain of that family by its name; `t` is required |
@@ -4367,8 +4367,8 @@ it and the plate's guitarist and her mirror image echo in eras and veggies on ei
 `kind = "mandala"` lays concentric rings of copies about a `center` on its `back`: copies of the figure (`objects`, cut out of
 the picture as a collage cuts it and drawn as its `fill`), of sprites (pictures with alpha: photos of real butterflies, clovers
 and flowers from the asset registry) or of stickers drawn in palette colours (flat ones: a clover, a flower, a heart, a star,
-a butterfly; and two kits drawn with a pen's ink line: a moon, a rabbit, a carrot and dango; a daisy, a cassette, a guitar
-pedal and cherries).
+a butterfly; and three kits drawn with a pen's ink line: a moon, a rabbit, a carrot and dango; a daisy, a cassette, a
+guitar pedal and cherries; a book, a teacup and a potion).
 Every copy is a sticker: with a thick white `edge` (grown round it and rounded where it bends in, as a die cut is) and a drop
 `shadow` it is cut out and laid on the page. Each ring turns its own way (every other ring the other way), steps on the hits
 (`times` or a `lane`, as a collage steps; a list of `back`, `fill` or shape `colors` is read at the step plus the copy), with a
@@ -6008,6 +6008,21 @@ their nearest partly transparent layer over the opaque casters and the product o
 `shadow_mode: "rays"` traces ray queries toward the light instead of the maps: converged soft shadows, as EEVEE's
 jittered shadows and Cycles draw them.
 
+Of a material's own settings mkr reads its render method (DITHERED, BLENDED), `use_backface_culling`,
+`show_transparent_back`, `use_transparent_shadow`, its pass index and thickness mode (without nodes, its viewport
+colour, metallic, roughness and specular too), and the bake's `receives_shadow`: false for an MMD material whose PMX
+flag "self shadow" is off (mmd_tools' `mmd_material.enabled_self_shadow`). No light's shadow falls on such a material,
+as MMD draws it: the whites of an anime character's eyes lie behind the lids, whose shadow left them grey and grainy
+(a face's eye white, #ffffff in its texture, drawn #939092 with a grain of 4.3 levels; #f8f6f8 and 0.7 without the
+shadow). Its draws carry the flag (`render.wgsl` `Draw.flags`), the G-buffer keeps it per pixel, and every light's
+visibility there is 1 (`light.wgsl` `light_visibility`): shadow maps and rays, every kind of light, the lighting pass,
+the blended pass and Shader to RGB alike. It is lit and shaded as before and casts its shadow as before; fast GI's
+occlusion of the world's light and the traced reflections still reach it (no light casts them). Blender's engines do
+not honour the flag (neither EEVEE nor Cycles has a material that receives no shadow, and mmd_tools' shader ignores
+it), so Blender's frames keep that shadow. A bake from before the field reads as receiving, and a scene without such a
+material draws the same bytes as before (Crimson, jwin and the lab's sun, point, spot, area, `mmd_model` and
+`rt_rough` cases, with maps and rays, `RADV_DEBUG=nodcc`).
+
 Keyed and driven colours (a [breathing palette](#lights-and-the-look), a material morph's tint, a keyed lamp) are
 mkr's like any frame: every driven node socket value and every light's colour and strength come per frame from the
 bake. What is keyed where the bake holds one value (a colour ramp's stops, a node's setting, a material's or a world's own
@@ -6089,9 +6104,10 @@ lost), times the split-sum albedo, faded out as the light's bounding sphere sink
 (`ltc_glossy: "eevee"`, measured on probes; `"mkr"` integrates true GGX). What still differs: EEVEE's shadow tracing is
 known by measurement only (`shadow_rule`: the default rule matches Crimson's frames and the MMD lab cases best; `"v2"`,
 fitted on EEVEE's probes, the lab's plates and square or disk lights), and its dithered alpha leaves per-pixel noise mkr
-reproduces only statistically. Her eyes are the largest share of what is left in the close-ups (5.0 levels over the
-eyes, mkr darker by 3.9): the eye white (白目) is the floor of a socket 2-3.5 cm deep, its walls the same material, the
-iris a lens floating 2 cm in front of it and the highlight 1-2 mm in front of that, all opaque but the iris's rim. Under
+reproduces only statistically; and on purpose, mkr leaves the lights' shadows off a material whose "self shadow" is
+off (above). Her eyes are the largest share of what is left in the close-ups (5.0 levels over the eyes, mkr darker by
+3.9): the eye white (白目) is the floor of a socket 2-3.5 cm deep, its walls the same material, the iris a lens
+floating 2 cm in front of it and the highlight 1-2 mm in front of that, all opaque but the iris's rim. Under
 the key light Cycles leaves that floor 4 % of its light, EEVEE 27 % and mkr 23 % (lab `mmd_model` face: the eye white
 0.83 times EEVEE's under the key, 0.91 under the fill, its unshadowed light within 0.3 %); jwin's eyes, the same
 model's sockets, are 0.86 times EEVEE's. Neither the casters' alpha, the normals, the levels the steps read nor the
@@ -6999,10 +7015,11 @@ tapering horns on the head bone: `[horns] at length base taper rise sweep curl i
 up, `inward` and toward her `back`, and turning toward her back along the horn by `twist` degrees; a flat `base` with
 `edge` (its narrow ends drawn to keels), `spin` (degrees its section turns about the horn) and `wind` (its middle line
 wound off the curve as the section turns, an open spiral) makes an antelope's twisted horn; `bands`, rings worn on
-them; `[colors.horns]`; `mkmmd/model/parts/horns.py`) and `bangles` (rings round a limb, an anklet or a
+them; `[colors.horns]`; `mkmmd/model/parts/horns.py`), `bangles` (rings round a limb, an anklet or a
 bracelet: `[bangles] rings = [{on, toward, at, width, thick, offset, color}, ...]`, each round the limb from the
 landmark `on` toward the landmark `toward`, following the skin's section there and carrying its weights;
-`[colors.bangles]`). The
+`[colors.bangles]`), `gown` (a long loose nightgown under a capelet, with full sleeves, ankle socks and flats, below)
+and `mob_cap` (a soft puffed cap on a band, below). The
 hair is combed in one of two hairdos (`[hair] style`: `clumps`, the bases'; `locks`,
 groups of locks laid from guides, partings and ties, any hairdo that can be written down the way it is combed, hair
 gathered to a tie and the tail or braid that hangs from it included: [hair_part.md](hair_part.md)). Pants and socks are
@@ -7056,6 +7073,130 @@ cloth (thin dark ribbons a fraction of a millimetre above it, with its weights: 
 pants; `[<part>.ink]`, materials 靴下線, ズボン線), and the sneakers' painted face outlines its rubber, stripes and
 laces. The hair keeps its hanging locks off every garment built before it (`[model] parts` order), so long hair rests
 on a sweater instead of inside it.
+
+**The gown** (`gown`, `mkmmd/model/parts/gown.py`) is composed from the other garments' pieces. Its body is rings round
+a vertical axis through her hips, each the convex section of her body without her arms plus ease, hanging from what is
+above it (it falls from her bust and shoulder blades, never follows her in at the waist: `waist` off her skin at
+least), at most `front_max` off her skin across her front and right hip between her hip joints and the bust (a guitar
+rests there), and below the bust a straight A-line out to an elliptic hem (`[gown.hem] above rx ry`) whose last
+`flare_height` flares `flare` more. Its folds are a seeded field (`fold_field`): `folds` irregular gathers start under
+the yoke's seam (`fold_seam` deep crest to hollow, easing to `fold_hip`), some running to the hem, the rest fading out
+round her hips, and `waves` broad waves open to `fold_hem` at the hem; the field has no mean round any height, so the
+stripes (`[gown.stripes] count share`, painted in one picture round the gown with the folds shaded softly in their
+hollows, none on the plain yoke) run straight down the cloth. The yoke is her skin from the neckline (a ring round the
+base of her neck in a tilted plane) to the seam, offset and relaxed; a frill stands at the neckline. The capelet is
+drawn as it hangs with her arms lowered to `hang` degrees (the lab's arms_down): in each half plane round her neck the
+outer convex hull of yoke, gown and sleeves lowered with her arms, from the neckline down to a level edge `drop` below
+her shoulder joints, `stand` off them, with shallow irregular radial folds and a wavering edge; it takes the weights of
+her skin there and is carried back onto her raised arms by inverse linear blend skinning (`gown.lowered`, the shoulder
+helper's grant included), so at rest it rides on her A-posed arms with a web between arm and chest, and whenever her
+arms come down it is the soft cone it was drawn as; one frill hangs from its edge, a satin bow (`outfit_geo.bow_ex`)
+sits at the collarbone with its tails laid on it. The sleeves are the sweater's (`sweater.sleeve`, its chains,
+colliders, helpers), with long soft folds, no chain on the last `[gown.chains] free` of the forearm (the bag does not
+flap on a fast hand), their bags lying on capsules the size of the gown's body (group 12; the bags ignore her own
+colliders, which stand off her arms into the bag); the wrist band is the sweater's cuff and its frill (`cuff_frill`)
+lies along her hand at `angle` degrees, draped over the back of her hand and the base of her thumb where it would go
+in. The skirt swings on a ring of tied chains (`outfit_rig.Rig.ring`, family `skirt`, `[gown.skirt] columns rows`). A
+lining (her covered skin 1 mm out, wearing the gown's picture on her body and the sleeves' cloth on her arms) shows
+cloth wherever the pieces part. Ankle socks are `socks.socks`, the flats `outfit_legs.shoes` with `strap.enabled =
+false` (no strap, buckle or bow) and a low `collar` line, the sole's colour only under the foot. Colours
+`[colors.gown]` (`ground`, `stripe`, `robe`, `trim`, `bow`, `sock`, `shoe`, each with its `_shadow`, and `sole`);
+every cloth matte, toon shade = its shadow swatch over its colour (`[gown.toon] edge soft`: horizontal faces stay
+lit), outline a dark shade of the shadow. A character hides the skin it covers with `[body.pmx.hide]` (groups, `neck_z`
+under the collar, `wrist_back` inside the band, `leg_z` above the knees). Materials ガウン, ケープ, ガウン袖, ガウンフリル,
+ガウンリボン, ガウン裏, ケープ裏, ソックス, フラット靴, フラット靴底. For a strumming forearm (8 strokes a second) give
+the `sleeve` family the capsules' own size and heavy damping in the show (`[sim.<cast>.params.sleeve] radius = 1`,
+`zeta = 1`); in MMD the sleeve chains' own PMX settings are `outfit_rig.PHYSICS["sleeve"]`.
+
+| Table | Keys and defaults (metres x S; degrees; counts) |
+|---|---|
+| `[gown.neck]` | `drop` 0.013, `tilt` 15, `ease` 0.0028, `frill` 0.015, `pleat` 0.01, `depth` 0.0018, `flare` 0.0035 |
+| `[gown.yoke]` | `seam` 0.05, `ease` 0.005, `relax` 10 |
+| `[gown.body]` | `ease_front` 0.016, `ease_side` 0.012, `ease_back` 0.014, `taper` 0.1, `waist` 0.033, `front_max` 0.049, `folds` 18, `run` 0.5, `waves` 10, `vary` 0.35, `fold_seam` 0.009, `fold_hip` 0.004, `fold_hem` 0.015, `step` 0.01, `gap` 0.003 |
+| `[gown.hem]` | `above` 0.0585, `rx` 0.378, `ry` 0.34, `power` 1, `flare` 0.019, `flare_height` 0.1, `thick` 0.0025 |
+| `[gown.frill]` | `height` 0.05, `pleat` 0.022, `depth` 0.006, `flare` 0.012 |
+| `[gown.stripes]` | `count` 28, `share` 0.3, `line` 0.01, `line_width` 0.004, `shade` 0.8 |
+| `[gown.capelet]` | `drop` 0.113, `hang` 75, `columns` 160, `rows` 22, `stand` 0.01, `rim` 0.003, `collar` 0.025, `folds` 7, `fold_depth` 0.0032, `fold_from` 0.05, `waver` 0.0032, `thick` 0.003, `smooth` 0.035, `frill` 0.023, `pleat` 0.014, `depth` 0.003, `flare` 0.006 |
+| `[gown.bow]` | `width` 0.088, `ribbon` 0.0176, `knot` 0.0126, `tails` 0.076, `at` 0.022, `lift` 0.003 |
+| `[gown.sleeve]` | sweater.sleeve's keys (`ease` a table along the arm, 0 shoulder .. 1 wrist band: [[0, 0.008], [0.3, 0.012], [0.55, 0.022], [0.87, 0.038], [0.95, 0.03], [1, 0.016]]; `sag` 0.01, `puff` 0, `pleats` 12, `pleat_depth` 0.0025, `gather` 0.05, `elbow_fold` 0, `elbow_at` [-0.012, 0.012], `start_depth` 0.006, `underarm` 0.02) and `start` 0, `folds` 7, `fold_depth` 0.004 |
+| `[gown.cuff]` | `band` 0.015, `past` 0, `offset` 0.004, `thick` 0.003, `rib` 0.006, `rib_depth` 0.0004, `frill` 0.028, `angle` 30, `pleat` 0.01, `depth` 0.0022, `margin` 0.002 |
+| `[gown.chains]` | `enabled` true, `upper` 4, `fore` 3, `radius` 0.02, `gap` 0.03, `peak` 1, `free` 0.25 |
+| `[gown.skirt]` | `enabled` true, `columns` 16, `rows` 5, `from` 0, `root` 0.02, `radius` 0.04, `follow` 0 |
+| `[gown.colliders]` | `enabled` true, `step` 0.04, `inset` 0.003 |
+| `[gown.helpers]` | `elbow` 0.5, `shoulder` 0.5, `peak` 0.8 |
+| `[gown.lining]` | `enabled` true, `off` 0.001, `cuff` 0.004 |
+| `[gown.socks]` | socks.socks' table (its `ink` always off): `top` 0.033, `snug` 0.002, `rise` 0.052, `loose` 0.003, `roll` 0.0035, `relax` 6, `gap` 0.0015 |
+| `[gown.shoes]` | outfit_legs.shoes' `cfg` (`shoe`: every key of outfit_legs `DEFAULTS["shoe"]`); the gown's defaults switch `strap`, `buckle` and `bow` off and lower the top line (`collar.az` [0, 52, 70, 90, 110, 135, 180], `collar.h` [-0.04, -0.04, -0.036, -0.032, -0.028, -0.024, -0.02] metres over the ankle joint) |
+| `[gown.toon]` | `edge` 0.72, `soft` 0.18 |
+| `[gown]` | `seed` 5 |
+
+Every size is metres x S (S = head_tip.z / 1.7, 0.793 on the bases: 0.050 is 40 mm on them).
+
+**The mob cap** (`mob_cap`, `mkmmd/model/parts/mob_cap.py`): a soft puffed cap on a band. The band's lower edge is a
+tilted ring, `[mob_cap] edge` metres above the middle of her eyes (the eyeballs' centres, which no lid edit moves) at
+her front and `drop` lower at her back; `band` high, `thick`, its outer side bulging `bulge` between its rounded edges
+(a folded cloth band, not a ring of card), its lower edge rolled under, `gap` off what it is fitted over: at every
+height the convex hull of the section of the head's skin and of every part built before the cap but the body (list the
+cap after `hair` and it hugs the hair, bridging the dips between locks as a taut ribbon does). A pleated frill hangs
+under the band (`[mob_cap.frill] depth pleats amp flare`, every pleat `margin` off the skin or hair, measured as the
+nearest distance). The crown (`[mob_cap.crown]`) is gathered into the band's top with `pleats` soft pleats
+(`pleat_depth`, gone `reach` of the way up; under its roll they fold in and out, not up and down, so the roll's lower
+edge stays smooth over the band) and bulges like a muffin top: its widest line `rim` above the band's top, its highest
+point `top` above the top of the skull, its top flattened by `flat`. It slouches toward `lean_toward` (degrees round
+from her front toward her left): it leans `lean` degrees, more toward its top, and sags there: `overhang` past the band
+on the far side and `slump` more toward `lean_toward`, its roll hanging `hang` under the band's top edge on the far
+side and `droop` more toward `lean_toward` (sized meridian by meridian on the plain shape, then measured again with the
+pleats on). A seeded unevenness of at most `wobble` keeps it from reading as a lathe shape. A gold crescent
+(`[mob_cap.moon]`: two circular arcs, the outer `size` across, the inner cutting it so that its middle is `width`
+wide, horns ending in rounds; a plate `thick` thick with its edges rounded `round`) is pinned on the puff's outward
+face `at` degrees round from her front, its centre `lift` above the lowest point of the roll there; its horns point
+toward her left (+x) and turn `tilt` degrees up, so seen from her front it opens toward the right of the picture, its
+back toward the middle of the cap. It is bent only as much as the cloth under it curves (round the cap and up it,
+never twisted) and lies `proud` off it; the crown's pleats and unevenness are smoothed out under it. A satin bow
+(`[mob_cap.bow]`) lies on the band at `at` degrees (negative: toward her right), under the roll: `span` wide, two full
+loops `loop` = [long, high, thick] with a soft fold down their middle, a `knot`, two tails `tails` long laid on the
+band and over the frill. Everything rides the head bone (`bone`, 頭) with no physics of its own. Colours
+`[colors.mob_cap]`: `cloth`, `cloth_shadow`, `cloth_light` (the crown), `trim`, `trim_shadow` (band and frill), `line`
+(a line round the band, `line` wide, its middle `line_at` above the band's lower edge so it shows under the overhang),
+`gold`, `gold_shadow`, `gold_light`, `bow`, `bow_shadow`; each toon shade is the shadow colour over the base colour,
+each outline a darker shade of the shadow's hue (`cloth_ink`, `trim_ink`, `gold_ink`, `bow_ink` set one). The band is
+painted in the crown's shade above its line. Materials 帽子 (crown), 帽子バンド, 帽子フリル, 帽子月, 帽子リボン; landmarks
+`cap_top`, `cap_moon`, `cap_bow`; `info` holds its measures (the band line, the frill's depth, the crown's top,
+overhang, droop and lean, the crescent's size, place and stand-off, the bow's width, the smallest gaps to what is
+under it).
+
+| Key (`[mob_cap]`, metres and degrees) | Default | What |
+|---|---|---|
+| `edge` | 0.065 | the band's lower edge at her front, above the middle of her eyes |
+| `drop` | 0.020 | the lower edge that much lower at her back (a tilted plane) |
+| `band` | 0.024 | band height, along the plane's normal |
+| `gap` | 0.002 | band (and crown) off the skull and the hair under it |
+| `thick` | 0.0025 | the band's cloth, rolled under at its lower edge |
+| `bulge` | 0.0015 | its outer side bulging between its rounded edges |
+| `line`, `line_at` | 0.005, 0.008 | the line round the band: width, its middle above the band's lower edge |
+| `frill.depth` | 0.016 | the frill under the band |
+| `frill.pleats`, `amp` | 44, 0.002 | soft pleats, their depth at the hem |
+| `frill.flare` | 0.005 | how far its hem stands out |
+| `frill.margin` | 0.002 | every pleat this far off the skin or hair (nearest distance) |
+| `crown.overhang` | 0.025 | bulge past the band, on the side away from `lean_toward` |
+| `crown.slump` | 0.008 | that much more toward `lean_toward` |
+| `crown.hang` | 0.003 | the roll's lowest point under the band's top edge, away from `lean_toward` |
+| `crown.droop` | 0.006 | that much lower toward `lean_toward` |
+| `crown.rim` | 0.014 | the widest line above the band's top |
+| `crown.top` | 0.060 | the highest point above the top of the skull |
+| `crown.flat` | 2.4 | the top's flatness (2: an elliptic profile) |
+| `crown.pleats`, `pleat_depth`, `reach` | 17, 0.004, 1/3 | the gathering into the band |
+| `crown.lean`, `lean_toward` | 12, 135 | the slouch: degrees, toward (135: her back-left) |
+| `crown.wobble` | 0.003 | seeded unevenness, at most |
+| `moon.at`, `lift` | 25, 0.022 | where: degrees toward her left, centre above the roll's lowest point |
+| `moon.size`, `width`, `thick`, `round` | 0.046, 0.0135, 0.006, 0.0015 | outer arc across, middle width, plate, edge round |
+| `moon.tilt` | 20 | its horns point toward her left (+x), turned this far up |
+| `moon.proud` | 0.0015 | its back off the cloth |
+| `bow.at` | -110 | on the band, degrees (negative: toward her right) |
+| `bow.span`, `loop`, `fold`, `knot` | 0.045, [0.018, 0.014, 0.005], 0.3, 0.008 | width, each loop long/high/thick, its fold, the knot |
+| `bow.tails`, `tail_width`, `splay` | 0.030, 0.008, 40 | two tails laid on the band and the frill |
+| `around`, `rings`, `bone` | 144, 56, 頭 | columns round the cap, rings up the crown, the bone it rides |
+
 `[body] bust` (metres, the mesh body) moves each breast's front forward as it is, keeping the donor's round shape; the
 flesh it grows follows the chest (`body_donor.chest_flesh`: the shoulder girdle's weights go to 上半身2 there), so the
 breasts keep their shape when the arms come down. `[body] bust_tip` moves each breast's tip that much more over a smaller

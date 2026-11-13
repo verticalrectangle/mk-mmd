@@ -484,11 +484,16 @@ def box_fit(P, axes, q=0.98, pad=0.0015):
 
 
 LOWER_LEG = ("col_calf", "col_shin", "col_shin_mid", "col_shin_low", "col_ankle")      # from the knee down (`tapered_chain`)
+CHEST_SPLIT = 0.6        # of the chest's height (chest bone to neck): the bust's box below it, the collarbones' above
 
 
 def fit_bodies(verts, G, land, head_verts, bone_names, head_hint=None):
     """The static colliders for an imported body, named like the procedural body's (col_head, col_neck, col_upper_body,
-    col_upper_body2, col_lower_body, col_shoulder_L/R, col_arm, col_forearm, col_hand, col_thigh, col_calf .. col_ankle (`LOWER_LEG`: the tapered lower leg, a stack of capsules on the knee bone), col_foot).
+    col_upper_body2, col_lower_body, col_shoulder_L/R, col_arm, col_forearm, col_hand, col_thigh, col_calf .. col_ankle
+    (`LOWER_LEG`: the tapered lower leg, a stack of capsules on the knee bone), col_foot), and col_collar: the chest is
+    two boxes, col_upper_body2 round the bust and col_collar above it, round the collarbones between the shoulders'
+    roots (one box round all of it stands 3 to 5 cm in front of the collarbones and of the chest beside them, where a
+    lock of hair or a strap lies; the shoulders' capsules are what she has there).
 
     verts, G   skin vertices (n, 3) and their region weights (`vertex_groups`); the dominant region owns a vertex
     land       landmarks (`landmarks`)
@@ -518,13 +523,15 @@ def fit_bodies(verts, G, land, head_verts, bone_names, head_hint=None):
     neck_v = V[own("neck")]
     r_neck = capsule_fit(neck_v, nk, hd, q=0.9) if len(neck_v) > 8 else 0.027
     keep(capsule("col_neck", "首", nk + np.array([0.0, 0.0, -0.004]), hd + np.array([0.0, 0.0, 0.012]), r_neck))
-    # torso: axis aligned boxes of the torso region between the bones' heights
+    # torso: axis aligned boxes of the torso region between the bones' heights, the chest in two (CHEST_SPLIT)
     T = V[own("torso")]
-    ub, ub2 = float(land["upper_body"][2]), float(land["upper_body2"][2])
+    ub, ub2, top = float(land["upper_body"][2]), float(land["upper_body2"][2]), float(land["neck"][2]) + 0.002
+    mid = ub2 + 0.004 + CHEST_SPLIT * (top - ub2 - 0.004)
+    inner = np.abs(T[:, 0]) <= 0.5 * (abs(land["shoulder.L"][0]) + abs(land["shoulder.R"][0])) + 0.006
     for name, bone, z0, z1 in (("col_lower_body", "下半身", T[:, 2].min() + 0.012, ub + 0.004),
                                ("col_upper_body", "上半身", ub + 0.004, ub2 + 0.004),
-                               ("col_upper_body2", "上半身2", ub2 + 0.004, float(land["neck"][2]) + 0.002)):
-        sel = (T[:, 2] >= z0) & (T[:, 2] <= z1)
+                               ("col_upper_body2", "上半身2", ub2 + 0.004, mid), ("col_collar", "上半身2", mid, top)):
+        sel = (T[:, 2] >= z0) & (T[:, 2] <= z1) & (inner if name == "col_collar" else True)
         if sel.sum() >= 12:
             c, half = box_fit(T[sel], np.eye(3))
             keep(box(name, bone, c, half))

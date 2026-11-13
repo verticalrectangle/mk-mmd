@@ -859,7 +859,7 @@ def knit_colliders(fit, c, rings, z_low, z_high, rig):
         mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo)
         k = int(np.argmax(half))                 # it lies along the wider way, as thick as the knit is the other way
         ext = np.zeros(3)
-        ext[k] = half[k] - half[1 - k]
+        ext[k] = max(half[k] - half[1 - k], 0.001 * S)       # (2 mm at least: a capsule of no length is no PMX capsule)
         at = np.array([mid[0], mid[1], float(z)])
         bone = next((b for z_b, b in bones if z >= z_b), "下半身")
         out.append(rig.shell(f"col_sweater_{i + 1}", bone, at - ext, at + ext, float(half[1 - k]) - cc["inset"] * S))

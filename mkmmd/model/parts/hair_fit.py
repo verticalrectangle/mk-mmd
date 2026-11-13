@@ -410,10 +410,14 @@ class Volume:
     `lift_phi` (width `lift_width`), stronger on the back of the crown (`lift_back`: 0 = all round, 1 = back only), so the
     hair rises over the skull instead of lying on it like a smooth dome. `nape` (metres, with `hairline(theta)` the
     hairline's polar angle) is the offset at the hairline behind the ears: the hull comes in to it over NAPE_RISE above
-    the hairline, as hair lies that is gathered at the back of the head (loose hair hangs from the widest part: None)."""
+    the hairline, as hair lies that is gathered at the back of the head (loose hair hangs from the widest part: None).
+    `band` = (z, fall, off, ease) is the line a cap or hat is fitted over the hair at: a tilted ring round the head at
+    height z in front, `fall` metres lower at the back. Above it the hull stands at most `off` off the skin (thin and
+    smooth under the hat), below it the hull grows to its full volume over `ease` metres of height."""
 
     def __init__(self, skull, top=0.028, front=0.020, side=0.034, back=0.027, taper=0.55, taper_from=None,
-                 lift=0.0, lift_phi=np.radians(32.0), lift_width=np.radians(24.0), lift_back=0.5, nape=None, hairline=None):
+                 lift=0.0, lift_phi=np.radians(32.0), lift_width=np.radians(24.0), lift_back=0.5, nape=None,
+                 hairline=None, band=None):
         self.skull = skull
         self.top = top
         a_plus_c = 0.5 * (front + back)
@@ -426,6 +430,7 @@ class Volume:
         self.lift, self.lift_phi = float(lift), float(lift_phi)
         self.lift_width, self.lift_back = float(lift_width), float(lift_back)
         self.nape, self.hairline = (None, None) if nape is None or hairline is None else (float(nape), hairline)
+        self.band = None if band is None else tuple(float(x) for x in band)
         th = -np.pi + np.arange(skull.nth) * skull.dth
         ph = np.arange(skull.nphi) * skull.dphi
         h = skull.R * np.sin(ph)[:, None]                         # horizontal reach per (phi, theta)
@@ -452,6 +457,11 @@ class Volume:
         if self.lift:
             g = np.exp(-(((phi - self.lift_phi) / self.lift_width) ** 2))
             v = v + self.lift * g * (1.0 + self.lift_back * np.cos(theta - np.pi)) / (1.0 + self.lift_back)
+        if self.band is not None:
+            z0, fall, off, ease = self.band
+            z = self.skull.center[2] + self.skull.radius(dirs(theta, phi)) * np.cos(phi)
+            full = smoothstep((z0 - fall * 0.5 * (1.0 - np.cos(theta)) - z) / max(ease, 1e-6))
+            v = np.minimum(v, off) + (v - np.minimum(v, off)) * full
         p0 = np.maximum(peq, self.taper_from)
         v = v * (1.0 - self.taper * smoothstep((phi - p0) / 0.8))
         if self.nape is not None:

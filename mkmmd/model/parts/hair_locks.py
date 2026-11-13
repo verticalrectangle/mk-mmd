@@ -43,22 +43,37 @@ A group (defaults in GROUP):
     rhythm      [1.0, 0.6, ...]: the locks' widths in turn, as shares (wide and narrow locks side by side); a narrower
                 lock rides over its neighbours (RIDE)
     free        metres at a lock's end where it hangs on its own; `finger` its width there over its full width
-    thick       a free lock's thickness over its width; `cup` how far its edges bend toward the head (1 / m)
+    thick       a free lock's thickness over its width (never thinner than THICK's least, nor thicker than
+                `thick_max` metres); `cup` how far its edges bend toward the head (1 / m)
     root_w      a lock with a `width` of its own: its width at the root over `width`, easing to full over the first
                 `root_len` metres
-    tip_len     metres over which it tapers into its point; `tip_power` the point's sharpness (1 a straight wedge)
+    tip         how a lock ends: "point" (it tapers into its point over `tip_len` metres, `tip_power` the point's
+                sharpness: 1 a straight wedge) or "round" (rounded off over `tip_len`: a blunt cut with soft corners)
+    cut         a height (metres): every lock of the group ends there, level, as hair cut straight across: it lies
+                on the head, or falls, until it comes down to that height (it needs no `length`)
     lift        metres off the hull on its way over the head (negative: tucked under what lies over it): numbers
                 spread evenly from the root to where it leaves, or `[[metres from the root, metres off], ...]`,
                 level after the last. Hair that rises out of a parting: `[[0, -0.012], [0.025, 0.014], [0.1, 0.006]]`
     swell       times the `lift`; a guide's own makes the hair rise more at one end of a row than at the other
     stiff       how soon a falling lock turns to hang straight down (0 .. 1 per step of STEP)
-    tuck        pulls a falling lock in toward the neck; `flare` pushes it out; `lean` bends it toward her back
+    tuck        pulls a falling lock in toward the neck; `flare` pushes it out and `lean` bends it toward her back
+                (negative: forward) until it is past her shoulders, below them it hangs (SETTLE)
+    hug         metres: a falling lock is drawn in to this far off her face and head (its middle line) while it
+                passes them, down to her chin (HUG_FADE), as a side lock follows the cheek line; without it a lock
+                is only kept off them
+    mass        {enabled, thin, over}: the group hangs as one heavy mass (down to the shoulder joints never coming
+                closer to the neck's axis than where it left the head: hair hangs straight from the head's widest
+                part onto the shoulders): its locks have their own thickness and cup
+                from where they leave the head (not only at their free ends), thinning to `thin` of it at their ends
+                (over their last `over` metres; all the way down without it),
+                and each is as wide as the room to its neighbours all down its way, so the mass has no holes
     wave        {amp, length, phase, drift, grow, depth, start}: waves along the fall, `amp` metres to either side,
                 one wave every `length` metres, starting `start` below where the lock leaves the head, `grow` times
                 wider at the tip; neighbours are `drift` radians apart, so a group waves together; `depth` is the share
                 that goes in and out instead of sideways (1: a corkscrew)
     flip        {len, out}: the last `len` metres turn outward by `out` metres (negative: curl under)
-    jitter      {root, to (degrees), length, width (shares), lift (metres), phase (radians)}: how far a lock strays
+    jitter      {root, to (degrees), length, width (shares), lift, cut (metres), phase (radians)}: how far a lock
+                strays (`cut`: how far above or below the group's cut it ends)
     under       {enabled, length, width, lift}: a second, darker row half a place aside under this one, its locks
                 `length` and `width` times these and `lift` metres closer to the head: what shows between the locks
     chain       {bones, every, radius}: every `every`-th lock is a chain of `bones` bones from where it leaves the
@@ -72,10 +87,18 @@ A group (defaults in GROUP):
                 hair_braids' weave keys may be given here too (over PLAIT). Hair that ends in another colour
                 (`[hair.paint] tips`) plaits into it over the plait's last `tip_len` metres. A long braid is one
                 lock: `count = 1`, `family = "braid"`, a chain of its own
+    bow         {enabled, above, span, ribbon, shade, pinch, fan, tails}: each lock is tied `above` metres over its
+                end with a satin bow `span` metres wide (a band round the lock, a knot on its face, two loops across
+                it, two short tails `tails` long down its face; BOW_SHAPE its proportions; LOCK_BOW the defaults) in
+                `ribbon`, shaded to
+                `shade` (a darker `ribbon` without it). The lock is gathered to `pinch` of its width and thickness
+                at the tie and fans out to `fan` of its width below it; the bow rides the lock's chain
 
 Falling locks slide over the body and the garments built before the hair and face the way those face under them
-(hair_clear). `build_lock_hair` lays the scalp cap under it all (hair_head's) and returns the Piece hair.py merges;
-the texture is hair_paint's atlas, a cell per lock; the shading normals are hair_head's own."""
+(hair_clear); `[hair] cloth` (metres) is the room they leave over skin that no garment built before the hair covers,
+for clothes she wears that are built after it (or not at all, in a build of the hair alone). `build_lock_hair` lays
+the scalp cap under it all (hair_head's) and returns the Piece hair.py merges; the texture is hair_paint's atlas, a
+cell per lock; the shading normals are hair_head's own."""
 import numpy as np
 
 from . import cat_common as CC
@@ -85,7 +108,10 @@ from . import hair_braids_plait as PL
 from . import hair_braids_tex as TX
 from . import hair_head as HH
 from . import hair_paint as PT
+from . import hair_tex as TEX
 from .. import spec as SP
+from ...core import bonemap
+from ..part import Material
 from .hair_braids_path import Plan
 from .hair_clear import Surround
 from .hair_fit import angles, dirs, unit
@@ -105,8 +131,9 @@ REST = 0.010                    # a falling lock's middle line rests this far of
 NEAR = 0.035                    # within this of them a lock turns to face as they do (all the way at REST)
 TURN = 0.03                     # metres over which a lock's facing turns
 MIN_RADIUS = 0.003              # a chain's capsules are never thinner than this
+CLEAR = 0.005                   # ... and keep this clear of every static collider at rest where they can
 RIDE = 0.004                    # metres a lock of half the width rides over its full-width neighbours (`rhythm`)
-THICK = (0.0025, 0.010)         # a free lock is never thinner or thicker than this
+THICK = (0.0025, 0.010)         # a free lock is never thinner than this, nor thicker than `thick_max` (this by default)
 FLAT = 0.04                     # a lock's thickness where it lies with its neighbours, over its free thickness
 HAIR = 0.0002                   # metres between neighbours of a group where they lie in one surface (who is on top)
 OWN = 0.6                       # where a lock hangs free it is shaded this much less like the head (its own form shows)
@@ -116,17 +143,30 @@ PLAIT = {"strand_wid": 0.60, "strand_k": 7}     # hair_braids' weave keys a lock
 TIE = {"at": None, "out": None, "off": 0.006, "stem": 0.012}    # a tie of [hair.ties]: where it is, the way a tail
 #                                 leaves it, how far over the hull a tail's root stands, how far it goes before it falls
 THROAT = 0.010                  # hair gathered to a tie runs this far past where a tail's band sits, into it
+LOCK_BOW = {"enabled": False, "above": 0.050, "span": 0.055, "ribbon": "#d8344a", "shade": None, "pinch": 0.6,
+            "fan": 1.15, "tails": 0.024}
+BOW_SHAPE = {"knot": (0.15, 0.12, 0.10), "wing_h": 0.21, "wing_th": 0.12, "droop": 10.0, "band_h": 0.16,
+             "band_thick": 0.037, "tail_width": 0.14, "notch": 0.10, "spread": 12.0}   # a bow's parts over its span
+#                                 (hair_braids' bow: knot half sizes, a loop's half height and puff, ...), droop degrees
+FALL_MAX = 3.0                  # metres a lock of a group with a `cut` falls at most to come down to it
+SETTLE = 0.06                   # metres over the shoulder joints over which a falling lock's `lean` and `flare` fade
+TIE_EASE = 0.025                # metres over which a lock gathers into a bow's tie
+HANG = 0.04                     # metres after it leaves the head over which a lock of a `mass` takes its own thickness
+ROOM_ALONG = 24                 # points along a whole lock of a `mass` where the room to its neighbours is measured
+HUG_FADE = 0.03                 # metres above her chin over which a falling lock's `hug` lets go of her face
 GROUP = {
     "enabled": True, "family": "back", "count": 5, "layer": 0, "guides": [],
     "width": None, "overlap": 1.9, "rhythm": [1.0], "free": 0.08, "finger": 0.7, "thick": 0.12, "cup": 6.0,
-    "root_w": 0.3, "root_len": 0.03, "tip_len": 0.07, "tip_power": 1.3, "lift": [-0.012, 0.0], "stiff": 0.22,
-    "tuck": 0.15, "flare": 0.0, "lean": 0.0, "swell": 1.0,
+    "thick_max": THICK[1], "root_w": 0.3, "root_len": 0.03, "tip": "point", "tip_len": 0.07, "tip_power": 1.3,
+    "cut": None, "lift": [-0.012, 0.0], "stiff": 0.22, "tuck": 0.15, "flare": 0.0, "lean": 0.0, "swell": 1.0,
+    "hug": None, "mass": {"enabled": False, "thin": 1.0, "over": None},
     "wave": {"amp": 0.0, "length": 0.12, "phase": 0.0, "drift": 0.6, "grow": 0.5, "depth": 0.3, "start": 0.03},
     "flip": {"len": 0.0, "out": 0.0},
-    "jitter": {"root": 2.0, "to": 2.0, "length": 0.08, "width": 0.12, "lift": 0.001, "phase": 0.3},
+    "jitter": {"root": 2.0, "to": 2.0, "length": 0.08, "width": 0.12, "lift": 0.001, "phase": 0.3, "cut": 0.0},
     "under": {"enabled": False, "length": 1.06, "width": 1.15, "lift": -0.006},
     "chain": {"bones": 0, "every": 1, "radius": 0.010},
     "plait": {"enabled": False, "pitch": None, "start": None, "ties": "end"},
+    "bow": LOCK_BOW,
 }
 NUMBERS = ("width", "free", "finger", "thick", "cup", "root_w", "root_len", "tip_len", "tip_power", "stiff", "tuck",
            "flare", "lean", "swell")
@@ -135,7 +175,7 @@ FAMILIES = {"bangs": ("前髪", "bangs"), "side": ("横髪", "hair"), "back": ("
 SIDED = ("side", "braid")       # the families whose chains are named by the side they hang on (左 / 右)
 DEFAULTS = {**{k: HH.DEFAULTS[k] for k in ("volume", "ring", "cap", "k_outer", "bulge", "toon", "normal_mix", "edge_mix",
                                            "shade", "dynamic")},
-            "paint": PT.PAINT, "atlas": 2048, "partings": {}, "ties": {}, "locks": {}}
+            "paint": PT.PAINT, "atlas": 2048, "partings": {}, "ties": {}, "locks": {}, "cloth": 0.0}
 
 
 class HairdoError(ValueError):
@@ -195,20 +235,51 @@ def freedom(s, length, free):
     return smoothstep((np.asarray(s, float) - (length - 1.5 * free)) / (0.5 * free))
 
 
+def arm_bones(bones):
+    """The names of her arms' bones among `bones` (part Bones): the upper arms' and all that hang from them."""
+    sem = bonemap.build_map({b.name: b.name for b in bones})
+    out, kids = {sem[k] for k in ("arm.L", "arm.R") if k in sem}, {}
+    for b in bones:
+        kids.setdefault(b.parent, []).append(b.name)
+    stack = list(out)
+    while stack:
+        for k in kids.get(stack.pop(), []):
+            if k not in out:
+                out.add(k)
+                stack.append(k)
+    return out
+
+
+def cut_at(P, z):
+    """The path `P` up to where it first comes down to height `z`, ending exactly there (all of it when it never
+    does)."""
+    below = np.flatnonzero(P[:, 2] <= z)
+    if not len(below) or below[0] == 0:
+        return P
+    k = int(below[0])
+    t = (P[k - 1, 2] - z) / max(P[k - 1, 2] - P[k, 2], 1e-12)
+    return np.vstack([P[:k], P[k - 1] + t * (P[k] - P[k - 1])])
+
+
 class LockHair(HH.HeadHair):
     """The lock hairdo: `plan` lays every group's locks out (paths, shapes, chains), `build` meshes and paints them."""
     DEFAULTS = DEFAULTS
 
     def __init__(self, ctx, fit, cfg, rig, pal):
         super().__init__(ctx, fit, cfg, rig, pal)
-        self.surround = None                                # the body and the garments the falling locks keep off
+        self.surround = self.drape = None                   # the body and the garments the falling locks keep off
+        arms = [np.asarray(ctx.land[k], float) for k in ("arm.L", "arm.R") if k in getattr(ctx, "land", {})]
+        self.shoulder_z = float(np.mean([a[2] for a in arms])) if arms else None     # the shoulder joints' height
         self._statics = []                                  # the body's static colliders the chains must not overlap
         if self._body is not None:
-            self.surround = Surround(self._body[0].meshes, self._wear, self._body[1])
-            self._statics = [rb for rb in self._body[0].bodies if rb.mode == "static"]
+            bones = [b for p in getattr(ctx, "parts", {}).values() for b in p.bones]
+            self.surround = Surround(self._body[0].meshes, self._wear, self._body[1], cloth=float(self.cfg["cloth"]),
+                                     arms=arm_bones(bones))
+            self.drape = self.surround.drape()             # what a mass of hair lies on
+            self._statics = [rb for p in getattr(ctx, "parts", {}).values() for rb in p.bodies if rb.mode == "static"]
         self.atlas = PT.Atlas(int(self.cfg["atlas"]))
         self._cap_cell = None
-        self.more = ([], [])                                # meshes and materials beside the head hair's (the plaits')
+        self.more = ([], [])                                # meshes and materials beside the head hair's (plaits, bows)
         self.partings = {}                                  # [hair.partings]: name -> (directions along it, their arc)
         for name, pts in (self.cfg["partings"] or {}).items():
             if name == "hairline" or not isinstance(pts, list) or len(pts) < 2:
@@ -294,7 +365,7 @@ class LockHair(HH.HeadHair):
         return unit(spline(np.array([root, first, *rest]), CTRL))
 
     # ---------------------------------------------------------------- one lock's path
-    def hint(self, P):
+    def hint(self, P, mass=False):
         """The way a lock faces along its path P: out from the head's centre above it, level out from the axis through it
         below (a lock hanging down a back faces away from the back), and where it lies on the body or a garment the way
         that surface faces (flat on a shoulder, it faces up). The body's say fades in over TURN below the neck seam and
@@ -302,8 +373,8 @@ class LockHair(HH.HeadHair):
         c = self.skull.center
         axis = np.stack([np.full(len(P), c[0]), np.full(len(P), c[1]), np.minimum(P[:, 2], c[2])], -1)
         n = unit(P - axis)
-        if self.surround is not None:
-            d, out = self.surround.away(P)
+        if self.surround is not None:                       # a mass faces as the drape does: no fold turns it
+            d, out = (self.drape.over(P), self.drape.normal(P)) if mass else self.surround.away(P)
             w = smoothstep((NEAR - d) / (NEAR - REST)) * smoothstep((self.surround.z_seam - P[:, 2]) / TURN)
             n = unit(n * (1.0 - w)[:, None] + out * w[:, None])
         if len(n) >= 5:
@@ -344,10 +415,17 @@ class LockHair(HH.HeadHair):
         lie["whole"] = float(s[-1])
         return self.skull.point(D, self.lying(D, s if lie["line"] is None else self.away(D, lie["line"]), lie))
 
-    def fall(self, P, length, g):
+    def fall(self, P, length, g, cut=None):
         """`P` gone on for `length` metres as hair falls: its heading turns to straight down (`stiff` of the way each
-        step), pulled in by `tuck`, out by `flare` and back by `lean`; it stays off the head, and what it meets of the
-        body and the garments (`rest` off them: REST, more for a thick plait) it slides over."""
+        step), pulled in by `tuck`, out by `flare` and back by `lean` (those two until it is past her shoulders: they
+        fade out over SETTLE down to the shoulder joints, below them the hair hangs); `hug` draws it in to her face
+        while it passes it; it stays off the head, and what it meets of the body and the garments (`rest` off them:
+        REST, more for a thick plait) it slides over. With `cut` (a height) it falls until it comes down to it and
+        ends there, whatever its `length` (`P` itself is cut when it does)."""
+        if cut is not None:
+            if P[:, 2].min() <= cut:
+                return cut_at(P, cut)
+            length = FALL_MAX
         rest = float(g.get("rest", REST))
         n = int(round(length / STEP))
         if n < 1:
@@ -355,22 +433,42 @@ class LockHair(HH.HeadHair):
         c = self.skull.center
         p, h = P[-1], unit(P[-1] - P[-2])
         out = []
+        wall = None if self.drape is None else float(np.hypot(p[0] - self.drape.ax, p[1] - self.drape.ay))
         for _ in range(n):
             rxy = unit(np.array([p[0] - c[0], p[1] - c[1], 0.0]))
-            down = unit(np.array([0.0, g["lean"], -1.0]) + (g["flare"] - g["tuck"]) * rxy)
+            past = 1.0 if self.shoulder_z is None else smoothstep((p[2] - self.shoulder_z) / SETTLE)
+            down = unit(np.array([0.0, g["lean"] * past, -1.0]) + (g["flare"] * past - g["tuck"]) * rxy)
             h = unit(h + g["stiff"] * (down - h))
             q = self.skull.push_out(p + STEP * h, 0.008)
-            if self.surround is not None:
+            if g["hug"] is not None:                        # drawn in to the face as it passes it, down to the chin
+                near = float(smoothstep((q[2] - self.fit.chin[2]) / HUG_FADE))
+                off = float(self.skull.height_dist(q)) - float(g["hug"])
+                if near > 0.0 and off > 0.0:
+                    q = q - unit(q - c) * off * near
+            if self.drape is not None and g["mass"]["enabled"]:     # a mass lies on the drape, a column at a time
+                lay = self.drape.clear(q[None], rest)[0]
+                r = float(np.hypot(lay[0] - self.drape.ax, lay[1] - self.drape.ay))
+                if self.shoulder_z is not None and lay[2] > self.shoulder_z and r < wall:   # under the head it
+                    axis = np.array([self.drape.ax, self.drape.ay])
+                    lay[:2] = axis + (lay[:2] - axis) * (wall / max(r, 1e-9))
+                wall = max(wall, float(np.hypot(lay[0] - self.drape.ax, lay[1] - self.drape.ay)))   # hangs straight
+                if np.linalg.norm(lay - q) > 1e-9:
+                    q, h = lay, unit(lay - p)
+            elif self.surround is not None:
                 d, way = self.surround.away(q[None])
                 if d[0] < rest:
                     q = q + way[0] * (rest - d[0])
                     h = unit(q - p)                         # it goes on the way the surface turned it
             p = q
             out.append(p)
-        return np.vstack([P, np.array(out)])
+            if cut is not None and p[2] <= cut:
+                break
+        P = np.vstack([P, np.array(out)])
+        return P if cut is None else cut_at(P, cut)
 
-    def style(self, P, n_head, wave, flip, phase):
-        """The fallen part of `P` (its points from `n_head` on) waved and its end flipped."""
+    def style(self, P, n_head, wave, flip, phase, mass=False, rest=REST):
+        """The fallen part of `P` (its points from `n_head` on) waved and its end flipped (a mass's no closer than
+        `rest` to the drape)."""
         if len(P) - n_head < 3 or (wave["amp"] <= 0.0 and flip["out"] == 0.0):
             return P
         Q = P.copy()
@@ -378,7 +476,7 @@ class LockHair(HH.HeadHair):
         s = arclen(F)
         L = float(s[-1])
         T = unit(np.gradient(F, axis=0))
-        out = self.hint(F)
+        out = self.hint(F, mass)
         side = unit(np.cross(T, out))
         d = np.zeros_like(F)
         if wave["amp"] > 0.0:
@@ -389,6 +487,8 @@ class LockHair(HH.HeadHair):
             u = np.clip((s - (L - flip["len"])) / flip["len"], 0.0, 1.0)
             d += out * (flip["out"] * u * u)[:, None]
         Q[n_head - 1:] = self.skull.push_out(F + d, 0.006)
+        if mass and self.drape is not None:
+            Q[n_head - 1:] = self.drape.clear(Q[n_head - 1:], rest)
         return Q
 
     # ---------------------------------------------------------------- a group's locks
@@ -403,6 +503,14 @@ class LockHair(HH.HeadHair):
             raise HairdoError(f"{what}: guides = [{{root, to, length}}, ...] is required")
         if g["family"] not in FAMILIES:
             raise HairdoError(f"{what}: family {g['family']!r} is none of {', '.join(FAMILIES)}")
+        if g["tip"] not in ("point", "round"):
+            raise HairdoError(f"{what}: tip {g['tip']!r} is none of point, round")
+        cut = None if g["cut"] is None else float(g["cut"])
+        mass = bool(g["mass"]["enabled"])
+        bow = g["bow"] if g["bow"]["enabled"] else None
+        if bow is not None and (g["plait"]["enabled"] or not 0.0 < float(bow["above"]) < 0.5):
+            raise HairdoError(f"{what}: a bow is tied round a lock (not a plait) `above` metres over its end, "
+                              f"0 .. 0.5")
         tail, gathered = self.tied(guides, "root", what), self.tied(guides, "to", what)
         lengths = np.array([float(x.get("length", 0.0)) for x in guides])
         own = {k: np.array([float(x.get(k, g[k])) for x in guides]) for k in NUMBERS if g[k] is not None or
@@ -478,27 +586,32 @@ class LockHair(HH.HeadHair):
                     lie = {"lift": lift, "swell": num["swell"], "layer": int(g["layer"]), "line": line,
                            "lower": -g["under"]["lift"] if under else 0.0, "over": HAIR * (i % 3)}
                     head = self.on_head(C, lie)
-                rest = REST
+                rest = REST - (g["under"]["lift"] if g["under"]["enabled"] and not under else 0.0)  # over its row
                 if g["plait"]["enabled"]:               # a plait is thick: its middle line rests further off her
                     if "width" not in num:
                         raise HairdoError(f"{what}: a plait needs a `width`")
                     rest = max(REST, 0.5 * flat * num["width"] + 0.004)
+                own_cut = cut
+                if cut is not None and jit["cut"] > 0.0:            # a cut whose locks end a little apart
+                    own_cut = cut + float(jit["cut"]) * rng.uniform(-1.0, 1.0)
                 if gathered is None:
-                    P = self.fall(head, length, {**g, **num, "rest": rest})
+                    P = self.fall(head, length, {**g, **num, "rest": rest}, cut=own_cut)
                 else:                                   # it runs on into the tie, the way a tail leaves it
                     P = np.vstack([head, mouth + np.outer(np.linspace(0.0, gathered["stem"] + THROAT, 4)[1:],
                                                           gathered["out"])])
                 place = (i + shift) if n > 1 else 0.0       # the rows of a group wave together
                 phase = g["wave"]["phase"] + g["wave"]["drift"] * place + (0.0 if under else jit["phase"] * rng.uniform(-1.0, 1.0))
-                P = self.style(P, len(head), g["wave"], g["flip"], phase)
+                P = self.style(P, len(head), g["wave"], g["flip"], phase, mass, rest)
                 s_leave = float(arclen(P[:len(head)])[-1])
                 P = smooth_polyline(resample(P, max(int(arclen(P)[-1] / STEP) + 1, 6)), 1)
-                planned.append((P, s_leave, num, d_to, resample(head, ROOM), beat, rise, lie))
+                along = resample(P, ROOM_ALONG) if mass else resample(head, ROOM)      # where the room is measured
+                planned.append((P, s_leave, num, d_to, along, beat, rise, lie))
             for i, (P, s_leave, num, d_to, along, beat, rise, lie) in enumerate(planned):
                 wide = None
                 if "width" in num:
                     w = num["width"]
-                else:                                       # the room to its neighbours, all along its way on the head:
+                else:                                       # the room to its neighbours, all along its way on the head
+                    #                                         (on its whole way down, for a mass):
                     near = [np.linalg.norm(planned[q][0][None] - along[:, None], axis=2).min(1)  # to the nearest of theirs
                             for q in (i - 1, i + 1) if 0 <= q < len(planned)]
                     if not near:
@@ -510,31 +623,34 @@ class LockHair(HH.HeadHair):
                 L = float(arclen(P)[-1])
                 free = min(num["free"], 0.6 * L)
                 s = arclen(P)                               # where it hangs free it rises off the shared surface
-                P = P + self.hint(P) * (rise * freedom(s, L, free))[:, None]
-                thick = float(np.clip(num["thick"] * w * num["finger"], *THICK))
+                P = P + self.hint(P, mass) * (rise * freedom(s, L, free))[:, None]
+                thick = float(np.clip(num["thick"] * w * num["finger"], THICK[0], max(float(g["thick_max"]), THICK[0])))
                 if g["plait"]["enabled"]:
                     thick = flat * w
-                tip_start = float(np.clip(1.0 - num["tip_len"] / max(L, 1e-6), 0.15, 0.97))
-                if self.surround is not None and gathered is None and L - s_leave > 0.02:
+                tip_start = float(np.clip(1.0 - num["tip_len"] / max(L, 1e-6), 0.15, 0.97 if g["tip"] == "point" else
+                                          0.999))
+                if self.surround is not None and gathered is None and L - s_leave > 0.02 and not mass:
                     P = self.surround.keep_off(P, self.hint, w, thick, num["cup"], tip_start, HH.BODY_GAP,
-                                               first=max(int(s_leave / STEP) - 1, 1))
-                out.append(HH.Lock(f"{name}{'_u' if under else ''}{i}", P, w, thick, tip="point", tip_start=tip_start,
+                                               first=max(int(s_leave / STEP) - 1, 1), tip=g["tip"])
+                out.append(HH.Lock(f"{name}{'_u' if under else ''}{i}", P, w, thick, tip=g["tip"], tip_start=tip_start,
                                    tip_power=num["tip_power"], root_w=num["root_w"], curv=num["cup"],
                                    layer=int(g["layer"]), theta=float(angles(d_to)[0]), dark=under,
                                    extra={"s_leave": s_leave, "free": free, "finger": num["finger"], "lie": lie,
                                           "root_len": num["root_len"], "wide": wide, "group": name, "under": under,
-                                          "gathered": gathered is not None}))
+                                          "gathered": gathered is not None, "bow": None if under else bow,
+                                          "mass": dict(g["mass"]) if mass else None}))
         return out
 
     def clump(self, lk):
         """The lock's mesh: as wide as the room to its neighbours and paper-flat where it lies with them, every point
         of it in the group's surface (`lying`); `finger` of the width, its own thickness and its own `cup` where it
-        hangs free."""
+        hangs free. A lock of a `mass` has its own thickness and cup from where it leaves the head (taking it over
+        HANG), thinning toward its end, and is as wide as the room to its neighbours all down its way."""
         P = np.asarray(lk.path, float)
         s = arclen(P)
         L = float(s[-1])
         e = lk.extra
-        hint = self.hint(P)
+        hint = self.hint(P, e.get("mass") is not None)
         lie, c = e["lie"], self.skull.center
         loose = freedom(s, L, e["free"])
         on = (1.0 - loose) * (1.0 - smoothstep((s - (e["s_leave"] - 0.01)) / 0.03))    # 1 where it lies on the head
@@ -548,22 +664,51 @@ class LockHair(HH.HeadHair):
             D = unit(mid - c)
             x = np.full(len(mid), sp * L) if lie["line"] is None else self.away(D, lie["line"])
             return mid + m * (self.skull.point(D, self.lying(D, x, lie)) - mid)
+        wide, bow = e.get("wide"), e.get("bow")
+        thin = None if e.get("mass") is None else float(e["mass"]["thin"])
+        over = None if e.get("mass") is None or e["mass"]["over"] is None else float(e["mass"]["over"])
+        tie = None if bow is None else L - float(bow["above"])
 
         def free(sp):
             return freedom(np.asarray(sp, float) * L, L, e["free"])
-        wide = e.get("wide")
+
+        def own(sp):
+            """How much of its own form (thickness, cup) the lock has: where it hangs free, or (a mass) off the head."""
+            if thin is None:
+                return free(sp)
+            return np.maximum(free(sp), smoothstep((np.asarray(sp, float) * L - e["s_leave"]) / HANG))
+
+        def tied(sp, fan):
+            """What a bow's tie leaves of the lock's width (or thickness): drawn in to `pinch` over TIE_EASE above the
+            tie, out to `fan` over the first third below it (the tuft's round end tapers it after that)."""
+            if tie is None:
+                return 1.0
+            x, pinch = np.asarray(sp, float) * L, float(bow["pinch"])
+            above = 1.0 - (1.0 - pinch) * smoothstep((x - (tie - TIE_EASE)) / TIE_EASE)
+            below = pinch + (fan - pinch) * smoothstep((x - tie) / max(0.3 * (L - tie), 1e-6))
+            return np.where(x <= tie, above, below)
 
         def across(sp):
-            f = 1.0 - (1.0 - e["finger"]) * free(sp)
+            f = (1.0 - (1.0 - e["finger"]) * free(sp)) * tied(sp, float(bow["fan"]) if bow else 1.0)
             if wide is None:
                 return f
-            return f * np.interp(np.asarray(sp, float) * L, np.linspace(0.0, e["s_leave"], len(wide)), wide)
+            reach = L if thin is not None else e["s_leave"]
+            return f * np.interp(np.asarray(sp, float) * L, np.linspace(0.0, reach, len(wide)), wide)
+
+        def deep(sp):
+            f = (FLAT + (1.0 - FLAT) * own(sp)) * tied(sp, float(bow["pinch"]) if bow else 1.0)
+            if thin is None:
+                return f
+            x = np.asarray(sp, float) * L
+            down = np.clip((x - e["s_leave"]) / max(L - e["s_leave"], 1e-6), 0.0, 1.0) if over is None else \
+                np.clip((x - (L - over)) / max(over, 1e-6), 0.0, 1.0)
+            return f * (1.0 + (thin - 1.0) * down)
         return sweep(P, hint, lk.width, lk.thick, tip=lk.tip, tip_start=lk.tip_start, tip_power=lk.tip_power,
                      root_w=lk.root_w if wide is None else 1.0,
                      root_len=float(np.clip(e["root_len"] / max(L, 1e-6), 0.01, 0.5)), curv=lk.curv,
                      k_outer=int(self.cfg["k_outer"]) if lk.width >= 0.018 else 5, bulge=self.cfg["bulge"],
-                     ring_step=0.010, width_fn=across, thick_fn=lambda sp: FLAT + (1.0 - FLAT) * free(sp),
-                     curv_fn=free, place=place)
+                     ring_step=0.010 if tie is None else 0.005, width_fn=across, thick_fn=deep, curv_fn=own,
+                     place=place)
 
     def proxy_normals(self, P):
         """HeadHair's shading proxy with its axis going on down to the lowest hair: what hangs below the head is shaded
@@ -572,15 +717,16 @@ class LockHair(HH.HeadHair):
         return HH.shade_proxy(P, c, c[2] + self.cfg["shade"]["z_hi"], min(c[2] + self.cfg["shade"]["z_lo"], self.z_bot))
 
     def radii(self, lk, bones, s_root, radius):
-        """A chain's capsule radius per bone: `radius`, or what the room to the body's static colliders leaves at rest
-        (MIN_RADIUS at least): a capsule that overlaps one at rest is thrown out by physics."""
+        """A chain's capsule radius per bone: `radius`, or what the room to the static colliders of the parts built
+        before the hair leaves at rest, CLEAR kept (MIN_RADIUS at least): a capsule that overlaps one at rest is thrown
+        out by physics."""
         if not self._statics:
             return radius
         s = arclen(lk.path)
         sh = np.linspace(s_root, s[-1], bones + 1)
         pts = np.stack([np.interp(sh, s, lk.path[:, k]) for k in range(3)], -1)
         room = [CC.capsule_clearance(self._statics, pts[k], pts[k + 1], 0.0)[0] for k in range(bones)]
-        return np.clip(np.asarray(room) - 0.001, MIN_RADIUS, radius)
+        return np.clip(np.asarray(room) - CLEAR, MIN_RADIUS, radius)
 
     # ---------------------------------------------------------------- the whole hairdo
     def plan(self):
@@ -646,7 +792,10 @@ class LockHair(HH.HeadHair):
         V, faces, q, arc, side = split_shell(st)
         uv = lk.extra["cell"].uv(q, arc / max(st.length, 1e-9))
         w = {"頭": np.ones(len(V))} if chain is None else chain.weights(V)
-        mix = self.cfg["normal_mix"] * (1.0 - OWN * freedom(arc, st.length, lk.extra["free"]))
+        own = freedom(arc, st.length, lk.extra["free"])
+        if lk.extra.get("mass") is not None:                # a mass shows its strands' own form where it hangs
+            own = np.maximum(own, smoothstep((arc - lk.extra["s_leave"]) / HANG))
+        mix = self.cfg["normal_mix"] * (1.0 - OWN * own)
         acc.add(V, faces, uv, 0, weights=w, normals=shell_normals(V, faces, side, self.proxy_normals(V), mix))
         return st
 
@@ -658,12 +807,13 @@ class LockHair(HH.HeadHair):
         sheen = None
         if ring["enabled"]:
             sheen = PT.Sheen(self.z_top - ring["drop"], ring["width"] * look["sheen_width"], look["tooth"], look["glow"],
-                             self.ctx.rng_for("hair.paint.sheen"))
+                             self.ctx.rng_for("hair.paint.sheen"), fall=ring["fall"], turn=ring["turn"])
         bands = []
         for k, raw in enumerate(look["bands"]):
             bd = SP.merge(PT.BAND, raw)
             bands.append((PT.Sheen(self.z_top - bd["drop"], bd["width"], bd["tooth"], 0.0,
-                                   self.ctx.rng_for(f"hair.paint.band{k}")), PT.colour(self.pal, bd["colour"]), bd["strength"]))
+                                   self.ctx.rng_for(f"hair.paint.band{k}"), fall=bd["fall"], turn=bd["turn"]),
+                          PT.colour(self.pal, bd["colour"]), bd["strength"]))
         c = self.skull.center
         for lk in locks:
             cell = lk.extra["cell"]
@@ -724,23 +874,105 @@ class LockHair(HH.HeadHair):
         return [(b, mat, {"頭": np.ones(len(b.verts))} if chain is None else chain.weights(b.verts))
                 for b, mat in blocks], c
 
+    def bow(self, lk, st, chain):
+        """The bow tied round lock `lk` (`st` its mesh, from `clump`) `above` metres over its end: a band round the
+        gathered lock, a knot on its face, two loops across it drooping a little and two short tails down its face
+        (hair_braids_bow's pieces in BOW_SHAPE's proportions of `span`), every piece riding the lock's chain where it
+        is tied. Returns ([Block], {bone: weight} at the tie, info)."""
+        b, sh = lk.extra["bow"], BOW_SHAPE
+        span = float(b["span"])
+        R, n = st.R, st.rings
+        arcs = st.arc[:n * R:R]
+        P = np.asarray(lk.path, float)
+        s = arclen(P)
+        T, B, N = frames(P, self.hint(P, lk.extra.get("mass") is not None))
+
+        def at(x):
+            """(the middle of the lock's face-to-back, down it, across it, out of its face, its half width, half its
+            depth) where it is `x` metres from its root: its mesh's nearest ring measured in the path's frame."""
+            i, k = int(np.argmin(np.abs(arcs - x))), int(np.argmin(np.abs(s - x)))
+            d = st.verts[i * R:(i + 1) * R] - st.ctr[i * R]
+            t, a, f = T[k], B[k], N[k]
+            front, back = float((d @ f).max()), float((d @ f).min())
+            return st.ctr[i * R] + f * 0.5 * (front + back), t, a, f, float(np.abs(d @ a).max()), 0.5 * (front - back)
+        tie = st.length - float(b["above"])
+        O, t, a, f, half_w, half_d = at(tie)
+        kt, kw, kd = (x * span for x in sh["knot"])
+        blocks = [BOW.band_block(O, t, a, f, half_w + 0.0012, half_d + 0.0012, sh["band_h"] * span,
+                                 sh["band_thick"] * span)]
+        kc = O + f * (half_d + 0.0012 + 0.55 * kd)
+        blocks.append(BOW.knot_block(kc, t, f, kt, kw, kd))
+        droop = np.radians(sh["droop"])
+        for side in (1.0, -1.0):                            # the loops, across the lock, drooping toward its end
+            way = unit(np.cos(droop) * side * a + np.sin(droop) * t)
+            blocks.append(BOW.wing_block(kc + side * 0.6 * kw * a, way, unit(t - (t @ way) * way), f,
+                                         0.5 * span - 0.6 * kw, sh["wing_h"] * span, sh["wing_th"] * span))
+        length, notch = float(b["tails"]), sh["notch"] * span
+        rows = max(3, int(length / (1.8 * notch)) + 1)      # rows further apart than the V-cut, or the tail folds
+        for side in (1.0, -1.0):                            # the tails, down its face, parting a little
+            path = []
+            for u in np.linspace(0.0, 1.0, rows):
+                Q, _, qa, qf, _, qd = at(tie + 0.6 * kt + u * length)
+                lat = side * (0.25 * kw + np.tan(np.radians(sh["spread"])) * u * length)
+                path.append(Q + qa * lat + qf * (qd + 0.0015 + 0.001 * u))
+            blocks.append(BOW.tail_block(np.array(path), f, sh["tail_width"] * span, 0.03 * span, notch, w_end=1.1,
+                                         edge=0.4))
+        weights = {"頭": 1.0} if chain is None else {k: float(v[0]) for k, v in chain.weights(O[None]).items()}
+        V = np.vstack([bk.verts for bk in blocks])
+        info = {"group": lk.extra["group"], "lock": lk.name, "knot": [float(x) for x in kc],
+                "span": float(np.ptp(V @ a)), "above_end": float(b["above"]), "end_z": float(P[-1, 2])}
+        return blocks, weights, info
+
+    def tie_bows(self, bows):
+        """The bows' mesh (`hair_bow`, a material per ribbon colour: 結びリボン1, 2 ...) into `more`; `bows` is
+        [(lock, bow's (blocks, weights, info))]."""
+        colours, mats = {}, []
+        for lk, _ in bows:
+            b = lk.extra["bow"]
+            key = (str(b["ribbon"]), None if b["shade"] is None else str(b["shade"]))
+            if key in colours:
+                continue
+            rgb = TEX.srgb(key[0])
+            shade = 0.62 * rgb if key[1] is None else TEX.srgb(key[1])
+            k = len(colours) + 1
+            look = {"base": key[0], "shade": TEX.to_hex(shade), "sheen": TEX.to_hex(rgb + 0.45 * (1.0 - rgb))}
+            png = self.ctx.save_png(f"tie_ribbon{k}", TX.ribbon_texture(look, rng=self.ctx.rng_for(f"hair.bow{k}")))
+            toon = self.ctx.save_png(f"toon_tie_ribbon{k}", TEX.toon_ramp(tuple(np.clip(shade / np.maximum(rgb, 1e-3),
+                                                                                        0.3, 0.95))))
+            mats.append(Material(f"結びリボン{k}", name_en=f"tie ribbon {k}", diffuse=(1.0, 1.0, 1.0, 1.0),
+                                 specular=(0.26, 0.25, 0.31), shininess=24.0, ambient=(0.45, 0.45, 0.5), texture=png,
+                                 toon=toon, edge=True, edge_size=0.7,
+                                 edge_color=(*(float(x) for x in np.clip(0.8 * shade, 0.0, 1.0)), 1.0)))
+            colours[key] = len(mats) - 1
+        acc = MeshAccum("hair_bow", [m.name for m in mats])
+        for lk, (blocks, weights, info) in bows:
+            b = lk.extra["bow"]
+            mat = colours[(str(b["ribbon"]), None if b["shade"] is None else str(b["shade"]))]
+            for bk in blocks:
+                acc.add(bk.verts, bk.faces, bk.uv, mat, weights={k: np.full(len(bk.verts), v)
+                                                                   for k, v in weights.items()})
+        self.more = (self.more[0] + [acc.to_mesh()], self.more[1] + mats)
+        self.stats["bows"] = [info for _, (_, _, info) in bows]
+
     def build(self, acc):
-        """The cap and every lock meshed into `acc`, the plaits into a mesh of their own (`more`: meshes and materials
-        beside the head hair's). Returns the atlas picture."""
+        """The cap and every lock meshed into `acc`, the plaits and the bows into meshes of their own (`more`: meshes
+        and materials beside the head hair's). Returns the atlas picture."""
         planned = self.plan()
         locks = [lk for _, g, group in planned if not g["plait"]["enabled"] for lk in group]
         cells, (self._cap_cell,) = self.atlas.cells([(lk.width, float(arclen(lk.path)[-1])) for lk in locks], [CAP_PX])
         for lk, cell in zip(locks, cells):
             lk.extra["cell"] = cell
         self.cap(acc)
-        tips, woven = [], []
+        tips, woven, bows = [], [], []
         for name, g, group in planned:
             for lk in group:
                 chain = self.chains[lk.chain] if lk.chain else None
                 if g["plait"]["enabled"]:
                     woven.append(self.plait(lk, g, chain))
                     continue
-                self.emit(acc, lk, chain)
+                st = self.emit(acc, lk, chain)
+                if lk.extra["bow"] is not None:
+                    bows.append((lk, self.bow(lk, st, chain)))
                 if g["family"] == "bangs" and not lk.extra["under"]:
                     tips.append(float(lk.path[-1, 2]))
             self.stats[f"locks_{name}"] = len(group)
@@ -754,6 +986,8 @@ class LockHair(HH.HeadHair):
                 for b, mat, w in blocks:
                     braid.add(b.verts, b.faces, b.uv, mat, weights=w)
             self.more = ([braid.to_mesh()], [tex.hair, tex.ribbon])
+        if bows:
+            self.tie_bows(bows)
         self.stats["locks"] = len(locks) + len(woven)
         self.stats["low_z"] = float(self.z_bot)
         if tips:
@@ -762,9 +996,10 @@ class LockHair(HH.HeadHair):
 
 
 def build_lock_hair(ctx, fit, cfg, rig, pal):
-    """The lock hairdo -> Piece (mesh `hair_head` with material 髪, and `hair_braid` with 三つ編 and 髪リボン when a
-    group is plaited), its bones, bodies and joints in `rig`. It has no shadow decal under its fringe (the clumps'
-    straight fringe has one): a fringe that sweeps casts its own under the lights."""
+    """The lock hairdo -> Piece (mesh `hair_head` with material 髪, `hair_braid` with 三つ編 and 髪リボン when a group
+    is plaited, `hair_bow` with 結びリボン1.. when locks are tied with bows), its bones, bodies and joints in `rig`. It
+    has no shadow decal under its fringe (the clumps' straight fringe has one): a fringe that sweeps casts its own
+    under the lights."""
     try:
         hh = LockHair(ctx, fit, cfg, rig, pal)
         acc = MeshAccum("hair_head", [hh.mat])

@@ -106,6 +106,9 @@ def frames(P, N):
 
 
 # ---------------------------------------------------------------- widths
+ROUND_RINGS = 6                 # rings round a round tip's end (evenly by angle, so the end is a smooth half ellipse)
+
+
 def taper_factor(sp, kind="point", start=0.55, power=1.5):
     """Width multiplier along s' in [0, 1]: 1 until `start`, then to 0 at the tip.
     point: (1 - t)^power (power > 1 concave needle tips, 1 straight); round: a half ellipse; blunt: constant."""
@@ -118,6 +121,18 @@ def taper_factor(sp, kind="point", start=0.55, power=1.5):
     if kind == "blunt":
         return np.ones_like(sp)
     raise ValueError(f"unknown tip kind {kind!r}")
+
+
+def ring_places(rings, tip, tip_start):
+    """s' (0 .. 1) of a sweep's rings: `rings` evenly spaced (pointed tips end in a tip vertex at 1, the others in a
+    ring there); a round tip has ROUND_RINGS more, round its end at even angles from `tip_start` on, so a short round
+    end is round however long the clump is."""
+    if tip == "round":
+        a = np.arange(ROUND_RINGS) / ROUND_RINGS * 0.5 * np.pi
+        return np.concatenate([np.arange(rings) / rings * tip_start, tip_start + (1.0 - tip_start) * np.sin(a)])
+    if tip == "point":
+        return np.arange(rings) / rings
+    return np.linspace(0.0, 1.0, rings)
 
 
 @dataclass
@@ -154,11 +169,12 @@ def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, roo
     """Sweep a clump along the centreline P (m,3) with outward hint N.
 
     width, thick   full width / thickness (m) of the clump; width_fn(s') / thick_fn(s') -> multipliers (s' in 0..1)
-    tip            "point" (concave needle), "round" or "blunt" (flat cut, `tilt` slants it: fraction of the width)
+    tip            "point" (concave needle), "round" (a half ellipse from tip_start on, with rings of its own round
+                   it: ring_places) or "blunt" (flat cut, `tilt` slants it: fraction of the width)
     tip_start      where the taper starts (fraction of the length); tip_power the needle sharpness
     root_w         width multiplier at the very root, easing to 1 at root_len (fraction of the length)
     curv           lateral cupping (1/m): the edges bend towards the head; 0 = flat across; curv_fn(s') -> multiplier
-    rings          number of rings (default: one per ring_step metres, at least 7)
+    rings          number of rings (default: one per ring_step metres, at least 7; a round tip has ROUND_RINGS more)
     outer_frac     share of the thickness on the outer side of the centreline; bulge shapes the lens (< 1 = fuller)
     end_taper      blunt tips only: the width falls by this fraction over the last 15 % (rounded corners)
     place          place(points (R, 3) across a ring's middle surface, the ring's s') -> where they lie: a clump laid
@@ -169,8 +185,8 @@ def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, roo
         rings = max(7, int(round(L / ring_step)))
     pointed = tip in ("point", "round")
     # ring parameters: pointed tips end with a tip vertex at s' = 1, blunt ones with a ring at s' = 1
-    n_r = rings
-    sp = np.arange(n_r) / n_r if pointed else np.linspace(0.0, 1.0, n_r)
+    sp = ring_places(rings, tip, tip_start)
+    n_r = len(sp)
     s_abs = sp * L
     sa = arclen(P)
     Pc = np.stack([np.interp(s_abs, sa, P[:, k]) for k in range(3)], -1)

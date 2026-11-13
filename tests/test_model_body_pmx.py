@@ -151,6 +151,9 @@ def test_colliders_hug_and_mirror(part):
     assert head.shape == "sphere" and np.allclose(head.location, HEAD_SPHERE[:3]) and abs(head.size[0] - HEAD_SPHERE[3]) < 1e-9
     assert 0.02 < bodies["col_arm_L"].size[0] < 0.045 and 0.015 < bodies["col_forearm_L"].size[0] < 0.04
     assert 0.04 < bodies["col_thigh_L"].size[0] < 0.075 and 0.025 < bodies["col_shin_L"].size[0] < 0.05
+    bust, collar = bodies["col_upper_body2"], bodies["col_collar"]     # the chest in two boxes: the collar's front stands
+    assert collar.location[2] > bust.location[2]                       # behind the bust's, at the collarbones
+    assert (collar.location[1] - collar.size[1]) - (bust.location[1] - bust.size[1]) > 0.012
     m = part.meshes[0]
     V = np.asarray(m.verts)
     arm = bodies["col_arm_L"]

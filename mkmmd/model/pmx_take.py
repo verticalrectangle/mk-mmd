@@ -558,13 +558,62 @@ def _safe_stem(path):
     return s or "tex"
 
 
-def part_materials(tk, ctx, names=None, recolor=None, hooks=None, prefix=""):
-    """Part Materials for the kept materials `names` (default all): the texture, sphere and toon images are read from the PMX's
-    folder, edited by the `recolor` rules (pmx_recolor.recolor; rules and hooks are matched by the CONTENT of the source
-    file, since a PMX often lists one image twice), passed through `hooks` ({source path: fn(img) -> img}), written with
-    `ctx.save_png` (identical results are shared across calls and across parts) and referenced by file name.
-    Returns {name: part.Material}."""
+def hex_rgb(c):
+    """'#rrggbb' -> (3,) floats 0..1."""
+    c = str(c).lstrip("#")
+    return np.array([int(c[i:i + 2], 16) for i in (0, 2, 4)], float) / 255.0
+
+
+def ramp(img, rule):
+    """A gradient map over a rectangle of a copy of the RGBA uint8 image (h, w, 4): each pixel's luma (0.299 R + 0.587 G
+    + 0.114 B, 0..1) picks its colour between the stops `rule["ramp"] = [[luma, "#rrggbb"], ...]` (sRGB, linear between
+    them, held beyond the ends), so a painting keeps its light and shade and takes exactly the palette's colours where
+    the stops say. `rect` [u0, v0, u1, v1] (v from the top), `protect` [s0, s1] (pixels with HSV saturation below s0
+    stay as they are: white highlights) and `feather` (pixels) work as in pmx_recolor; alpha is kept, transparent pixels
+    skipped."""
+    from .pmx_recolor import rgb_to_hsv
+    out = np.array(img, copy=True)
+    h, w = out.shape[:2]
+    u0, v0, u1, v1 = rule.get("rect", [0.0, 0.0, 1.0, 1.0])
+    reg = out[int(round(v0 * h)):int(round(v1 * h)), int(round(u0 * w)):int(round(u1 * w))]
+    if reg.size == 0:
+        return out
+    rgb = reg[..., :3].astype(float) / 255.0
+    stops = sorted((float(a), hex_rgb(c)) for a, c in rule["ramp"])
+    xs = [s[0] for s in stops]
+    luma = rgb @ np.array([0.299, 0.587, 0.114])
+    new = np.stack([np.interp(luma, xs, [s[1][k] for s in stops]) for k in range(3)], -1)
+    wt = (reg[..., 3] > 0).astype(float)
+    if "protect" in rule:
+        s0, s1 = (float(x) for x in rule["protect"])
+        t = np.clip((rgb_to_hsv(rgb)[1] - s0) / max(s1 - s0, 1e-6), 0.0, 1.0)
+        wt = wt * t * t * (3.0 - 2.0 * t)
+    f = float(rule.get("feather", 0.0))
+    if f > 0:
+        hh, ww = reg.shape[:2]
+        t = np.clip(np.minimum(np.minimum(np.arange(hh), hh - 1 - np.arange(hh))[:, None],
+                               np.minimum(np.arange(ww), ww - 1 - np.arange(ww))[None, :]) / f, 0.0, 1.0)
+        wt = wt * t * t * (3.0 - 2.0 * t)
+    mixed = rgb * (1.0 - wt[..., None]) + new * wt[..., None]
+    reg[..., :3] = np.clip(mixed * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    return out
+
+
+def edit_image(img, rules):
+    """The recolour rules in their order: a rule with `ramp` is a gradient map (`ramp`), any other one goes to
+    pmx_recolor.recolor (hue / saturation / value maps, warp, almond)."""
     from . import pmx_recolor as RC
+    for r in rules:
+        img = ramp(img, r) if "ramp" in r else RC.recolor(img, [r])
+    return img
+
+
+def part_materials(tk, ctx, names=None, recolor=None, hooks=None, prefix=""):
+    """Part Materials for the kept materials `names` (default all): the texture, sphere and toon images are read from
+    the PMX's folder, edited by the `recolor` rules in their order (`edit_image`: pmx_recolor.recolor, or `ramp` for a
+    rule with a `ramp`; rules and hooks are matched by the CONTENT of the source file, since a PMX often lists one image
+    twice), passed through `hooks` ({source path: fn(img) -> img}), written with `ctx.save_png` (identical results are
+    shared across calls and across parts) and referenced by file name. Returns {name: part.Material}."""
     names = list(tk.materials) if names is None else list(names)
     reg = ctx.__dict__.setdefault("_pmx_files", {"digest": {}, "names": set()})
 
@@ -591,7 +640,7 @@ def part_materials(tk, ctx, names=None, recolor=None, hooks=None, prefix=""):
         if d0 not in edited:                                             # one edit (and one hook call) per distinct source image
             img = _image(path)
             if d0 in rules:
-                img = RC.recolor(img, rules[d0])
+                img = edit_image(img, rules[d0])
             if d0 in hooked:
                 img = hooked[d0](img)
             edited[d0] = img

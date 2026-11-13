@@ -135,13 +135,59 @@ The eyes sit on the planes, their outer corners further back than the inner ones
 ## `source = "body"` (`head_body.py`)
 
 `[head.take]`: `materials` (the face materials; one mesh each, the skin one is named `face`), `skin`, `head_bone`, `brow_bone` /
-`brow_material`, `eyes {left, right, iris}`, `cap {rings, fade, pole_gap}`, `patch`, `shell_deg`, `[[head.take.recolor]]` rules.
+`brow_material`, `eyes {left, right, iris}`, `cap {rings, fade, pole_gap}`, `patch`, `shell_deg`, `[[head.take.recolor]]` rules,
+`[head.take.material.<name>]` overrides, `[head.take.scalp]`; `[[head.morphs]]` adds morphs mixed from the imported ones.
 
 An imported face is a front shell with an open back and top. `head_cap.build_cap` closes it with rings that start exactly on the shell's
 outer boundary and relax to the generated skull (`head_shape`): hidden under the hair, and what the hair is fitted to. A radial map of the
 closed shell (`head_shell.RadialShape`, same interface as the implicit shape) answers the hairline, ears, cat-ear anchors and face-outline
 queries. The cap's colour is a generated gradient patch painted into a free corner of the skin texture copy (it starts in the colours
 the shell ends in). The neck needs no stitching: the face skin and the body skin share the ring vertices (same weights, normals).
+
+### Recolour rules (`[[head.take.recolor]]`, `pmx_take.part_materials`, `pmx_take.ramp`, `pmx_take.edit_image`)
+
+The rules run in the order written. A rule with `ramp` is a gradient map; any other rule is a hue / saturation / value map, `warp`
+or `almond` (`pmx_recolor`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ramp` | (none) | `[[luma, "#rrggbb"], ...]`: each pixel's luma (0.299 R + 0.587 G + 0.114 B, 0..1) picks its colour between the stops (sRGB, linear between them, held beyond the ends): the painting keeps its light and shade and lands exactly on the palette's colours where the stops say |
+| `rect` | whole image | `[u0, v0, u1, v1]`, v from the top |
+| `protect` | (none) | `[s0, s1]`: pixels with HSV saturation below s0 stay as they are, fully mapped from s1 up (white highlights) |
+| `feather` | 0 | pixels: the rule fades in from the rect's edges |
+
+A luma ramp cannot tell two features of one luma apart: split them by `rect` (the eye maps of an imported face: one rule for the
+iris, one each for the pupil layer's ring and its lower crescent).
+
+### Material overrides (`[head.take.material.<name>]`, `head_body.override`)
+
+Any field of `part.Material` for one of the face materials, replacing what the source has (default: the source's values; an unknown
+field is an error). `self_shadow = false`: the material takes no cast shadow in mk's renderer (the whites of the eyes sit in a pocket
+behind the lids, and the lids' soft shadows grey and grain them); its own lighting stays. It is the PMX flag "receives self-shadow"
+(design.md: Rendering).
+
+### The scalp (`[head.take.scalp]`, `head_body.scalp_tint`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `color` | (none: off) | the colour the face shell's hairline band takes: 1 on the shell's outer boundary (where the source's hair began), fading smoothly to 0 at the surface distance of the vertices `band` edge rings in; the source's own tint is taken out first (its share of the line from the skin there to the boundary's median colour), so the band fades into the skin as painted beyond it |
+| `crown` | the boundary's mean colour | the generated skull cap's colour at the crown (it starts in the band's boundary colour, so the seam does not show) |
+| `band` | 6 | edge rings the band fades over (an imported face's own hairline fade) |
+
+Pieces of the skin the boundary does not reach keep their colours, other pieces' texels on the same texture are never touched, and
+with `color` set the generated ears take the skin colour of the band's inner ring.
+
+### Morphs mixed from the imported ones (`[[head.morphs]]`, `head_edit.mix_morphs`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | (required) | a new morph name (PMX) |
+| `en` | "" | English name |
+| `panel` | "other" | eye, brow, mouth or other; the morph joins its panel, so a bake compensates it like the imported ones |
+| `mix` | {} | `{morph: weight}`: the weighted sum of the imported vertex morphs' offsets |
+| `move` | {} | `{material: [dx, dy, dz]}` metres: that whole material moved rigidly in the morph (eye highlights dropping with a lowered lid) |
+
+A semantic name for rig.json comes from `core.bonemap.MORPHS` (`sleepy`: ねむい, 眠い).
 
 ### Edits (`[head.edit]`, `head_edit.py`)
 
@@ -155,10 +201,14 @@ Landmarks are found on the mesh (the skin's holes, the iris weights); positions 
 | `fang` | a yaeba as its own mesh `fang` (a white triangle in its own pure-white material `牙`, an additive white sphere map and full ambient as the eye highlights, so it stays white in the shadow of the lip, + a slightly larger pink `outline` triangle behind it, material `牙線`: a white tooth on pale skin does not read without it): tilted so its base hides in the upper lip and its tip hangs `peek` below the lip's lower edge, `over` in front of the skin there (the lower lip), found by a ray cast; in every vertex morph it rides the lip (the nearest upper-lip vertex's offset is copied rigidly), and `reveal = {morph = factor}` pulls the tip further down / forward in those morphs (`reveal_down`, `reveal_forward`): a hint at rest, reading in the smiles |
 | `highlight` | the main highlight of each eye scaled in x by `scale_x` |
 | `pupil` | texture rules applied after `[[head.take.recolor]]` (`almond` pupil, `warp` of the painted highlight) |
+| `lids` | `rest` (0) of `morph` (まばたき) baked into the rest shape: heavier lids. The morph keeps the rest of its way ((1 - rest) of it), and every morph of its panel gives back the baked share on each side where it moves the baked vertices at least a quarter as much as on its busier side (`head_edit.compensated_sides`), so each ends exactly where it ended before; on a side it leaves alone the new rest stays (a wink's open eye keeps the heavier lid) |
+| `mouth` | the same for a mouth shape (`rest` 0, `morph` 口角下げ): lips closed, corners level, every mouth morph compensated |
+| `move` | `<material> = [dx, dy, dz]`: whole materials moved rigidly at rest (the highlights lowered under heavier lids); their morph offsets stay, so every morph still moves them as it did |
+| `blush` | `rest` (0), `morph` (照れ), `material` (`<morph>常`), `feather` (0 m), `middle` (1.0): a decal that the morph pushes out through the skin cannot show a share by moving a share of the way, so a copy of its painted faces sits where the morph takes them, in a copy of its material `rest` as opaque, without its additive sphere; in the morph the copy sinks back to where the original rested, so the morph still ends as it did. Faces painted transparent all over are left out. `feather`: the copy's alpha fades to 0 over that many metres (along its surface) toward its edges and toward where it meets the skin (no hard lower edge); `middle`: the strength over the middle third of its width (the nose), easing back to full over the next sixth; with either set the copy gets its own texture (`<texture>_rest.png`, `head_body.decal_weights`) |
 
 ## Tests
 
 `tests/test_model_pmx_take.py` (importer, recolour) runs on a tiny synthetic PMX (pruning, head blend, morph / material / group
 carry-over, bodies, `part_materials`), `tests/test_model_head_body.py` (cap, radial shape, the builder on a synthetic take, edits on it),
-`tests/test_model_head_edit.py` (each edit and the texture ops), `tests/test_model_head.py` (the generated mode). None of them needs
-a real model.
+`tests/test_model_head_edit.py` (each edit and the texture ops: the gradient map and the rule order, `mix_morphs`, `bake_rest`,
+`compensated_sides`, `fade_copy`), `tests/test_model_head.py` (the generated mode). None of them needs a real model.

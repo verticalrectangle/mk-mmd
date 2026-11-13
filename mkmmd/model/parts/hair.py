@@ -87,8 +87,8 @@ def build(ctx):
     frames.setdefault("髪", []).extend(head_names)
     ctx.log(f"{sum(len(m.verts) for m in meshes)} verts, {len(rig.bones)} bones, {len(rig.bodies)} bodies, "
             f"{len(rig.joints)} joints, {len(chains)} chains")
-    body = ctx.parts.get("body")
-    for gap, base, bone, which in overlaps(rig, body.bodies if body is not None else []):
+    statics = [rb for name, p in ctx.parts.items() if name != "hair" for rb in p.bodies]  # the body's and the garments'
+    for gap, base, bone, which in overlaps(rig, statics):
         table = next((t for stem, t in TABLE if base.startswith(stem)), "[hair]")
         ctx.log(f"WARNING hair chain {base.rstrip('_')}: {bone} is {-gap * 1000:.0f} mm inside {which} at rest; MMD's "
                 f"physics will throw it out and mk's solver ignores that collider for it: move the chain clear ({table})")

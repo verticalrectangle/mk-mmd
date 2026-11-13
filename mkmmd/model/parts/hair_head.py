@@ -37,8 +37,11 @@ def hex_rgb(h):
 
 DEFAULTS = {
     "volume": {"top": 0.036, "front": 0.020, "side": 0.034, "back": 0.027, "lift": 0.016, "lift_deg": 28.0,
-               "lift_width_deg": 20.0, "lift_back": 0.5, "nape": None},
-    "ring": {"enabled": True, "drop": 0.050, "width": 0.018},  # baked crown sheen: on/off, metres below the hair top, half thickness
+               "lift_width_deg": 20.0, "lift_back": 0.5, "nape": None,
+               "band": {"z": None, "fall": 0.0, "off": 0.016, "ease": 0.020}},   # a cap's band line: thin over it
+    "ring": {"enabled": True, "drop": 0.050, "width": 0.018,  # baked crown sheen: on/off, metres below the hair top,
+             "fall": 0.0, "turn": [0.0, 180.0]},              # half thickness; locks only: metres lower at the sides
+    #                                                           and back, degrees round from the front it comes down
     "cap": {"delta": -0.014, "cols": 72, "rows": 15},
     "crown": {"count": 9, "width": 0.070, "thick": 0.016, "delta": -0.004, "swirl": 0.45, "inner_delta": -0.011},
     "bangs": {"count": 11, "width": 0.028, "thick": 0.014, "delta": 0.004, "span_deg": 44.0, "above_eye": 0.027,
@@ -171,9 +174,11 @@ class HeadHair:
         self.rng = ctx.rng_for("hair.head")
         self.skull = fit.skull
         v = self.cfg["volume"]
+        bd = v["band"]                                      # the hull: shared with the other builders
         fit.vol = Volume(self.skull, v["top"], v["front"], v["side"], v["back"], taper_from=fit.vol.taper_from,
                          lift=v["lift"], lift_phi=np.radians(v["lift_deg"]), lift_width=np.radians(v["lift_width_deg"]),
-                         lift_back=v["lift_back"], nape=v["nape"], hairline=fit.cap_phi)  # shared with the other builders
+                         lift_back=v["lift_back"], nape=v["nape"], hairline=fit.cap_phi,
+                         band=None if bd["z"] is None else (bd["z"], bd["fall"], bd["off"], bd["ease"]))
         self.vol = fit.vol
         self.head_body = ctx.find_body("頭")
         body = getattr(ctx, "parts", {}).get("body")

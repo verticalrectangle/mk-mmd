@@ -242,3 +242,105 @@ def test_almond_makes_a_pointed_vertical_lens_inside_its_rect_only():
     assert a[100 - 30, 106] == 255 and a[100 - 60, 106] == 0 and a[100 - 60, 100] == 255   # narrows towards the points (the axis stays inside)
     assert a[100, 40] == 255 and a[10, 100] == 255                                         # outside the rect: untouched
     assert (a[:, :, None] == out[..., 3:4]).all() and out[100, 128, 0] == 200
+
+
+def test_ramp_paints_by_luma_between_the_stops_and_keeps_alpha_whites_and_the_outside():
+    img = np.zeros((10, 40, 4), np.uint8)
+    img[..., 3] = 255
+    img[:, :10, :3] = (70, 40, 60)                                                     # luma 0.2
+    img[:, 10:20, :3] = (102, 102, 230)                                                # a saturated blue: luma ~0.4
+    img[:, 20:30, :3] = (250, 250, 250)                                                # a white highlight
+    img[0, 0, 3] = 0
+    rule = dict(rect=[0.0, 0.0, 0.75, 1.0], ramp=[[0.2, "#2a1650"], [0.6, "#a98af0"]], protect=[0.05, 0.2])
+    out = T.ramp(img, rule)
+    # the first stop; alpha kept
+    assert np.abs(out[5, 5, :3].astype(int) - [0x2a, 0x16, 0x50]).max() <= 1 and out[0, 0, 3] == 0
+    luma = (np.array([102, 102, 230]) / 255.0) @ [0.299, 0.587, 0.114]
+    want = np.array([0x2a, 0x16, 0x50]) + (luma - 0.2) / 0.4 * (np.array([0xa9, 0x8a, 0xf0]) - [0x2a, 0x16, 0x50])
+    assert np.abs(out[5, 15, :3].astype(int) - want).max() <= 1                             # linear between the stops
+    # white kept; outside
+    assert np.array_equal(out[:, 20:30], img[:, 20:30]) and np.array_equal(out[:, 30:], img[:, 30:])
+
+
+def test_recolour_rules_run_in_their_order_whatever_their_kind():
+    img = np.zeros((4, 4, 4), np.uint8)
+    img[..., 3] = 255
+    img[..., :3] = (200, 30, 140)
+    hue = dict(hue=[[0, 120], [359, 120]])                                             # anything -> green
+    ramp = dict(ramp=[[0.0, "#ff0000"], [1.0, "#ff0000"]])                             # anything -> red
+    assert tuple(T.edit_image(img, [hue, ramp])[0, 0, :3]) == (255, 0, 0)
+    assert T.edit_image(img, [ramp, hue])[0, 0, 1] > 200                                   # the later rule wins
+
+
+# ------------------------------------------------------------------------------------------------------- morph bakes
+def two_eyes():
+    """Upper-lid vertices over both eyes (x = +-0.045) that a blink brings down onto the lower lid, and a mouth vertex.
+    """
+    up = np.array([[0.035, -0.09, 1.275], [0.045, -0.09, 1.28], [0.055, -0.09, 1.275],
+                   [-0.035, -0.09, 1.275], [-0.045, -0.09, 1.28], [-0.055, -0.09, 1.275], [0.0, -0.1, 1.21]])
+    blink = np.zeros_like(up)
+    blink[:6, 2] = 1.25 - up[:6, 2]                                                    # down to z 1.25
+    jito = 0.3 * blink                                                                 # a lowered lid on both eyes
+    wink = np.where((up[:, 0] > 0)[:, None], blink, 0.0)                               # closes the left eye ...
+    # ... and barely touches the right one
+    wink[3] = [0.0, 0.0, -0.0003]
+    wide = np.zeros_like(up)
+    wide[[1, 4], 2] = 0.002                                                            # only the middle of each lid, up
+    mouth = np.zeros_like(up)
+    mouth[6, 2] = -0.004
+    return piece(up, morphs=dict(blink=blink, jito=jito, wink=wink, wide=wide, mouth=mouth))
+
+
+def test_mix_morphs_adds_weighted_offsets_and_skips_pieces_it_does_not_move():
+    p, other = two_eyes(), piece(np.zeros((2, 3)), morphs=dict(mouth=np.ones((2, 3))))
+    n = HE.mix_morphs({"a": p, "b": other}, "sleepy", {"jito": 1.0, "blink": 0.25, "wide": 0.5})
+    assert n == 1 and "sleepy" not in other.morphs
+    assert np.allclose(p.morphs["sleepy"], p.morphs["jito"] + 0.25 * p.morphs["blink"] + 0.5 * p.morphs["wide"])
+
+
+def test_a_baked_blink_lowers_the_rest_and_every_eye_morph_still_ends_where_it_ended():
+    p = two_eyes()
+    rest0 = p.verts.copy()
+    ends = {k: rest0 + v for k, v in p.morphs.items()}
+    done = HE.bake_rest({"skin": p}, "blink", 0.25, ["jito", "wink", "wide"])
+    assert np.allclose(p.verts, rest0 + 0.25 * (ends["blink"] - rest0))                    # heavier lids at rest
+    for k in ("blink", "jito", "wide"):
+        # closed, half closed, wide: as before
+        assert np.allclose(p.verts + p.morphs[k], ends[k], atol=1e-12), k
+    # the wink only gives back on its own side
+    assert done["jito"] == [1.0, -1.0] and done["wink"] == [1.0]
+    got = p.verts + p.morphs["wink"]
+    # the winking eye closes as before
+    assert np.allclose(got[:3], ends["wink"][:3], atol=1e-12)
+    assert np.allclose(got[3:6], rest0[3:6] + 0.25 * (ends["blink"][3:6] - rest0[3:6]) + ends["wink"][3:6] - rest0[3:6])
+    # the mouth: untouched
+    assert np.allclose(p.verts[6], rest0[6]) and np.allclose(p.morphs["mouth"], ends["mouth"] - rest0)
+
+
+def test_compensated_sides_follow_where_a_morph_really_moves_the_baked_vertices():
+    p = two_eyes()
+    assert HE.compensated_sides({"s": p}, "blink", "jito") == [1.0, -1.0]
+    assert HE.compensated_sides({"s": p}, "blink", "wink") == [1.0]
+    assert HE.compensated_sides({"s": p}, "blink", "mouth") == []
+    assert HE.compensated_sides({"s": p}, "blink", "missing") == []
+
+
+def test_the_fade_copy_shows_the_decal_at_rest_and_sinks_back_in_its_morph():
+    v = np.array([[0.03, -0.0995, 1.24], [0.05, -0.0995, 1.24], [0.04, -0.0995, 1.25], [0.0, -0.1, 1.21]])
+    tere = np.zeros_like(v)
+    tere[:3, 1] = -0.0009                                                              # out through the skin
+    smile = np.full_like(v, 0.001)
+    faces = [(0, 1, 2), (0, 2, 3)]
+    p = piece(v, morphs=dict(tere=tere, smile=smile), faces=faces)
+    p.uv = np.arange(12, dtype=float).reshape(6, 2)
+    p.face_mat = np.zeros(2, int)
+    cp = HE.fade_copy(p, "tere")
+    # only the face the morph moves whole
+    assert cp.faces == [(0, 1, 2)] and np.array_equal(cp.ids, [0, 1, 2])
+    # at rest where the morph takes the decal
+    assert np.allclose(cp.verts, v[:3] + tere[:3])
+    # and back where the original rested
+    assert np.allclose(cp.verts + cp.morphs["tere"], v[:3])
+    # every other morph rides along
+    assert np.allclose(cp.morphs["smile"], smile[:3]) and np.array_equal(cp.uv, p.uv[:3])
+    assert HE.fade_copy(p, "smile") is not None and HE.fade_copy(p, "nothing") is None

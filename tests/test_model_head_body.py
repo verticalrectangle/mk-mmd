@@ -419,3 +419,92 @@ def test_the_jaw_edit_pushes_the_lower_face_out_by_at_most_the_amount(synth, tmp
     d = np.linalg.norm(face.verts[:n] - plain.verts, axis=1)
     assert d.max() <= 0.002 + 1e-9 and (d > 1e-5).sum() > 10
     assert np.array_equal(face.morphs["blink"][:n], plain.morphs["blink"])                  # the offsets stay as they are
+
+
+# ------------------------------------------------- spec keys of the imported face: overrides, bakes, mixes, scalp
+def _build_with(synth, tmp_path, take=None, edit=None, morphs=None):
+    from mkmmd.model.parts import head as H
+    tc = dict(synth.tc)
+    tc.update(take or {})
+    head = {"source": "body", "take": tc, "edit": edit or {}}
+    if morphs:
+        head["morphs"] = morphs
+    sp = spec.from_dict({"model": {"name": "t", "parts": ["head"]},
+                         "proportions": {"head": {}, "face": {}, "hair_guides": {}}, "head": head})
+    ctx = build.BuildCtx(sp, tmp_path, seed=1)
+    ctx.part = "body"
+    tk = T.take(synth.path, ["skin", "bodyskin", "eyeball", "brow"])
+    ctx.parts["body"] = P.Part("body", bones=tk.bones, info=dict(take=tk))
+    ctx.land.update(head=np.array(tk.bone("頭").head))
+    ctx.part = "head"
+    part = H.build(ctx)
+    P.check(part)
+    part.ctx = ctx
+    return part, tk
+
+
+def test_a_material_override_turns_the_shadow_flag_off_in_the_built_pmx(synth, tmp_path):
+    from mkmmd.model import assemble as AS
+    part, tk = _build_with(synth, tmp_path, take={"material": {"eyeball": {"self_shadow": False}}})
+    assert {m.name: m.self_shadow for m in part.materials} == {"skin": True, "eyeball": False, "brow": True}
+    pmx = AS.assemble([P.Part("body", bones=tk.bones), part], name="t").pmx
+    assert {m.name: m.self_shadow for m in pmx.materials} == {"skin": True, "eyeball": False, "brow": True}
+    with pytest.raises(ValueError, match="not material fields"):
+        _build_with(synth, tmp_path, take={"material": {"eyeball": {"shadowless": True}}})
+
+
+def test_a_rest_move_shifts_a_whole_material_and_keeps_its_morphs(synth, tmp_path):
+    part, tk = _build_with(synth, tmp_path, edit={"move": {"eyeball": [0.0, 0.0, -0.002]}})
+    eye, plain = _mesh(part, "eyeball"), tk.piece(["eyeball"])
+    assert np.allclose(eye.verts, plain.verts + [0.0, 0.0, -0.002])
+    assert np.array_equal(eye.morphs["blink"], plain.morphs["blink"])
+
+
+def test_the_builder_bakes_the_lids_and_declares_a_mixed_morph_that_is_compensated_too(synth, tmp_path):
+    mix = [{"name": "sleepy", "en": "sleepy", "panel": "eye", "mix": {"blink": 0.5, "brows up": 1.0}}]
+    part, tk = _build_with(synth, tmp_path, edit={"lids": {"rest": 0.25, "morph": "blink"}}, morphs=mix)
+    face, plain = _mesh(part, "face"), tk.piece(["skin"])
+    n = len(plain.verts)
+    assert np.allclose(face.verts[:n], plain.verts + 0.25 * plain.morphs["blink"])
+    assert np.allclose(face.morphs["blink"][:n], 0.75 * plain.morphs["blink"])
+    # ends as mixed
+    assert np.allclose(face.verts[:n] + face.morphs["sleepy"][:n], plain.verts + 0.5 * plain.morphs["blink"])
+    assert ("sleepy", "eye", "sleepy") in {(m.name, m.panel, m.name_en) for m in part.morphs}
+    assert np.allclose(_mesh(part, "brow").morphs["sleepy"], tk.piece(["brow"]).morphs["brows up"])
+    with pytest.raises(ValueError, match="head.morphs"):
+        _build_with(synth, tmp_path, morphs=[{"name": "x", "mix": {"no such morph": 1.0}}])
+
+
+def test_the_scalp_turns_the_hairline_band_to_its_colour_and_leaves_the_rest_of_the_face(synth, tmp_path):
+    part, tk = _build_with(synth, tmp_path, take={"scalp": {"color": "#4a3378", "crown": "#2e1f52", "band": 2}})
+    skin = next(m for m in part.materials if m.name == "skin")
+    img = np.asarray(Image.open(part.ctx.tex_dir / skin.texture).convert("RGB")).astype(int)
+    src = np.asarray(Image.open(synth.path.parent / "tex" / "skin.png").convert("RGB")).astype(int)
+    pc = tk.piece(["skin"])
+    loops = CP.boundary_loops(pc.verts, pc.faces)
+    outer = max(loops, key=lambda l: float(np.ptp(pc.verts[l[1]], axis=0).sum()))
+    from mkmmd.model.parts.head_body import ring_index
+    ring = ring_index(len(pc.verts), pc.faces, outer[1])
+    h, w = img.shape[:2]
+    px = lambda i: (min(int((1 - pc.vert_uv[i, 1]) * h), h - 1), min(int(pc.vert_uv[i, 0] * w), w - 1))
+    on = [img[px(i)] for i in outer[1]]
+    assert np.abs(np.median(on, 0) - [0x4a, 0x33, 0x78]).max() <= 3                   # the boundary takes the colour
+    near_uv = pc.vert_uv[ring <= 4]                    # the synthetic map folds front onto back: skip shared texels
+    far = [i for i in np.nonzero(ring >= 5)[0] if np.linalg.norm(near_uv - pc.vert_uv[i], axis=1).min() > 0.03]
+    assert far and all(np.array_equal(img[px(i)], src[px(i)]) for i in far)          # beyond the band: untouched
+
+
+def test_decal_weights_fade_to_the_edges_and_hold_the_middle_third_down():
+    from mkmmd.model.parts.head_body import decal_weights
+    xs, zs = np.linspace(-0.06, 0.06, 25), np.linspace(1.22, 1.26, 9)
+    V = np.array([[x, -0.1, z] for z in zs for x in xs])
+    F = [(j * 25 + i, j * 25 + i + 1, (j + 1) * 25 + i + 1, (j + 1) * 25 + i) for j in range(8) for i in range(24)]
+    w = decal_weights(V, F, np.zeros(len(V), bool), feather=0.008, middle=0.4).reshape(9, 25)
+    assert np.all(w[0] == 0.0) and np.all(w[:, 0] == 0.0)                              # nothing at the edges
+    # a cheek in full, the nose at 40 %
+    assert w[4, 3] == pytest.approx(1.0) and w[4, 12] == pytest.approx(0.4)
+    assert 0.0 < w[1, 3] < w[2, 3] <= 1.0                                              # a soft rise from the edge
+    behind = np.zeros(len(V), bool)
+    behind[4 * 25 + 3] = True
+    # where it meets the skin: faded out
+    assert decal_weights(V, F, behind, feather=0.008)[4 * 25 + 3] == 0.0

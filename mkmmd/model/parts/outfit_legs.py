@@ -988,6 +988,8 @@ def foot_donors(F):
 
 def rigid_weights(fit, F, patches):
     """Weights shared by all vertices of a rigid decoration (buckle, bow): the skin weights under the middle of the piece."""
+    if not patches:
+        return
     bone = f"{F.name}足首"
     pts = np.concatenate([p.v for p in patches])
     w = fit.weights_for(pts.mean(0)[None], foot_donors(F), default=bone)
@@ -997,7 +999,8 @@ def rigid_weights(fit, F, patches):
 
 def shoes(fit, cfg, soup_shoes, soup_satin, rig=None):
     """Black Mary-Jane shoes on both feet: leather upper with a rolled collar and a throat opening over the instep, strap
-    with a buckle and a small bow, sole with a flat bottom on the floor plane.
+    with a buckle and a small bow, sole with a flat bottom on the floor plane. `strap`, `buckle` and `bow` each with
+    `enabled` false are left out (no strap: no buckle or bow either), which makes a flat slipper of the shoe.
 
     Adds to `soup_shoes` (material 0 = 靴: upper, collar, strap, buckle; 1 = 靴底: sole) and `soup_satin` (0 = 黒リボン: the
     bows). Upper, collar, sole and strap take the weights of the nearest skin point (donors: 左/右 ひざ, 足首, 足つま先: the
@@ -1015,9 +1018,10 @@ def shoes(fit, cfg, soup_shoes, soup_satin, rig=None):
         upper = G.orient_outward(upper, np.repeat(np.array([F.c_a[0], F.c_a[1], U["z_p"]])[None], len(upper.v), 0))
         collar = build_collar(F, c, U)
         sole = build_sole(F, c, U)
-        strap = build_strap(F, c, U)
-        buckle = build_buckle(c, strap, S)
-        bows = build_shoe_bow(c, strap, S)
+        strap = build_strap(F, c, U) if c["strap"].get("enabled", True) else {"patches": []}
+        on = bool(strap["patches"])
+        buckle = build_buckle(c, strap, S) if on and c["buckle"].get("enabled", True) else []
+        bows = build_shoe_bow(c, strap, S) if on and c["bow"].get("enabled", True) else []
         leather_left = [upper, collar] + strap["patches"] + buckle
         d, _, _, _ = F.srf.closest(np.concatenate([p.v for p in leather_left]))
         bone = f"{F.name}足首"
