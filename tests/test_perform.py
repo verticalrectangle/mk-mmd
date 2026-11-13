@@ -45,12 +45,22 @@ def test_blink_schedule_spacing_extras_and_avoid():
     assert min(np.diff(sorted(times))) >= 1.2 - 1e-9
     assert 12 <= len(b) <= 24                                 # ~20 per minute, minus the avoided 10 s
     assert PF.blink_schedule(0, 60, 20, seed=1) == PF.blink_schedule(0, 60, 20, seed=1)
+    assert {d for _, d in PF.blink_schedule(0, 60, 20, seed=1, dur=0.32)} == {0.32}      # slow blinks, all of them
 
 
 def test_blink_curve_closes_fully_and_reopens():
     ts = np.linspace(0, 1, 301)
     c = PF.blink_curve(ts, [(0.2, 0.157)])
     assert c.max() == pytest.approx(1.0) and c[0] == 0 and c[-1] == 0
+
+
+def test_lids_are_a_number_or_keys_that_sink_and_open_again():
+    ts = np.array([0.0, 1.0, 2.0, 2.5, 3.0, 9.0])
+    assert PF.lids_floor(ts, 0.3) == pytest.approx([0.3] * 6)
+    doze = PF.lids_floor(ts, [[1.0, 0.3], [2.0, 0.9], [3.0, 0.0]])
+    assert doze == pytest.approx([0.3, 0.3, 0.9, 0.45, 0.0, 0.0])        # held, sunk, half way open, open, held
+    with pytest.raises(ValueError, match="0 .open. to 1 .shut."):
+        PF.lids_floor(ts, [[0.0, 0.2], [1.0, 1.4]])
 
 
 def test_beat_bob_peaks_just_after_beats_with_accent():

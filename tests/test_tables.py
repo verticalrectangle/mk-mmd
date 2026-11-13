@@ -50,7 +50,7 @@ def test_keys_below_the_table_are_checked_where_the_stage_reads_them_all():
         with pytest.raises(TB.TableError, match=where):
             check(text)
     for text, where in [("[perform.rin]\nblink = {per_minute = 12}\n",
-                         r"\[perform\.rin\] blink: unknown key 'per_minute' \(known: extra, per_min, seed\)"),
+                         r"\[perform\.rin\] blink: unknown key 'per_minute' \(known: dur, extra, per_min, seed\)"),
                         ("[perform.rin]\ngaze = [{t = 1, at = [0, 0, 1]}, {t = 2, at = [0, 0, 1], hld = 3}]\n", r"gaze\[1\]: unknown key 'hld'"),
                         ("[perform.rin]\nbob = {deg = 2, timelines = 'x'}\n", r"\[perform\.rin\] bob: unknown key 'timelines'"),
                         ("[perform.rin]\nsing = {timeline = 'x', mouths = 1}\n", r"\[perform\.rin\] sing: unknown key 'mouths'"),

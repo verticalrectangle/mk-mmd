@@ -65,7 +65,8 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      leave the ground, the root flies a parabola and the legs tuck (mkmmd.core.perform.
                                      walk_plan); slide 1 is a treadmill (a running man)
   tumble = [{from, to, deg, axis = "flip" | "cartwheel"}]   the body turns about its hips in the air
-  blink = {per_min = 15, seed = 0, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1)
+  blink = {per_min = 15, seed = 0, dur = 0.157, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1) or keys
+                                     [[t, value], ...]
   sing = {timeline = "audio/timeline.json" (the default), lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
   expressions = [{morph = "smile_eyes" (semantic or the model's own name), keys = [[t, value], ...]}]
   twitch = [{bones = ["ear_root.L", ...] | family = "ears", t = 3.2, deg = 14, axis = [1, 0, 0], dur = 0.22}]
@@ -1260,11 +1261,16 @@ def run(ctx):
         # ---- face: blinks + lids
         bl = spec.get("blink", {})
         blink_m = _morph(m, "blink")
-        blinks = PF.blink_schedule(ts[0], ts[-1], bl.get("per_min", 15.0), seed=bl.get("seed", 0),
+        dur = float(bl.get("dur", PF.BLINK_S))
+        blinks = PF.blink_schedule(ts[0], ts[-1], bl.get("per_min", 15.0), seed=bl.get("seed", 0), dur=dur,
                                    extra=[tuple(x) for x in bl.get("extra", [])] +
-                                   [(ev["t"] + 0.03, PF.BLINK_S) for ev in events if ev.get("blink", True)] +
-                                   [(g["t"] + 0.02, PF.BLINK_S) for g in glances if g.get("blink", True)])
-        lids = float(spec.get("lids", 0.0)) * (1 - w_away) * (1 - np.minimum(G.sum(0), 1.0))
+                                   [(ev["t"] + 0.03, dur) for ev in events if ev.get("blink", True)] +
+                                   [(g["t"] + 0.02, dur) for g in glances if g.get("blink", True)])
+        try:
+            floor = PF.lids_floor(ts, spec.get("lids", 0.0))
+        except ValueError as e:
+            raise BuildError(f"perform.{name}.lids: {e}") from None
+        lids = floor * (1 - w_away) * (1 - np.minimum(G.sum(0), 1.0))
         vals = np.maximum(PF.blink_curve(ts, blinks), lids * settle)
         info["blinks"] = len(blinks)
         holders = S.morph_holders(m.arm)                  # the meshes, or the bound sliders' placeholder

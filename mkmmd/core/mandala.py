@@ -25,7 +25,7 @@ from . import tween as TW
 
 KINDS = ("mandala", "trails")
 SHAPES = ("clover", "flower", "heart", "star", "butterfly", "moon", "rabbit", "carrot", "dango", "daisy", "cassette",
-          "pedal", "cherry")
+          "pedal", "cherry", "book", "teacup", "potion")
 ROLES = ("main", "dark", "light", "accent", "accent_dark", "ink", "paper")   # what a shape's part is painted in
 ORIENTS = ("radial", "upright")               # a copy's top: away from the centre, or up the frame
 ORDERS = ("rings", "inward", "around", "random")   # the order a grow pops the copies in
@@ -35,12 +35,15 @@ SHAPE_COLORS = {"clover": ("pine", "foam"), "flower": ("love", "rose", "iris"), 
                 "star": ("gold", "rose"), "butterfly": ("iris", "love", "foam", "gold"), "moon": ("gold", "rose"),
                 "rabbit": ("rose", "love", "iris"), "carrot": ("gold", "rose"), "dango": ("rose", "love", "iris"),
                 "daisy": ("gold", "rose", "love"), "cassette": ("iris", "foam", "love", "gold"),
-                "pedal": ("love", "pine", "iris", "gold"), "cherry": ("love", "rose")}
+                "pedal": ("love", "pine", "iris", "gold"), "cherry": ("love", "rose"),
+                "book": ("iris", "love", "pine"), "teacup": ("rose", "iris", "foam"),
+                "potion": ("iris", "foam", "love")}
 SHAPE_ACCENT = {"clover": "gold", "flower": "gold", "heart": "rose", "star": "love", "butterfly": "gold",
                 "moon": "rose", "rabbit": "love", "carrot": "pine", "dango": "foam", "daisy": "gold", "cassette": "gold",
-                "pedal": "gold", "cherry": "pine"}
+                "pedal": "gold", "cherry": "pine", "book": "gold", "teacup": "gold", "potion": "gold"}
 PEN = 0.022                                  # the ink line round a drawn sticker's parts, of its box before scaling
-PENNED = ("moon", "rabbit", "carrot", "dango", "daisy", "cassette", "pedal", "cherry")    # drawn with it: the two kits
+PENNED = ("moon", "rabbit", "carrot", "dango", "daisy", "cassette", "pedal", "cherry", "book", "teacup",
+          "potion")                          # drawn with it: the three kits
 SCALE = {"figure": 0.25, "sticker": 0.12}    # a ring's `scale` by default: a copy's height (the figure's) or longer side
 RING = {"count": None, "radius": None, "scale": None, "turn": 12.0, "step": 0.0, "phase": 0.0, "mirror": False,
         "spin": 0.0, "orient": "radial", "angle": 0.0, "source": "figure", "fill": None}
@@ -603,19 +606,72 @@ def _tilted(parts, angle):
     return [(role, kind, _turned(p, angle), w) for role, kind, p, w in parts]
 
 
-def _moon():
+def _crescent():
+    """A crescent moon, its disc 1 wide about (0, 0), its horns to the right."""
     d, r1 = 0.2, 0.41                                        # the bite out of the disc: a circle r1 wide, d to the right
     x = (d * d + 0.25 - r1 * r1) / (2.0 * d)
     y = math.sqrt(0.25 - x * x)                              # the horns: where the two circles cross
     a, b = math.atan2(y, x), math.atan2(y, x - d)
     ta, tb = np.linspace(a, 2.0 * math.pi - a, 56), np.linspace(2.0 * math.pi - b, b, 44)
-    body = np.concatenate([0.5 * np.stack([np.cos(ta), np.sin(ta)], 1),
+    return np.concatenate([0.5 * np.stack([np.cos(ta), np.sin(ta)], 1),
                            ((d, 0.0) + r1 * np.stack([np.cos(tb), np.sin(tb)], 1))[1:-1]])
+
+
+def _moon():
     ts = np.radians(np.linspace(195.0, 250.0, 16))
     shine = 0.44 * np.stack([np.cos(ts), np.sin(ts)], 1)
     asleep = _curve([-0.43, 0.0], [-0.375, 0.07], [-0.32, 0.0])             # its eye, shut
-    return _tilted(_drawn("main", body) + [("light", "line", shine, 0.03), ("ink", "line", asleep, 0.02),
-                                           ("accent", "fill", _ellipse(-0.37, 0.13, 0.05, 0.032, n=24), 0.0)], 24.0)
+    eye = [("light", "line", shine, 0.03), ("ink", "line", asleep, 0.02),
+           ("accent", "fill", _ellipse(-0.37, 0.13, 0.05, 0.032, n=24), 0.0)]
+    return _tilted(_drawn("main", _crescent()) + eye, 24.0)
+
+
+def _book():
+    ribbon = np.array([[0.1, 0.4], [0.21, 0.4], [0.21, 0.64], [0.155, 0.585], [0.1, 0.64]])   # its bookmark, hanging out
+    parts = _drawn("accent", ribbon, 0.016)
+    parts += _drawn("paper", _box(-0.27, -0.38, 0.41, 0.5, 0.04), 0.016)                       # the pages, under the cover
+    parts += [("ink", "line", np.array([[0.35, y], [0.4, y]]), 0.008) for y in (-0.2, 0.0, 0.2)]
+    parts += _drawn("main", _box(-0.37, -0.46, 0.33, 0.43, 0.05))
+    parts += [("dark", "line", np.array([[-0.26, -0.44], [-0.26, 0.41]]), 0.026)]              # the spine's hinge
+    parts += _drawn("accent", _turned(0.3 * _crescent(), 30.0) + (0.05, -0.12), 0.014)          # a moon on its cover
+    parts += [("light", "line", np.array([[-0.1, 0.17], [0.2, 0.17]]), 0.024),                 # and its title
+              ("light", "line", np.array([[-0.04, 0.25], [0.14, 0.25]]), 0.024)]
+    return _tilted(parts, 10.0)
+
+
+def _teacup():
+    ts = np.radians(np.linspace(-100.0, 130.0, 32))                                            # its ends behind the cup
+    handle = (0.27, 0.1) + np.stack([0.1 * np.cos(ts), 0.105 * np.sin(ts)], 1)
+    parts = _drawn("paper", _ellipse(0.0, 0.31, 0.43, 0.075, n=56))                             # the saucer
+    parts += [("ink", "line", handle, 0.082), ("paper", "line", handle, 0.038)]               # the handle, behind the cup
+    side = _curve([0.28, -0.06], [0.275, 0.27], [0.07, 0.29])
+    cup = np.concatenate([side, side[::-1] * (-1.0, 1.0)])
+    parts += _drawn("paper", cup)
+    parts += _drawn("main", _ellipse(0.0, -0.06, 0.28, 0.055, n=48), 0.016)                     # the tea
+    parts += [("accent", "fill", _ellipse(x, 0.11 - 0.9 * x * x, 0.022, 0.022, n=14), 0.0) for x in (-0.13, 0.0, 0.13)]
+    ys = np.linspace(-0.2, -0.47, 24)
+    for x0, s in ((-0.08, 1.0), (0.09, -1.0)):                                                 # two wisps of steam
+        parts.append(("light", "line", np.stack([x0 + 0.035 * s * np.sin((ys + 0.2) * 23.0), ys], 1), 0.03))
+    return parts
+
+
+def _potion():
+    level, r, cy, lean = 0.14, 0.3, 0.18, 14.0               # a round flask: its liquid's surface, its bulb, its lean
+    parts = _drawn("accent", _box(-0.07, -0.49, 0.07, -0.36, 0.025), 0.016)                     # the cork
+    parts += _drawn("paper", _box(-0.09, -0.32, 0.09, 0.0, 0.01))                               # the neck
+    parts += _drawn("paper", _ellipse(0.0, cy, r, r, n=64))
+    parts += [("paper", "fill", _box(-0.078, -0.16, 0.078, -0.06, 0.005), 0.0)]             # the neck opens into the bulb
+    parts += _drawn("paper", _box(-0.13, -0.38, 0.13, -0.3, 0.03))                              # its lip
+    a = math.asin((level - cy) / (r - PEN))
+    ts = np.linspace(a, math.pi - a, 40)
+    liquid = (0.0, cy) + _turned((r - PEN) * np.stack([np.cos(ts), np.sin(ts)], 1), lean)     # level as the flask leans
+    parts += [("main", "fill", liquid, 0.0), ("dark", "line", liquid[[0, -1]], 0.016)]
+    parts += [("paper", "fill", _ellipse(x, y, k, k, n=14), 0.0) for x, y, k in ((-0.1, 0.3, 0.03), (0.07, 0.24, 0.02),
+                                                                                 (0.02, 0.38, 0.016))]
+    shine = np.radians(np.linspace(200.0, 245.0, 12))
+    parts += [("accent", "fill", _ellipse(0.04, 0.02, 0.022, 0.022, n=14), 0.0),               # a bubble on its way up
+              ("light", "line", (0.0, cy) + 0.23 * np.stack([np.cos(shine), np.sin(shine)], 1), 0.03)]
+    return _tilted(parts, -lean)
 
 
 def _rabbit():
@@ -712,7 +768,8 @@ def _cherry():
 
 _SHAPE_PARTS = {"clover": _clover, "flower": _flower, "heart": _heart_parts, "star": _star, "butterfly": _butterfly,
                 "moon": _moon, "rabbit": _rabbit, "carrot": _carrot, "dango": _dango, "daisy": _daisy,
-                "cassette": _cassette, "pedal": _pedal, "cherry": _cherry}
+                "cassette": _cassette, "pedal": _pedal, "cherry": _cherry, "book": _book, "teacup": _teacup,
+                "potion": _potion}
 
 
 def shape_parts(name):

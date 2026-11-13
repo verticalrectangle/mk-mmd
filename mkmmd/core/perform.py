@@ -52,6 +52,20 @@ def eased_keys(ts, keys):
     return out
 
 
+def lids_floor(ts, lids):
+    """The lids' base lowering 0..1 over time from `lids`: a number (the same all through), or keys [[t, v], ...] eased
+    as `eased_keys` eases them (heavy lids that sink in a doze and open at a start). Raises ValueError on a value
+    outside 0..1."""
+    keys = [[0.0, lids]] if isinstance(lids, (int, float)) and not isinstance(lids, bool) else lids
+    try:
+        vals = [float(v) for _, v in keys]
+    except (TypeError, ValueError):
+        raise ValueError(f"{lids!r}: a number 0..1, or keys [[t, value], ...]") from None
+    if not vals or min(vals) < 0.0 or max(vals) > 1.0:
+        raise ValueError(f"{lids!r}: the lids' lowering is 0 (open) to 1 (shut), a number or keys [[t, value], ...]")
+    return eased_keys(ts, keys)
+
+
 class GazeEvents:
     """Look-at events [(t_on, t_hold_end, t_back, target_index, rise_s)] over an idle target. weights(t) -> (E, F)."""
 
@@ -82,10 +96,10 @@ def glance_weights(ts, glances):
     return W
 
 
-def blink_schedule(t0, t1, per_min=15.0, seed=0, extra=(), avoid=(), min_gap=1.2, jitter=0.45):
+def blink_schedule(t0, t1, per_min=15.0, seed=0, extra=(), avoid=(), min_gap=1.2, jitter=0.45, dur=BLINK_S):
     """[(t, duration)] between t0 and t1: `extra` blinks (t, dur) at chosen moments (gaze shifts, startles), then
-    natural blinks with mean interval 60/per_min s (+- jitter share), at least min_gap s from any other, never inside
-    an `avoid` interval (t_a, t_b)."""
+    natural blinks `dur` s long with mean interval 60/per_min s (+- jitter share), at least min_gap s from any other,
+    never inside an `avoid` interval (t_a, t_b)."""
     rnd = random.Random(seed)
     out = [(float(t), float(d)) for t, d in extra]
     mean = 60.0 / max(per_min, 1e-3)
@@ -96,7 +110,7 @@ def blink_schedule(t0, t1, per_min=15.0, seed=0, extra=(), avoid=(), min_gap=1.2
             continue
         if any(abs(t - b) < min_gap for b, _ in out) or any(a <= t <= b for a, b in avoid):
             continue
-        out.append((t, BLINK_S))
+        out.append((t, dur))
     return sorted(out)
 
 
