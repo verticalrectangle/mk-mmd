@@ -298,11 +298,12 @@ def build_window(R, mats):
     bx0, bx1 = GLASS_X - BAR_D / 2, GLASS_X + BAR_D / 2
     specs += [(bx0, bx1, yc - BAR_W / 2, yc + BAR_W / 2, z0 + fw, z1 - fw) for yc in BARS_Y]
     specs += [(bx0, bx1, y0 + fw, y1 - fw, zc - BAR_W / 2, zc + BAR_W / 2) for zc in BARS_Z]
-    # interior casing boards on the wall face
+    # interior casing boards, standing on the wall's face (in its plane their fronts fight the wall for depth and the
+    # trim flickers between paint and plaster as the camera moves): 2 mm into it, `ct` proud of it
     cw, ct = 0.075, 0.014
-    specs += [(WINDOW_X - ct, WINDOW_X + 0.0, y0 - cw, y0, z0 - 0.02, z1 + cw),
-              (WINDOW_X - ct, WINDOW_X + 0.0, y1, y1 + cw, z0 - 0.02, z1 + cw),
-              (WINDOW_X - ct, WINDOW_X + 0.0, y0, y1, z1, z1 + cw)]
+    specs += [(WINDOW_X - 0.002, WINDOW_X + ct, y0 - cw, y0, z0 - 0.02, z1 + cw),
+              (WINDOW_X - 0.002, WINDOW_X + ct, y1, y1 + cw, z0 - 0.02, z1 + cw),
+              (WINDOW_X - 0.002, WINDOW_X + ct, y0, y1, z1, z1 + cw)]
     frame = R.boxes_obj("WindowFrame", specs, "window", [mats["pine"]], bevel=0.004)
     # sill board: through the wall, 0.18 m into the room, round front edge
     sill = R.boxes_obj("WindowSill", [(SILL_X0, SILL_X1, y0 - 0.07, y1 + 0.07, SILL_TOP - SILL_T, SILL_TOP)], "window",
