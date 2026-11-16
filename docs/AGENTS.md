@@ -129,10 +129,19 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   a `crouch` before it to brace. One that floats for seconds (`rise`) gets `air` with `kicks` too (`every = 2` lands them on the
   beats), so its legs tread lazily in turns instead of holding the tuck like a statue, and a `point` past the tucked shin's slope
   (about 55) so its feet hang pointed, not flexed.
-  A strut is `walk = {steps, cross = 1, sway = 0.035}` (the feet on one line, the hips over the foot that is down). For arms that
-  swing like a person's, not a robot's, let both hands go with `free` moves over each run of steps and play a walk VMD's arms there
-  (`[[motion.<cast>]] bones = ["arms", "upper_body", "upper_body2"], extend = "none"`, its cycle scaled to two steps and its left heel
-  strike on her left steps; [Motion](design.md#motion)); `walk.arms` (an IK swing) reads stiff. A zero-g moment is `[sim.<cast>] gravity` eased out over a beat or two (`[[t, 1], [t + 0.4,
+  A walk walks with its whole body: `walk = {steps, arms = 0.11}` swings the arms from the shoulders (the hands need a `rest`
+  move), turns the pelvis with the legs and the chest against it; a strut is `cross = 1, sway = 0.035, twist = 8, list = 4,
+  arms = 0.13` (the feet on one line, the hips over the foot that is down and swinging). Do not play a walk VMD's arms on her
+  instead: a VMD turns each bone from its own model's rest pose, and on a model whose arms rest another way they come out
+  splayed with the wrists kinked (it happened: forearms 30 to 44 degrees out all through a walk).
+  Keyed curves (`lean`, `tilt`, `turn`, `head_*`, `crouch`) pass the keys they meet on their way and stop only where they
+  turn round or hold, so key a body the way one moves: nothing arrives at once (the hips, then the chest a few frames later,
+  then the head; the side lean after the forward one), a move runs a little past its end and comes back (a key beyond, then
+  the end), a held pose drifts (two keys a degree apart) instead of standing dead still, and a landing gives and pushes back
+  before it rises. Then measure it: a `stillness` check on each shot where she stands or sits (the share of frames her chest
+  does not turn: under 40 %; a statue with busy hands scores 60 to 80), and `mk q` on the head for the frames where its speed
+  jumps.
+  A zero-g moment is `[sim.<cast>] gravity` eased out over a beat or two (`[[t, 1], [t + 0.4,
   0]]`), not cut to 0 on one frame: a sudden cut flings the hair.
   Group and material morphs (vowels with a tongue bone, a blush) are keyed like any other: the cast stage binds the model's morph sliders
   (`bound_morphs` in its report).
