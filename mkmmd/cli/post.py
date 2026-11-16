@@ -39,7 +39,8 @@ HELP = """Grade the rendered frames of each output ([post] in mk.toml: contrast,
 shadows off black, halation, vignette, grain) and encode them to <project>/out/<name>_<output>[_<preset>].mp4 (the
 preset is left out of the name for `final`) with the audio of [audio] (file, start = song seconds at clip time 0), as
 H.264 (yuv420p, even size) and AAC (at 44.1 or 48 kHz, the nearer to the file's own rate: a 96 kHz master is resampled)
-with a 60 ms fade-out at the end. With [audio.master] the clip's audio is mastered for
+with a 60 ms fade-out at the end ([audio] fade_out, seconds; fade_in, 0 by default, fades the start in: for a clip cut
+where a voice is still dying away). With [audio.master] the clip's audio is mastered for
 small speakers first (mkmmd.master: the booms of a lane of [audio] hits get overtones a phone can play, a lifted attack
 and the rest of the mix ducked under them; the sub is cut; the loudness is set under a limiter), and the report's
 `audio_master` says how far the booms stand out through a phone's speakers before and after. Missing frames are an error
@@ -144,7 +145,7 @@ def encode(frames, size, fps, out, audio=None, crf=15, encoder="x264", preset="s
         else:
             args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-tune", "film"]
         return args + ["-movflags", "+faststart", str(path)]
-    cmd += one(out, sound=f"afade=t=out:st={max(0.0, audio['duration'] - 0.06):.4f}:d=0.06" if audio else None)
+    cmd += one(out, sound=audio.get("sound") or EX.clip_sound(audio["duration"]) if audio else None)
     for e in excerpts:
         cmd += one(e["out"], *EX.filters(e, fps))
     return subprocess.Popen(cmd, stdin=subprocess.PIPE)
@@ -211,9 +212,14 @@ def run(args):
         if not f.exists():
             raise UsageError(f"[audio] file {f} not found")
         audio = {"file": str(f), "start": float(au.get("start", 0.0)), "duration": proj.duration}
+        try:
+            sound = EX.clip_sound(proj.duration, au.get("fade_in", 0.0), au.get("fade_out", EX.FADE))
+        except EX.ExcerptError as e:
+            raise UsageError(str(e)) from None
         if au.get("master") is not None:
             wav, mastering = mastered(proj, au, f, audio["start"], proj.duration)
             audio = {"file": str(wav), "start": 0.0, "duration": proj.duration}
+        audio["sound"] = sound
     frames = list(range(proj.frame0, proj.last_frame + 1))
     plan = None if args.no_transitions else cut_plan(proj)
     breath = cut_breath(proj, plan)                            # [look] breathe: each frame's colours, its mix's

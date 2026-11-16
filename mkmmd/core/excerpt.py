@@ -54,6 +54,24 @@ def normalize(specs, duration, fps, outputs):
     return out
 
 
+def clip_sound(duration, fade_in=0.0, fade_out=FADE):
+    """The audio filter of the whole clip's sound (`duration` s) in ffmpeg: faded in over its first `fade_in` s (0:
+    none; for a clip cut where a voice is still dying away, so the video does not open on the end of a word) and out
+    over its last `fade_out` s (FADE; 0: none). An ExcerptError when a fade is negative, not a number, or the two
+    together are longer than the clip."""
+    for name, v in (("fade_in", fade_in), ("fade_out", fade_out)):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            raise ExcerptError(f"[audio] {name} = {v!r}: seconds, 0 or more")
+    if fade_in + fade_out > duration:
+        raise ExcerptError(f"[audio] fade_in + fade_out = {fade_in + fade_out:g} s is longer than the clip ({duration:g} s)")
+    parts = []
+    if fade_in > 0:
+        parts.append(f"afade=t=in:st=0:d={fade_in:.4f}")
+    if fade_out > 0:
+        parts.append(f"afade=t=out:st={duration - fade_out:.4f}:d={fade_out:.4f}")
+    return ",".join(parts) or "anull"
+
+
 def filters(e, fps):
     """(video filter, audio filter) that cut excerpt `e` out of the clip's stream in ffmpeg, both starting at 0: the
     frames by their number, the sound over the same span, faded out at its end unless it is a loop."""

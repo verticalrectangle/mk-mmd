@@ -33,6 +33,14 @@ def test_an_excerpt_holds_the_frames_a_shot_over_its_span_holds():
     assert "afade" in EX.filters({**e, "loop": False}, 30)[1] and "afade" not in EX.filters(e, 30)[1]
 
 
+def test_the_clip_s_own_sound_fades_out_and_in_only_when_asked_and_refuses_fades_longer_than_itself():
+    assert EX.clip_sound(22.2) == "afade=t=out:st=22.1400:d=0.0600"
+    assert EX.clip_sound(22.2, 0.08, 0.0) == "afade=t=in:st=0:d=0.0800" and EX.clip_sound(4.0, 0, 0) == "anull"
+    for bad in ((1.0, 0.7, 0.4), (4.0, -0.1, 0.06), (4.0, True, 0.06)):
+        with pytest.raises(EX.ExcerptError):
+            EX.clip_sound(*bad)
+
+
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
 def test_the_encoder_writes_an_excerpts_frames_to_a_file_of_its_own(tmp_path):
     w, h, n = 32, 16, 12
