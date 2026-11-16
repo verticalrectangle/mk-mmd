@@ -24,10 +24,12 @@
   [pose.<cast>.hands.<L|R>]   arm IK on the wrist through the twist bones:
      at = target ref, dir = [x, y, z] (hand direction), palm = [x, y, z] (palm normal), pole = target ref
      rest = "prop:edge" (+ along = 0..1, lift = m): the hand lies on an edge use point
-     keys = [{t, at, dir, palm, sight}]  moving targets (clip seconds, eased); `sight = true` on consecutive keys holds
-        the hand with the HEAD from the first to the last of them (`_sight_ride`: a ring held at the eye stays on it as
-        the head leans, tilts, nods and rocks), handed over in SIGHT_RAMP seconds either side; the moves mark the keys of
-        a place seen through (mkmmd.core.moves.SIGHTED)
+     keys = [{t, at, dir, palm, sight, carry}]  moving targets (clip seconds, eased); `sight = true` on consecutive keys
+        holds the hand with the HEAD from the first to the last of them (`_sight_ride`: a ring held at the eye stays on it
+        as the head leans, tilts, nods and rocks), handed over in SIGHT_RAMP seconds either side; the moves mark the keys
+        of a place seen through (mkmmd.core.moves.SIGHTED). `carry = "<bone>"` moves the key's `at` and `pole` by how far
+        the settled base pose has taken that bone of hers from its rest place (`_key_points`): the moves' places, made
+        from the body at rest, standing, go with a seated body
      ride = "<object>" | "cast:NAME.BONE"   the goal FOLLOWS something: an object (a steering wheel), or a bone of this
         character (NAME is its own name: the chest, `cast:rin.upper_body2`). The goal and the elbow pole are then
         bone-parented to the bone (Blender parents to its TAIL) and their keys are computed from the world goal as the bone
@@ -144,6 +146,18 @@ def _place_root(m, seat):
 
 def _world_head(arm, bone):
     return arm.matrix_world @ arm.data.bones[bone].head_local
+
+
+def _settled_head(arm, bone, f1):
+    """The world head of a bone where the settled base pose has it, frame f1 (this stage's own spine and seat keys): a
+    seat or a hip shift moves it from where it is at rest."""
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    sc.frame_set(f1)
+    ae = arm.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    p = ae.matrix_world @ ae.pose.bones[bone].head
+    sc.frame_set(keep)
+    return p
 
 
 def _reparent(obj, parent):
@@ -593,9 +607,10 @@ def _sight_ride(ctx, m, smap, name, side, h, tgt, back, f1):
         helper.rotation_mode = "QUATERNION"
         collection("Rig").objects.link(helper)
         attach_to_bone(helper, arm, hb, Matrix())
-    mats = [(ctx.frame(float(k["t"])), _hand_matrix(arm, smap, side, targets.point(ctx, k["at"]),
-                                                    k.get("dir", h.get("dir", tuple(-back))), k.get("palm", h.get("palm"))))
-            for k in keys if k.get("sight")]
+    held = [k for k in keys if k.get("sight")]
+    mats = [(ctx.frame(float(k["t"])), _hand_matrix(arm, smap, side, at, k.get("dir", h.get("dir", tuple(-back))),
+                                                    k.get("palm", h.get("palm"))))
+            for k, at in zip(held, _key_points(ctx, m, held, "at", f1))]
     _key_goal(helper, mats, Matrix.Translation((0.0, -arm.data.bones[hb].length, 0.0)) @ head_inv)
     if c is None:
         c = tgt.constraints.new("COPY_TRANSFORMS")
@@ -801,16 +816,19 @@ def _swivel(S, W, a, b):
     return math.atan2(u.dot(pa.cross(pb)), pa.dot(pb)) if pa.length > 1e-6 and pb.length > 1e-6 else 0.0
 
 
-def _key_move_poles(ctx, pole, keys, home, pinv):
+def _key_move_poles(ctx, m, pole, keys, home, pinv, f1):
     """Key the elbow's pole on a hand's keys when one of them holds the elbow its own way (a key's `pole`, a target: a
-    move's place such as a lone hand resting on the skirt, mkmmd.core.moves POLES): that pole on its keys and the hand's
-    own pole (`home`, world) on the others, eased between them as the goal is; read in the pole's parent frame `pinv`."""
+    move's place such as a lone hand resting on the skirt, mkmmd.core.moves POLES, read as the hand's own key targets
+    are, `_key_points`): that pole on its keys and the hand's own pole (`home`, world) on the others, eased between them
+    as the goal is; read in the pole's parent frame `pinv`."""
     if not any(k.get("pole") is not None for k in keys):
         return
+    keys = sorted(keys, key=lambda k: float(k["t"]))
+    held = [k for k in keys if k.get("pole") is not None]
+    at = dict(zip(map(id, held), _key_points(ctx, m, held, "pole", f1)))
     want = {}
-    for k in sorted(keys, key=lambda k: float(k["t"])):
-        want[ctx.frame(float(k["t"]))] = tuple(pinv @ (targets.point(ctx, k["pole"]) if k.get("pole") is not None
-                                                       else home))
+    for k in keys:
+        want[ctx.frame(float(k["t"]))] = tuple(pinv @ at.get(id(k), home))
     frames = sorted(want)
     K.key_vec(pole, "location", frames, [want[f] for f in frames], interp="BEZIER")
 
@@ -921,11 +939,11 @@ def free_hands(ctx):
         for s in sides:
             rig = m.hands[s]
             keys = res["hands"][s]
-            h = dict(rig["h"], keys=MOVES.hand_keys(name, keys), ik=res["ik"].get(s))
+            h = dict(rig["h"], keys=MOVES.hand_keys(name, keys, MOVES.chest_of(m.arm)), ik=res["ik"].get(s))
             _key_goal(rig["tgt"], _hand_targets(ctx, name, s, h, m.arm, smap, rig["back"], rig["out_dir"], f1),
                       rig["par_inv"])
             _sight_ride(ctx, m, smap, name, s, h, rig["tgt"], rig["back"], f1)
-            _key_move_poles(ctx, rig["pole"], h["keys"], rig["pole_w"], rig["pole_inv"])
+            _key_move_poles(ctx, m, rig["pole"], h["keys"], rig["pole_w"], rig["pole_inv"], f1)
             ik = h["ik"] or []
             spans = [(ik[i][0], ik[i + 3][0]) for i in range(0, len(ik), 4)]
             frames, shares = _key_ik(ctx, m.arm, name, s, rig, h["ik"], f0, f1,
@@ -989,6 +1007,19 @@ def _full(st, f):
     return a + st.blend_in - 1e-3 <= f <= b - st.blend_out + 1e-3
 
 
+def _key_points(ctx, m, keys, what, f1):
+    """The world points of the targets `what` ("at" or "pole") of a hand's keys. A key that names the bone of member m
+    it goes with (`carry`: the moves' places, made from the body at rest, mkmmd.blender.build.moves.hand_keys) is moved
+    by how far the settled base pose (frame f1: this stage's own seat, hips and spine keys) has taken that bone's head
+    from where it is at rest, so a seat or a hip shift takes it along with the body; a hand that hangs or points still
+    hangs or points the same way. That move is measured once, here in the pose stage, and kept on the member
+    (`m.carried`): `free_hands` keys the hands again after the motion stage, when strips play under the base pose."""
+    for bone in {k["carry"] for k in keys if k.get("carry")} - set(m.carried):
+        b = S.resolve_bone(m.arm, bone)
+        m.carried[bone] = _settled_head(m.arm, b, f1) - _world_head(m.arm, b)
+    return [targets.point(ctx, k[what]) + m.carried.get(k.get("carry"), Vector()) for k in keys]
+
+
 def _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1):
     """[(frame, IK goal matrix)] of a hand without a grip: lying on an edge or plane, at a point, or moving keys."""
     mats = []
@@ -1003,9 +1034,9 @@ def _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1):
     if h.get("at") is not None:
         at = targets.point(ctx, h["at"])
         mats.append((f1, _hand_matrix(arm, smap, side, at, h.get("dir", tuple(-back)), h.get("palm"))))
-    for k in h.get("keys", []):
-        mats.append((ctx.frame(float(k["t"])), _hand_matrix(arm, smap, side, targets.point(ctx, k["at"]),
-                                                             k.get("dir", h.get("dir", tuple(-back))),
+    keys = h.get("keys", [])
+    for k, at in zip(keys, _key_points(ctx, ctx.cast[name], keys, "at", f1)):
+        mats.append((ctx.frame(float(k["t"])), _hand_matrix(arm, smap, side, at, k.get("dir", h.get("dir", tuple(-back))),
                                                              k.get("palm", h.get("palm")))))
     if not mats:
         raise BuildError(f"pose.{name}.hands.{side}: give at, rest, grip or keys")
@@ -1764,7 +1795,7 @@ def run(ctx):
             m.ik[side] = (tgt, pole)
             probe[name, side] = np.array([f1])
             wrist = smap[f"wrist.{side}"]
-            sh = _world_head(arm, smap[f"arm.{side}"])
+            sh = _settled_head(arm, smap[f"arm.{side}"], f1)      # where the settled pose has the shoulder: a seat lowers it
             out_dir = lat if side == "L" else -lat
             gp, gu = _grip_card(ctx, h)
             if h.get("pole") is not None:
@@ -1850,7 +1881,7 @@ def run(ctx):
                 rig["pluck"] = dict(grip["pluck"], stations={s: dict(st, local=par_inv @ st["goal"])
                                                              for s, st in grip["pluck"]["stations"].items()})
             m.hands[side] = rig
-            _key_move_poles(ctx, pole, h.get("keys") or [], pole_w, rig["pole_inv"])
+            _key_move_poles(ctx, m, pole, h.get("keys") or [], pole_w, rig["pole_inv"], f1)
             _key_ik(ctx, arm, name, side, rig, h.get("ik"), f0, f1)
             if h.get("ik") is not None:                    # a hand let go follows the member's strips (a walk's arm
                 arm.animation_data.action_blend_type = "COMBINE"   # swing), which compose with its own keys (the

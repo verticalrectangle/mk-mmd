@@ -18,8 +18,9 @@ BEATS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 PLACES = ("rest", "dainty", "dainty_one", "mic", "mic_lens", "mic_up", "mic_across", "chest", "bounce", "point", "heart",
           "peace", "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny", "bonk_up", "bonk", "hair",
           "hair_out", "hip", "gun", "float_low", "float", "peek", "butterfly", "butterfly_shut", "bud", "bloom", "reach",
-          "wings_up", "wings_down", "blow", "blow_out", "giggle", "behind", "behind_one", "clasp", "clasp_one", "skirt")
-DREAMY = ("peek", "butterfly", "bloom", "reach", "wings", "blow", "giggle")      # the moves of the dreamy set
+          "reach_up", "wings_up", "wings_down", "blow", "blow_out", "giggle", "behind", "behind_one", "clasp", "clasp_one",
+          "skirt", "swing_back")
+DREAMY = ("peek", "butterfly", "bloom", "reach", "reach_up", "wings", "blow", "giggle")   # the moves of the dreamy set
 
 
 def near(p):
@@ -421,6 +422,17 @@ def test_body_moves_ease_in_and_out_and_two_at_once_are_refused():
         MV.compile([{"name": "lean_back", "t": 1.0, "dur": 1.0}, {"name": "into_lens", "t": 1.5, "dur": 1.0}], MARKS)
     with pytest.raises(MV.MoveError):                                     # a head turn and a hip tilt at once, too
         MV.compile([{"name": "over_shoulder", "t": 1.0, "dur": 1.0}, {"name": "hand_hip", "t": 1.9, "dur": 1.0}], MARKS)
+
+
+def test_a_move_s_body_keys_can_be_left_out_for_the_project_s_own():
+    """body = false: the peek's ring and its face stay, its lean and head tilt go, so [perform] can key the body itself
+    (leaning over a table, sitting back) over the same clip without the two keying it at once."""
+    kept = MV.compile([{"name": "peek", "t": 1.0, "dur": 1.0, "hand": "R"}], MARKS)
+    out = MV.compile([{"name": "peek", "t": 1.0, "dur": 1.0, "hand": "R", "body": False}], MARKS)
+    assert kept["lean"] and kept["head_tilt"] and not any(out[k] for k in MV.BODY)
+    assert out["hands"] == kept["hands"] and out["expressions"] == kept["expressions"]
+    with pytest.raises(MV.MoveError, match="body = false"):
+        MV.compile([{"name": "peek", "t": 1.0, "body": "no"}], MARKS)
 
 
 @pytest.mark.parametrize("name", ["hair_flip", "over_shoulder", "hand_hip", "finger_gun", "peek", "reach", "giggle"])

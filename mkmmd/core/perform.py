@@ -38,13 +38,27 @@ def envelope(t, t_on, t_hold, t_back, rise, fall=None):
     return smooth((np.asarray(t, float) - t_on) / max(rise, 1e-3)) * (1.0 - smooth((np.asarray(t, float) - t_hold) / fall))
 
 
+def curves(keys):
+    """`keys` as a list of curves: keys [[t, v], ...] are one curve, a list of such key lists several (a project's own
+    `crouch` and the one a move adds to it, mkmmd.core.moves.join_legs); none for no keys."""
+    if not keys:
+        return []
+    first = keys[0]
+    if isinstance(first, (list, tuple)) and first and isinstance(first[0], (list, tuple)):
+        return [list(c) for c in keys if c]
+    return [list(keys)]
+
+
 def eased_keys(ts, keys):
     """Values over time from keys [[t, v], ...]: smoothstep-eased between consecutive keys, held before the first and
-    after the last; zeros without keys."""
+    after the last; zeros without keys. A list of such key lists (`curves`) is the sum of their curves."""
     ts = np.asarray(ts, float)
-    if not keys:
+    cs = curves(keys)
+    if not cs:
         return np.zeros(len(ts))
-    ks = sorted((float(t), float(v)) for t, v in keys)
+    if len(cs) > 1:
+        return sum(eased_keys(ts, c) for c in cs)
+    ks = sorted((float(t), float(v)) for t, v in cs[0])
     out = np.full(len(ts), ks[0][1])
     for (t0, v0), (t1, v1) in zip(ks, ks[1:]):
         m = ts >= t0

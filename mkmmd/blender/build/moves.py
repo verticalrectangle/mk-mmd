@@ -332,11 +332,28 @@ def _targets(ctx, name, m, i, e):
     return dict(e, target=[round(float(v), 4) for v in p])
 
 
-def hand_keys(name, keys):
+def chest_of(arm):
+    """The bone the moved hands ride (`ride`), their places with it: the chest, `upper_body2`, or `upper_body` on a rig
+    without one."""
+    return "upper_body2" if "upper_body2" in S.semantic_map(arm) else "upper_body"
+
+
+def hand_keys(name, keys, chest):
     """A hand's compiled keys (mkmmd.core.moves) as the pose stage reads them: their places, and the elbow's pole of a
-    place that holds the elbow its own way, are points in member `name`'s own frame, so targets of it."""
-    return [dict(k, at={"cast": name, "point": k["at"]},
-                 **({"pole": {"cast": name, "point": k["pole"]}} if k.get("pole") is not None else {})) for k in keys]
+    place that holds the elbow its own way, are points in member `name`'s own frame, so targets of it. They are made
+    from the landmarks of the body at rest, standing, so each key also names the bone it goes with, `carry`: the
+    `chest`, or the head for a place seen through (`sight`). The pose stage moves its places by how far the settled
+    base pose has moved that bone from where it is at rest, so a seat or a hip shift takes them along with the body
+    (seated, her eyes are 20 to 40 cm lower than standing) and a hand that hangs or points still hangs or points the
+    same way. A key on a motion strip (`strip`) is where the strip has the hand, as it is: it carries nothing."""
+    out = []
+    for k in keys:
+        k = dict(k, at={"cast": name, "point": k["at"]},
+                 **({"pole": {"cast": name, "point": k["pole"]}} if k.get("pole") is not None else {}))
+        if not k.get("strip"):
+            k["carry"] = "head" if k.get("sight") else chest
+        out.append(k)
+    return out
 
 
 def apply(ctx):
@@ -369,7 +386,7 @@ def apply(ctx):
                         for s in ("L", "R")}
         plan["held"] = res["held"]
         m.moves = plan                                   # pose.free_hands compiles them again with the strips' hands
-        chest = "upper_body2" if "upper_body2" in S.semantic_map(m.arm) else "upper_body"
+        chest = chest_of(m.arm)
         pose = ctx.data.setdefault("pose", {}).setdefault(name, {})
         for side, keys in res["hands"].items():
             if not keys:
@@ -377,7 +394,7 @@ def apply(ctx):
             hand = pose.setdefault("hands", {}).setdefault(side, {})
             if any(k in hand for k in ("at", "keys", "grip", "rest", "ik")):
                 raise BuildError(f"[pose.{name}.hands.{side}] places that hand and [[move.{name}]] moves it")
-            hand["keys"] = hand_keys(name, keys)
+            hand["keys"] = hand_keys(name, keys, chest)
             hand.setdefault("ride", f"cast:{name}.{chest}")
             if side in res["ik"]:
                 hand["ik"] = res["ik"][side]
@@ -390,15 +407,10 @@ def apply(ctx):
         for key in ("twitch", "expressions"):
             if res[key]:
                 perf[key] = list(perf.get(key) or []) + res[key]
-        for key, v in res["perform"].items():            # a gag's or mosh move's legs (a bounce's pump and hops, a run,
-            if key in ("air", "mouth"):                  # a pogo's jumps, a pound's knees) and its mouth
-                own = perf.get(key) or []
-                perf[key] = (own if isinstance(own, list) else [own]) + v
-            elif perf.get(key):
-                users = {"walk": "run_in_place", "bounce": "bounce"}.get(key, "bounce, pogo, pound")
-                raise BuildError(f"[perform.{name}] {key} and [[move.{name}]] both key it (a {users})")
-            else:
-                perf[key] = v
+        try:                                             # a gag's or mosh move's legs (a bounce's pump and hops, a run,
+            MV.join_legs(perf, res["perform"])           # a pogo's jumps, a pound's knees) and its mouth
+        except MV.MoveError as e:
+            raise BuildError(f"[perform.{name}] {e}") from None
         for prop, vals in res["props"].items():          # a carrot's bites: the clip second each is bitten
             for key, v in vals.items():
                 ctx.props[prop].root[key] = float(v)

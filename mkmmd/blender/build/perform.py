@@ -42,7 +42,8 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      seconds) keep it to a span, easing in over `ease` s before `from` and out after `to`; a
                                      list of tables is several sways, summed (a sway in each span where she stands idle)
   crouch = [[t, metres], ...]        the hips drop by that much, the feet planted (the knees bend: a landing, a squat), eased
-                                     between keys like `rise`
+                                     between keys like `rise`; for either, a list of such key lists is their sum (a move's
+                                     hops added to the project's own: mkmmd.core.moves.join_legs)
   air = [{from, to, tuck = 0.24, back = 0.10, first = "L", share = 0.7, lag = 0.06, rise = 0.14, extend = 0.22, point = 30,
           kicks = true | {knee = 10, hip = 2, foot = 15, period = 3.0, every, beats, timeline, wander = 0.3, seed = 0,
           ease = 1.0}}]              the legs while the body is off the ground (a jump, a blast, a float; the root's height is

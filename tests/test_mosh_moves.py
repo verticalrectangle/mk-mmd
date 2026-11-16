@@ -160,6 +160,25 @@ def test_a_pogo_jumps_up_on_each_hit_as_high_as_a_body_flies_in_the_time_it_has(
     assert max(v for _, v in eights["perform"]["rise"]) < top          # less time between the hits: lower hops
 
 
+def test_a_pogo_s_jumps_add_to_the_project_s_own_lift_and_crouch_and_its_face_can_be_left_out():
+    res = compile([{"name": "pogo", "t": 2.0, "dur": 1.6, "face": False}])
+    own = {"rise": [[0.0, 0.0], [0.5, 1.5], [1.2, 0.0]], "crouch": [[1.2, 0.3], [1.5, 0.0]], "bounce": None}
+    perf = {k: v for k, v in own.items() if v}
+    MV.join_legs(perf, res["perform"])                                 # a leap the project keys, then the pogo
+    ts = np.linspace(0.0, 4.0, 401)
+    for key in ("rise", "crouch"):
+        both = PF.eased_keys(ts, perf[key])
+        assert both == pytest.approx(PF.eased_keys(ts, own[key]) + PF.eased_keys(ts, res["perform"][key]))
+    assert PF.eased_keys(ts, perf["rise"])[50] == pytest.approx(1.5)   # the leap's top at 0.5 s, as the project keyed it
+    assert max(PF.eased_keys(ts[ts > 2.0], perf["rise"])) > 0.05       # and the pogo's hops after it
+    assert perf["air"] == res["perform"]["air"]
+    assert not res["expressions"]                                      # face = false: no cheerful, no smile of its own
+    with pytest.raises(MV.MoveError, match="bounce"):
+        MV.join_legs({"bounce": {"depth": 0.03}}, {"bounce": {"beats": [1.0]}})
+    with pytest.raises(MV.MoveError, match="face = false"):
+        compile([{"name": "pogo", "t": 2.0, "dur": 1.6, "face": "no"}])
+
+
 @pytest.mark.parametrize("routine", list(MO.ROUTINES))
 def test_wotagei_holds_a_penlight_in_each_fist_and_plays_its_routine_on_the_beats(routine):
     res = compile([{"name": "wotagei", "t": 0.5, "dur": 2.5, "props": PENS, "routine": routine}])

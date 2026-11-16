@@ -804,6 +804,30 @@ def test_a_hand_let_go_follows_the_arm_strip_and_the_ik_lets_go_and_takes_over_w
     assert np.linalg.norm(before - strip[0][0]) > 0.1                           # ... though the strip is raising the arm
 
 
+def test_a_strip_that_leans_her_does_not_move_where_the_moves_put_her_hands(make, capsys):
+    """The moves' places go with the bone they belong with by how far the settled base pose moved it from rest (`carry`),
+    measured in the pose stage. `free_hands` keys the hands again once the motion stage has laid the strips, and it used
+    to measure that move again with a strip of the upper body playing under the base pose (a walk's lean, Combine), so
+    every place went where the strip had leaned the chest (40 cm forward on a walk). With the chest leaned by the strip
+    or not, the resting hand's goal is the same in the chest's frame."""
+    vmd = make.root / "lean.vmd"
+    lean = (0.2588, 0.0, 0.0, 0.9659)                                           # the upper body 30 deg about X
+    _vmd(vmd, {"左腕": [(0, (0.0, 0.0, 0.4226, 0.9063)), (60, (0.0, 0.0, 0.4226, 0.9063))], "上半身": [(0, lean), (60, lean)]})
+    moves = ('\n[[move.mq]]\nname = "rest"\nhand = "L"\nplace = "rest"\n'
+             '\n[[move.mq]]\nname = "free"\nt = 0.5\ndur = 0.8\nhand = "L"\n')
+    got = {}
+    for run, bones in (("arms", '"arms"'), ("leaned", '["arms", "upper_body"]')):
+        code, out = make(FREE.replace('bones = "arms"', f"bones = {bones}").format(vmd=vmd, moves=moves), until="motion")
+        assert code == 0, out.get("error")
+        code, q = cli(["q", str(make.root / "build" / "t.blend"),
+                       "[list(bone('upper_body2').matrix.inverted() @ obj('mq_hand.L').loc), list(bone('upper_body2').head)]",
+                       "--frames", "34", "--project", str(make.root)], capsys)
+        assert code == 0, q
+        got[run] = [np.array(v) for v in q["values"][0]]
+    assert np.linalg.norm(got["leaned"][1] - got["arms"][1]) > 0.02            # the strip does lean her chest ...
+    assert np.linalg.norm(got["leaned"][0] - got["arms"][0]) < 3e-3            # ... and her hand stays where it was put
+
+
 def test_a_hand_let_go_to_a_strip_that_plays_its_fingers_curls_them_as_the_strip_does_not_more(make, capsys):
     """The action of a member with a hand let go blends with Combine, so the hand's own finger keys (a rest place's
     relaxed curl) used to compose with the strip's fingers: a strip's curl of 40 deg became 54. While the hand is let
@@ -1127,6 +1151,43 @@ def test_a_peek_s_hand_goes_with_the_head_over_its_hold_as_the_head_rocks(tmp_pa
     assert np.linalg.norm(head - head[0], axis=1).max() < 2e-3          # still against the head from its arrival on ...
     assert np.linalg.norm(chest - chest[0], axis=1).max() > 5e-3        # ... as the head rocks it about over the chest
 
+
+PEEK_SEATED = """[pose.mq]
+{seat}
+
+[[move.mq]]
+name = "peek"
+t = 0.5
+dur = 1.0
+hand = "L"
+"""
+
+
+def test_a_seated_member_s_moves_go_where_the_seat_has_her_body(tmp_path, mannequin, capsys):
+    """The moves' places are made from the body at rest, standing; a seat lowers it (the mannequin's head by some 40 cm),
+    so the places ride her chest and her head from their rest pose: a seated peek's ring is at her eye as a standing
+    one's is (it was where her standing eye would have been, over her head), and the elbow's default pole hangs from the
+    shoulder where the seat has it (it was at the height of her standing shoulder: the elbow winged out)."""
+    rig = json.loads(Path(mannequin[1]).read_text(encoding="utf-8"))
+    rig["morphs"]["mouth_smile"] = rig["morphs"]["smile_eyes"]           # the mannequin's one smile, for the peek's face
+    (tmp_path / "mq.rig.json").write_text(json.dumps(rig), encoding="utf-8")
+    got = {}
+    for how, seat in (("standing", 'feet = "floor"'), ("seated", "sit = { hip = [0.0, 0.0, 0.5] }")):
+        (tmp_path / "mk.toml").write_text(HEAD + f'\n[[cast]]\nname = "mq"\npmx = "{mannequin[0]}"\n'
+                                          f'rig = "{tmp_path / "mq.rig.json"}"\n\n' + PEEK_SEATED.format(seat=seat),
+                                          encoding="utf-8")
+        code, out = cli(["build", "--project", str(tmp_path), "--until", "pose"], capsys)
+        assert code == 0, out.get("error")
+        expr = ("[list(bone('head').matrix.inverted() @ bone('wrist.L').head), list(bone('head').head), "
+                "list(bone('arm.L').head), list(obj('mq_elbow.L').loc)]")
+        code, q = cli(["q", str(tmp_path / "build" / "t.blend"), expr, "--frames", "31,61", "--project", str(tmp_path)],
+                      capsys)
+        assert code == 0, q
+        got[how] = [[np.array(v) for v in f] for f in q["values"]]     # [resting (clip 0), the ring held (clip 1)]
+    (rest, ring), (seated_rest, seated_ring) = got["standing"], got["seated"]
+    assert rest[1][2] - seated_rest[1][2] > 0.2                       # she sits well below where she stands ...
+    assert np.linalg.norm(seated_ring[0] - ring[0]) < 0.01             # ... and her ring is at her eye all the same
+    assert seated_rest[2][2] - seated_rest[3][2] > 0.2                 # the resting arm's pole under her shoulder
 
 
 @pytest.fixture(scope="module")

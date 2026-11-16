@@ -73,6 +73,7 @@ from . import armtwist as AT
 from . import fingers as FG
 from . import gags as GG
 from . import mosh as MO
+from . import perform as PF
 
 
 class MoveError(ValueError):
@@ -195,6 +196,8 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
     "float_low": ((0.62, -0.3, -0.72), 0.92),
     "float": ((0.86, -0.32, 0.12), 0.9),
     "reach": ((0.12, -1.0, 0.12), 0.9),
+    "reach_up": ((0.45, -0.55, 0.7), 0.85),       # half raised, up and out in front: toward something high (the moon)
+    "swing_back": ((0.18, 0.55, -0.82), 0.95),    # down and back behind the hip: a jump's wind-up
     "wings_up": ((0.92, 0.05, 0.38), 0.92),
     "wings_down": ((0.92, 0.0, -0.4), 0.92),
     "skirt": ((0.22, -0.12, -1.0), 0.99),
@@ -286,6 +289,8 @@ def place(name, side, marks):
         "bud": (chest + R * _v(s * 0.12, -0.40, 0.05), _v(-s * 0.1, -0.6, 0.79), _v(-s, 0, 0), "bud"),   # cupped
         "bloom": (chest + R * _v(s * 0.40, -0.55, 0.35), _v(s * 0.45, -0.25, 0.86), _v(-s * 0.6, 0.3, 0.75), "open"),
         "reach": (out("reach"), _v(-s * 0.05, -0.6, 0.8), _v(0, -1, 0), "reach"),                # the palm to the lens
+        "reach_up": (out("reach_up"), _v(s * 0.35, -0.45, 0.82), _v(0, -0.84, -0.55), "reach"),  # the fingers up to it
+        "swing_back": (out("swing_back"), _v(s * 0.1, 0.45, -0.89), _v(-s, 0, 0), "relaxed"),   # the arm back
         "wings_up": (out("wings_up"), _v(s * 0.97, 0, -0.12), _v(0, 0.3, -1), "relaxed"),      # the hand trailing down
         "wings_down": (out("wings_down"), _v(s * 0.92, 0, 0.38), _v(0, 0.2, -1), "relaxed"),   # ... and up
         "blow": (mouth + _v(s * 0.04, -0.17, -0.07), _v(-s * 0.25, -0.9, 0.2), _v(0, 0.1, 1), "flat"),   # palm up
@@ -760,6 +765,9 @@ MOVES = {
               "face": [("smile_eyes", 0.6), ("mouth_smile", 0.5)]},
     "reach": {"hand": "places", "places": (("reach", 0.0),), "lean": 8.0, "head_tilt": 6.0, "mirror": True,
               "face": [("calm", 0.35), ("mouth_smile", 0.35)]},
+    "reach_up": {"hand": "places", "places": (("reach_up", 0.0),), "face": [("calm", 0.3)]},
+    "swing_back": {"hand": "places", "places": (("swing_back", 0.0),), "both": True},
+    "drive": {"hand": "places", "places": (("bounce", 0.0), ("up", 0.25)), "both": True, "react": True},
     "wings": {"hand": "beats", "place": "wings_down", "off_place": "wings_up", "on": (0, 0, 0), "off": (0, 0, 0),
               "both": True, "every": 2, "face": [("calm", 0.5)]},
     "blow": {"hand": "places", "places": (("blow", 0.0), ("blow_out", 0.5)), "face": [("u", 0.7), ("calm", 0.4)]},
@@ -771,7 +779,8 @@ MOVES.update(GG.MOVES)                                          # the gag moves 
 MOVES.update(MO.MOVES)                                          # ... and the mosh moves (mkmmd.core.mosh)
 BODY = ("lean", "tilt", "turn", "head_tilt", "head_turn", "head_nod")   # perform keys a move holds, degrees
 MIRRORED = ("tilt", "turn", "head_tilt", "head_turn")           # ... those that a mirrored move turns the other way
-KEYS = {"name", "t", "dur", "hand", "morph", "value", "hits", "prop", "chore", "accents"} | set(MO.KEYS)
+KEYS = ({"name", "t", "dur", "hand", "morph", "value", "face", "body", "hits", "prop", "chore", "accents"}
+        | set(MO.KEYS))
 REST_PLACES = ("rest", "dainty", "mic", "behind", "clasp", "skirt")
 LONE = {"dainty": "dainty_one", "behind": "behind_one", "clasp": "clasp_one"}   # a pose for two: a hand there alone
 STRIP = "strip"                  # the place of a hand on a strip: (STRIP, i) is its i-th sample
@@ -822,8 +831,8 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
     for i, e in enumerate(entries):
         what = f"move {i} ({e.get('name')!r})" if isinstance(e, dict) else f"move {i}"
         if not isinstance(e, dict) or set(e) - KEYS or "name" not in e or "t" not in e:
-            raise MoveError(f"{what}: expected {{name, t, dur, hand, morph, value, hits, prop, chore, accents, "
-                            f"{', '.join(MO.KEYS)}}}")
+            raise MoveError(f"{what}: expected {{name, t, dur, hand, morph, value, face, body, hits, prop, chore, "
+                            f"accents, {', '.join(MO.KEYS)}}}")
         if e["name"] not in MOVES:
             raise MoveError(f"{what}: no such move (have {', '.join(sorted(MOVES))})")
         m, t0, dur = MOVES[e["name"]], float(e["t"]), float(e.get("dur", 1.0))
@@ -892,18 +901,23 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
             mouths += got["mouth"]
             for prop, vals in got["values"].items():
                 out["props"].setdefault(prop, {}).update(vals)
-            if got.get("body"):
+            if got.get("body") and e.get("body", True):
                 body.append((t0, t1, got["body"], what))         # its own curves (a headbang's nods)
         flip = -1.0 if m.get("mirror") and hand == "R" else 1.0
-        if any(k in m for k in BODY):
+        if not isinstance(e.get("body", True), bool):
+            raise MoveError(f"{what}: body = false leaves the move's own lean, tilt, turn and head keys out, so the "
+                            f"project keys the body itself (true, the default, keeps them)")
+        if any(k in m for k in BODY) and e.get("body", True):
             body.append((t0, t1, {k: float(m.get(k, 0.0)) * (flip if k in MIRRORED else 1.0) for k in BODY}, what))
         if "twitch" in m:
             out["twitch"].append(dict(m["twitch"], t=t0, deg=float(m["twitch"]["deg"]) * flip))
         if e["name"] == "face" and "morph" not in e:
             raise MoveError(f"{what}: a face needs `morph` (a morph's semantic name)")
+        if not isinstance(e.get("face", True), bool):
+            raise MoveError(f"{what}: face = false leaves the move's own face out (true, the default, keeps it)")
         wink = [((winks or WINKS)["R" if hand == "L" else "L"], 1.0)] if m.get("wink") else []   # the other eye
-        for morph, value in (m.get("face", []) + wink
-                             + ([(str(e["morph"]), float(e.get("value", 1.0)))] if "morph" in e else [])):
+        own = m.get("face", []) + wink if e.get("face", True) else []       # face = false: the project keys the face
+        for morph, value in (own + ([(str(e["morph"]), float(e.get("value", 1.0)))] if "morph" in e else [])):
             faces.setdefault(morph, []).append([t0, t1, value])
     made = {sd: dict(fixed[sd]) for sd in SIDES}                     # a gag's prop places, solved with their grips
 
@@ -966,6 +980,23 @@ def compile(entries, marks, beats=(), yaw=0.0, clear=None, strip=None, cloth=Non
     for key in BODY:
         out[key] = [[round(t, 4), round(v, 3)] for t, v in out[key]]
     return out
+
+
+def join_legs(perf, legs):
+    """Lay a member's moves' legs and mouth (`compile`'s "perform") into its `[perform.<cast>]` table `perf` (changed in
+    place): `air` and `mouth` spans join the project's own; `rise` and `crouch` add to them (several curves, summed:
+    mkmmd.core.perform.eased_keys), so a pogo can follow a leap and a landing the project keys itself; a `bounce` or a
+    `walk` the project keys as well is refused (MoveError naming the move that keys it)."""
+    for key, v in legs.items():
+        own = perf.get(key)
+        if key in ("air", "mouth"):
+            perf[key] = (list(own) if isinstance(own, list) else [own] if own else []) + list(v)
+        elif key in ("rise", "crouch") and own:
+            perf[key] = PF.curves(own) + [list(v)]
+        elif own:
+            raise MoveError(f"{key} and [[move]] both key it (a {'run_in_place' if key == 'walk' else 'bounce'})")
+        else:
+            perf[key] = v
 
 
 def ik_keys(spans):

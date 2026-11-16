@@ -16,7 +16,7 @@ SIDES = ("L", "R")
 HAND = {k: None for k in ("at", "dir", "palm", "pole", "rest", "along", "offset", "lift", "ride", "fingers", "grip", "clock",
                           "approach", "wrap", "edge", "face", "seeds", "skin_radius", "posture", "track", "channel", "fret",
                           "chord", "press", "move", "thumb", "tip", "clear", "hold", "ik")}
-HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers", "pole", "sight")
+HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers", "pole", "sight", "carry")
 HAND["wobble"] = ("deg", "tau", "seed")
 HAND["notes"] = fretting.NOTES_KEYS
 
