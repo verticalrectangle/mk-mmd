@@ -141,3 +141,15 @@ def test_an_older_bake_is_refused_with_the_command_that_bakes_it_again(tmp_path)
     (tmp_path / "bake.bin").write_bytes(b"")
     with pytest.raises(PL.BakeError, match="mk build --bake"):
         PL.load(tmp_path)
+
+
+def test_what_an_mkr_render_would_leave_to_blender_is_counted_by_reason_and_empty_when_it_draws_all():
+    from mkmmd.render import mkr as MKR
+    all_mine = {"draw": [1, 2], "blender": {}, "layers": {1: [None]}, "screen": {"draw": [1], "blender": {}}}
+    assert MKR.blender_share(all_mine, {"demands": {}, "keep": [], "screen": []}) == {}
+    plan = {"draw": [1], "blender": {2: "glass: tangents", 3: "glass: tangents"},
+            "layers": {1: [None, "a figure through a reflection"]}, "screen": {"draw": [], "blender": {1: "over the cap"}}}
+    theirs = {"demands": {1: [{"kind": "figure"}]}, "keep": [], "screen": [1]}
+    assert MKR.blender_share(plan, theirs) == {"frames": {"glass: tangents": 2},
+                                               "layers": {"a figure through a reflection": 1},
+                                               "screen": {"over the cap": 1}}

@@ -409,6 +409,31 @@ def split(req, out_plan, frames_dir, output=None):
     return mine, theirs
 
 
+def blender_share(out_plan, theirs):
+    """What an mkr render of one output leaves to Blender, as {kind: {reason: count}} with only the kinds that have
+    any: "frames" (the cut's frames mkr cannot draw: `plan`'s "blender"), "layers" (the items of `split`'s
+    theirs["demands"], each with the verdict `plan` gave it), "keep" and "screen" (the frames whose keep mask or
+    screen type mkr cannot draw). Empty when mkr draws it all: what `mk render --no-blender` insists on."""
+    share = {}
+
+    def count(kind, reason):
+        share.setdefault(kind, {})
+        share[kind][reason] = share[kind].get(reason, 0) + 1
+
+    for reason in (out_plan.get("blender") or {}).values():
+        count("frames", reason)
+    verdicts = out_plan.get("layers") or {}
+    for f, items in (theirs.get("demands") or {}).items():
+        why = [r for r in verdicts.get(int(f)) or () if r is not None]
+        for k in range(len(items)):
+            count("layers", why[k] if k < len(why) else "mkr info did not sort it")
+    for kind in ("keep", "screen"):
+        reasons = (out_plan.get(kind) or {}).get("blender") or {}
+        for f in theirs.get(kind) or ():
+            count(kind, reasons.get(f) or reasons.get(str(f)) or "mkr cannot draw it")
+    return share
+
+
 def look_ids(req, output):
     """The look jobs a request (`split`'s `mine`) has mkr draw for `output`: its frames' and its layers'."""
     looks = ((req.get("looks") or {}).get("outputs") or {}).get(output)

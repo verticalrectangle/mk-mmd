@@ -6388,7 +6388,9 @@ Blender keeps what mkr cannot draw: anything seen through a reflection, a fishey
 lists the kinds). A Blender job starts only when something is left for it: frames mkr cannot draw, layers it cannot
 draw, the screen type and keep masks of its frames it leaves (`mk_screen`, `mk_keep` tell the job which mkr draws). The
 report adds per output `blender_layers` (items and screen layers left to Blender) and `blender_jobs`, and mkr's own
-report counts its `layers` and `looks`.
+report counts its `layers` and `looks`. `mk render --engine mkr --no-blender` starts no Blender job at all: when
+anything would be left to one it draws nothing and exits 1, its report's `blender_would_draw` counting, per output,
+the `frames`, `layers`, `keep` masks and `screen` type by the reason mkr gave (`mkmmd.render.mkr.blender_share`).
 
 On Crimson and Clover (900 frames, three outputs, with a `[post] keep` and a glitch added for the test) `mk render
 --engine mkr --preset final` left Blender one job per output, for the eight silhouette frames and their own layers, and

@@ -17,7 +17,7 @@ from ..core import keep as KP
 from ..core import progress as PR
 from ..core import screentype as SRT
 from ..core import transition as TR
-from .common import RUNTIME, add_project_arg, cut_plan, emit, get_project, parse_frames, UsageError
+from .common import CHECK_FAILED, RUNTIME, add_project_arg, cut_plan, emit, get_project, parse_frames, UsageError
 
 PRESETS = {
     "draft": {"percent": 50, "samples": 16, "motion_blur": False},
@@ -55,7 +55,8 @@ type. Frames and layers in a silhouette or vector look (a shot's or a [[medium]]
 drawn as the look's passes, which worker processes compose with the same composer as Blender's frames. `mkr info` says
 which frames and layers it draws; the others (a reflection, a fisheye camera, something it cannot draw) render in
 Blender, which starts only when something is left for it; the report counts the frames per engine and why, and the
-layers left to Blender.
+layers left to Blender. --no-blender makes that a refusal: when a frame, a layer, a keep mask or screen type would be
+left to Blender, nothing is drawn, the report's `blender_would_draw` counts them by reason and the exit code is 1.
 
 [[transition]], [[insert]] and [[glitch]] entries (docs/design.md: Shots: Transitions and inserts, Glitches) need more than
 the cut's frames: the other shot's frames (plates), a silhouette's figure (mattes), a glitch's shot without its objects
@@ -96,6 +97,8 @@ def add(sub):
                    help="do not render the layers of [[transition]] / [[insert]] / [[glitch]]")
     p.add_argument("--keep", action="store_true", help="take the frames on disk that are older than the built scene as "
                    "they are (by default they are drawn again: they show an earlier build)")
+    p.add_argument("--no-blender", action="store_true", help="with engine mkr: draw nothing and exit 1 when a frame or "
+                   "a layer would be left to Blender; the report says which and why")
     p.add_argument("--post", action="store_true", help="run `mk post --follow` alongside: the videos are finished as "
                    "the frames come")
     p.add_argument("--post-args", default="", metavar="ARGS", help="more flags for that mk post (one string, e.g. "
@@ -168,6 +171,9 @@ def run(args):
     if args.percent:
         cfg["percent"] = args.percent
     own = cfg.get("engine") if cfg.get("engine") in OWN and not args.no_styles else None
+    if args.no_blender and own != "mkr":
+        raise UsageError("--no-blender is for an mkr render: add --engine mkr (or [render] engine = \"mkr\"), and no "
+                         "--no-styles")
     if cfg.get("engine") in OWN:
         cfg["engine"] = None                               # Blender's frames: the scene's own engine
     plan = None if args.no_styles or args.no_transitions else cut_plan(proj)
@@ -248,6 +254,13 @@ def run(args):
             looks = MKR.compose_jobs(doc, blob, o.name, mine["looks"]["outputs"][o.name], o.size, cfg["percent"], d,
                                      ids) if ids else None
             todo[o.name] = ([f for f in own_frames[o.name] if f"{f:05d}" not in on_disk(d)], mine, looks)
+        if args.no_blender:                                # mkr or nothing: say what Blender would have drawn, and why
+            share = {o.name: MKR.blender_share(drawn["outputs"][o.name], drawn["outputs"][o.name]["theirs"])
+                     for o in outs}
+            if any(share.values()):
+                emit({"preset": args.preset, "error": "--no-blender: mkr cannot draw all of it, nothing was drawn",
+                      "blender_would_draw": {n: s for n, s in share.items() if s}})
+                return CHECK_FAILED
         engine_run = {"result": None, "error": None}
         # final frames at the preset's own samples: mkr's sampling for them (MKR.FINAL)
         sampling = MKR.sampling(args.preset, proj.data.get("render"), args.samples)
