@@ -8,6 +8,8 @@ import random
 
 import numpy as np
 
+from . import armreach as AR
+
 BLINK_S = 0.157
 
 
@@ -998,7 +1000,7 @@ def air_kicks(ts, t0, t1, spec, legs, tucked, first="L", where="kicks"):
 
 # ------------------------------------------------------------------------------ walking, hopping, tumbling
 WALK = {"stride": 0.55, "first": "L", "lift": 0.07, "dip": 0.015, "slide": 0.0, "roll": 0.15, "hop": 0.0, "arms": 0.0,
-        "cross": 0.0, "sway": 0.0}
+        "cross": 0.0, "sway": 0.0, "twist": 5.0, "list": 2.5}
 WALK_KEYS = ("steps", "hops") + tuple(WALK)
 HOP_KEYS = ("from", "to", "move", "height")
 TUMBLE_KEYS = ("from", "to", "deg", "axis")
@@ -1007,6 +1009,8 @@ GRAVITY = 9.81
 FIRST_SWING = 0.35                        # s: the swing of a step from a stand (the first, or one after a pause)
 WALK_PAUSE = 1.2                          # s: a step longer than this after the last (or a landing) is from a stand
 ARMS_SETTLE = 0.25                        # s: the arms' swing dies away over this once the feet have stopped
+WALK_CHEST = (0.6, 0.5)                   # the chest turns against the pelvis's twist by this share of it, and tilts
+#                                           against its list by that share (the shoulders level the hips out)
 
 
 def _hops(spec):
@@ -1039,12 +1043,19 @@ def walk_plan(ts, spec, feet):
     every hop) and carries it `move` [x, y] (default: a stride forward); the feet land a quarter stride either side of
     the body, the one that was ahead ahead, and the next step goes on from there. `slide` (0..1) puts the walk on a
     treadmill: the body goes 1 - slide of the way, the feet down slide back under it (1: the body stays, a running man).
-    `arms` (m) swings each hand forward as the other side's foot goes forward of where it stood, back as it goes
-    behind, while the feet move; it dies away over ARMS_SETTLE s once they stop, so a hand posed between two walks is
-    where its pose put it ("swing": {side: (F,)} the hand's forward offset; 0: none).
+    `arms` (m) swings each hand forward of its place and back behind it while the feet move: furthest forward as the
+    other side's foot comes down, furthest back as its own does, eased between (a pendulum's wave), at its place when
+    a hop lands; it dies away over ARMS_SETTLE s once the feet stop, so a hand posed between two walks is where its
+    pose put it ("swing": {side: (F,)} the hand's forward offset, which `swing_arm` turns into the arm's swing; 0:
+    none). The body walks too: the pelvis turns `twist` degrees about the upright so that the hip of the foot coming
+    down is forward, and lists `list` degrees so that the hip of the leg off the ground hangs lower (most at the middle
+    of the other leg's stance); the chest turns and tilts against it (WALK_CHEST), so the shoulders go with the arms
+    and the head stays level. Both come and go with the arms' swing.
     Returns {"shift": the root's travel (F, 2), "height": (F,), "feet": {side: (F, 2) the foot's floor position relative
     to the root}, "lift": {side: (F,)}, "dip": (F,), "sway": (F,) the hips' offset toward the left, "air": [(from, to)]
-    the hops' flights, "swing", "steps", "hops"}. Raises ValueError for steps out of order or inside a hop."""
+    the hops' flights, "swing", "twist" and "list": the pelvis's turn toward the left and its roll about the axis
+    behind her (F,) rad, "chest": {"turn", "tilt"} the chest's own toward the left (F,) rad, "steps", "hops"}. Raises
+    ValueError for steps out of order or inside a hop."""
     ts = np.asarray(ts, float)
     o = dict(WALK, **{k: v for k, v in spec.items() if k in WALK})
     bad = sorted(set(spec) - set(WALK_KEYS))
@@ -1153,15 +1164,114 @@ def walk_plan(ts, spec, feet):
     moving = np.zeros(n)                                          # the arms swing over a walk, coming and going smoothly
     for t0, t1 in runs:
         moving = np.maximum(moving, smooth((ts - t0) / ARMS_SETTLE) * (1.0 - smooth((ts - t1) / ARMS_SETTLE)))
-    swing = {}                                                    # each hand goes forward as the other side's foot does
+    lands = sorted({(t1, t0, s if arc else "") for s in swings for t0, t1, _, _, arc in swings[s]})
+    waves = {}                                                    # each hand is furthest forward as the other side's
+    for s in out_feet:                                            # foot comes down, furthest back as its own does
+        pts, last = [], None                                      # (t, where the hand is: -1 back .. 1 forward)
+        for t1, t0, who in lands:
+            if not who or len(out_feet) == 1:                     # a hop's landing: the hands at their places
+                pts.append((t1, 0.0))
+            else:
+                if last is None or t1 - last > WALK_PAUSE:        # a step from a stand: from its place
+                    pts.append((t0, 0.0))
+                pts.append((t1, 1.0 if who != s else -1.0))
+            last = t1
+        wave = np.zeros(n)
+        for (ta, va), (tb, vb) in zip(pts, pts[1:]):
+            inside = (ts >= ta) & (ts <= tb)
+            wave[inside] = va + (vb - va) * smooth((ts[inside] - ta) / max(tb - ta, 1e-9))
+        if pts:
+            wave[ts > pts[-1][0]] = pts[-1][1]
+        waves[s] = moving * wave
     arms = float(o["arms"])
-    for s in out_feet:
-        other = next((x for x in out_feet if x != s), s)
-        ahead = -(out_feet[other][:, 1] - float(feet[other][1]))  # that foot's forward offset from where it stood
-        swing[s] = (arms * moving * np.clip(ahead / max(0.5 * stride, 1e-6), -1.0, 1.0) if arms > 0
-                    else np.zeros(n))
+    swing = {s: arms * waves[s] if arms > 0 else np.zeros(n) for s in out_feet}
+    gait = waves.get("L", np.zeros(n))                            # 1 as the right foot comes down in front, -1 as the left
+    weight = np.zeros(n)                                          # 1 with all her weight on the left foot, -1 on the right
+    for t0, t1, s in stance:
+        u = (ts - t0) / max(t1 - t0, 1e-6)
+        inside = (u > 0.0) & (u < 1.0)
+        weight[inside] = math.copysign(1.0, lat[s][0] or 1.0) * np.sin(np.pi * u[inside])
+    weight = weight * moving
+    twist, lst = math.radians(float(o["twist"])), math.radians(float(o["list"]))
+    if twist < 0 or lst < 0:
+        raise ValueError("twist and list not negative (degrees)")
     return {"shift": (1.0 - slide) * path, "height": height, "feet": out_feet, "lift": out_lift, "dip": sag,
-            "sway": hips, "air": [(a, b) for a, b, _ in air], "swing": swing, "steps": len(steps), "hops": len(hops)}
+            "sway": hips, "air": [(a, b) for a, b, _ in air], "swing": swing, "steps": len(steps), "hops": len(hops),
+            "twist": twist * gait, "list": -lst * weight,
+            "chest": {"turn": -WALK_CHEST[0] * twist * gait, "tilt": WALK_CHEST[1] * lst * weight}}
+
+
+SWING_FLEX = (0.9, 0.4)       # the elbow folds by this share of the arm's swing as the hand comes forward, and opens by
+#                               that share of it as the hand goes back
+SWING_BEND = math.radians(8.0)   # ... but never straighter than this (or than the arm hangs)
+SWING_IN = (0.25, 0.1)        # the hand comes in toward the body's middle by this share of its way forward, and goes out
+#                               by that share of its way back
+SWING_LAG = 0.05              # s: the hand turns this long after the forearm (a loose wrist trails behind it)
+SWING_HANGS = (0.5, 0.9)      # an arm swings fully when its wrist is this far under its shoulder, a share of the way
+#                               between them (0.9: within 26 degrees of straight down), and not at all above the first
+
+
+def _quat(axis, angle):
+    """(w, x, y, z) of a turn by `angle` radians about the unit `axis`."""
+    return np.concatenate([[math.cos(0.5 * angle)], math.sin(0.5 * angle) * np.asarray(axis, float)])
+
+
+def _qmul(a, b):
+    """The turn b, then the turn a (w, x, y, z)."""
+    aw, av, bw, bv = a[0], a[1:], b[0], b[1:]
+    return np.concatenate([[aw * bw - av @ bv], aw * bv + bw * av + np.cross(av, bv)])
+
+
+def _turned(v, axis, angle):
+    """`v` turned by `angle` radians about the unit `axis`."""
+    c, s = math.cos(angle), math.sin(angle)
+    return v * c + np.cross(axis, v) * s + axis * (v @ axis) * (1.0 - c)
+
+
+def swing_arm(ts, shoulder, wrist, pole, swing, upper, fore, fwd, left, inner):
+    """A walking arm: the wrist's places `wrist` (F, 3) swung like a pendulum from the arm's joint `shoulder` (3,) by
+    walk_plan's `swing` (F,: metres the hand is forward of its place), instead of slid. The hand goes round the shoulder
+    by the angle that carries it that far forward; the elbow folds as it comes forward and opens as it goes back
+    (SWING_FLEX, for an arm of segments `upper` and `fore` m), so the hand rises in front; it comes in toward the body's
+    middle in front and goes out behind (SWING_IN; `inner` +1 for the left arm, -1 for the right); and an arm that does
+    not hang (a hand on a hip, at the chest, raised) is left where its pose put it (SWING_HANGS). The elbow's pole
+    `pole` (F, 3) goes round the shoulder with the arm, so the upper arm keeps the twist its pose gave it. `fwd` and
+    `left` are the character's unit axes in the frame of the points. Returns (wrist places (F, 3), poles (F, 3), turns
+    (F, 4)): `turns` are quaternions (w, x, y, z) to turn the hand's pose by, the forearm's own turn from where it hung
+    (its elbow where the pole puts it, mkmmd.core.armreach.pole_elbow) SWING_LAG s ago, so the wrist stays as the pose
+    has it and trails a little."""
+    ts, swing = np.asarray(ts, float), np.asarray(swing, float)
+    n = len(ts)
+    S, W, P = np.asarray(shoulder, float), np.asarray(wrist, float).reshape(n, 3), np.asarray(pole, float).reshape(n, 3)
+    fwd, left = np.asarray(fwd, float), np.asarray(left, float)
+    up = np.cross(fwd, left)
+    v0 = W - S
+    L0 = np.clip(np.linalg.norm(v0, axis=1), abs(upper - fore) + 1e-6, upper + fore - 1e-9)
+    hangs = smooth((-(v0 @ up) / L0 - SWING_HANGS[0]) / (SWING_HANGS[1] - SWING_HANGS[0]))
+    w = swing * hangs
+    th = np.arcsin(np.clip(w / L0, -0.95, 0.95))                   # the arm's angle about the shoulder, forward +
+    bend = lambda L: np.arccos(np.clip((L * L - upper * upper - fore * fore) / (2.0 * upper * fore), -1.0, 1.0))
+    e0 = bend(L0)                                                  # the elbow's bend as the arm hangs (0: straight)
+    e = e0 + SWING_FLEX[0] * np.maximum(th, 0.0) - SWING_FLEX[1] * np.maximum(-th, 0.0)
+    e = np.clip(e, np.minimum(e0, SWING_BEND), math.radians(150.0))
+    L = np.sqrt(upper * upper + fore * fore + 2.0 * upper * fore * np.cos(e))
+    axis = np.cross(fwd, up)                                       # turning about it by +th carries down toward fwd
+    side = -inner * left * (SWING_IN[0] * np.maximum(w, 0.0) - SWING_IN[1] * np.maximum(-w, 0.0))[:, None]
+    at, poles, turns = np.empty((n, 3)), np.empty((n, 3)), np.empty((n, 4))
+    for i in range(n):
+        at[i] = S + _turned(v0[i] / L0[i], axis, th[i]) * L[i] + side[i]
+        poles[i] = S + _turned(P[i] - S, axis, th[i])
+        hung = W[i] - AR.pole_elbow(S, W[i], upper, fore, P[i])    # the forearm as it hung, and as it is now
+        now = at[i] - AR.pole_elbow(S, at[i], upper, fore, poles[i])
+        a, b = _turned(hung / np.linalg.norm(hung), axis, th[i]), now / np.linalg.norm(now)
+        x = np.cross(a, b)                                         # the arm's swing, then what the elbow's fold adds
+        sx = float(np.linalg.norm(x))
+        more = _quat(x / sx, math.atan2(sx, float(a @ b))) if sx > 1e-9 else np.array([1.0, 0.0, 0.0, 0.0])
+        turns[i] = _qmul(more, _quat(axis, th[i]))
+        if i and turns[i] @ turns[i - 1] < 0:
+            turns[i] = -turns[i]
+    late = np.stack([np.interp(ts - SWING_LAG, ts, turns[:, c]) for c in range(4)], 1)
+    return at, poles, late / np.linalg.norm(late, axis=1)[:, None]
 
 
 def tumble_plan(ts, tumbles):

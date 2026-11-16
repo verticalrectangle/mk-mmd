@@ -6,6 +6,7 @@ import math
 import numpy as np
 import pytest
 
+from mkmmd.core import armreach as AR
 from mkmmd.core import perform as PF
 
 FEET = {"L": (0.09, 0.0), "R": (-0.09, 0.0)}
@@ -108,7 +109,55 @@ def test_the_arms_swing_while_she_walks_and_settle_when_she_stops_in_stride():
     assert np.abs(p["swing"]["L"][walking]).max() == pytest.approx(0.12, abs=0.01)
     settled = TS > steps[-1] + PF.ARMS_SETTLE
     assert np.abs(p["swing"]["L"][settled]).max() < 1e-9                # her feet a stride apart, her hands at rest
-    assert np.abs(np.diff(p["swing"]["L"])).max() < 0.03                 # no jump on the way (a jump is ~0.12 a sample)
+    assert np.abs(np.diff(p["swing"]["L"])).max() < 0.01                 # a pendulum: no jump, no whip (a slide's
+    #                                                                      return was 0.02 a sample)
+    for k, t in enumerate(steps[1:-1], 1):                               # L lands first: on the odd steps R does
+        lands = "L" if k % 2 == 0 else "R"
+        i = int(round(t * 120))
+        assert p["swing"]["R" if lands == "L" else "L"][i] == pytest.approx(0.12, abs=1e-6)     # the other hand ahead
+        assert p["swing"][lands][i] == pytest.approx(-0.12, abs=1e-6)                          # its own hand behind
+
+
+def test_the_pelvis_goes_with_the_legs_and_the_chest_against_it():
+    steps = [1.0 + k * BEAT for k in range(6)]                           # L, R, L, R, L, R
+    p = PF.walk_plan(TS, {"steps": steps, "twist": 8, "list": 4}, FEET)
+    right, left = int(round(steps[3] * 120)), int(round(steps[2] * 120))
+    assert math.degrees(p["twist"][right]) == pytest.approx(8.0, abs=1e-6)        # turned left: the right hip forward
+    assert math.degrees(p["twist"][left]) == pytest.approx(-8.0, abs=1e-6)
+    mid = int(round(0.5 * (steps[2] + steps[3]) * 120))                  # the left foot down, the right in the air
+    assert math.degrees(p["list"][mid]) == pytest.approx(-4.0, abs=0.01)  # the left hip up, the right one hanging
+    assert abs(p["list"][right]) < 1e-9                                   # level as both feet are down
+    assert math.degrees(p["chest"]["turn"][right]) == pytest.approx(-4.8) and p["chest"]["tilt"][mid] > 0
+    still = TS > steps[-1] + PF.ARMS_SETTLE
+    assert not p["twist"][still].any() and not p["list"][still].any()     # and square again once she has stopped
+
+
+def test_a_walking_arm_swings_from_the_shoulder_and_a_posed_hand_stays_put():
+    ts = np.arange(0.0, 1.0, 1.0 / 60.0)
+    S, upper, fore = np.array([0.15, 0.0, 1.30]), 0.22, 0.20
+    hang = np.tile(S + 0.97 * (upper + fore) * np.array([0.13, 0.03, -1.0]) / np.linalg.norm([0.13, 0.03, -1.0]), (60, 1))
+    pole = np.tile(S + np.array([0.1, 0.4, -0.2]), (60, 1))             # the elbow points back and a little out
+    swing = 0.12 * np.sin(2 * np.pi * ts)                              # forward, then back
+    fwd, left = np.array([0.0, -1.0, 0.0]), np.array([1.0, 0.0, 0.0])
+    at, poles, turns = PF.swing_arm(ts, S, hang, pole, swing, upper, fore, fwd, left, 1.0)
+    front, back = int(np.argmax(swing)), int(np.argmin(swing))
+    assert (at[front] - hang[front]) @ fwd == pytest.approx(0.12, abs=0.02)      # as far forward as the plan says ...
+    assert at[front][2] > hang[front][2] + 0.02 and at[front][0] < hang[front][0] - 0.02   # ... up and in, on an arc
+    reach = np.linalg.norm(at - S, axis=1)
+    assert reach[front] < reach[0] - 0.01 < reach[back]                 # the elbow folds in front and opens behind
+    assert reach.max() < upper + fore
+    lag = int(round(PF.SWING_LAG * 60))                                 # the hand turns as the forearm does, a moment
+    for i in (front, back):                                             # late: the wrist stays as straight as it hung
+        was = hang[i] - AR.pole_elbow(S, hang[i], upper, fore, pole[i])
+        now = at[i] - AR.pole_elbow(S, at[i], upper, fore, poles[i])
+        q = turns[i + lag]
+        got = was + 2.0 * np.cross(q[1:], np.cross(q[1:], was) + q[0] * was)
+        assert math.degrees(math.acos(got @ now / (np.linalg.norm(got) * np.linalg.norm(now)))) < 1.0
+    assert math.degrees(2.0 * math.acos(turns[front + lag][0])) > 20.0  # it has turned with the swing, not stayed down
+    assert np.allclose(np.linalg.norm(poles - S, axis=1), np.linalg.norm(pole - S, axis=1))    # the pole goes round too
+    chest = np.tile(S + np.array([0.02, -0.25, -0.05]), (60, 1))        # a hand held before her chest does not hang
+    held, kept, still = PF.swing_arm(ts, S, chest, pole, swing, upper, fore, fwd, left, 1.0)
+    assert np.allclose(held, chest) and np.allclose(kept, pole) and np.allclose(still, [1.0, 0.0, 0.0, 0.0])
 
 
 def test_a_step_after_a_pause_starts_from_a_stand_so_she_holds_still_between_two_walks():

@@ -907,11 +907,15 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
             flat[s] = (ball, heel)                               # that lifts (a groove's free foot, a spin's relevé)
         feet[s] = (ik, d, yaw_rel, heel)
     pelvis = None
-    if groove is not None:                                       # the pelvis: the standing hip up, the free one forward,
-        q0 = base.get("lower_body", Quaternion())               # on top of the pose's own pelvis turn
-        up_a, back_a = Vector((0.0, 0.0, 1.0)), Vector((0.0, 1.0, 0.0))
-        pelvis = [Quaternion(up_a, float(groove["yaw"][i])) @ Quaternion(back_a, float(groove["roll"][i]))
+    gait = walk is not None and (np.abs(walk["twist"]).max() > 0 or np.abs(walk["list"]).max() > 0)
+    if groove is not None or gait:                               # the pelvis, on top of the pose's own turn: a groove's
+        q0 = base.get("lower_body", Quaternion())               # standing hip up and free one forward; a walk's hip
+        up_a, back_a = Vector((0.0, 0.0, 1.0)), Vector((0.0, 1.0, 0.0))     # forward with its foot, the free one low
+        yaw = (groove["yaw"] if groove is not None else 0.0) + (walk["twist"] if gait else 0.0) + np.zeros(n)
+        roll = (groove["roll"] if groove is not None else 0.0) + (walk["list"] if gait else 0.0) + np.zeros(n)
+        pelvis = [Quaternion(up_a, float(yaw[i])) @ Quaternion(back_a, float(roll[i]))
                   @ Quaternion().slerp(q0, float(settle[i])) for i in range(n)]
+    if groove is not None:
         need, bend = _soft_knees(m, smap, W, centre0, feet0, settle, np.stack([side, behind, lift - dip], 1), pelvis,
                                  {s: f[1] for s, f in feet.items()}, groove["soft"], groove["dip"], groove["win"])
         if need is not None:                                     # and her knees soft under it: the hips come down for that
@@ -947,34 +951,61 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
 
 
 def _arm_swing(ctx, m, walk, frames):
-    """A walk's `arms`: each hand's IK goal moves forward and back (the plan's `swing`, along the character's forward
-    axis) on top of where the pose stage keyed it, in the goal's parent's frame as it stands at the settled pose (a goal
-    riding the chest swings with it). Returns the sides swung; a side without arm IK is left alone (logged)."""
+    """A walk's `arms`: each arm swings from its shoulder (mkmmd.core.perform.swing_arm: the hand on an arc, the elbow
+    folding as it comes forward, the hand turning with the forearm) by the plan's `swing`, on top of where the pose
+    stage keyed the hand's goal, in the frame the goal rides in as it stands at the settled pose (a goal riding the
+    chest swings with it). Returns the sides swung. A side without arm IK is left alone, and so is a hand whose goal
+    does not ride the member's own body (held at a place of the world: her shoulder leaves it as she walks); both are
+    logged."""
     sc = bpy.context.scene
     arm = m.arm
-    fwd = arm.matrix_world.to_3x3().normalized() @ Vector((0.0, -1.0, 0.0))
+    A = arm.matrix_world.to_3x3().normalized()
+    fwd, left = A @ Vector((0.0, -1.0, 0.0)), A @ Vector((1.0, 0.0, 0.0))
+    ts = np.asarray(frames, float) / ctx.fps
+    n = len(frames)
     keep = sc.frame_current
     sc.frame_set(int(ctx.start + ctx.settle))
     swung = []
+
+    def keyed(ob, path, still):
+        """The object's keys of `path` on every frame (its value where it has none)."""
+        act = ob.animation_data.action if ob.animation_data else None
+        out = np.empty((n, len(still)))
+        for c in range(len(still)):
+            fc = act.fcurves.find(path, index=c) if act is not None else None
+            out[:, c] = [fc.evaluate(f) for f in frames] if fc is not None else still[c]
+        return out
+
     for s, off in walk["swing"].items():
         if s not in m.ik:
             ctx.log(f"perform {m.name}: walk arms: no arm IK on side {s} (give the hand a pose, e.g. a `rest` move)")
             continue
-        goal = m.ik[s][0]
-        if goal.parent is not None and goal.parent_type == "BONE":
-            pb = goal.parent.pose.bones[goal.parent_bone]
-            R = (goal.parent.matrix_world @ pb.matrix).to_3x3().normalized()
-        elif goal.parent is not None:
-            R = goal.parent.matrix_world.to_3x3().normalized()
-        else:
-            R = Matrix.Identity(3)
-        d = R.inverted() @ fwd
-        ad = goal.animation_data
-        for c in range(3):
-            fc = ad.action.fcurves.find("location", index=c) if ad and ad.action else None
-            base = [fc.evaluate(f) for f in frames] if fc is not None else [goal.location[c]] * len(frames)
-            K.key_prop(goal, "location", frames, [b + float(off[i]) * d[c] for i, b in enumerate(base)], index=c,
-                       interp="LINEAR")
+        goal, pole = m.ik[s]
+        if goal.parent is not arm:
+            ctx.log(f"perform {m.name}: walk arms: the {s} hand's goal does not ride her body, it stays where it is held")
+            continue
+        P = goal.matrix_world @ goal.matrix_basis.inverted()        # the frame the goal's keys are in
+        Pi, k = P.inverted(), float(P.to_scale()[0])
+        R = P.to_3x3().normalized().inverted()
+        upper, fore, wrist = (S.resolve_bone(arm, f"{b}.{s}") for b in ("arm", "elbow", "wrist"))
+        rest = [arm.matrix_world @ arm.data.bones[b].head_local for b in (upper, fore, wrist)]
+        shoulder = Pi @ (arm.matrix_world @ arm.pose.bones[upper].head)
+        hold = Vector(bpy.data.objects[f"{m.name}_wrist.{s}"].location)   # the wrist's joint from the goal, in its axes
+        loc, rot = keyed(goal, "location", goal.location), keyed(goal, "rotation_quaternion", goal.rotation_quaternion)
+        rot /= np.linalg.norm(rot, axis=1)[:, None]
+        joint = np.array([loc[i] + np.array(Quaternion(rot[i]) @ hold) for i in range(n)])
+        Q = pole.matrix_world @ pole.matrix_basis.inverted()        # the pole's keys, read in the goal's frame
+        to_goal = Pi @ Q
+        poles = np.array([to_goal @ Vector(p) for p in keyed(pole, "location", pole.location)])
+        at, poles, turns = PF.swing_arm(ts, np.array(shoulder), joint, poles, np.asarray(off, float) / k,
+                                        (rest[1] - rest[0]).length / k, (rest[2] - rest[1]).length / k,
+                                        np.array(R @ fwd), np.array(R @ left), 1.0 if s == "L" else -1.0)
+        turned = [Quaternion(turns[i]) @ Quaternion(rot[i]) for i in range(n)]
+        K.key_vec(goal, "location", frames, [at[i] - np.array(q @ hold) for i, q in enumerate(turned)], interp="LINEAR")
+        K.key_vec(goal, "rotation_quaternion", frames, K.continuous([tuple(q) for q in turned]), interp="LINEAR")
+        if pole.parent is arm:                                      # it goes round the shoulder with the arm
+            back = to_goal.inverted()
+            K.key_vec(pole, "location", frames, [back @ Vector(p) for p in poles], interp="LINEAR")
         swung.append(s)
     sc.frame_set(keep)
     return swung
@@ -1188,6 +1219,8 @@ def run(ctx):
         head_tilt_x = np.radians(PF.eased_keys(ts, spec.get("head_tilt", [])))
         head_pitch_x = np.radians(PF.eased_keys(ts, spec.get("head_nod", [])))
         head_yaw_x = np.radians(PF.eased_keys(ts, spec.get("head_turn", [])))
+        if wplan is not None and "chest" in wplan:               # a walk: the chest against the pelvis
+            turn_x, tilt_x = turn_x + wplan["chest"]["turn"], tilt_x + wplan["chest"]["tilt"]
         gv = _groove(ctx, name, m, spec, ts) if body else None   # the weight from foot to foot: the chest leans back
         if gv is not None:                                       # over the hips, the head rights itself and nods late
             tilt_x, turn_x, lean_x = tilt_x + gv["tilt"], turn_x + gv["turn"], lean_x + gv["lean"]
