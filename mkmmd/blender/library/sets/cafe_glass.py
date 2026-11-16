@@ -216,8 +216,14 @@ def mat_glass(name, params, splats, rng, fog_tint, fog_img):
     tilt, wipe = glass_tilt(g, P, t, splats, rng, splat_group(f"{name}_splat"))
     tx, ty, _ = g.sep(tilt)
     tz = g.sq(g.mx(g.sub(1.0, g.add(g.mul(tx, tx), g.mul(ty, ty))), 0.04))
-    enc = g.rgb(g.mad(tx, 0.5, 0.5), g.mad(ty, 0.5, 0.5), g.mad(tz, 0.5, 0.5))
-    nm = g.node("ShaderNodeNormalMap", space="TANGENT", uv_map="UVMap")
+    # The pane is one flat quad facing +X with u along +Y and v along +Z (cafe.build_glass), so its tangent frame is
+    # the object's own axes: the tilted normal is (tz, tx, ty) there, written as an OBJECT-space map. A TANGENT-space
+    # one reads the same on this quad and needs the mesh's tangents, which mk's bake does not hold (mkr would leave
+    # every frame of the cafe to Blender). Seen from outside the tangent frame turns over with the face (the normal
+    # and the bitangent flip, the tangent stays): the object-space vector says so itself.
+    side = g.mad(g.node("ShaderNodeNewGeometry").outputs["Backfacing"], -2.0, 1.0)       # +1 from the room, -1 outside
+    enc = g.rgb(g.mad(g.mul(tz, side), 0.5, 0.5), g.mad(tx, 0.5, 0.5), g.mad(g.mul(ty, side), 0.5, 0.5))
+    nm = g.node("ShaderNodeNormalMap", space="OBJECT")
     g.put(nm.inputs["Color"], enc)
     # ---- shading, seen from the room (front face): refractive glass, clear -> frosted + whitened by the fog
     base = g.mixc(CLEAR_TINT, fog_tint, F)

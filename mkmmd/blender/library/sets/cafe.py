@@ -408,8 +408,13 @@ def build_lights(R, L):
 
 
 def build_world(R, L):
+    """The room's ambient: a warm floor bounce under a lavender-warm sky, brighter in a flash. Its radiance stays under
+    0.30 x 4 = 1.2, far below EEVEE's sun threshold (10), so nothing would ever be taken out of the probe into a sun
+    light: the threshold is 0 (as the night_sky and photo_world sets have it), which says so to a renderer that draws no
+    extracted sun (mkr)."""
     sc = bpy.context.scene
     w = bpy.data.worlds.get(R.oname("World")) or bpy.data.worlds.new(R.oname("World"))
+    w.sun_threshold = 0.0
     w.use_nodes = True
     nt = w.node_tree
     for n in list(nt.nodes):
