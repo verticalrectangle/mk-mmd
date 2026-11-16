@@ -23,6 +23,9 @@ spec keys (all optional)
     render     configure EEVEE Next (ray tracing, soft shadows) and AgX "Base Contrast" like the lighting expects
                (default true)
     rain, lightning   build the falling rain / the bolt rigs (default true)
+    glass      "refract" (default): from the room the pane is refracting glass (EEVEE's screen-space ray tracing; mkr
+               draws none, so it leaves every frame of the scene to Blender); "clear": alpha-transparent from both
+               sides, the street seen straight through beaded drops and fog: what mkr draws
     colors     {role = slot or "#hex"} overrides of the interior roles below (plaster, wainscot, window_paint, oak,
                oak_dark, cream, fog_tint, ...)
     steam, fog, outside_sat, sun, bolt, bolt_variant, bolt_rig, flash, refl    initial values of the parameters below
@@ -516,7 +519,10 @@ def cafe_room(name, coll, root, spec, palette):
     ticks = GL.splat_ticks(spec, proj.get("root") or ".", duration)
     splats = GL.splat_drops(ticks)
     fog_img = GL.fog_image("mk_cafe_fog_noise")            # one packed copy, shared by every cafe_room in the file
-    build_glass(R, GL.mat_glass(R.oname("WindowGlass"), params, splats, rng_glass, L["fog_tint"], fog_img))
+    glass = spec.get("glass", "refract")
+    if glass not in ("refract", "clear"):
+        raise ValueError(f"cafe_room {name}: glass = {glass!r} (\"refract\" or \"clear\")")
+    build_glass(R, GL.mat_glass(R.oname("WindowGlass"), params, splats, rng_glass, L["fog_tint"], fog_img, glass))
     out.build_street(rng_street)
     if spec.get("rain", True):
         out.build_rain()

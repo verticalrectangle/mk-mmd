@@ -890,7 +890,9 @@ strength 1.5}`: relative weights of the lit colours), `aviation` (12 red lights)
 **`cafe_room`** keys (all optional): `frame0` and `duration` (default the project's), `ticks` (clip seconds at which a rain splat lands
 on the glass; default every 1.5 s) or `timeline` (a file whose `ticks` or `tempo.ticks` are read, else its `beats`, the only tempo marks
 `mk timeline analyze` writes: a splat on every beat), `seed` (4242), `pendant` ([x, y], default [0, -0.48]), `render` (true: configure EEVEE Next and AgX
-"Base Contrast"), `rain` and `lightning` (true), `colors` (role to slot or `#hex`: `plaster`, `wainscot`, `window_paint`, `oak`,
+"Base Contrast"), `rain` and `lightning` (true), `glass` (`"refract"`: from the room the pane is refracting glass, which mkr does not
+draw, so it leaves the scene to Blender; `"clear"`: alpha-transparent from both sides, the street seen straight through beaded
+drops and fog, which mkr draws), `colors` (role to slot or `#hex`: `plaster`, `wainscot`, `window_paint`, `oak`,
 `oak_dark`, `cream`, `fog_tint`, ...). Room frame: a character sits at the origin facing -Y, +X is her left, the window wall is
 x = -0.80, the wall behind her y = 1.05; the big window spans y -1.75..0.65, z 0.82..2.85 and a small round table is expected at
 (0, -0.48). Animatable custom properties on the set root (key them with `[[key]]`; the initial values are also spec keys):

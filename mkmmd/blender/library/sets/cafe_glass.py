@@ -192,10 +192,13 @@ def glass_tilt(g, P, t, splats, rng, splat_grp):
     return tilt, wipe
 
 
-def mat_glass(name, params, splats, rng, fog_tint, fog_img):
-    """The window glass material. Principled glass (refraction by screen-space ray tracing, thin slab) whose normal
-    comes from the procedural rain; condensation fog from the noise image. `fog_tint` is the linear colour of the
-    condensation."""
+def mat_glass(name, params, splats, rng, fog_tint, fog_img, kind="refract"):
+    """The window glass material: its normal comes from the procedural rain, its condensation fog from the noise image;
+    `fog_tint` is the linear colour of the condensation. `kind` "refract" (default): seen from the room it is Principled
+    glass, refracting by EEVEE's screen-space ray tracing as a slab, and from outside alpha-transparent. "clear": the
+    pane is alpha-transparent from both sides (the drops milky glossy beads, the fog a translucent veil, the street
+    seen straight through), which any renderer draws: mkr draws no raytraced refraction and leaves a scene with a
+    refracting pane to Blender."""
     m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     m.use_nodes = True
     for n in list(m.node_tree.nodes):
@@ -225,6 +228,17 @@ def mat_glass(name, params, splats, rng, fog_tint, fog_img):
     enc = g.rgb(g.mad(g.mul(tz, side), 0.5, 0.5), g.mad(tx, 0.5, 0.5), g.mad(g.mul(ty, side), 0.5, 0.5))
     nm = g.node("ShaderNodeNormalMap", space="OBJECT")
     g.put(nm.inputs["Color"], enc)
+    # ---- alpha-transparent (from outside, and from the room too for a clear pane): screen-space refraction turns lit
+    # objects behind the pane (the room) into flat grey silhouettes, so here the drops are milky glossy beads and the
+    # fog a translucent veil
+    a_drop = g.mul(g.pw(g.sat(g.div(g.vm("LENGTH", tilt), 0.8)), 1.1), 0.6)
+    back = principled(g, g.mixc((0.96, 0.98, 1.0), fog_tint, F), rough=g.mixf(0.05, 0.5, F), spec=0.8,
+                      normal=nm.outputs[0], alpha=g.mx(a_drop, g.mul(F, 0.80)),
+                      emission_color=fog_tint, emission_strength=g.mul(F, 0.10))
+    if kind == "clear":
+        finish(g, back.outputs[0])
+        m.use_raytrace_refraction = False
+        return m
     # ---- shading, seen from the room (front face): refractive glass, clear -> frosted + whitened by the fog
     base = g.mixc(CLEAR_TINT, fog_tint, F)
     grain = g.noise(g.xyz(g.mul(u, 90.0), g.mul(v, 76.0), 0.0), 1.0, detail=3.0, rough=0.55)
@@ -233,12 +247,6 @@ def mat_glass(name, params, splats, rng, fog_tint, fog_img):
     specl = g.mixf(0.14, 1.0, g.param("refl"))
     front = principled(g, base, rough=rough, spec=specl, normal=nm.outputs[0], transmission_weight=trans, IOR=1.45,
                        emission_color=fog_tint, emission_strength=g.mul(F, 0.10))
-    # ---- seen from outside (back face): screen-space refraction turns lit objects behind the pane (the room) into flat
-    # grey silhouettes, so here the pane is alpha-transparent: drops are milky glossy beads, fog a translucent veil
-    a_drop = g.mul(g.pw(g.sat(g.div(g.vm("LENGTH", tilt), 0.8)), 1.1), 0.6)
-    back = principled(g, g.mixc((0.96, 0.98, 1.0), fog_tint, F), rough=g.mixf(0.05, 0.5, F), spec=0.8,
-                      normal=nm.outputs[0], alpha=g.mx(a_drop, g.mul(F, 0.80)),
-                      emission_color=fog_tint, emission_strength=g.mul(F, 0.10))
     mix = g.node("ShaderNodeMixShader")
     g.put(mix.inputs[0], g.node("ShaderNodeNewGeometry").outputs["Backfacing"])
     g.nt.links.new(front.outputs[0], mix.inputs[1])
