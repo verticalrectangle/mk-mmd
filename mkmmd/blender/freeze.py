@@ -1,10 +1,13 @@
 """Freezes at render time (mkmmd.core.freeze, docs/design.md: Shots: Freezes): `frame_set(scene, f)` sets the world to the
 frame a freeze holds on `f` and every camera to where its own keys put it on `f`, with the camera the timeline markers bind
-on `f` as the scene camera; outside a freeze it is `scene.frame_set(f)`. A render evaluates the animation again and binds
-the camera of the markers on the world's frame, so a held camera's action and the markers are set aside (the camera's
-values written by hand) until the next `frame_set` or `release()`, which a render loop calls when it ends (and
-mkmmd.blender.scene.bind_aspect before it binds the markers). The scene is updated after the cameras move, so what reads
-them next (a camera's matrix_world: the bake, a ring's centre seen through the camera) sees them where the render will."""
+on `f` as the scene camera; outside a freeze it is `scene.frame_set(f)`. Screen type is graphics over the picture, not a
+thing in the world, so the words on screen go on with the clock like the cameras (a word that lands inside a freeze
+lands, one that is up leaves on its own time). A render evaluates the animation again and binds the camera of the markers
+on the world's frame, so what is kept on the real frame has its action set aside (its values written by hand), and the
+markers with them, until the next `frame_set` or `release()`, which a render loop calls when it ends (and
+mkmmd.blender.scene.bind_aspect before it binds the markers). The scene is updated after they move, so what reads them
+next (a camera's matrix_world: the bake, a ring's centre seen through the camera, a word's evaluated mesh) sees them
+where the render will."""
 import json
 
 import bpy
@@ -45,8 +48,9 @@ def release():
 
 
 def _hold_at(owner, f):
-    """Write the values `owner`'s action has on frame `f` onto it (location, rotation, lens, shift, focus ...) and set the
-    action aside, so the render does not evaluate it again on the world's frame."""
+    """Write the values `owner`'s action has on frame `f` onto it (location, rotation, lens, shift, focus, a node's
+    value, a modifier's input ...) and set the action aside, so the render does not evaluate it again on the world's
+    frame."""
     ad = getattr(owner, "animation_data", None)
     if ad is None or ad.action is None:
         return
@@ -54,16 +58,63 @@ def _hold_at(owner, f):
     _HELD.append((owner, ad.action))
     ad.action = None
     for path, index, v in values:
-        head, _, attr = path.rpartition(".")
+        item = path.endswith("]")                         # ...["name"]: a custom property, a modifier's input
+        head, _, attr = path.rpartition("[" if item else ".")
         try:
             target = owner.path_resolve(head) if head else owner
-            cur = getattr(target, attr)
-        except (AttributeError, ValueError):
+            key = bpy.utils.unescape_identifier(attr[1:-2]) if item else attr
+            cur = target[key] if item else getattr(target, attr)
+        except (AttributeError, ValueError, KeyError):
             continue
         if hasattr(cur, "__len__") and not isinstance(cur, str):
             cur[index] = v
+            continue
+        v = bool(round(v)) if isinstance(cur, bool) else int(round(v)) if isinstance(cur, int) else v
+        if item:
+            target[key] = v
         else:
             setattr(target, attr, v)
+
+
+def _screen_ids(sc, f):
+    """The datablocks that animate the screen type on screen on frame `f` (the text stage's objects with `mk_screen`,
+    inside their `mk_show` frames): each object and the empties it hangs from, its data, the node groups of its
+    modifiers (and the groups inside them), its materials (slots and Set Material nodes) and their node trees."""
+    out, seen = [], set()
+
+    def add(idb):
+        if idb is None or idb.as_pointer() in seen:
+            return False
+        seen.add(idb.as_pointer())
+        out.append(idb)
+        return True
+
+    for ob in sc.objects:
+        if "mk_screen" not in ob.keys():
+            continue
+        show = ob.get("mk_show")
+        if show is not None and not int(show[0]) - 1 <= f <= int(show[1]):
+            continue
+        add(ob)
+        add(ob.data)
+        p = ob.parent
+        while p is not None and p.type == "EMPTY":
+            add(p)
+            p = p.parent
+        mats = [s.material for s in ob.material_slots]
+        todo = [m.node_group for m in ob.modifiers if m.type == "NODES"]
+        while todo:
+            ng = todo.pop()
+            if not add(ng):
+                continue
+            for n in ng.nodes:
+                todo.append(getattr(n, "node_tree", None))
+                if n.bl_idname == "GeometryNodeSetMaterial":
+                    mats.append(n.inputs["Material"].default_value)
+        for m in mats:
+            if add(m):
+                add(m.node_tree)
+    return out
 
 
 def frame_set(sc, f, wins=None):
@@ -75,6 +126,8 @@ def frame_set(sc, f, wins=None):
         for cam in [o for o in sc.objects if o.type == "CAMERA"]:
             _hold_at(cam, f)
             _hold_at(cam.data, f)
+        for idb in _screen_ids(sc, f):                    # type over the picture: not of the world, it goes on
+            _hold_at(idb, f)
         cam = camera_at(sc, f)
         marks = [(m.name, m.frame, m.camera) for m in sc.timeline_markers]
         if marks:                                         # else they bind the camera of the world's frame

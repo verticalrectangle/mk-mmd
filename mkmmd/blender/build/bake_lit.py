@@ -155,6 +155,7 @@ from ...core import fitgeo as FG
 from ...core import screentype as SR
 from ...core import transition as TR
 from ... import cache as CA
+from .. import freeze as FRZ
 from .. import styles as ST
 from ..ops_core import _namespace
 
@@ -1148,8 +1149,10 @@ def _anim(idb):
 @functools.cache
 def _screen_code():
     """The fingerprint of the code that bakes a screen word (mkmmd.cache.code): _ScreenWord, the Lit methods that drive
-    and evaluate it and all they reach, fitgeo included; an edit anywhere else in the bake leaves the cache as it is."""
-    return CA.code(sys.modules[__name__], "_ScreenWord", "Lit._screen", "Lit._render_settings")
+    and evaluate it and all they reach, fitgeo included, and the clock that puts it on a frame (a freeze does not hold
+    it: mkmmd.blender.freeze); an edit anywhere else in the bake leaves the cache as it is."""
+    return [CA.code(sys.modules[__name__], "_ScreenWord", "Lit._screen", "Lit._render_settings"),
+            CA.code(FRZ, "frame_set")]
 
 
 def _screen_key(o, reads, k0, k1, frame0, n):

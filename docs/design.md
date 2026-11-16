@@ -3385,7 +3385,9 @@ moving: the hit-stop, the world stopped on a hit and the camera swinging round i
 and `mk look` set the scene to the window's first frame (poses, props, cords and the sim hold) and every camera to where its own
 keys put it on the real frame, the timeline markers of the real frame choosing the camera (they are set aside while the frame
 renders, else the render would bind the camera of the world's frame); the looks go on with the clock (a ring keeps sweeping, a
-cut inside the window still cuts). At `to` the world is where the timeline has got to, so moves keyed on the beat stay on it:
+cut inside the window still cuts), and so does [screen type](#screen-type), which is graphics over the picture and not a thing
+in the world: a word that lands inside the window lands, at its size, and leaves on its own time (text that stands in the
+scene holds with the world). At `to` the world is where the timeline has got to, so moves keyed on the beat stay on it:
 give the keys inside the window to what should be there when it ends. Windows may not overlap; the shots stage keeps them in
 `scene["mk_freeze"]` (`mkmmd.core.freeze`, `mkmmd.blender.freeze`).
 
