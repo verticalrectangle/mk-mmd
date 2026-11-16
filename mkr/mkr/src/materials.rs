@@ -302,6 +302,7 @@ impl MaterialSet {
             if c.attributes.len() > mkr_shade::MAX_ATTRS {
                 unsupported.push(format!("{} attributes (mkr passes {})", c.attributes.len(), mkr_shade::MAX_ATTRS));
             }
+            unsupported.extend(raytraced_refraction(&settings, crate::raytrace::screen_traced(&lit.eevee), blended));
             by_name.insert(name.clone(), list.len());
             mat_anim.push(lit.materials.get(name).map(|m| m.anim.clone()).unwrap_or_default());
             let image_base = image_map.len() as u32;
@@ -568,6 +569,19 @@ fn mesh_problem(m: &crate::bake::MeshRec) -> Option<String> {
     }
 }
 
+/// Why mkr cannot draw a material for its raytraced transmission (`use_raytrace_refraction`), or None: in a scene that
+/// traces EEVEE's rays through the screen, EEVEE draws a dithered material of it after every other surface and
+/// refracts what is behind it through the material's refraction closures (its refraction layer, the opaque surfaces'
+/// lit picture traced along each refracted ray, the world's probe where a ray leaves the screen). mkr lights no
+/// refraction closure: such a surface would come out black where EEVEE shows the scene behind it.
+pub fn raytraced_refraction(settings: &Value, traced: bool, blended: bool) -> Option<String> {
+    let on = setting(settings, "use_raytrace_refraction").and_then(Value::as_bool).unwrap_or(false);
+    (on && traced && !blended).then(|| {
+        "raytraced refraction (use_raytrace_refraction: EEVEE refracts the scene behind it, mkr draws no light \
+         through it)".to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +589,16 @@ mod tests {
 
     fn sock(id: &str, ty: &str, value: Value) -> Value {
         json!({"identifier": id, "name": id, "type": ty, "enabled": true, "linked": false, "value": value})
+    }
+
+    #[test]
+    fn raytraced_refraction_is_left_to_blender() {
+        let on = json!({"use_raytrace_refraction": true, "surface_render_method": "DITHERED"});
+        assert!(raytraced_refraction(&on, true, false).is_some(), "EEVEE refracts the scene behind it: mkr cannot");
+        assert!(raytraced_refraction(&on, false, false).is_none(), "no ray tracing: EEVEE has no refraction layer");
+        assert!(raytraced_refraction(&on, true, true).is_none(), "a blended material is lit forward, not traced");
+        assert!(raytraced_refraction(&json!({"use_raytrace_refraction": false}), true, false).is_none());
+        assert!(raytraced_refraction(&json!({}), true, false).is_none(), "a bake without the setting: off, Blender's default");
     }
 
     /// A material showing what its Attribute node (type `kind`, name `name`) reads, its Emission strength keyed.

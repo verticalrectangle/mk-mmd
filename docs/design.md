@@ -6039,6 +6039,22 @@ it), so Blender's frames keep that shadow. A bake from before the field reads as
 material draws the same bytes as before (Crimson, jwin and the lab's sun, point, spot, area, `mmd_model` and
 `rt_rough` cases, with maps and rays, `RADV_DEBUG=nodcc`).
 
+mkr lights no refraction closure (a Refraction or Glass BSDF, a Principled BSDF's transmission): what comes through
+such a surface is black in its frames. A material with Raytraced Transmission (`use_raytrace_refraction`), dithered, in
+a scene that traces the screen is therefore Blender's (`mkr info`: "raytraced refraction"; `mk render --no-blender`
+refuses its frames): EEVEE draws it after every other surface, a layer of its own, and traces each refracted ray
+through the opaque surfaces' lit picture of the same sample (their depth alone, so the surface never finds itself),
+the world's probe where a ray leaves the screen; a ray that starts behind everything finds nothing and takes the probe
+(black without a world). EEVEE models the two sides of a pane by the material's thickness (`thickness_mode` SLAB: a
+slab that deep, the light leaving as it came, shifted; SPHERE: a sphere that wide) and lights the closure's colour
+twice over. That thickness is the Material Output's Thickness only when something is linked into it: its value alone
+is ignored and the object's own stands, the smallest world dimension of its texture space's box (a flat pane's: the
+smaller of its sides and 2 m, as an axis without extent gets a texture space 2 m across). On a probe (a pane at 40
+degrees before an emissive checker, SLAB, IOR 1.45, EEVEE's ray tracing) the Thickness unlinked at 0.004, at 1 and at
+0 renders the same frame as 2 linked (0.00 levels apart; 0.004 linked is 32.6 levels from it): the checker seen
+shifted along the pane (by about half a metre at that slant, by the slab's geometry) and the rays of the pane's far
+half lost off the screen, black.
+
 Keyed and driven colours (a [breathing palette](#lights-and-the-look), a material morph's tint, a keyed lamp) are
 mkr's like any frame: every driven node socket value and every light's colour and strength come per frame from the
 bake. What is keyed where the bake holds one value (a colour ramp's stops, a node's setting, a material's or a world's own
