@@ -468,6 +468,8 @@ The model's own bodies (rig.json `bodies`) collide too. A chain skips a body it 
 (the author's intended overlaps); within `anchor_free` (0.25 m) of its root it also skips the body it hangs from and
 every pair the PMX collision masks exclude. Any spec may name the chain `families` it acts on (a list; default all of
 them): a worn guitar's strap is capsules for the hair families alone, since hair lies over a strap and a skirt is under it.
+A bone or `fingers` spec that names no `armature` rides on the model it is asked for: the cast member a `[sim]` table or
+a check is about.
 
 ## Checks
 
@@ -502,7 +504,7 @@ ways in; `mk check --list` prints every metric's arguments and default limits. M
 |---|---|---|
 | `jitter` | median jerk / median speed of chain points in the head's frame | calm hair < 0.5; Bullet hair on a seated model ~1.4; the detail has `jerk_p95_mm`, and a `static` note when a chain barely moves (the ratio is then float32 noise: judge by `jerk_p95_mm`) |
 | `contact` | largest distance (mm) between two points (expressions or tracks) where `when` holds | `component = "z"` for a signed axis difference |
-| `penetration` | deepest chain point inside a body or collider (mm) | measured on the baked bones, i.e. what renders, with each chain's own radius; reports the frame, the bone and the shape (`body:<bone>` for the model's own bodies) |
+| `penetration` | deepest chain point inside a body or collider (mm) | measured on the baked bones, i.e. what renders, with each chain's own radius; reports the frame, the bone and the shape (`body:<bone>` for the model's own bodies). The bodies of every chain the member's `[sim.<cast>]` simulates are left out, as the solver leaves them (a simulated skirt is no obstacle to the hair over it) |
 | `foot_slide` | 95th percentile horizontal speed of planted feet (mm/frame) | between consecutive frames only: `frames` with gaps (a dance's stops) are measured run by run. An ankle is judged by what of its foot is down: the point of the sole under the ankle, or the ball of the foot (the toes' joint, where the model has that bone), so a heel lifting about planted toes is not a slide |
 | `ground` | how deep (mm) the skin of a character's feet goes under the surface of what it stands on, the deepest vertex over the frames | the skin its ankle bones carry (the toes with them), read straight down at every vertex against a set's or a prop's geometry as a render shows it: a studio sweep's floor and the cove it curves up into, a stage, a slope. A step back into a cove counts as what it is; a surface more than `reach` over a vertex (a table top, a ceiling) is not its ground. A few millimetres is a sole pressed on the floor: default `max` 10; detail: `at_frame`, `foot`, `p95_mm`, `frames_over_10mm`, `worst_frames`, `ground` (the objects read) |
 | `joint_limits` | worst excess over a limit (deg) | elbow fold-through and in-plane hyperextension, knees, wrists, neck, spine (limits calibrated on professional MMD dances; sideways elbow bends are not flagged: MMD rigs treat the elbow as a ball joint), and how far each arm turns about itself, by anatomy: `forearm_twist` and `arm_twist` (below); each series over its limit names its worst frame (`at_frame`) and up to ten `spans` of frames over it (`[first, last, worst, degrees]`) |

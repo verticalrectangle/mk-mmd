@@ -97,7 +97,8 @@ def _collider_items(spec, default_arm):
         root = bpy.data.objects.get(spec.get("prop", ""))
         if root is None or "mk_colliders" not in root.keys():
             raise ValueError(f"collider spec {spec!r}: no prop {spec.get('prop')!r} with stored colliders (rebuild)")
-        return [it for s in json.loads(root["mk_colliders"]) for it in resolve_collider(s, default_arm)]
+        arm = spec.get("armature") or default_arm
+        return [it for s in json.loads(root["mk_colliders"]) for it in resolve_collider(s, arm)]
     if "object" in spec:
         ob = bpy.data.objects[spec["object"]]
         src = ["object", "", ob.name]

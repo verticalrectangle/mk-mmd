@@ -142,6 +142,21 @@ def test_enables_skip_rest_overlap_root_body_and_masks_near_root():
     assert not E3["capsule"][:, -2].any() and E3["capsule"][:, -1].all()
 
 
+def test_penetration_leaves_out_the_bodies_of_every_chain_the_sim_simulates_as_the_solver_does():
+    """The check measured hair against a simulated skirt's own bodies (38 mm) that the solver leaves out, so the two
+    disagreed: the bodies of every chain the member's [sim] simulates move with the strands and are no obstacle."""
+    def chain(fam, bones, anchor):
+        return {"family": fam, "bones": bones, "parents": [-1] + list(range(len(bones) - 1)), "anchor": anchor,
+                "ends": [[0.0, 0.0, 0.5]] * len(bones), "body_radius": [0.01] * len(bones)}
+    rig = {"bones": {b: {"head": [0.0, 0.0, 1.0]} for b in ("h1", "h2", "s1", "e1")},
+           "chains": [chain("back_hair", ["h1", "h2"], "head"), chain("skirt", ["s1"], "lower_body"),
+                      chain("ears", ["e1"], "head")],
+           "bodies": [{"bone": b} for b in ("h1", "h2", "s1", "e1")]}
+    assert motion.skipped_bones(rig, ["back_hair"], {"families": ["back_hair", "skirt"]}) == {"h1", "h2", "s1"}
+    assert motion.skipped_bones(rig, ["back_hair"], {}) == {"h1", "h2", "e1"}      # the solver's default families
+    assert motion.skipped_bones(rig, ["back_hair"]) == {"h1", "h2"}                # no sim: the measured chains only
+
+
 def test_quaternion_roundtrip():
     rng = np.random.default_rng(1)
     q = rng.normal(size=(20, 4))
@@ -181,6 +196,13 @@ def test_contact_uses_mask_and_skips_missing_track_values(tmp_path):
     args_z.pop("when")
     value, detail = m.compute(args_z, ctx, data, [10, 11, 12], st)
     assert value == pytest.approx(500.0) and detail["median"] == pytest.approx(2.0)
+
+
+def test_a_checks_collider_rides_on_its_own_armature():
+    need = Need()                                        # two models in a scene: `fingers` alone names neither
+    idx = need.collider_specs([{"type": "fingers"}, {"type": "fingers", "armature": "B_arm"}], "A_arm")
+    asked = need.job([1], "x")["colliders"]
+    assert [asked[i]["armature"] for i in idx] == ["A_arm", "B_arm"]
 
 
 class FeetData:

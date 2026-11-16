@@ -139,6 +139,15 @@ class Contact(Metric):
 
 
 # ---------------------------------------------------------------- penetration
+def skipped_bones(rig, fams, sim=None):
+    """The bones whose own collision bodies the penetration check leaves out, as the solver does: those of the chains it
+    measures (families `fams`) and of every chain the member's `[sim.<cast>]` table (`sim`) simulates, its `families` or
+    the solver's default (the hair families, ears and tail), whose bodies move with the strands instead of standing in
+    their way (a simulated skirt's bodies are no obstacle to the hair over it). Without a sim table, the measured chains'."""
+    simmed = (_list(sim.get("families")) or sorted(FAM.HAIR_FAMILIES | {"ears", "tail"})) if isinstance(sim, dict) else []
+    return set(geom.Chains(rig, sorted(set(fams) | set(simmed))).chain_bones)
+
+
 @metric
 class Penetration(Metric):
     name = "penetration"
@@ -158,27 +167,26 @@ class Penetration(Metric):
         if rig is None:
             raise CheckError("penetration: needs the model's rig.json (cast with rig/asset, or rig = path)")
         fams = _list(args.get("families")) or sorted(FAM.HAIR_FAMILIES | {"ears"})
+        sim = (ctx.project.data.get("sim", {}).get(args["cast"]) if ctx.project and args.get("cast") else None) or None
+        skip = skipped_bones(rig, fams, sim)
         rig = dict(rig, chains=[c for _, c in geom.split_chains(rig, fams)])     # as the sim stage solves them
         chains = geom.Chains(rig, fams)
         if not len(chains):
             raise CheckError(f"penetration: no chains in families {fams}")
         need.bone(arm, *chains.bones)
         if args.get("model_bodies", True):
-            need.bone(arm, *[b["bone"] for b in rig["bodies"] if b.get("bone") and "geom" in b and
-                             b["bone"] not in chains.chain_bones])
+            need.bone(arm, *[b["bone"] for b in rig["bodies"] if b.get("bone") and "geom" in b and b["bone"] not in skip])
         specs = ctx.colliders(args.get("colliders"))
-        sim_params = {}
-        if ctx.project and args.get("cast"):
-            sim_params = (ctx.project.data.get("sim", {}).get(args["cast"]) or {}).get("params") or {}
         from ..solvers.strands import resolve_params
-        params = resolve_params(sorted(set(chains.family)), sim_params)
-        return {"arm": arm, "rig": rig, "chains": chains, "idx": need.collider_specs(specs), "params": params}
+        params = resolve_params(sorted(set(chains.family)), (sim or {}).get("params") or {})
+        return {"arm": arm, "rig": rig, "chains": chains, "idx": need.collider_specs(specs, arm), "params": params,
+                "skip": skip}
 
     def compute(self, args, ctx, data, frames, st):
         arm, rig, chains = st["arm"], st["rig"], st["chains"]
         shapes = geom.Shapes()
         if args.get("model_bodies", True):
-            geom.model_shapes(shapes, rig, arm, skip_bones=chains.chain_bones)
+            geom.model_shapes(shapes, rig, arm, skip_bones=st["skip"])
         for it in data.colliders(st["idx"]):
             shapes.add_item(it)
         P = shapes.pack()

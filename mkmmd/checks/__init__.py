@@ -72,9 +72,13 @@ class Need:
             self.exprs.append(e)
         return self.exprs.index(e)
 
-    def collider_specs(self, specs):
+    def collider_specs(self, specs, arm=""):
+        """Request these collider specs; one that names no `armature` rides on `arm`, the check's own (a scene with two
+        models has no other default). Returns their indices for Data.colliders."""
         idx = []
         for s in specs:
+            if arm and "armature" not in s:
+                s = dict(s, armature=arm)
             key = json.dumps(s, sort_keys=True)
             keys = [json.dumps(c, sort_keys=True) for c in self.colliders]
             if key not in keys:
