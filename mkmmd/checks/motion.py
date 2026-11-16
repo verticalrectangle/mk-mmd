@@ -695,3 +695,42 @@ class JointLimits(Metric):
         detail["at_frame"] = at[1] if at else None
         detail["worst"] = at[0] if at else None
         return worst, detail
+
+
+@metric
+class Stillness(Metric):
+    name = "stillness"
+    doc = ("A body that stands like a statue: the share of frames on which a part turns less than a breath from the "
+           "frame before, in the world (percent). Hands and a face that move over a chest that does not read as "
+           "stiff, however good the hands are: a held pose should drift, a standing body shift its weight (perform's "
+           "`groove`), a lean run past its end and settle. Turning is taken between consecutive frames only, and a "
+           "walk or a turn of the whole body counts as moving. Value: the percent of frames `bone` is still; detail: "
+           "the longest still run in frames and where it starts.")
+    args = {"cast": "cast member (or armature)", "bone": "the part watched (default upper_body2, else upper_body)",
+            "under": "degrees a frame under which it counts as still (default 0.05)"}
+    default_max = 40.0
+
+    def needs(self, args, ctx, need):
+        arm, _ = ctx.cast(args)
+        bones = [args["bone"]] if args.get("bone") else ["?upper_body2", "upper_body"]
+        need.bone(arm, *bones)
+        return {"arm": arm, "bones": bones}
+
+    def compute(self, args, ctx, data, frames, st):
+        bone = next(b for b in st["bones"] if data.has(st["arm"], b))
+        R = data.bones(st["arm"], [bone.lstrip("?")], frames)[0][:, 0, :3, :3]
+        R = R / np.linalg.norm(R, axis=1, keepdims=True)                 # the armature's scale is no turn
+        f = np.asarray(frames)
+        cos = (np.einsum("fij,fij->f", R[:-1], R[1:]) - 1.0) / 2.0        # the trace of the turn between two frames
+        turn = np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))[np.diff(f) == 1]
+        if not len(turn):
+            raise CheckError("stillness: needs consecutive frames")
+        still = turn < float(args.get("under", 0.05))
+        run = best = start = 0
+        for i, s in enumerate(still):
+            run = run + 1 if s else 0
+            if run > best:
+                best, start = run, i - run + 1
+        return 100.0 * float(still.mean()), {"bone": bone.lstrip("?"), "frames": int(len(turn)),
+                                             "mean_deg": round(float(turn.mean()), 3), "longest_frames": int(best),
+                                             "at_frame": int(f[1:][np.diff(f) == 1][start]) if best else None}

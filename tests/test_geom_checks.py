@@ -222,6 +222,29 @@ class FeetData:
         return np.tile(np.eye(4), (len(frames), 1, 1))
 
 
+class TurnData:
+    """A chest's world rotations as Data.bones gives them: it turns `deg[i]` about the upright from frame i to i + 1."""
+    def __init__(self, deg):
+        self.a = np.radians(np.r_[0.0, np.cumsum(deg)])
+
+    def has(self, arm, name):
+        return name.lstrip("?") == "upper_body"
+
+    def bones(self, arm, names, frames):
+        W = np.tile(np.eye(4), (len(self.a), 1, 1, 1))
+        W[:, 0, 0, 0], W[:, 0, 0, 1], W[:, 0, 1, 0], W[:, 0, 1, 1] = np.cos(self.a), -np.sin(self.a), np.sin(self.a), np.cos(self.a)
+        return W * 0.08, None, names                                     # an MMD armature's scale is no turn
+
+
+def test_stillness_is_the_share_of_frames_a_part_does_not_turn():
+    m = motion.Stillness()
+    st = m.needs({"armature": "a"}, Context(None), Need())
+    deg = [0.5, 0.4, 0.0, 0.01, 0.02, 0.0, 0.6, 0.3]                   # a move, four frames frozen, a move
+    value, detail = m.compute({}, None, TurnData(deg), list(range(10, 19)), st)
+    assert value == pytest.approx(50.0) and detail["bone"] == "upper_body"
+    assert detail["longest_frames"] == 4 and detail["at_frame"] == 13
+
+
 def test_foot_slide_measures_consecutive_frames_only():
     """Two runs of frames with a gap between them: the left foot stands still in each but somewhere else in the second
     (it stepped in the frames not asked for), the right one slides 5 mm a frame. Only the slide counts."""
