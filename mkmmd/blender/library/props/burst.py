@@ -1,6 +1,6 @@
-"""burst: pieces (puffy hearts, stars and smoke puffs) flung out from the root at a clip second, easing out to their reach
-while they spin and pop in, then shrinking away; drivers on the scene frame (the maths is mkmmd/core/burst.py), so a
-freeze holds them mid-air.
+"""burst: pieces (puffy hearts, stars and smoke puffs, slivers of glass, bits of a broken pot, drops of a liquid) flung
+out from the root at a clip second, easing out to their reach while they spin and pop in, then shrinking away; drivers on
+the scene frame (the maths is mkmmd/core/burst.py), so a freeze holds them mid-air.
 
     [[prop]]
     name = "blast"
@@ -8,12 +8,21 @@ freeze holds them mid-air.
     at = [0.0, 1.0, 0.6]                  # where it goes off; the pieces fly mostly across the picture (it faces -Y)
     slots = { start = 9.39, count = 30, reach = 1.6, mix = { heart = 0.5, star = 0.3, puff = 0.2 } }
 
-Objects `<name>_<kind><i>` (one mesh per kind: a heart, a five-point star, a cloud puff, each a pillow facing -Y) with
-the materials `<name>_heart`, `<name>_star`, `<name>_puff`; the hearts are tagged `mk_heart`, so a silhouette shot can take
-them as accents. Options (the `slots`): count (24), seed (1), mix ({kind: share}), the colours `heart` (love), `star`
-(gold), `puff` (text) as palette slots or hex, glow (0.3: emission strength; 0 = lit by the scene), and the live root
-properties `start`, `reach`, `life`, `spin`, `size`, `amount` (core.burst.PARAMS), which `[[key]]` keys (`amount` shrinks
-every piece). Card keys: size, bounds (the whole burst), front "-Y", params, `burst` {objects, accent, count, fps}."""
+    [[prop]]                              # a cup smashing on the floor: up and out all round, falling back to it
+    name = "smash"
+    card = "library:burst"
+    at = [0.4, -0.5, 0.0]
+    slots = { start = 2.55, mix = { sherd = 1 }, aim = [0, 0, 1], cone = 75, tumble = 540, fade = 1, gravity = 9.8,
+              ground = 0.0, reach = 0.6, life = 1.2, size = 0.035 }
+
+Objects `<name>_<kind><i>` (one mesh per kind: a heart, a five-point star, a cloud puff, each a pillow facing -Y; a
+sliver of glass; a sherd, a thick bit of a pot's wall curved round it, its glazed outside to -Y; a drop) with the
+materials `<name>_<kind>`; the hearts are tagged `mk_heart`, so a silhouette shot can take them as accents. Options (the
+`slots`): count (24), seed (1), mix ({kind: share}), the colours `heart` (love), `star` (gold), `puff` (text), `shard`
+(text), `sherd` (rose), `drop` (gold) as palette slots or hex, glow (0.3: emission strength; 0 = lit by the scene), how
+they fly (`aim` and `cone`, `tumble`, `fade`: core.burst.options) and the live root properties `start`, `reach`, `life`,
+`spin`, `size`, `amount`, `gravity`, `ground` (core.burst.PARAMS), which `[[key]]` keys (`amount` shrinks every
+piece). Card keys: size, bounds (the whole burst), front "-Y", params, `burst` {objects, accent, count, fps}."""
 import re
 
 import bpy
@@ -65,7 +74,7 @@ def _glass(name, rgb, glow):
 @register("burst")
 def burst(name, coll, root, slots=None):
     slots = dict(slots or {})
-    count, seed, mix, P, colours, glow = BU.options(slots)
+    count, seed, mix, P, colours, glow, form = BU.options(slots)
     sc = bpy.context.scene
     fps = sc.render.fps / sc.render.fps_base
     for old in [o for o in bpy.data.objects if any(o.name.startswith(f"{name}_{k}") and o.name[len(name) + len(k) + 1:]
@@ -85,7 +94,7 @@ def burst(name, coll, root, slots=None):
             mat = _glass(f"{name}_{kind}", rgb, glow) if kind == "shard" else _material(f"{name}_{kind}", rgb, glow)
             meshes[kind], _ = SH.mesh_data(f"{name}_{kind}", BU.mesh(kind), lambda _role, m=mat: m)
     objs, at = [], {k: 0 for k in BU.KINDS}
-    for piece in BU.layout(count, seed, mix):
+    for piece in BU.layout(count, seed, mix, form["aim"], form["cone"]):
         kind = piece["kind"]
         o = bpy.data.objects.new(f"{name}_{kind}{at[kind]}", meshes[kind])
         at[kind] += 1
@@ -96,8 +105,10 @@ def burst(name, coll, root, slots=None):
             o["mk_heart"] = True
         elif kind == "shard":
             SH.exempt(o, "a sliver of broken glass: flat and sharp by nature")
+        elif kind == "sherd":
+            SH.exempt(o, "a bit of a broken pot: sharp-edged by nature")
         o["u"] = 0.0
-        ex = BU.expressions(piece)
+        ex = BU.expressions(piece, form["tumble"], form["fade"])
         _driver(o, '["u"]', ex["u"], root)
         for i, ch in enumerate("xyz"):
             _driver(o, "location", ex[ch], root, i)
@@ -107,7 +118,8 @@ def burst(name, coll, root, slots=None):
             _driver(o, "scale", ex["s"], root, i)
         objs.append(o)
     half = P["reach"] + P["size"]
-    lo, hi = [-half, -BU.FLAT * half, -half], [half, BU.FLAT * half, half]
+    flat = BU.FLAT if form["aim"] is None else 1.0
+    lo, hi = [-half, -flat * half, -half], [half, flat * half, half]
     return {"size": [round(h - l, 4) for l, h in zip(lo, hi)], "origin": "center", "front": "-Y", "blocks": False,
             "bounds": {"min": [round(v, 4) for v in lo], "max": [round(v, 4) for v in hi]}, "layers": [],
             "slots": colours, "params": P,

@@ -1217,7 +1217,7 @@ def test_a_burst_s_pieces_are_where_the_core_puts_them_on_a_moved_scaled_prop_fo
     code, out = make(BURST, with_cast=False, until="keys")
     assert code == 0, out.get("error")
     assert not warnings(out)
-    count, seed, mix, P, _, _ = BU.options({"start": 0.6, "count": 9, "seed": 3, "reach": 0.8, "life": 1.0})
+    count, seed, mix, P, _, _, _ = BU.options({"start": 0.6, "count": 9, "seed": 3, "reach": 0.8, "life": 1.0})
     P["reach"] = 0.5                                                       # keyed: the root's property is live
     names, at = [], {k: 0 for k in BU.KINDS}
     pieces = BU.layout(count, seed, mix)

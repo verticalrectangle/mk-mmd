@@ -33,7 +33,8 @@ def _run(ex, P, t):
 
 def test_the_kinds_follow_the_mix_and_the_layout_is_the_seed_s():
     L = BU.layout(24, 3, BU.MIX)
-    assert {k: sum(p["kind"] == k for p in L) for k in BU.KINDS} == {"heart": 11, "star": 8, "puff": 5, "shard": 0}
+    assert {k: sum(p["kind"] == k for p in L) for k in BU.KINDS} == {"heart": 11, "star": 8, "puff": 5, "shard": 0,
+                                                                     "sherd": 0, "drop": 0}
     again, other = BU.layout(24, 3, BU.MIX), BU.layout(24, 4, BU.MIX)
     assert all((a["dir"] == b["dir"]).all() and a["kind"] == b["kind"] for a, b in zip(L, again))
     assert any((a["dir"] != b["dir"]).any() for a, b in zip(L, other))
@@ -47,24 +48,55 @@ def test_pieces_fly_across_the_picture_more_than_toward_the_camera():
     assert D[:, 0].min() < -0.8 and D[:, 0].max() > 0.8 and D[:, 2].min() < -0.9 and D[:, 2].max() > 0.9
 
 
+FORMS = [(None, BU.FADE, None), (540.0, 1.0, [0.0, 0.0, 1.0])]          # (tumble, fade, aim): as built by default; a smash
+
+
+@pytest.mark.parametrize("tumble, fade, aim", FORMS)
 @pytest.mark.parametrize("P", [dict(BU.options({})[3], start=2.0),
-                               dict(BU.options({})[3], start=-0.5, reach=0.4, life=0.6, spin=-90.0, size=0.3, amount=0.5)])
-def test_expressions_equal_the_numpy_reference(P):
-    for piece in BU.layout(12, 7, BU.MIX):
-        ex = BU.expressions(piece)
+                               dict(BU.options({})[3], start=-0.5, reach=0.4, life=0.6, spin=-90.0, size=0.3, amount=0.5),
+                               dict(BU.options({})[3], start=1.0, gravity=9.8, ground=-0.05)])
+def test_expressions_equal_the_numpy_reference(P, tumble, fade, aim):
+    for piece in BU.layout(12, 7, BU.MIX, aim, 70.0):
+        ex = BU.expressions(piece, tumble, fade)
         for t in np.linspace(P["start"] - 0.5, P["start"] + P["life"] * 1.3, 23):
             got = _run(ex, P, float(t))
-            pos, rx, ry, s = BU.pose(float(t), P, piece)
+            pos, rx, ry, s = BU.pose(float(t), P, piece, tumble, fade)
             assert [got["x"], got["y"], got["z"]] == pytest.approx(pos, abs=1e-6)
             assert (got["rx"], got["ry"], got["s"]) == pytest.approx((rx, ry, s), abs=1e-6)
 
 
+def test_a_smash_flies_up_and_out_in_its_cone_falls_back_to_the_ground_and_lies_there():
+    """A cup smashing on the floor: the pieces go out in a cone about the aim (up), come down under gravity and never
+    under the ground they stay on, tumbling as they fly and keeping their size once they lie there (fade 1)."""
+    count, seed, mix, P, _, _, form = BU.options({"mix": {"sherd": 0.8, "drop": 0.2}, "aim": [0, 0, 2], "cone": 70,
+                                                  "tumble": 540, "fade": 1, "gravity": 9.8, "ground": 0.0,
+                                                  "reach": 0.8, "life": 1.2, "start": 1.0})
+    assert form["aim"] == [0.0, 0.0, 1.0] and form["tumble"] == 540.0 and form["fade"] == 1.0
+    L = BU.layout(count, seed, mix, form["aim"], form["cone"])
+    assert {p["kind"] for p in L} == {"sherd", "drop"}
+    D = np.array([p["dir"] for p in L])
+    assert np.linalg.norm(D, axis=1) == pytest.approx(1.0, abs=1e-4)
+    assert D[:, 2].min() >= math.cos(math.radians(70)) - 1e-4               # all inside the cone ...
+    assert np.hypot(D[:, 0], D[:, 1]).max() > 0.9 and D[:, 2].max() > 0.95  # ... and over all of it
+    ts = np.linspace(1.0, 2.6, 81)
+    rise = []
+    for p in L:
+        z = BU.pose(ts, P, p, form["tumble"], form["fade"])[0][:, 2]
+        assert z.min() >= 0.0 and z[-1] == 0.0                               # never into the floor, and back down on it
+        rise.append(z.max())
+        end = BU.pose(ts[-1], P, p, form["tumble"], form["fade"])
+        assert end[3] == pytest.approx(P["size"] * p["size"])                # lying there, whole
+        assert abs(end[1]) == pytest.approx(math.radians(540.0))             # turned end over end on the way
+    assert max(rise) > 0.05 and np.median(rise) > 0.005                      # up off the floor on the way
+
+
 def test_expressions_are_blender_simple_expressions():
     ok = set(BU.PARAMS) | set(BU.HELPERS) | BU.FUNCS | {"frame", "f0", "fps"}
-    for piece in BU.layout(30, 1, BU.MIX):
-        for text in BU.expressions(piece).values():
-            assert len(text) <= 255 and not re.search(r"\*\*|//|%|\.[A-Za-z_]", text)
-            assert set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)) <= ok
+    for tumble, fade, aim in FORMS:
+        for piece in BU.layout(30, 1, BU.MIX, aim):
+            for text in BU.expressions(piece, tumble, fade).values():
+                assert len(text) <= 255 and not re.search(r"\*\*|//|%|\.[A-Za-z_]", text)
+                assert set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)) <= ok
 
 
 def test_a_piece_is_hidden_before_the_blast_pops_in_flies_out_and_is_gone_after_its_life():
@@ -91,14 +123,20 @@ def test_a_piece_is_hidden_before_the_blast_pops_in_flies_out_and_is_gone_after_
     ({"reach": 0}, "reach must be a positive number"),
     ({"life": -1}, "life must be a positive number"),
     ({"amount": -0.5}, "amount must be a number"),
+    ({"gravity": -9.8}, "gravity must be a number"),
     ({"glow": -1}, "glow is a number"),
+    ({"aim": [0, 0, 0]}, "aim is the way"),
+    ({"aim": "up"}, "aim is the way"),
+    ({"cone": 0}, "cone is the half-angle"),
+    ({"tumble": -10}, "tumble is the degrees"),
+    ({"fade": 1.5}, "fade is the share"),
 ])
 def test_a_bad_burst_is_refused_saying_what_to_change(slots, frag):
     with pytest.raises(ValueError, match=frag):
         BU.options(slots)
 
 
-@pytest.mark.parametrize("kind, tips", [("heart", None), ("star", 5), ("puff", 6)])
+@pytest.mark.parametrize("kind, tips", [("heart", None), ("star", 5), ("puff", 6), ("sherd", None), ("drop", None)])
 def test_every_piece_is_a_closed_pillow_of_unit_width_facing_out(kind, tips):
     m = BU.mesh(kind)
     edges = {}
