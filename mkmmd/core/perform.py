@@ -49,20 +49,42 @@ def curves(keys):
     return [list(keys)]
 
 
+def _flow(keys):
+    """One curve's keys, sorted, and the rate it passes each at (per second): zero at the first and the last key, at a key
+    where it turns round and at the ends of a hold (two keys of one value); at a key it only passes on its way up or
+    down, the rate that keeps it rising or falling all the way without overshooting a key (a monotone cubic's)."""
+    ks = sorted((float(t), float(v)) for t, v in keys)
+    t, v = np.array([k[0] for k in ks]), np.array([k[1] for k in ks])
+    m = np.zeros(len(ks))
+    h = np.diff(t)
+    d = np.diff(v) / np.maximum(h, 1e-6)
+    for k in range(1, len(ks) - 1):
+        if h[k - 1] > 1e-6 and h[k] > 1e-6 and d[k - 1] * d[k] > 0.0:
+            w1, w2 = 2.0 * h[k] + h[k - 1], h[k] + 2.0 * h[k - 1]
+            m[k] = (w1 + w2) / (w1 / d[k - 1] + w2 / d[k])
+    return t, v, m
+
+
 def eased_keys(ts, keys):
-    """Values over time from keys [[t, v], ...]: smoothstep-eased between consecutive keys, held before the first and
-    after the last; zeros without keys. A list of such key lists (`curves`) is the sum of their curves."""
+    """Values over time from keys [[t, v], ...]: eased from each stop to the next, held before the first key and after
+    the last; zeros without keys. A key the curve only passes on its way (rising through it, or falling) is passed
+    without stopping, so a lean keyed 2, 5, 9, 15 degrees is one lean with its pace set by the keys, not three pushes;
+    it stops where it turns round and at both ends of a hold (two keys of one value), and never goes beyond a key
+    (`_flow`). Two keys are a smoothstep. A list of such key lists (`curves`) is the sum of their curves."""
     ts = np.asarray(ts, float)
     cs = curves(keys)
     if not cs:
         return np.zeros(len(ts))
     if len(cs) > 1:
         return sum(eased_keys(ts, c) for c in cs)
-    ks = sorted((float(t), float(v)) for t, v in cs[0])
-    out = np.full(len(ts), ks[0][1])
-    for (t0, v0), (t1, v1) in zip(ks, ks[1:]):
-        m = ts >= t0
-        out[m] = v0 + (v1 - v0) * smooth((ts[m] - t0) / max(t1 - t0, 1e-6))
+    t, v, m = _flow(cs[0])
+    out = np.full(len(ts), v[0])
+    for k in range(len(t) - 1):
+        on = ts >= t[k]
+        h = max(t[k + 1] - t[k], 1e-6)
+        u = np.clip((ts[on] - t[k]) / h, 0.0, 1.0)
+        out[on] = ((2 * u ** 3 - 3 * u ** 2 + 1) * v[k] + (u ** 3 - 2 * u ** 2 + u) * h * m[k]
+                   + (3 * u ** 2 - 2 * u ** 3) * v[k + 1] + (u ** 3 - u ** 2) * h * m[k + 1])
     return out
 
 
@@ -489,14 +511,16 @@ def aloft(ts, air=None, rise=None):
 
 
 def eased_rate(ts, keys):
-    """The rate of `eased_keys` (per second): zero before the first key, after the last and on every key."""
+    """The rate of `eased_keys` (per second): zero before the first key, after the last and at every stop."""
     ts = np.asarray(ts, float)
     out = np.zeros(len(ts))
-    ks = sorted((float(t), float(v)) for t, v in keys)
-    for (t0, v0), (t1, v1) in zip(ks, ks[1:]):
-        m = (ts >= t0) & (ts < t1)
-        x = (ts[m] - t0) / max(t1 - t0, 1e-6)
-        out[m] = (v1 - v0) * 6.0 * x * (1.0 - x) / max(t1 - t0, 1e-6)
+    t, v, m = _flow(keys)
+    for k in range(len(t) - 1):
+        on = (ts >= t[k]) & (ts < t[k + 1])
+        h = max(t[k + 1] - t[k], 1e-6)
+        u = (ts[on] - t[k]) / h
+        out[on] = ((6 * u ** 2 - 6 * u) * (v[k] - v[k + 1]) / h + (3 * u ** 2 - 4 * u + 1) * m[k]
+                   + (3 * u ** 2 - 2 * u) * m[k + 1])
     return out
 
 

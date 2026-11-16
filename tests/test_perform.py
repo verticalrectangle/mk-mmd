@@ -63,6 +63,21 @@ def test_lids_are_a_number_or_keys_that_sink_and_open_again():
         PF.lids_floor(ts, [[0.0, 0.2], [1.0, 1.4]])
 
 
+def test_a_keyed_curve_passes_the_keys_on_its_way_without_stopping_and_stops_where_it_turns_or_holds():
+    ts = np.linspace(0.0, 5.0, 5001)
+    keys = [[0.0, 2.0], [1.0, 5.0], [1.5, 9.0], [2.0, 15.0], [3.0, 15.0], [4.0, -6.0]]   # a lean in, held, then back past upright
+    v, rate = PF.eased_keys(ts, keys), PF.eased_rate(ts, keys)
+    at = lambda t: int(round(t * 1000))
+    assert [v[at(t)] for t in (0.0, 1.0, 1.5, 2.0, 3.0, 4.0)] == pytest.approx([2.0, 5.0, 9.0, 15.0, 15.0, -6.0])
+    assert rate[at(1.0)] > 4.0 and rate[at(1.5)] > 8.0                    # through the keys on the way in: no stop
+    assert rate[1:at(2.0)].min() > 0.0                                    # one lean, rising all the way
+    assert abs(rate[at(2.0) - 1]) < 0.2 and np.ptp(v[at(2.0):at(3.0)]) < 1e-9          # it stops for the hold
+    assert v.max() <= 15.0 + 1e-9 and v.min() >= -6.0 - 1e-9              # never beyond a key
+    assert np.gradient(v, ts)[10:-10] == pytest.approx(rate[10:-10], abs=0.05)
+    two = PF.eased_keys(np.array([0.25, 0.5]), [[0.0, 0.0], [1.0, 1.0]])
+    assert two == pytest.approx([0.15625, 0.5])                           # two keys: a smoothstep, as ever
+
+
 def test_beat_bob_peaks_just_after_beats_with_accent():
     ts = np.linspace(0, 2, 601)
     bob = PF.beat_bob(ts, [0.5, 1.5], deg=2.0, accent=[1.0, 2.0])
