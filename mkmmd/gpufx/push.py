@@ -20,7 +20,7 @@ def ops(ffx, fx, frame):
         raise FileNotFoundError(f"fx {fx['index']} (push): the frame inside, {fx['inside_frame']}, is not there")
     if not paths.fits(inner):
         return None
-    z, p, m, r, s = FF.push_terms(ffx.size, c, r0, u, fx["ease"])
+    z, p, m, r, s = FF.push_terms(ffx.size, c, r0, u, fx["ease"], fx["border"])
     return [{"op": "push", "inner": str(inner), "c": [f32(c[0]), f32(c[1])], "p": [f32(p[0]), f32(p[1])],
              "m": [f32(m[0]), f32(m[1])], "z": f32(z), "s": f32(s), "rr": f32(r + 0.5),
              "border": cv2.BORDER_REPLICATE if fx["border"] == "extend" else cv2.BORDER_REFLECT}]

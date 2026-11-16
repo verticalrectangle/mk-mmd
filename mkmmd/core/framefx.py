@@ -104,7 +104,8 @@ SILK = "silkscreen"                                     # a collage's fill: the 
 BLENDS = ("lighten", "darken")
 EDGES = ("left", "right", "top", "bottom")
 EASES = ("log", "smooth", "linear")
-BORDERS = ("mirror", "extend")      # a push's disc round the frame inside it: that frame mirrored, or its edge drawn on
+BORDERS = ("mirror", "extend", "fill")  # a push's disc round the frame inside it: that frame mirrored, its edge drawn
+#                                         on, or nothing (the frame fills the disc)
 STEMS = ("drums", "bass", "other", "vocals", "mix")
 _COMMON = {"kind", "from", "to", "strength", "aspect", "rect", "feather"}
 _HITS = {"times", "lane", "min_db", "every"}            # zoom and shock fire on these, a collage steps on them

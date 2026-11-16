@@ -201,25 +201,36 @@ def zoom(log_zmax, u, ease):
     return float(np.exp(log_zmax * g)), g
 
 
-def push_terms(size, c, r0, u, ease="log"):
+def push_terms(size, c, r0, u, ease="log", border="mirror"):
     """(z, p, m, r, s) of a push into a disc of radius r0 (px) about `c` at progress u on a frame of `size` (w, h): the
-    zoom, the disc's centre on screen (gliding to the frame's middle `m`), its radius and the inner frame's scale."""
+    zoom, the disc's centre on screen (gliding to the frame's middle `m`), its radius and the inner frame's scale. The
+    inner frame stands whole in the disc; with `border` "fill" it fills it instead: the disc is the circle inside the
+    frame's shorter side while it grows to that size, its centre at the middle by then, and from there on the frame
+    is at its own size and the disc opens on it (a disc that starts larger than that glides as ever and shows the
+    frame mirrored round it)."""
     w, h = size
     m = np.array([(w - 1) / 2.0, (h - 1) / 2.0])
     R = float(np.hypot(w, h)) / 2.0 + 1.0
     z, g = zoom(np.log(max(R / max(r0, 1e-6), 1.0)), float(u), ease)
-    p = np.asarray(c, float) + (m - np.asarray(c, float)) * g                       # the disc's centre on screen
     r = r0 * z
-    return z, p, m, r, r / R                                                         # s: the inner frame's scale
+    s = r / R
+    if border == "fill":
+        half = (min(w, h) - 1) / 2.0
+        s = min(1.0, (r + 1.0) / half)
+        if half - 1.0 > r0:
+            g = min(1.0, (r - r0) / (half - 1.0 - r0))
+    p = np.asarray(c, float) + (m - np.asarray(c, float)) * g                       # the disc's centre on screen
+    return z, p, m, r, s                                                             # s: the inner frame's scale
 
 
 def push(img, inner, c, r0, u, ease="log", border="mirror"):
     """The picture zooming into a disc of radius r0 (px) about `c` that shows `inner`: at u = 0 the picture as it is, at
     u = 1 the disc, its centre glided to the frame's middle, covers the frame and `inner` is shown at its own size. On
     the way `inner` stands whole in the disc, which is larger than it: round it the disc shows `inner` mirrored about
-    its edges (`border` "mirror"), or its edge pixels drawn on outwards ("extend": a flat ground goes on)."""
+    its edges (`border` "mirror"), or its edge pixels drawn on outwards ("extend": a flat ground goes on); or `inner`
+    fills the disc, its middle showing and nothing round it ("fill": push_terms)."""
     h, w = img.shape[:2]
-    z, p, m, r, s = push_terms((w, h), c, r0, u, ease)
+    z, p, m, r, s = push_terms((w, h), c, r0, u, ease, border)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     dx, dy = xx - np.float32(p[0]), yy - np.float32(p[1])
     outer = cv2.remap(np.ascontiguousarray(img, np.float32), np.float32(c[0]) + dx / np.float32(z),

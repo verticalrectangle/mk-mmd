@@ -70,7 +70,7 @@ def runner(pl, frames=None, points=None):
     ({"kind": "orbit", "from": 0, "to": 1, "objects": "a", "back": ["picture", "nope"]}, "colour 'nope'"),
     ({"kind": "stack", "from": 0, "to": 1, "objects": "a", "mirror": 1}, "mirror is true or false"),
     ({"kind": "grid", "from": 0, "to": 1, "objects": "a", "mirror": True}, "unknown keys ['mirror']"),
-    ({"kind": "push", "from": 0, "to": 1, "center": [0.5, 0.5], "border": "wrap"}, "border 'wrap' is none of mirror, extend"),
+    ({"kind": "push", "from": 0, "to": 1, "center": [0.5, 0.5], "border": "wrap"}, "border 'wrap' is none of mirror, extend, fill"),
 ])
 def test_bad_fx_say_what_is_wrong(spec, frag):
     with pytest.raises(TR.TransitionError, match=frag.replace("[", r"\[").replace("]", r"\]")):
@@ -152,6 +152,23 @@ def test_round_the_frame_inside_a_push_shows_it_mirrored_or_its_edge_drawn_on():
     row = int(mid[1] - s * H / 2.0) - 4                           # in the disc, 8.6 of its rows above the frame inside
     mirror, extend = (FF.push(img, inner, mid, 2.0, u, border=b)[row, W // 2] for b in ("mirror", "extend"))
     assert mirror[2] > 0.9 and extend[2] < 0.02                   # the band again, mirrored; the top row drawn on
+
+
+def test_a_push_that_fills_its_disc_shows_the_frame_inside_once_and_ends_on_it():
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    inner = np.stack([xx, yy, xx * 0], -1)                        # every pixel says where it is: a mirror would run back
+    img, c, r0 = np.full((H, W, 3), -1.0, np.float32), (40.0, 9.0), 4.0
+    scales = []
+    for u in (0.0, 0.2, 0.4, 0.6, 0.8, 0.95, 1.0):
+        _, p, _, r, s = FF.push_terms((W, H), c, r0, u, border="fill")
+        out = FF.push(img, inner, c, r0, u, border="fill")
+        disc = np.hypot(xx - p[0], yy - p[1]) < r - 1.0
+        along, down = disc[:, 1:] & disc[:, :-1], disc[1:] & disc[:-1]
+        assert np.all(np.diff(out[..., 0], axis=1)[along] > 0) and np.all(np.diff(out[..., 1], axis=0)[down] > 0), u
+        scales.append(s)
+    assert scales == sorted(scales) and scales[-1] == 1.0         # it only grows, to its own size
+    assert np.allclose(FF.push(img, inner, c, r0, 1.0, border="fill"), inner, atol=1e-4)
+    assert np.allclose(FF.push(img, inner, c, r0, 0.0, border="fill")[0, 0], -1.0)        # the picture as it was
 
 
 def test_an_echo_never_touches_the_ground_and_tints_the_figure():
