@@ -1,6 +1,7 @@
 """Which of mkr's frames a rebuilt scene left as they were, so `mk render` keeps them instead of drawing them again.
 
-mkr draws the same picture from the same input, bit for bit, and a frame's input is the bake, the run's settings and
+mkr draws the same picture from the same input, bit for bit (but for a speck of the driver's colour compression in a
+frame now and then: docs/design.md, mkr, `RADV_DEBUG=nodcc`), and a frame's input is the bake, the run's settings and
 the frame's own layers. The bake says which of its values it holds a row a frame (bake.json `per_frame`: [float offset,
 floats a row] into bake.bin, marked where the bake stage writes them: bones, matrices, visibility, shape keys, lights,
 cameras, keyed node values), and whose rows they are where only some frames read them ([float offset, floats a row,

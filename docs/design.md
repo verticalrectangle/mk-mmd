@@ -1282,6 +1282,7 @@ the targets `cast:<name>` and `{cast = "<name>", point}`, and a check's `cast = 
 | `parent` | name of an object the model rides on; `at` and `yaw` are then in its frame |
 | `physics` | `"mk"` (default): import without Bullet, so the chains move only where a `[sim.<name>]` table solves them. `"none"`: the same import, and the member is left out of `[sim]` even when it has a table (no secondary motion; the sim report says `skipped`). `"bullet"`: keep the author's rigid bodies and joints (Blender's rigid-body simulation then moves them; give the member no `[sim.<name>]`). Any other word is an error |
 | `materials` | `{<PMX material> = {color \| tint \| hide}}`: changes the model's own materials in the scene (the file stays as it is). `color` (a palette slot or `#hex`) makes the material that flat colour: its texture off, its toon and sphere kept, the diffuse the colour and the ambient 0.4 of it (MMD lights it as ambient + 0.6 x diffuse); `tint` multiplies its diffuse and ambient colours (the texture's detail stays); `hide = true` draws it no more (alpha 0). A name the model lacks, an unknown key or both `color` and `tint` is an error that lists what there is; the cast report says per member what was done |
+| `shows` | `[[from, to], ...]` clip seconds the member is drawn in (a shot's way: from the frame of `from` up to the frame of `to`; default every frame). Outside them she is hidden from render on every frame, and so is what rides on her: what is parented under her root or armature (worn props, held ones), what her objects deform or carry (an armature or hook modifier, a surface deform) or hold by a Child Of constraint, and so on from those. It ends in the same CONSTANT `hide_render` keys a `[[key]]` would make (the keys stage, after the glitches; a hide already there stays), so her motion and sims run as before and the bake's `shown` rows leave her out of those frames, camera and shadows alike. Two scenes of one clip give each scene's members their scene's span ([Rendering](#rendering): a change to her draws her own frames only). A pair that is not two numbers with `from` before `to` is an error |
 
 ```toml
 [[cast]]
@@ -5964,7 +5965,9 @@ outputs, `--frames SPEC` some frames (default the whole clip), `--jobs N` runs N
 Frames are claimed with an empty file first, so a stopped render resumes; frames and layers on disk that are older than the built
 scene show the scene of an earlier build, so they are drawn again (the report's `stale` counts them; `--keep` takes them as they
 are), except the ones an mkr render can tell the rebuild left as they were (the report's `reused`). mkr draws the same picture
-from the same input, bit for bit, so every frame it draws whole (the frame and each layer of it: none left to Blender, none in
+from the same input, bit for bit (but for the speck the driver's colour compression leaves in a frame now and then:
+[mkr](#mkr); a check of kept frames against a render from nothing runs both with `RADV_DEBUG=nodcc`), so every frame
+it draws whole (the frame and each layer of it: none left to Blender, none in
 a look) gets a key, stored in `keys.json` beside the frames: a digest of everything in the bake that is not held a row a frame,
 of the run's settings (mkr's binary, its samples and tunables, the size, the shutter, the output), of the frame's own layers,
 and of the rows of the frames its shutter can reach (two either side): those that belong to no one thing, those of the cameras
@@ -5973,9 +5976,14 @@ the frame and its layers are seen through, and those of the armatures and meshes
 reaches: a character's frames from where her motion changes to where she leaves the cut (her hair and skirt carry the change
 on), the whole of a shot whose camera was moved or whose content changed (a camera's clip range follows what its shot shows),
 and every frame after a change to a material, a mesh, a by-frame geometry, the cut or the type on screen, which are part of
-every frame; so are the bones of every character the scene shows, wherever she stands: two scenes of one clip that are kept
-apart by place, not by hiding the cast of the other, share their characters' motion, and a change to the first one's is drawn
-again through the second. When no frame can be kept the report's `stale` says what changed for all of them
+every frame; so are the bones of every character a frame shows, wherever she stands. Two scenes of one clip are kept apart
+by showing, not by place: give each member `[[cast]] shows` (her scene's clip seconds, [Cast](#cast)), and the frames of
+the other scene do not show her, so a change to her draws her own frames and no others. No test of where she stands can
+do it soundly: a shadow ray's steps read the light's map in directions far wider than the way to the light, and every
+step's caster, near or far, takes part in deciding whether a later step is a hit, so a caster counts wherever it is the
+nearest on a texel a step reads, out of view and past the light's reach included (measured: a character moved 35 m from
+the other scene's lights, past their reach and out of view, changed 32 pixels of that scene's frame by one level, through
+those lights' maps). When no frame can be kept the report's `stale` says what changed for all of them
 (`every_frame_because`: `bake.json`, `bake.bin` for the values that are not a row a frame, `lit.bin` for the meshes, a view
 table, `images`, or `settings`). It all rests on a build that gives the same bake for the same scene, which a builder has to
 see to: bmesh hands over the faces and the edges that `create_uvsphere` and `extrude_face_region` make in an order that
@@ -6538,7 +6546,10 @@ previews the effects in the same colours.
 
 The frames are finished by worker processes over chunks of about a dozen consecutive frames and handed to the encoder in
 order (`mkmmd/postframes.py`): `--jobs N` or `[post] jobs` (default: up to 4, fewer when half the memory available would
-not hold them at a worker's peak, about 1.7 GB at 1920 x 1080; one process for a little work). They are the frames one
+not hold them at a worker's peak, about 1.7 GB at 1920 x 1080; one process for a little work), counted as each output
+starts: an output's workers are its own and stop with it, so the next one is not counted against the memory idle
+workers of the outputs before still hold (which left the last of a 22 s show's three final outputs one worker, against
+three for the others). They are the frames one
 process makes in order: a missing frame repeats the last one rendered before it in any chunk, the wrap's frame 0 as
 finished is finished afresh by a worker that needs it, and a chunk only starts on a frame where no effect holds a picture
 of the frames before (a film's frame over its step, a booth's captures, an eraser's frame, a mosh with a flow:
@@ -6565,7 +6576,8 @@ stays on the GPU, and a frame whose keeping started on the CPU stays there. A pi
 of the output's size (the CPU path resamples it) leaves its entry to the CPU. mkr-post writes each finished frame
 straight into the encoder's pipe (`serve --stats FD`: its index and darkest luma come back on a pipe of their own), a
 frame finished on the CPU handed through it in order (`finished` jobs). The worker processes (`--jobs`, default up to
-3 on this path) only plan the frames, up to 32 ahead of mkr-post, and plan a heavy frame (one whose picture they work
+3 on this path) only plan the frames (reading a frame's picture where they work on it, not its screen type or keep
+mask, which mkr-post reads), up to 32 ahead of mkr-post, and plan a heavy frame (one whose picture they work
 out whole: the entries before a pixel sort, some fifty times a plain frame's work) long before its turn, from the
 output's start, on one worker fewer than `--jobs` at most and with 512 MB of such pictures waiting at most
 (`postframes.EARLY_BYTES`), so the frames round it never wait for it; a group of consecutive heavy frames is cut into
@@ -6580,7 +6592,7 @@ process, not once an output. mkr-post decodes the PNGs a frame reads on four thr
 the GPU takes as it comes out of the decoder (a figure layer's luma as one byte a pixel, widened on the GPU), and those
 threads write the frame, its screen layer and its keep mask into buffers the GPU copies from, so the thread that hands
 the frames' work to the GPU copies none of them (`engine::inputs`). The outputs go one after another (one mkr-post on
-the card at a time: `mkmmd/gpulock.py`), sharing the workers; each output's setup (its pipeline built, its files
+the card at a time: `mkmmd/gpulock.py`); each output's setup (its pipeline built, its files
 checked) is worked out on a thread while the output before it is finished (the first one's while the GPU is waited
 for), and each encoder writes its last frames while the next output starts. The kinds, and what else of them stays on
 the CPU:
