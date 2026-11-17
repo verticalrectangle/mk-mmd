@@ -24,6 +24,11 @@
 The objects a [[glitch]] names (docs/design.md: Shots: Glitches) are hidden from its `to` on (a CONSTANT `hide_render` key
 added to what they already have), so they stay gone once it has broken them up.
 
+A [[cast]] member's `shows` (clip seconds she renders in, docs/design.md: Cast) hides her meshes and what rides on her
+(see `_riders`) from render outside those spans, after the glitches: on each such object a CONSTANT `hide_render` curve
+that is hidden wherever it was hidden before or the frame is outside every span, keyed on every frame it changes. Her
+motion and her sims run as before: a hidden object is still evaluated, it is only not drawn (the bake's `shown` rows).
+
 A prop card's `rates` = [{rate, into, per}] (a turntable's `rpm` into its `turns`): once the keys have animated the root's
 property `rate`, its property `into` is keyed on every frame with the running integral of rate / per over clip seconds,
 0 at clip second 0, so a driver that reads `into` turns a part at the keyed speed and a speed change never jumps it.
@@ -37,6 +42,7 @@ import math
 import bpy
 import numpy as np
 
+from ...core import cast as CN
 from ...core import lanes as LN
 from ...core import shotstyle as SS
 from ...core import transition as TR
@@ -163,6 +169,9 @@ def run(ctx):
     hidden = _glitched(ctx)
     if hidden:
         out["_glitch_hidden"] = hidden
+    shown = _cast_shown(ctx)
+    if shown:
+        out["_cast_hidden"] = shown
     return out
 
 
@@ -226,4 +235,59 @@ def _glitched(ctx):
             before = _base_values(ob, "hide_render", 0, [f1 - 1])[0]          # as it was on the window's last frame
             K.key_prop(ob, "hide_render", [f1 - 1, f1], [before, 1.0], interp="CONSTANT", replace=False)
         out[i] = len(names)
+    return out
+
+
+# what a hidden object is drawn as: geometry (an empty only when it instances something)
+DRAWN = {"MESH", "CURVE", "SURFACE", "META", "FONT", "CURVES", "POINTCLOUD", "VOLUME", "GPENCIL", "GREASEPENCIL"}
+
+
+def _riders(objs):
+    """`objs` and every object that rides on them: parented under one (bones included), deformed or carried by one (a
+    modifier whose object or target is one: an armature, a hook, a surface deform) or held by a Child Of / Armature
+    constraint on one, and so on from those."""
+    hers = set(objs)
+    grew = True
+    while grew:
+        grew = False
+        for o in bpy.data.objects:
+            if o in hers:
+                continue
+            if o.parent in hers \
+                    or any(getattr(m, "object", None) in hers or getattr(m, "target", None) in hers for m in o.modifiers) \
+                    or any(c.type in ("CHILD_OF", "ARMATURE") and (getattr(c, "target", None) in hers
+                                                                  or any(t.target in hers for t in getattr(c, "targets", ())))
+                           for c in o.constraints):
+                hers.add(o)
+                grew = True
+    return hers
+
+
+def _cast_shown(ctx):
+    """{member: objects keyed}: every [[cast]] member with `shows` hidden from render, with what rides on her, on the
+    frames outside her spans (see the module docstring)."""
+    frames = [int(f) for f in ctx.frames]
+    out = {}
+    for spec in ctx.data.get("cast") or []:
+        spans = CN.shows(spec)                               # validated by the cast stage
+        if spans is None:
+            continue
+        root, arm = bpy.data.objects.get(CN.root_name(spec)), bpy.data.objects.get(CN.armature_name(spec))
+        if root is None or arm is None:
+            raise BuildError(f"cast {spec['name']!r}: shows: no {CN.root_name(spec)} or {CN.armature_name(spec)} in the "
+                             f"scene (the cast stage makes them)")
+        on = [(TR.frame_of(a, ctx.fps, ctx.frame0), TR.frame_of(b, ctx.fps, ctx.frame0)) for a, b in spans]
+        outside = np.array([not any(f0 <= f < f1 for f0, f1 in on) for f in frames])
+        n = 0
+        for ob in sorted(_riders([root, arm]), key=lambda o: o.name):
+            if ob.type not in DRAWN and not (ob.type == "EMPTY" and ob.instance_type != "NONE"):
+                continue
+            was = np.array(_base_values(ob, "hide_render", 0, frames)) >= 0.5
+            if was.all():
+                continue                                     # never drawn anyway
+            hide = was | outside
+            at = [0] + [i for i in range(1, len(frames)) if hide[i] != hide[i - 1]]
+            K.key_prop(ob, "hide_render", [frames[i] for i in at], [float(hide[i]) for i in at], interp="CONSTANT")
+            n += 1
+        out[spec["name"]] = n
     return out

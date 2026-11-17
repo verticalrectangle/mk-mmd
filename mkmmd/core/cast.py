@@ -1,4 +1,5 @@
-"""Cast members ([[cast]] in mk.toml): naming rules and the `physics` word, shared by the build and the checks."""
+"""Cast members ([[cast]] in mk.toml): naming rules, the `physics` word and the `shows` spans, shared by the build and the
+checks."""
 
 PHYSICS = ("mk", "none", "bullet")
 
@@ -23,3 +24,19 @@ def physics(member):
     if word not in PHYSICS:
         raise ValueError(f"physics = {word!r}: one of {', '.join(PHYSICS)}")
     return word
+
+
+def shows(member):
+    """`[[cast]] shows`: the clip seconds the member renders in, [(from, to), ...] in order (a shot's way: shown from the
+    frame of `from` up to the frame of `to`), or None without the key (every frame). ValueError says what is wrong."""
+    spans = member.get("shows")
+    if spans is None:
+        return None
+    if not isinstance(spans, list) or not spans or not all(isinstance(s, list) and len(s) == 2 for s in spans):
+        raise ValueError(f"shows = {spans!r}: a list of [from, to] clip seconds, e.g. shows = [[0.0, 9.5]]")
+    out = []
+    for a, b in spans:
+        if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (a, b)) or not a < b:
+            raise ValueError(f"shows: [{a!r}, {b!r}] is not [from, to] in clip seconds with from before to")
+        out.append((float(a), float(b)))
+    return sorted(out)

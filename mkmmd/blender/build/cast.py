@@ -5,7 +5,8 @@ the armature; default "<Name>_arm"), at [x, y, z], yaw (deg; 0 = facing -Y), par
 physics: "mk" (default: no Bullet; chains come from rig.json and the sim stage solves them), "bullet" (keep the
 author's rigid bodies), "none" (no secondary motion: no Bullet, and the sim stage leaves the member out),
 materials: {"<PMX material name>" = {color | tint | hide}} (`paint`: a colour of the model changed in the scene, the
-model file untouched).
+model file untouched), shows: [[from, to], ...] clip seconds she renders in (the keys stage hides her and what rides on
+her outside them).
 
 A model with group, bone, material or UV morphs (vowels made of a mouth shape and a tongue bone, a blush that is a
 material) has its morph sliders bound (`bind_morphs`), so every morph is keyed the same way, on the root's
@@ -234,6 +235,7 @@ def run(ctx):
         name = spec["name"]
         try:
             physics = CN.physics(spec)
+            CN.shows(spec)
         except ValueError as e:
             raise BuildError(f"cast {name!r}: {e}") from None
         pmx, rig = resolve(ctx, spec)

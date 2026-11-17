@@ -1444,6 +1444,37 @@ def test_a_glitch_breaks_up_the_objects_it_names_and_they_stay_gone_after_it(mak
     assert glitched[0] == plain[0] and glitched[2] == 0           # before the window as it is; gone on its last frame
 
 
+SHOWS = """[[prop]]
+name = "guitar"
+card = "library:electric_guitar"
+wear = "mq"
+[[prop]]
+name = "rug"
+card = "library:rug_80s"
+[pose.mq]
+feet = "floor"
+"""
+
+
+def test_cast_shows_hides_her_and_what_she_wears_outside_her_spans_and_nothing_else(make, capsys):
+    """Two scenes of one clip keep apart by `shows`: outside her spans the member is drawn on no frame, nor the guitar she
+    wears and its cord (the bake's `shown` rows, so a change to her redraws only her frames); the rug stays."""
+    code, out = make(SHOWS, until="keys", cast="shows = [[0.5, 1.0], [1.5, 1.8]]")
+    assert code == 0, out.get("error")
+    assert out["stages"]["keys"]["_cast_hidden"]["mq"] >= 3            # her mesh, the guitar, its cord
+    expr = 'sorted(o.name for o in bpy.data.objects if o.type in ("MESH", "CURVE") and not o.hide_render)'
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), expr, "--frames", "40,46,60,61,76,85",
+                   "--project", str(make.root)], capsys)              # spans: frames 46..60 and 76..84
+    assert code == 0, q
+    drawn = [set(v) for v in q["values"]]
+    hers = lambda names: {n for n in names if n.startswith(("Mq", "guitar"))}
+    assert all({"Mq_mesh0", "guitar_cable"} <= drawn[i] for i in (1, 2, 4))
+    assert all(not hers(drawn[i]) for i in (0, 3, 5))
+    assert all(drawn[i] - hers(drawn[i]) == drawn[0] and any(n.startswith("rug") for n in drawn[i]) for i in range(6))
+    code, out = make("", until="cast", cast="shows = [[1.0, 0.5]]")
+    assert code == 3 and "cast 'mq'" in out["error"] and "shows" in out["error"]
+
+
 BAKED = """[pose.mq]
 feet = "floor"
 [[move.mq]]
