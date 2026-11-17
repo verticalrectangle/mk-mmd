@@ -245,6 +245,39 @@ def test_stillness_is_the_share_of_frames_a_part_does_not_turn():
     assert detail["longest_frames"] == 4 and detail["at_frame"] == 13
 
 
+class ArmData:
+    """A chest, elbows and wrists as Data.bones gives them: the chest's world turn (3, 3), each point's places (F, 3)."""
+    def __init__(self, chest, pts):
+        self.chest, self.pts = chest, pts
+
+    def has(self, arm, name):
+        return name.lstrip("?") == "upper_body"
+
+    def bones(self, arm, names, frames):
+        W = np.tile(np.eye(4), (len(frames), len(names), 1, 1))
+        for i, n in enumerate(names):
+            if n == "upper_body":
+                W[:, i, :3, :3] = self.chest
+            else:
+                W[:, i, :3, 3] = self.pts[n] @ self.chest.T
+        return W, np.tile(np.eye(4), (len(names), 1, 1)), names
+
+
+def test_arm_sweep_is_how_far_a_forearm_goes_from_side_to_side_of_the_chest():
+    a = np.radians(np.linspace(-20.0, 10.0, 7))                        # one step: 20 degrees in to 10 out
+    flap = 0.2 * np.stack([np.sin(a), 0 * a, -np.cos(a)], 1)           # the left forearm across her body and back
+    swing = 0.2 * np.stack([0 * a, -np.sin(a), -np.cos(a)], 1)         # the right one forward and back
+    el = {"L": np.array([0.2, 0.0, 1.0]), "R": np.array([-0.2, 0.0, 1.0])}
+    pts = {"elbow.L": np.tile(el["L"], (7, 1)), "wrist.L": el["L"] + flap,
+           "elbow.R": np.tile(el["R"], (7, 1)), "wrist.R": el["R"] + swing}
+    quarter = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])   # she faces another way: no difference
+    for chest in (np.eye(3), quarter):
+        value, detail = motion.ArmSweep().compute({}, None, ArmData(chest, pts), list(range(30, 37)), {"arm": "a"})
+        assert value == pytest.approx(30.0) and detail["at_frame"] == 30
+        assert detail["forearm.L"] == {"in_deg": -20.0, "out_deg": 10.0, "frames": [30, 36]}
+        assert detail["forearm.R"]["out_deg"] - detail["forearm.R"]["in_deg"] == pytest.approx(0.0, abs=0.1)
+
+
 def test_foot_slide_measures_consecutive_frames_only():
     """Two runs of frames with a gap between them: the left foot stands still in each but somewhere else in the second
     (it stepped in the frames not asked for), the right one slides 5 mm a frame. Only the slide counts."""

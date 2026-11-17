@@ -734,3 +734,40 @@ class Stillness(Metric):
         return 100.0 * float(still.mean()), {"bone": bone.lstrip("?"), "frames": int(len(turn)),
                                              "mean_deg": round(float(turn.mean()), 3), "longest_frames": int(best),
                                              "at_frame": int(f[1:][np.diff(f) == 1][start]) if best else None}
+
+
+@metric
+class ArmSweep(Metric):
+    name = "arm_sweep"
+    doc = ("Arms that flap across the body: how far a forearm sweeps from side to side, the angle it points out of the "
+           "plane that cuts the chest in two halves (out to its own side +, in across the body -), the range over the "
+           "frames (degrees, the larger arm's). An arm that hangs and swings with a walk goes forward and back with "
+           "its elbow behind it and hardly sweeps (10 to 15); one whose elbow is held out to the side folds its "
+           "forearm in across the body and out again with every step (30 and more), which from the front is a stiff "
+           "sideways sway however right its timing is. For a walk or a stand: a dance's arms sweep on purpose. Value: "
+           "the larger range; detail: each forearm's least and greatest angle and the frames they are at.")
+    args = {"cast": "cast member (or armature)"}
+    default_max = 20.0
+
+    def needs(self, args, ctx, need):
+        arm, _ = ctx.cast(args)
+        need.bone(arm, "upper_body", "?upper_body2", "elbow.L", "wrist.L", "elbow.R", "wrist.R")
+        return {"arm": arm}
+
+    def compute(self, args, ctx, data, frames, st):
+        arm = st["arm"]
+        W, rest, _ = data.bones(arm, ["upper_body2" if data.has(arm, "?upper_body2") else "upper_body"], frames)
+        left = (geom.unscaled(W[:, 0])[:, :3, :3] @ geom.unscaled(rest[0])[:3, :3].T)[:, :, 0]   # the chest's left
+        f = np.asarray(frames)
+        worst, detail = 0.0, {"at_frame": None}
+        for s, out in (("L", 1.0), ("R", -1.0)):
+            J = data.bones(arm, [f"elbow.{s}", f"wrist.{s}"], frames)[0][:, :, :3, 3]
+            fore = J[:, 1] - J[:, 0]
+            side = out * np.sum(fore * left, 1) / np.maximum(np.linalg.norm(fore, axis=1), 1e-9)
+            deg = np.degrees(np.arcsin(np.clip(side, -1.0, 1.0)))
+            lo, hi = int(np.argmin(deg)), int(np.argmax(deg))
+            detail[f"forearm.{s}"] = {"in_deg": round(float(deg[lo]), 1), "out_deg": round(float(deg[hi]), 1),
+                                      "frames": [int(f[lo]), int(f[hi])]}
+            if float(deg[hi] - deg[lo]) > worst:
+                worst, detail["at_frame"] = float(deg[hi] - deg[lo]), int(f[lo])
+        return worst, detail
