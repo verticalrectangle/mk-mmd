@@ -56,6 +56,7 @@ def palette_colors(C):
         "flash_sky": b(rose=.8, foam=.2, hue=-90, chroma=1.5, k=1.2),     # sky during a strike: luminous periwinkle
         "flash_obj": b(rose=.9, muted=.1, hue=-90, chroma=1.25, k=.9),    # everything else outside during a strike
         "sun_tint": L(gold=.5, hl_high=.5, hue=20),                        # low warm sun multiplied onto everything outside
+        "night": b(iris=.5, pine=.5, hue=-20, chroma=1.5, k=.3),         # night multiplied onto everything outside but its lamps
         "sun_disc": L(foam=.5, overlay=.25, gold=.25),
         "facade_rose": mix(b(rose=1), b(base=1), 0.55),
         "pavers": [b(overlay=.6, rose=.3, surface=.1), b(hl_low=.7, love=.3)], "paver_mortar": b(hl_med=.7, love=.3),
@@ -107,13 +108,16 @@ class Outside:
         self.c = palette_colors(R.C)
 
     # ---------------------------------------------------------------- colour pipeline
-    def grade(self, g, col, strength=1.0, mist=None, sky=False):
+    def grade(self, g, col, strength=1.0, mist=None, sky=False, lamp=None):
         """Everything outside runs through this: outside_sat (HSV saturation), flash (periwinkle strike light), sun (warm
-        gold wash), optional distance mist (near, far, amount) towards the horizon haze. Returns (colour, strength)."""
+        gold wash), night (multiplied toward a deep blue, but for `lamp`, a 0..1 mask of what is a lamp: a lit window,
+        which the night leaves on and the brighter against it), optional distance mist (near, far, amount) towards the
+        horizon haze. Returns (colour, strength)."""
         c_ = self.c
         sat = g.param("outside_sat")
         flash = g.param("flash")
         sun = g.param("sun")
+        night = g.param("night")
         c = g.hsv(col, sat=sat)
         if mist:
             near, far, amt = mist
@@ -121,14 +125,21 @@ class Outside:
             f = g.mul(g.ss(dist, near, far), amt)
             c = g.mixc(c, g.hsv(c_["sky_h"], sat=sat), f)
         c = g.mixc(c, c_["sun_tint"], g.mul(sun, 0.80), blend="MULTIPLY")
+        dark = g.mul(night, 0.96 if sky else 0.9)
+        if lamp is not None:
+            dark = g.mul(dark, g.sub(1.0, lamp))
+        c = g.mixc(c, c_["night"], dark, blend="MULTIPLY")          # before the flash: a strike lights the night too
         c = g.mixc(c, c_["flash_sky"] if sky else c_["flash_obj"], g.mul(flash, 0.88 if sky else 0.70))
         s = g.mul(g.mul(strength, g.mad(flash, 0.55 if sky else -0.12, 1.0)), g.mad(sun, 0.55, 1.0))
+        if lamp is not None:
+            s = g.mul(s, g.mad(g.mul(night, lamp), 1.5, 1.0))
         return c, s
 
     def mat_out(self, name, fn, strength=1.0, mist=(12.0, 140.0, 0.8)):
         m, g = self.R.mat(name)
+        self.lamp = None                             # `fn` may set it: where the picture is a lamp (grade)
         col = fn(g)
-        c, s = self.grade(g, col, strength, mist)
+        c, s = self.grade(g, col, strength, mist, lamp=self.lamp)
         em = g.node("ShaderNodeEmission")
         g.put(em.inputs["Color"], c)
         g.put(em.inputs["Strength"], s)
@@ -232,9 +243,10 @@ class Outside:
             stripes = g.ss(g.fr(g.div(py, 0.42)), 0.45, 0.55)
             awn = g.mul(band, g.gt(seed, 0.4))
             awn_col = g.mixc(c_["rose"], c_["cream"], stripes)
-            # warm lit windows
+            # warm lit windows: one in four by day, half of them at night
             rv, _ = g.white("3D", vec=g.xyz(bi, g.mad(fi, 1.0, g.mul(upper, 0.0)), g.mul(seed, 17.0)))
-            lit = g.lt(rv, 0.24)
+            lit = g.lt(rv, g.mad(g.param("night"), 0.26, 0.24))
+            self.lamp = g.mul(g.mul(lit, win), face)
             glass = g.mixc(c_["win_glass"][0], c_["win_glass"][1], g.ss(g.add(cv, g.mul(rv, 0.5)), 0.4, 1.2))
             glass = g.mixc(glass, c_["win_lit"], lit)
             wall = base

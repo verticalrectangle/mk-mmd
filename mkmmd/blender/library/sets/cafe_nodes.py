@@ -11,7 +11,7 @@ from mathutils import Vector
 from ..props.cafe_kit import drive
 
 # the set's animatable parameters: custom properties of the set root, read by the shaders through one node group
-PARAMS = ("fog", "outside_sat", "sun", "bolt", "bolt_variant", "bolt_rig", "flash", "refl", "clip_t")
+PARAMS = ("fog", "outside_sat", "sun", "bolt", "bolt_variant", "bolt_rig", "flash", "refl", "clip_t", "night")
 
 
 def params_group(name, root):

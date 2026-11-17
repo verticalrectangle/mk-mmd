@@ -28,7 +28,8 @@ spec keys (all optional)
                sides, the street seen straight through beaded drops and fog: what mkr draws
     colors     {role = slot or "#hex"} overrides of the interior roles below (plaster, wainscot, window_paint, oak,
                oak_dark, cream, fog_tint, ...)
-    steam, fog, outside_sat, sun, bolt, bolt_variant, bolt_rig, flash, refl    initial values of the parameters below
+    steam, fog, outside_sat, sun, night, bolt, bolt_variant, bolt_rig, flash, refl    initial values of the parameters
+               below
 
 Animatable parameters: custom properties on the set root (key them with `root["fog"]`, e.g. in a build script or an
 action). Every shader and light reads them through the node group "<name>_params" and drivers; nothing in the set is
@@ -38,6 +39,9 @@ keyed.
     fog          0..1   condensation on the inside of the glass: the share of the glass that is fogged (default 0.12)
     outside_sat  0..1   saturation of everything outside the window (1 colour, 0 grey; default 1)
     sun          0..1   a low warm sun breaking through: gold sky glow and disc, gold sun lamp, warm outside (default 0)
+    night        0..1   night: the street dark and blue with half its windows lit, the daylight through the window and
+                        the room's fills nearly out, the sky's ambient low and blue, the pendant lamp brighter: the
+                        room is lit by its lamp and by whatever lights the project adds (neon) (default 0)
     bolt         0..1   lightning bolt strength (0 = invisible, default 0)
     bolt_variant 0|1    which of the two bolt shapes (default 0)
     bolt_rig     0|1|2  which bolt rig is visible: 0 Front (seen from the front cameras), 1 Behind, 2 Side (default 0);
@@ -96,6 +100,7 @@ PROPS = {"steam": (0.6, 0.0, 1.0, "steam over the tea: read by the mug prop (caf
          "fog": (0.12, 0.0, 1.0, "share of the glass fogged by condensation"),
          "outside_sat": (1.0, 0.0, 1.0, "saturation of everything outside the window"),
          "sun": (0.0, 0.0, 1.0, "low warm sun breaking through"),
+         "night": (0.0, 0.0, 1.0, "night: the street dark, the daylight and the fills down, the pendant up"),
          "bolt": (0.0, 0.0, 1.0, "lightning bolt strength"),
          "bolt_variant": (0, 0, 1, "which of the two bolt shapes"),
          "bolt_rig": (0, 0, 2, "which bolt rig is visible (0 front, 1 behind, 2 side)"),
@@ -109,6 +114,13 @@ TOP_E = 34.0
 PENDANT_E = 45.0
 FLASH_E = 4000.0
 SUN_E = 14.0
+NIGHT = {"key": -0.9, "fill": -0.94, "top": -0.9, "pendant": -0.8, "world": -0.85}   # at night = 1: how the window's
+#                                                 daylight, the fills, the ceiling's light, the pendant's all-round
+#                                                 light and the world's change (a share of each) ...
+POOL_E = 170.0                                  # ... and the light the pendant throws down in a cone then: the lamp
+#                                                 lights the table and whoever sits at it, and the walls fall dark
+BOUNCE_E = 5.0                                  # ... with what the table top sends back up of it (EEVEE bounces none):
+#                                                 a face over the table is not all top light
 
 
 # ================================================================= colours
@@ -140,6 +152,7 @@ def interior_colors(C, spec):
         # world
         "world_up_warm": L(hl_med=.55, gold=.25, surface=.2), "world_up_cool": L(subtle=.5, hl_med=.4, iris=.1),
         "world_down": L(gold=.45, foam=.45, hl_high=.1, k=0.863), "world_flash": L(muted=.6, surface=.2, foam=.2),
+        "world_night": L(iris=.55, pine=.45),
         "warm_glow": mix(mix(b(gold=1), b(rose=1), 0.35), b(surface=1), 0.30),
     }
     for k, v in (spec.get("colors") or {}).items():
@@ -399,6 +412,19 @@ def build_lights(R, L):
         ob.data.transmission_factor = 0.0      # room lights must not show up as bright shapes through the pane
         if ob is not pend:
             ob.data.specular_factor = 0.35
+    night = ("night", R.root, '["night"]')      # at night the daylight and the fills go and the lamp makes a pool
+    for ob, e, share in ((key, KEY_E, NIGHT["key"]), (fill, FILL_E, NIGHT["fill"]), (front, FILL_E * 0.8, NIGHT["fill"]),
+                         (top, TOP_E, NIGHT["top"]), (pend, PENDANT_E, NIGHT["pendant"])):
+        drive(ob.data, "energy", f"{e} * (1 + {share} * night)", var=night)
+    pool = make_light(R, "Pendant_Pool", "SPOT", (tx, ty, 2.08), energy=0.0, color=L["pendant"], spot=math.radians(74),
+                      radius=0.1)
+    pool.data.transmission_factor = 0.0
+    pool.data.specular_factor = 0.35
+    drive(pool.data, "energy", f"{POOL_E} * night", var=night)
+    bounce = make_light(R, "Pendant_Bounce", "AREA", (tx, ty, 0.95), rot=(math.pi, 0, 0), energy=0.0,
+                        color=L["pendant"], size=0.55, shadow=False)     # over what stands on the table, upward
+    bounce.data.specular_factor = 0.0
+    drive(bounce.data, "energy", f"{BOUNCE_E} * night", var=night)
     flash = make_light(R, "Flash_Area", "AREA", (WINDOW_X - 5.5, -0.55, 2.2), rot=(0, -math.pi / 2, 0),
                        energy=0.0, color=L["flash"], size=14.0, size_y=8.0)
     drive(flash.data, "energy", f"{FLASH_E} * flash", var=("flash", R.root, '["flash"]'))
@@ -408,7 +434,7 @@ def build_lights(R, L):
     # shines towards +x, slightly towards -y, 14 degrees downward
     sun.rotation_euler = (-SUN_DIR).to_track_quat("-Z", "Y").to_euler()
     drive(sun.data, "energy", f"{SUN_E} * sun", var=("sun", R.root, '["sun"]'))
-    return [o.name for o in (key, fill, front, top, pend, flash, sun)]
+    return [o.name for o in (key, fill, front, top, pend, pool, bounce, flash, sun)]
 
 
 def build_world(R, L):
@@ -431,9 +457,11 @@ def build_world(R, L):
     col = g.mixc(down, up, g.ss(dz, -0.25, 0.1))
     sun = g.param("sun")
     flash = g.param("flash")
+    night = g.param("night")
     col = g.mixc(col, L["warm_glow"], g.mul(sun, 0.35))
+    col = g.mixc(col, L["world_night"], g.mul(night, 0.8))
     col = g.mixc(col, L["world_flash"], g.mul(flash, 0.6))
-    strength = g.mul(1.0, g.mad(flash, 3.0, 1.0))
+    strength = g.mul(g.mad(night, NIGHT["world"], 1.0), g.mad(flash, 3.0, 1.0))
     bg = g.node("ShaderNodeBackground")
     g.put(bg.inputs["Color"], col)
     g.put(bg.inputs["Strength"], g.mul(strength, WORLD_STRENGTH))
