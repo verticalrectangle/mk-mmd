@@ -735,7 +735,11 @@ The bake stage writes `<blend>.bake/` (version 5): `scene.glb`, `bake.json` and 
 site's scene viewer and the vector look's renderer, and the `lit` section of bake.json with `lit.bin` (vertex attributes,
 triangles and shape-key deltas, little-endian), `view_lut.bin` and `images/` for mkr, mk's GPU renderer of the lit frames.
 `mkmmd/blender/build/bake.py` has the format of the first and `bake_lit.py` of the second. Positions and directions are in
-glTF's axes (+Y up); what node graphs read (Generated coordinates, attributes) stays in Blender's.
+glTF's axes (+Y up); what node graphs read (Generated coordinates, attributes) stays in Blender's. While Blender's glTF
+exporter writes `scene.glb` a node socket's `links` come from a table made once per node tree (`bake.quick_links`):
+Blender's own property walks every link of the tree on each read and the exporter reads it at every step of its search
+behind each material socket, which was 93 of the 109 s a scene with a hundred procedural materials took to export (12 s
+with the table, the same file byte for byte).
 
 - View: Blender's display transform for the scene's view settings (transform, look, exposure, gamma, curves, display), captured
   by saving a float image of a 65³ grid of scene-linear values (2^-12.5 to 2^12.5 on a log2 scale) through them as a 16-bit
@@ -764,7 +768,10 @@ glTF's axes (+Y up); what node graphs read (Generated coordinates, attributes) s
   collection instances, particles) are meshes of their own that share their source's vertices. A mesh that bends (skinned or
   shape-keyed) carries its corner fans, so a renderer rebuilds its normals on the deformed mesh as Blender does, custom
   normals included; the bake picks each fan's reference edge against Blender's own deformed normals on a few frames (turning
-  the rest normals with the joints instead misses Blender's by 14 to 23° on 1 % of an MMD model's corners).
+  the rest normals with the joints instead misses Blender's by 14 to 23° on 1 % of an MMD model's corners), and keeps the
+  edge the bake before it picked while that is within 0.1° a frame of the best (`mkmmd.core.bend.KEEP`): many fans have two
+  edges about as good, and which wins by a hair follows the frames it is fitted on, so without that any change of the
+  motion moved a few hundred fans to another edge and, with them, every frame's normals.
 - Every lit mesh names its look record (`record`: the object's own entry in bake.json's `objects`, an instance its
   instancer's), and `lit.records` holds the records of those no look sorts (screen type, objects drawn for one output only),
   so the figure, bare and keep patterns resolve from the bake alone.
@@ -793,6 +800,13 @@ glTF's axes (+Y up); what node graphs read (Generated coordinates, attributes) s
 - Self-check: the bake rebuilds every static and skinned mesh from lit.bin and bake.bin alone on the export frame, the middle
   frame and the last, and measures it against Blender's evaluated mesh. The report's `lit` has the worst distance per mesh
   (`check_mm`; over 0.1 mm is a WARNING), bake.json's `lit.check` the normals' worst, 99th and 99.9th-percentile angle too.
+- What is held a row a frame (`per_frame`): every array of bake.bin that has one row for each frame of the clip, as
+  `[float offset, floats a row]`, or `[float offset, floats a row, scope]` where only some frames read it: `camera:NAME` (a
+  camera's own rows: the frames seen through it), `armature:NAME` (its joints: the frames that show a mesh it bends),
+  `mesh:NAME` (a mesh's matrix, shape-key values and object attributes: the frames that show it). The marks are made where
+  the bake writes each array (`put(arr, per_frame=True, scope=...)`); what is not marked counts as part of every frame.
+  `mk render` keys mkr's frames on them to keep the ones a rebuild left as they were ([Rendering](#rendering):
+  `mkmmd/render/reuse.py`).
 
 ### Targets
 
@@ -5949,7 +5963,32 @@ under another engine the render stops before it starts, naming the frame and the
 outputs, `--frames SPEC` some frames (default the whole clip), `--jobs N` runs N Blender processes per output that share the frames.
 Frames are claimed with an empty file first, so a stopped render resumes; frames and layers on disk that are older than the built
 scene show the scene of an earlier build, so they are drawn again (the report's `stale` counts them; `--keep` takes them as they
-are, for a scene built again without a change); a disk check refuses to start when the frames would not fit
+are), except the ones an mkr render can tell the rebuild left as they were (the report's `reused`). mkr draws the same picture
+from the same input, bit for bit, so every frame it draws whole (the frame and each layer of it: none left to Blender, none in
+a look) gets a key, stored in `keys.json` beside the frames: a digest of everything in the bake that is not held a row a frame,
+of the run's settings (mkr's binary, its samples and tunables, the size, the shutter, the output), of the frame's own layers,
+and of the rows of the frames its shutter can reach (two either side): those that belong to no one thing, those of the cameras
+the frame and its layers are seen through, and those of the armatures and meshes it shows (`mkmmd/render/reuse.py`; the bake's
+`per_frame`). A frame whose key is what it was stays, however old its file. So a rebuild after a change draws what the change
+reaches: a character's frames from where her motion changes to where she leaves the cut (her hair and skirt carry the change
+on), the whole of a shot whose camera was moved or whose content changed (a camera's clip range follows what its shot shows),
+and every frame after a change to a material, a mesh, a by-frame geometry, the cut or the type on screen, which are part of
+every frame; so are the bones of every character the scene shows, wherever she stands: two scenes of one clip that are kept
+apart by place, not by hiding the cast of the other, share their characters' motion, and a change to the first one's is drawn
+again through the second. When no frame can be kept the report's `stale` says what changed for all of them
+(`every_frame_because`: `bake.json`, `bake.bin` for the values that are not a row a frame, `lit.bin` for the meshes, a view
+table, `images`, or `settings`). It all rests on a build that gives the same bake for the same scene, which a builder has to
+see to: bmesh hands over the faces and the edges that `create_uvsphere` and `extrude_face_region` make in an order that
+differs from run to run (the edges in a direction that does too), an exact Boolean its faces, and a bevel after them
+then gives another mesh each time. A builder that calls the first puts them in the order of their vertices after it
+(`mkmmd.blender.library.mesh.steady_order`: the sort moves the faces, so one held from before names another afterwards),
+as a shell baked into a plain mesh does after its Boolean (`shell.bake`); the tech props' `pocket` pushes its region in by
+hand instead of the second. So built, the library's 74 props in one scene, 1 105 meshes, are the same three times over
+(before, a cassette player's body differed every time and a car's every other time). A `lit.bin` named there after a
+build that changed nothing is a builder that is not steady: its scene's frames are all drawn again, never kept wrongly.
+A frame drawn by a render that was stopped has no key and is drawn again after
+the next build. Delete `keys.json` (or the frames) to have all of them drawn again. A disk check refuses to start when the
+frames would not fit
 (it keeps 1.5 GB spare). Shots with a render-time look ([Shots](#looks-silhouette-and-reflection): silhouette, reflection) are finished
 flat frames on disk, composed inside the render job; `--no-styles` renders them as lit, and leaves out the cut effects and the screen type too (they are part of the looks). `[[transition]]` and `[[insert]]`
 ([Shots](#transitions-and-inserts)) add the layers they need next to the frames (`plate/`, `matte/`, `back/`, `point/`; `--no-transitions`
@@ -6510,8 +6549,9 @@ OpenCV seeking to the exact frame (checked on every clip frame Crimson and Clove
 pixel by one level.
 
 The encoder is `[post] encoder` or `--encoder`: `x264` (the default: libx264 at `[post] x264_preset` or `--x264-preset`,
-`slow` by default, CRF `--crf`) or `vaapi` (the GPU's H.264 encoder on the config's `vaapi_device`, constant QP `--crf`:
-some 250 frames a second at 1080p against x264 slow's 14, larger files).
+CRF `--crf`; without either `slow` for the final preset and `veryfast` for the others, whose videos are for review: 20 of
+the 62 s a 22 s draft took to post at 960 x 540) or `vaapi` (the GPU's H.264 encoder on the config's `vaapi_device`,
+constant QP `--crf`: some 250 frames a second at 1080p against x264 slow's 14, larger files).
 
 `--gpu` or `[post] gpu = true` hands what mkr-post can do of each frame to the GPU (`mkr/mkr-post`, driven by
 `mkmmd/postgpu.py`): the frame effects it draws, the screen type (the ordinary layer over the picture, then a frame's negative

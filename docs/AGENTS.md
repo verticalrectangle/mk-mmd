@@ -28,7 +28,11 @@ For agents (and people) driving `mk`. Every command prints JSON; exit codes are 
 | 10. Credits | every asset named, nothing unreviewed | `mk assets credits` |
 
 Go back as often as needed: build, check and look are cheap (seconds); render and post are not. Repeat 5-8 until the checks pass and
-the sheets look right, then render a draft, post it, and render the final once the draft is approved.
+the sheets look right, then render a draft, post it, and render the final once the draft is approved. A person judges motion from
+a playing video, not from your sheets and not from the checks: after a fix, render the changed shot in draft with mkr (`mk render
+--engine mkr --preset draft --frames A:B`: seconds; a whole 22 s show in three sizes drew in two minutes where its final took
+nineteen), post that, show it, and render the final only once it is approved. A render after a rebuild draws what the change
+reaches and keeps the rest (the report's `reused`), so the final after a fix is the fix's frames, not the clip's.
 
 ## 1. Brief
 
@@ -431,7 +435,7 @@ The expression language is listed under [Expressions](design.md#expressions).
 `mk render --preset draft --jobs 2` renders every output (frames are claimed, so a stopped render resumes and `--jobs` share the work); `--output 9x16 --frames t=0:5` renders a
 part. A project whose shots are vector looks renders several times faster with `[render] engine = "mk"` (or `--engine mk` for one run): mk draws those shots on the GPU
 from the bake (`mk build --bake` after saving the .blend by hand), as Blender would to a few pixels in a thousand, and Blender the rest; the report's `shots` says which
-engine drew each and why. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song. Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
+engine drew each and why. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song; `mk render ... --post` runs it beside the render, each video finished as its frames come (its minutes inside the render's, not after them: a 22 s show's final took six to post on its own). Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
 layer or frame is an error unless `--allow-gaps`; after changing text, delete the preset's frames. `mk post --to DIR` copies the videos. A loop for a feed or a
 teaser is an `[[excerpt]] {name, from, to, outputs, loop}` ([Excerpts](design.md#excerpts)): `mk post` writes that span beside each output as it encodes it. The grade is `[post]`
 ([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black. A video watched on phones
@@ -515,7 +519,7 @@ The build:
 
 Renders and post:
 
-- Frames and layers are claimed with an empty file, so a stopped render resumes. After a `mk build`, `mk render` draws again every frame and layer that is older than the scene (the report's `stale`; `--keep` takes them as they are): a video is never old frames under a new sound track. A change that does not go through the build is not seen that way: delete `renders/<preset>` then.
+- Frames and layers are claimed with an empty file, so a stopped render resumes. After a `mk build`, `mk render` draws again every frame and layer that is older than the scene (the report's `stale`; `--keep` takes them as they are): a video is never old frames under a new sound track. An mkr render keeps the frames the build left as they were (the report's `reused`: each frame's key in `keys.json` says what it shows): after a change to one character's motion it draws her frames from the change on, not the scenes without her; a change to a material, a mesh or the cut is part of every frame. So fix a shot, build, render, and only that much is drawn. A change that does not go through the build is not seen that way: delete `renders/<preset>` then.
 - Use static fonts: Blender reads a variable font's default instance (`python -m mkmmd.fontinst` pins the axes).
 - A fast move (a spin, a windmill, a kick, a step) is judged from every one of its frames at full size, in the shot's own camera, before anyone is shown it: a sheet of small tiles hides an arm across a face, a hand flipped over for three frames, a foot in the floor. A draft has no motion blur, so anything that travels more than a hand's width a frame strobes.
 - `strum`'s `windmill` keeps the hand in the plane of the strings: its circle lies in front of the player, not beside her as a real one does. On a small player or a guitar worn high it crosses her chest and her face; the build warns (`head_cm` in the report) and it is better left out there.
