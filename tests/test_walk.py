@@ -136,16 +136,24 @@ def test_a_walking_arm_swings_from_the_shoulder_and_a_posed_hand_stays_put():
     ts = np.arange(0.0, 1.0, 1.0 / 60.0)
     S, upper, fore = np.array([0.15, 0.0, 1.30]), 0.22, 0.20
     hang = np.tile(S + 0.97 * (upper + fore) * np.array([0.13, 0.03, -1.0]) / np.linalg.norm([0.13, 0.03, -1.0]), (60, 1))
-    pole = np.tile(S + np.array([0.1, 0.4, -0.2]), (60, 1))             # the elbow points back and a little out
+    pole = np.tile(S + np.array([AR.POLE[0], AR.POLE[1], -AR.POLE[2]]), (60, 1))   # the pose stage's: the elbow out
     swing = 0.12 * np.sin(2 * np.pi * ts)                              # forward, then back
     fwd, left = np.array([0.0, -1.0, 0.0]), np.array([1.0, 0.0, 0.0])
-    at, poles, turns = PF.swing_arm(ts, S, hang, pole, swing, upper, fore, fwd, left, 1.0)
+    walks = np.ones(60)
+    at, poles, turns = PF.swing_arm(ts, S, hang, pole, swing, upper, fore, fwd, left, 1.0, walks)
     front, back = int(np.argmax(swing)), int(np.argmin(swing))
-    assert (at[front] - hang[front]) @ fwd == pytest.approx(0.12, abs=0.02)      # as far forward as the plan says ...
-    assert at[front][2] > hang[front][2] + 0.02 and at[front][0] < hang[front][0] - 0.02   # ... up and in, on an arc
+    assert (at[front] - at[back]) @ fwd == pytest.approx(0.24, abs=0.03)         # as far each way as the plan says ...
+    assert at[front][2] > hang[front][2] + 0.02 and at[front][0] < hang[front][0] - 0.01   # ... up and in, on an arc
     reach = np.linalg.norm(at - S, axis=1)
     assert reach[front] < reach[0] - 0.01 < reach[back]                 # the elbow folds in front and opens behind
     assert reach.max() < upper + fore
+    elbows = np.array([AR.pole_elbow(S, at[i], upper, fore, poles[i]) for i in range(60)])
+    fore_arm = at - elbows                                              # seen from the front, where the lens is: the
+    lean = np.degrees(np.arctan2(fore_arm[:, 0], -fore_arm[:, 2]))      # forearm's lean out from straight down
+    assert np.ptp(lean) < 12.0                                          # it does not flap across her and back (the
+    #                                                                     pose's own pole, its elbow out: 37 degrees)
+    assert ((elbows - S) @ fwd).max() < 0.01                            # the elbow stays behind her shoulder: the fold
+    assert (fore_arm[front] @ fwd) > 0.1                                 # lifts the forearm forward
     lag = int(round(PF.SWING_LAG * 60))                                 # the hand turns as the forearm does, a moment
     for i in (front, back):                                             # late: the wrist stays as straight as it hung
         was = hang[i] - AR.pole_elbow(S, hang[i], upper, fore, pole[i])
@@ -156,8 +164,10 @@ def test_a_walking_arm_swings_from_the_shoulder_and_a_posed_hand_stays_put():
     assert math.degrees(2.0 * math.acos(turns[front + lag][0])) > 20.0  # it has turned with the swing, not stayed down
     assert np.allclose(np.linalg.norm(poles - S, axis=1), np.linalg.norm(pole - S, axis=1))    # the pole goes round too
     chest = np.tile(S + np.array([0.02, -0.25, -0.05]), (60, 1))        # a hand held before her chest does not hang
-    held, kept, still = PF.swing_arm(ts, S, chest, pole, swing, upper, fore, fwd, left, 1.0)
+    held, kept, still = PF.swing_arm(ts, S, chest, pole, swing, upper, fore, fwd, left, 1.0, walks)
     assert np.allclose(held, chest) and np.allclose(kept, pole) and np.allclose(still, [1.0, 0.0, 0.0, 0.0])
+    stood, same, _ = PF.swing_arm(ts, S, hang, pole, 0.0 * swing, upper, fore, fwd, left, 1.0, 0.0 * walks)
+    assert np.allclose(stood, hang) and np.allclose(same, pole)         # and one that hangs while she stands keeps its pose
 
 
 def test_a_step_after_a_pause_starts_from_a_stand_so_she_holds_still_between_two_walks():

@@ -951,12 +951,12 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
 
 
 def _arm_swing(ctx, m, walk, frames):
-    """A walk's `arms`: each arm swings from its shoulder (mkmmd.core.perform.swing_arm: the hand on an arc, the elbow
-    folding as it comes forward, the hand turning with the forearm) by the plan's `swing`, on top of where the pose
-    stage keyed the hand's goal, in the frame the goal rides in as it stands at the settled pose (a goal riding the
-    chest swings with it). Returns the sides swung. A side without arm IK is left alone, and so is a hand whose goal
-    does not ride the member's own body (held at a place of the world: her shoulder leaves it as she walks); both are
-    logged."""
+    """A walk's `arms`: each arm swings from its shoulder (mkmmd.core.perform.swing_arm: the hand on an arc, its elbow
+    behind her, folding as the hand comes forward, the hand turning with the forearm) by the plan's `swing`, on top of
+    where the pose stage keyed the hand's goal, in the frame the goal rides in as it stands at the settled pose (a goal
+    riding the chest swings with it). Returns the sides swung. A side without arm IK is left alone, and so is a hand
+    whose goal does not ride the member's own body (held at a place of the world: her shoulder leaves it as she walks);
+    both are logged."""
     sc = bpy.context.scene
     arm = m.arm
     A = arm.matrix_world.to_3x3().normalized()
@@ -999,7 +999,8 @@ def _arm_swing(ctx, m, walk, frames):
         poles = np.array([to_goal @ Vector(p) for p in keyed(pole, "location", pole.location)])
         at, poles, turns = PF.swing_arm(ts, np.array(shoulder), joint, poles, np.asarray(off, float) / k,
                                         (rest[1] - rest[0]).length / k, (rest[2] - rest[1]).length / k,
-                                        np.array(R @ fwd), np.array(R @ left), 1.0 if s == "L" else -1.0)
+                                        np.array(R @ fwd), np.array(R @ left), 1.0 if s == "L" else -1.0,
+                                        walk["swinging"])
         turned = [Quaternion(turns[i]) @ Quaternion(rot[i]) for i in range(n)]
         K.key_vec(goal, "location", frames, [at[i] - np.array(q @ hold) for i, q in enumerate(turned)], interp="LINEAR")
         K.key_vec(goal, "rotation_quaternion", frames, K.continuous([tuple(q) for q in turned]), interp="LINEAR")
