@@ -209,6 +209,11 @@ def run(args):
     if not outs:
         raise UsageError("no [[output]] in mk.toml")
     frames = parse_frames(args.frames, proj) if args.frames else list(range(proj.frame0, proj.last_frame + 1))
+    between = [f for f in frames if not isinstance(f, int)]
+    if between:                                  # `t=7.66` at 30 fps: the files on disk are whole frames
+        near = round(between[0])
+        raise UsageError(f"--frames {args.frames}: frame {between[0]:g} is between two frames and mk render draws whole "
+                         f"ones (frame {near} is t={(near - proj.frame0) / proj.fps:.4f})")
     cfg = dict(PRESETS[args.preset])
     cfg.update({k: v for k, v in proj.data.get("render", {}).items() if k in ("samples", "shutter", "engine")})
     if args.percent:
