@@ -5,9 +5,9 @@ renders it. bake.py makes a `Lit` before its frame loop, samples it on every fra
 graphs and the meshes on the export frame (before the glTF export rewires the MMD materials) and writes it with the
 rest; then `check` rebuilds the meshes from the files and measures them against Blender's own evaluation.
 
-Files (in the bake beside bake.json): lit.bin (little-endian; BYTE offsets), view_lut.bin, images/ (packed and generated
-images), and the per-frame values in bake.bin (float32; FLOAT offsets). Axes as in bake.bin: glTF's (Blender's
-(x, y, z) is (x, z, -y)); what node graphs read (Generated, attributes) stays in Blender's.
+Files (in the bake beside bake.json): lit.bin (little-endian; BYTE offsets), view_lut.bin (and view_lut_<i>.bin: `view`
+spans), images/ (packed and generated images), and the per-frame values in bake.bin (float32; FLOAT offsets). Axes as in
+bake.bin: glTF's (Blender's (x, y, z) is (x, z, -y)); what node graphs read (Generated, attributes) stays in Blender's.
 
 bake.json "lit":
   file      "lit.bin"
@@ -16,7 +16,12 @@ bake.json "lit":
             ((b * n + g) * n + r) * 3, Blender's display-referred output (0..1, before 8-bit quantisation, no dither)
             for the scene-linear input 2^(lo + (hi - lo) * i / (n - 1)) per channel (i = r, g, b index), captured by
             saving a float image of those values through the scene's view settings as a 16-bit PNG; `zero` is the
-            output for scene-linear 0 and `floor` the output for 2^lo
+            output for scene-linear 0 and `floor` the output for 2^lo. A scene whose look, exposure or gamma changes
+            over the baked frames ([[look.span]]: the lights stage keys them) has `spans` [{frames [first, last]
+            (Blender frames), lut {file "view_lut_<i>.bin", n, lo, hi}, zero, floor, look, exposure, gamma}]: one per
+            longest run of frames seen through another look than the record's own, which is the look of every other
+            frame ([look]'s, scene["mk_look_spans"] `base`); each distinct look is captured once, on the first frame
+            it shows on. Without such a change there is no `spans`
   film      filter_size, transparent; render: every RenderSettings value; eevee: every scene.eevee value
   world     null (no world: black, no light) or {name, use_nodes, color, props (every World value: probe_resolution,
             sun_threshold, sun_angle, use_sun_shadow, ...), visibility (its ray visibility flags: camera, diffuse,
@@ -163,6 +168,7 @@ AXES3 = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
 AXES4 = np.eye(4)
 AXES4[:3, :3] = AXES3
 LUT_N, LUT_LO, LUT_HI = 65, -12.5, 12.5
+VIEW_KEYS = ("look", "exposure", "gamma")      # what a [[look.span]] changes of the view settings (lights stage)
 LIGHT_FLOATS, CAMERA_FLOATS = 22, 8
 FLEX_CAP = 256_000_000                  # bytes one object baked frame by frame may add to lit.bin
 CHECK_MM = 0.1                          # a mesh rebuilt from the bake further than this from Blender's is reported
@@ -516,17 +522,45 @@ def _object_attr(key, ob, sc, by=None, psys=None):
 
 
 # ================================================================================================= colour management
-def view(sc, part):
-    """The view record (module docstring), its LUT written to part/view_lut.bin."""
+def view_settings(sc):
+    """(view settings, display settings, override): those Blender saves the frames through, the output's own when it
+    overrides the scene's."""
     ims = sc.render.image_settings
     override = getattr(ims, "color_management", "FOLLOW_SCENE") == "OVERRIDE"
-    vs, ds = (ims.view_settings, ims.display_settings) if override else (sc.view_settings, sc.display_settings)
-    lut, zero, floor = _capture(sc, part)
+    if override:
+        return ims.view_settings, ims.display_settings, override
+    return sc.view_settings, sc.display_settings, override
+
+
+def view(sc, part):
+    """The view record (module docstring), its LUT written to part/view_lut.bin: the view settings as they are, or, in a
+    scene whose [[look.span]]s the lights stage keyed, with [look]'s own look, exposure and gamma (scene["mk_look_spans"]
+    `base`) for the capture."""
+    vs, ds, override = view_settings(sc)
+    base = None if override else json.loads(sc.get("mk_look_spans") or "{}").get("base")
+    saved = [(k, getattr(vs, k)) for k in VIEW_KEYS] if base else []
+    try:
+        for k in VIEW_KEYS if base else ():
+            setattr(vs, k, base[k])
+        lut, zero, floor = _capture(sc, part)
+        rec = {"transform": vs.view_transform, "look": vs.look, "exposure": vs.exposure, "gamma": vs.gamma,
+               "curve": vs.use_curve_mapping, "display": ds.display_device, "dither": sc.render.dither_intensity,
+               "override": override, "lut": {"file": "view_lut.bin", "n": LUT_N, "lo": LUT_LO, "hi": LUT_HI},
+               "zero": zero.tolist(), "floor": floor.tolist()}
+    finally:
+        for k, v in saved:
+            setattr(vs, k, v)
     lut.astype("<f4").tofile(os.path.join(part, "view_lut.bin"))
-    return {"transform": vs.view_transform, "look": vs.look, "exposure": vs.exposure, "gamma": vs.gamma,
-            "curve": vs.use_curve_mapping, "display": ds.display_device, "dither": sc.render.dither_intensity,
-            "override": override, "lut": {"file": "view_lut.bin", "n": LUT_N, "lo": LUT_LO, "hi": LUT_HI},
-            "zero": zero.tolist(), "floor": floor.tolist()}
+    return rec
+
+
+def span_look(sc, part, i, look):
+    """A [[look.span]]'s look `look` (look, exposure, gamma: the view settings as they are now, on a frame it shows on)
+    as a `view` spans entry without its frames, its LUT captured into part/view_lut_<i>.bin."""
+    lut, zero, floor = _capture(sc, part)
+    lut.astype("<f4").tofile(os.path.join(part, f"view_lut_{i}.bin"))
+    return {"lut": {"file": f"view_lut_{i}.bin", "n": LUT_N, "lo": LUT_LO, "hi": LUT_HI}, "zero": zero.tolist(),
+            "floor": floor.tolist(), **dict(zip(VIEW_KEYS, look))}
 
 
 def _capture(sc, part):
@@ -1407,6 +1441,12 @@ class Lit:
         self.frame0 = ctx.frame0 if ctx is not None else sc.frame_start
         self.view = view(sc, part)
         self.t_lut = time.time() - t0
+        # [[look.span]]s: the look each frame is seen through (`sample`), -1 for the view record's own, else an index
+        # into the other looks (`span_look` entries, captured on the first frame each shows on)
+        self.vs = view_settings(sc)[0]
+        self.view_own = tuple(self.view[k] for k in VIEW_KEYS)
+        self.view_k = np.full(n, -1, np.int32)
+        self.view_looks, self.view_spans = {}, []
         self.check_k = sorted({0, n // 2, n - 1})
         self.fit_k = sorted({int(round(x)) for x in np.linspace(0, n - 1, 10)[1:-1]} - set(self.check_k))
         enabled = _enabled(bpy.context.view_layer)
@@ -1640,6 +1680,15 @@ class Lit:
 
     # ------------------------------------------------------------------------------------------------- every frame
     def sample(self, k, dg):
+        look = tuple(getattr(self.vs, key) for key in VIEW_KEYS)  # the view settings the frame is saved through
+        if look != self.view_own:
+            i = self.view_looks.get(look)
+            if i is None:
+                t_lut = time.time()
+                i = self.view_looks[look] = len(self.view_spans)
+                self.view_spans.append(span_look(self.sc, self.part, i, look))
+                self.t_lut += time.time() - t_lut
+            self.view_k[k] = i
         t0 = time.time()
         t = time.perf_counter()
         b = self.bulk or self._make_bulk()
@@ -2097,7 +2146,7 @@ class Lit:
         left = [{"name": name, "why": why, "shows": _ranges(self.shown.get(of, np.zeros(n, bool)))}
                 for name, (why, of) in sorted(self.left.items())]
         sc = self.sc
-        self.docs = {"file": "lit.bin", "view": self.view,
+        self.docs = {"file": "lit.bin", "view": self._view_doc(),
                      "film": {"filter_size": sc.render.filter_size, "transparent": sc.render.film_transparent},
                      "render": _props(sc.render, skip={"filepath"}), "eevee": _props(sc.eevee),
                      "world": self.world_doc, "lights": lights, "materials": self.mat_docs, "groups": self.group_docs,
@@ -2108,6 +2157,16 @@ class Lit:
                      "check": None}
         self.t_finish = time.time() - t0
         return self.docs
+
+    def _view_doc(self):
+        """The view record, with `spans` when some frames are seen through another look (module docstring): per
+        longest run of frames of one other look, in frame order."""
+        if not self.view_spans:
+            return self.view
+        runs = sorted((k0, k1, i) for i in range(len(self.view_spans)) for k0, k1 in _ranges(self.view_k == i))
+        self.log(f"bake: lit: {len(runs)} runs of frames through {len(self.view_spans)} other looks ([[look.span]])")
+        return dict(self.view, spans=[{"frames": [self.frame0 + k0, self.frame0 + k1 - 1], **self.view_spans[i]}
+                                      for k0, k1, i in runs])
 
     def armatures(self):
         """Names of the armatures the skinned meshes need joints of."""

@@ -199,8 +199,10 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 | `[audio]` | post, timeline, the site | `file`, `start` (song seconds at clip time 0), `hits` (a JSON file of named lists of hit times, clip seconds, each a number or `{t, db}`, a gap lane's with its `dur`, a note lane's with its `midi`: `mk timeline hits` writes one; the site's timeline shows them as lanes), `lanes` (which of those lists, in order; default all but `beats` and `downbeats`), `fade_in` and `fade_out` (seconds the clip's sound fades in over at its start, 0, and out over at its end, 0.06: a fade-in is for a clip cut where a voice is still dying away), `master` (mastering for small speakers: see [Post](#post)) |
 | `[scene]` | scene stage | `start`, `end` (frame range; default: 3 s of pre-roll before `frame0` to the last frame of the clip), `settle_frames` (24: the frames the rest pose takes to ease into the base pose) |
 | `[look]` | sets, props, lights, post | `palette`, `slots`, and the colour management keys: see [Lights and the look](#lights-and-the-look) and [Palettes](#palettes) |
+| `[[look.span]]` | lights, the bake, mkr | a part of the clip seen through another look (`from`, `to` and any of `exposure`, `contrast`, `gamma`; what it leaves out is `[look]`'s): see [Lights and the look](#lights-and-the-look) |
 | `[render]` | `mk render` | `samples`, `shutter`, `engine`: see [Rendering and post](#rendering-and-post) |
 | `[post]` | `mk post` | the grade: see [Rendering and post](#rendering-and-post) |
+| `[[post.span]]` | `mk post` | a part of the clip graded its own way (`from`, `to`, `fade` and any of the grade's keys, laid over `[post]`'s): [Spans](#spans) |
 | `[[excerpt]]` | `mk post` | spans of the clip written as videos of their own beside each output (`name`, `from`, `to`, `outputs`, `loop`): [Excerpts](#excerpts) |
 | `[[fx]]` | `mk render`, `mk post`, `mk look` | frame effects on the finished pictures (lens, echo, slitscan, push, scope, zoom, shock, slab, tint, halftone, split, mosh, the collages, the picture effects pixelsort, film, camcorder, doodle, booth, the haze: mist, fog, bokeh, mitosis, and an inset into a recording): see [Frame effects](#frame-effects) |
 | `[[medium]]` | `mk build` (shots), `mk render`, `mk look` | a window of clip seconds drawn in another look whatever shot is in the cut: see [Medium shifts](#medium-shifts) |
@@ -733,7 +735,8 @@ without a word (see [Cast](#cast)).
 
 The bake stage writes `<blend>.bake/` (version 5): `scene.glb`, `bake.json` and `bake.bin` (float32 values per frame) for the
 site's scene viewer and the vector look's renderer, and the `lit` section of bake.json with `lit.bin` (vertex attributes,
-triangles and shape-key deltas, little-endian), `view_lut.bin` and `images/` for mkr, mk's GPU renderer of the lit frames.
+triangles and shape-key deltas, little-endian), `view_lut.bin` (and a `view_lut_<i>.bin` per look of a `[[look.span]]`),
+and `images/` for mkr, mk's GPU renderer of the lit frames.
 `mkmmd/blender/build/bake.py` has the format of the first and `bake_lit.py` of the second. Positions and directions are in
 glTF's axes (+Y up); what node graphs read (Generated coordinates, attributes) stays in Blender's. While Blender's glTF
 exporter writes `scene.glb` a node socket's `links` come from a table made once per node tree (`bake.quick_links`):
@@ -744,7 +747,12 @@ with the table, the same file byte for byte).
 - View: Blender's display transform for the scene's view settings (transform, look, exposure, gamma, curves, display), captured
   by saving a float image of a 65³ grid of scene-linear values (2^-12.5 to 2^12.5 on a log2 scale) through them as a 16-bit
   PNG with no dither and reading it back: the display-referred value before 8-bit quantisation (`zero` for black), and the
-  render's dither. Film filter and transparency, every render and EEVEE setting.
+  render's dither. Film filter and transparency, every render and EEVEE setting. A scene whose look, exposure or gamma
+  changes over the clip ([`[[look.span]]`](#lights-and-the-look)) keeps `[look]`'s as the record's own (`view_lut.bin`, the
+  look of every frame outside the spans) and adds `spans`: `{frames = [first, last], lut = {file, n, lo, hi}, zero, floor,
+  look, exposure, gamma}` per longest run of frames seen through another look, each distinct look captured once
+  (`view_lut_<i>.bin`) as the view settings are on the first frame it shows on; mkr resolves each frame through its own.
+  Without such a change the record is what it always was, no `spans` key.
 - World, materials and node groups: every node of their trees with every value of the node (colour ramps with a 257-sample
   table, curve mappings sampled where Blender builds its tables), its sockets, the links and what a muted node passes through;
   node groups once each with their interface. Images as files: absolute paths, packed and generated ones written into
@@ -2098,10 +2106,36 @@ The `[look]` table (`[look.slots]` sits beside it):
 | `exposure` | stops (default 0) |
 | `gamma` | default 1 |
 | `breathe` | `{palette, keys, ease, slots, lights}`: the palette breathes into another one and back over clip time (below) |
+| `span` | `[[look.span]]`, `{from, to, exposure, contrast, gamma}`: a part of the clip seen through another look (below) |
 
 The stage always writes `view`, `exposure` and `gamma` and writes `contrast` only when given, so the look a set builder chose
 (the café and bedroom sets pick `AgX - Base Contrast`) stays otherwise. The settings live in the scene's view settings, so
 `mk render` and `mk look` draw with them (the grade is `[post]`).
+
+**A part of the clip in another look.** `[[look.span]]` (`mkmmd/core/lookspan.py`, bpy-free, tested) gives the frames from
+`from` to `to` (clip seconds, required, `from` before `to`) an `exposure`, a `contrast` or a `gamma` of their own (one at
+least; what a span leaves out is `[look]`'s; no `view`: a project has one transform): a room at night darker and harder
+than the figure on a sweep in day light after it. A span holds the frames a `[[shot]]` with the same numbers holds, from the
+frame of `from` up to the one before the frame of `to` (each the build's rounding of its clip second,
+`mkmmd.core.transition.frame_of`), so it switches on the frame a cut written with the same number does. An unknown key, a
+span under a frame or reaching outside the clip, two spans over one frame and a contrast the view transform has no look of
+are build errors that name the span. The stage keys the scene's view settings CONSTANT (what some span changes of `look`,
+`exposure` and `gamma`; `look`, an enum, as its value), `[look]`'s on the scene's first frame and on the frame after each
+span, so every frame outside the spans, the pre-roll too, keeps `[look]`'s, and keeps the looks as applied in
+`scene["mk_look_spans"]`. Blender's renders follow the keys as they are; in a [freeze](#freezes) the look goes on with the
+clock, as the cut does. The bake captures each look once and mkr draws each frame through its own ([The bake](#the-bake));
+`mk render` keeps the frames a rebuild leaves as they were, so a span's new exposure draws its frames again and no others.
+
+```toml
+[look]
+palette = "rose-pine-dawn"
+
+[[look.span]]                         # the night room, darker and harder; the sweep after it keeps [look]'s
+from = 0.0
+to = 7.656
+exposure = -0.5
+contrast = "Medium High Contrast"
+```
 
 **Breathing palette.** `[look.breathe]` mixes the project's palette (mix 0) with another one of the same slot names (mix 1)
 over clip seconds (`mkmmd/core/breathe.py`, numpy-free, tested): `palette` (required: the other one), `keys` (required,
@@ -2178,7 +2212,8 @@ exposure = 0.3
 love = "#e5546f"
 ```
 
-The report has the `look` settings as applied (`view`, `look`, `exposure`) and, per light, `kind`, `color`, `power` and `mount`.
+The report has the `look` settings as applied (`view`, `look`, `exposure`; with spans, `spans`: per span its `frames` [first,
+last] and its `look`, `exposure` and `gamma`) and, per light, `kind`, `color`, `power` and `mount`.
 
 ### Keys
 
@@ -6578,8 +6613,8 @@ constant QP `--crf`: some 250 frames a second at 1080p against x264 slow's 14, l
 `mkmmd/postgpu.py`): the frame effects it draws, the screen type (the ordinary layer over the picture, then a frame's negative
 layer, `negative/<frame>.png`, inverting it: the job's `layer` and `negative`, kernels `composite` and `negate`), the keep mask, the grade and the bytes for the encoder,
 the rest of a frame (cut effects, the other kinds, entries before the last one it
-cannot draw) worked out by the workers and handed on as a picture; the loop's wrap, `halation` and `streaks` stay on the
-CPU (with either, the whole output does). Each kind it draws has a module in `mkmmd/gpufx/` that works the frame's
+cannot draw) worked out by the workers and handed on as a picture; the loop's wrap, `halation`, `streaks` and
+`[[post.span]]` stay on the CPU (with any of the last three, the whole output does). Each kind it draws has a module in `mkmmd/gpufx/` that works the frame's
 numbers out with the same `FrameFx` methods the CPU path uses, and `mkr/mkr-post/src/fx/<kind>.rs` with
 `shaders/fx_<kind>.wgsl` draws the pixels; what an effect keeps from frame to frame (a mosh's picture, a film's print)
 stays on the GPU, and a frame whose keeping started on the CPU stays there. A picture or layer that is not an 8-bit PNG
@@ -6748,6 +6783,52 @@ contrast = 1.12
 split = { shadows = "iris", highlights = "gold", amount = 0.05 }
 halation = { strength = 0.2, tint = "rose" }
 grain = { amount = 0.01 }
+```
+
+#### Spans
+
+`[[post.span]]` grades a part of the clip its own way (`mkmmd.post.Spans`): a neon room at night that wants a pink
+halation and a heavy vignette, then a bright collage that wants neither. A span's grade is `[post]`'s grade keys with
+the span's laid over them: a key it gives replaces that key's whole value (`halation = false`, `split = false` or
+`floor = false` turns that part off in the span) and what it leaves out is `[post]`'s; everything else of `[post]`
+(`streaks`, `keep`, `screen`, the encoder, `jobs`, `gpu`) is the project's.
+
+| Key | Meaning |
+|---|---|
+| `from`, `to` | clip seconds (required): the span holds the frames a `[[shot]]` with the same numbers holds, `round(frame0 + from x fps)` up to, not with, `round(frame0 + to x fps)` (the shots stage's rounding, `mkmmd.core.transition.frame_of`), so its grade switches on the cut |
+| `fade` | the seconds its grade takes to come in after `from` and to go out before `to`: one number for both ends or `[in, out]` (default 0: the span's grade whole from its first frame to its last) |
+| `contrast`, `pivot`, `saturation`, `split`, `floor`, `toe`, `halation`, `vignette`, `grain` | the grade's keys (above), for the span |
+
+A frame of a span is `(1 - w) x [post]'s grade + w x the span's`, `w` rising linearly from 0 at `from` to 1 at
+`from + in` and falling to 0 at `to` from `to - out`; a frame where `w` is 0 or 1 runs one grade only. Both grades run
+on the same picture with the same grain frame: a span whose grain has `[post]`'s `size` and `seed` (a `grain` table it
+gives replaces `[post]`'s whole, defaults and all) has its very field (and its vignette where the number is the same: no
+copies of either), so a fade does not thin the grain; one with another `size` or `seed` has a field of its own. With
+`[look] breathe` a span's colours breathe as `[post]`'s do. A key a span does not give, `from` not before `to`, a span
+with a frame outside the clip, a fade longer than the span (`in + out` over `to - from`) or two spans with a frame in
+common is an error before anything is drawn that names the span, counted from 0 in the file's order (`post span 1
+(12.0-20.0 s): ...`). mkr-post takes an output's vignette and grain once and mixes no two grades, so `--gpu` leaves a
+project with spans to the CPU (the report's `gpu` says why). `mk look` composes the cut as mk post does before the
+grade, so neither `[post]` nor a span shows in its images.
+
+```toml
+[post]
+saturation = 1.08
+contrast = 1.06
+vignette = 0.06
+
+[[post.span]]                 # the neon room: a pink halation and a heavy vignette
+from = 0.0
+to = 7.656
+saturation = 1.12
+vignette = 0.12
+halation = { strength = 0.38, radius = 0.016, threshold = 0.52, tint = "#ff3ea5" }
+
+[[post.span]]                 # the collage: no vignette, eased in over half a second
+from = 12.0
+to = 20.0
+fade = [0.5, 0.0]
+vignette = 0.0
 ```
 
 #### Excerpts

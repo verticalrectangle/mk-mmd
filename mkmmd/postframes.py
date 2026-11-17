@@ -90,8 +90,8 @@ class Output:
     mkmmd.core.progress.Follow: `files` holds the frames a running render promised) each frame is taken once the render
     has its files (`wait`), and what the cut effects settle once it has their windows. With `breath` (mkmmd.post.Breath:
     `[look] breathe`) every colour taken from the palette is the breathing palette's on each frame: the cut effects',
-    the frame effects', the loop's wrap's, the streaks' and the grade's (mkmmd.post.Mixed). A SetupError says what is
-    wrong."""
+    the frame effects', the loop's wrap's, the streaks' and the grade's (mkmmd.post.Mixed). A frame of a
+    `[[post.span]]` is graded with the span's grade (mkmmd.post.Spans: `graded`). A SetupError says what is wrong."""
 
     def __init__(self, proj, plan, name, src, files, frames, size, keep=None, verify=False, allow_gaps=False, gpu=None,
                  follow=None, breath=None):
@@ -116,6 +116,11 @@ class Output:
             raise SetupError(str(e).strip('"')) from None
         other = None if breath is None else breath.palettes[1]
         self._grades = None if other is None else P.Mixed(self.grade, other)
+        try:                                               # [[post.span]]: parts of the clip graded their own way
+            self.spans = None if post.get("span") is None else P.Spans(post, pal, self.size, proj.fps, proj.frame0,
+                                                                       proj.last_frame, self.grade, other)
+        except P.SpanError as e:
+            raise SetupError(str(e)) from None
         self._streaks = None if other is None or self.streaks is None else P.Mixed(self.streaks, other)
         footage = FT.source(proj.root)
         self.fx = CF.CutFx(plan, self.src, self.size, name, footage_of=footage, sprite_of=MDF.sprite_source(proj.root),
@@ -191,8 +196,11 @@ class Output:
         return self.follow is None or self.follow.ready(self.frames[k])
 
     def graded(self, f):
-        """The grade of clip frame `f`: its colours the breathing palette's mix there (`breath`), else `grade`."""
-        return self.grade if self._grades is None else self._grades.at(self.breath.mix(f))
+        """The grade of clip frame `f`: `grade`, or in a `[[post.span]]` the span's (the two mixed over its fades:
+        mkmmd.post.Spans), its colours the breathing palette's mix there (`breath`)."""
+        m = None if self._grades is None else self.breath.mix(f)
+        g = self.grade if m is None else self._grades.at(m)
+        return g if self.spans is None else self.spans.at(f, g, m)
 
     # ---------------------------------------------------------------- one frame
     def _read(self, f):

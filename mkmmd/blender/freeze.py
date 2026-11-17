@@ -2,12 +2,14 @@
 frame a freeze holds on `f` and every camera to where its own keys put it on `f`, with the camera the timeline markers bind
 on `f` as the scene camera; outside a freeze it is `scene.frame_set(f)`. Screen type is graphics over the picture, not a
 thing in the world, so the words on screen go on with the clock like the cameras (a word that lands inside a freeze
-lands, one that is up leaves on its own time). A render evaluates the animation again and binds the camera of the markers
-on the world's frame, so what is kept on the real frame has its action set aside (its values written by hand), and the
-markers with them, until the next `frame_set` or `release()`, which a render loop calls when it ends (and
+lands, one that is up leaves on its own time), and so does the look of a [[look.span]] (the scene's view settings are
+the picture's, like the cut). A render evaluates the animation again and binds the camera of the markers on the world's
+frame, so what is kept on the real frame has its action set aside (its values written by hand), and the markers with
+them, until the next `frame_set` or `release()`, which a render loop calls when it ends (and
 mkmmd.blender.scene.bind_aspect before it binds the markers). The scene is updated after they move, so what reads them
 next (a camera's matrix_world: the bake, a ring's centre seen through the camera, a word's evaluated mesh) sees them
-where the render will."""
+where the render will. The look is written onto the scene's view settings the same way, the scene's action set aside
+with the rest of its values as they are on the world's frame (`_look_at`)."""
 import json
 
 import bpy
@@ -117,6 +119,24 @@ def _screen_ids(sc, f):
     return out
 
 
+def _look_at(sc, f):
+    """Write the look the lights stage keys on frame `f` onto the scene's view settings (scene["mk_look_spans"]: [look]'s,
+    or that of the [[look.span]] that holds `f`) and set the scene's action aside, its other values left as they are on
+    the world's frame; nothing without spans."""
+    doc = sc.get("mk_look_spans")
+    if not doc:
+        return
+    doc = json.loads(doc)
+    look = next((s for s in doc["spans"] if s["frames"][0] <= f <= s["frames"][1]), doc["base"])
+    ad = sc.animation_data
+    if ad is not None and ad.action is not None:
+        _HELD.append((sc, ad.action))
+        ad.action = None
+    vs = sc.view_settings
+    for k in ("look", "exposure", "gamma"):
+        setattr(vs, k, look[k])
+
+
 def frame_set(sc, f, wins=None):
     """Go to frame `f` (see the module docstring). Returns the frame the world is at."""
     release()
@@ -136,5 +156,6 @@ def frame_set(sc, f, wins=None):
             _MARKS.append((sc, marks))
         if cam is not None:
             sc.camera = cam
+        _look_at(sc, f)
         bpy.context.view_layer.update()
     return src

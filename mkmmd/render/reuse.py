@@ -6,21 +6,23 @@ the frame's own layers. The bake says which of its values it holds a row a frame
 floats a row] into bake.bin, marked where the bake stage writes them: bones, matrices, visibility, shape keys, lights,
 cameras, keyed node values), and whose rows they are where only some frames read them ([float offset, floats a row,
 scope]: "camera:NAME" the frames seen through it, "armature:NAME" the frames that show a mesh it bends, "mesh:NAME" the
-frames that show it); everything else in the bake counts as part of every frame. So
+frames that show it); everything else in the bake counts as part of every frame, but for the looks of [[look.span]]s
+(bake.json lit.view `spans`: a run of frames seen through another look's LUT), which are their frames' own. So
 
-    signature(bake)   {"static": a digest of everything but those rows, "frames": [a digest of frame k's rows of no
-                       scope], "scoped": {scope: [a digest of its rows of frame k]}, "shows": {scope: [whether frame k
-                       shows it]} for the armatures and meshes some frames do not}
-    keys(...)         {frame: key}: the static digest, the run's settings, the frame's layers, and the rows of the
-                      frames a shutter can reach (RADIUS either side of it): all those of no scope, and those of the
-                      cameras it is seen through and of the armatures and meshes it shows
+    signature(bake)   {"static": a digest of everything but those rows and spans, "frames": [a digest of frame k's
+                       rows of no scope], "scoped": {scope: [a digest of its rows of frame k]}, "shows": {scope:
+                       [whether frame k shows it]} for the armatures and meshes some frames do not, "view": [a digest
+                       of the look frame k is seen through, None for the view's own]}
+    keys(...)         {frame: key}: the static digest, the run's settings, the frame's layers, the frame's look, and
+                      the rows of the frames a shutter can reach (RADIUS either side of it): all those of no scope, and
+                      those of the cameras it is seen through and of the armatures and meshes it shows
 
 and a frame on disk whose stored key (keys.json beside the frames: `load`, `save`) is its key now shows what a render
 now would draw, however old the file is. The scopes are what makes a change stay where it is: a camera's clip range
 follows what its shot shows and is written on every frame, and a character keeps moving (her hair, by the sim) while
-a later scene hides her. What the marks do not cover costs frames, never a wrong one: a material, a mesh, a by-frame
-geometry or a word of screen type that changes is part of every frame, and all of them are drawn again. Pure numpy,
-outside Blender."""
+a later scene hides her; a span's new exposure draws the span's frames again and no others. What the marks do not cover
+costs frames, never a wrong one: a material, a mesh, a by-frame geometry, a word of screen type or the view's own look
+that changes is part of every frame, and all of them are drawn again. Pure numpy, outside Blender."""
 import hashlib
 import json
 import os
@@ -57,14 +59,38 @@ def _file(h, path):
 
 def canonical(doc):
     """bake.json as a signature reads it: without what a build writes anew and no picture reads (the self-check's
-    measurements, `lit.check`), and with mmd_tools' bind nodes numbered in the order they come (their names differ from
-    build to build)."""
+    measurements, `lit.check`) or what only some frames read (the [[look.span]]s' looks, lit.view `spans`: `_views`),
+    and with mmd_tools' bind nodes numbered in the order they come (their names differ from build to build)."""
     doc = dict(doc)
     if isinstance(doc.get("lit"), dict):
-        doc["lit"] = {k: v for k, v in doc["lit"].items() if k != "check"}
+        lit = {k: v for k, v in doc["lit"].items() if k != "check"}
+        if isinstance(lit.get("view"), dict):
+            lit["view"] = {k: v for k, v in lit["view"].items() if k != "spans"}
+        doc["lit"] = lit
     seen = {}
     return VOLATILE.sub(lambda m: seen.setdefault(m.group(0), f"mmd_bind#{len(seen)}"),
                         json.dumps(doc, ensure_ascii=False, separators=(",", ":")))
+
+
+def _views(bake, doc, n):
+    """[hex or None per frame]: the digest of the look frame k is seen through where a [[look.span]] holds it (bake.json
+    lit.view `spans`: its record but for its frames and its LUT's file name, and the LUT's bytes), None where the
+    view's own holds it (in the static digest)."""
+    out = [None] * n
+    frame0, luts = int(doc.get("frame0") or 0), {}
+    for s in (((doc.get("lit") or {}).get("view") or {}).get("spans") or ()):
+        rec = {k: v for k, v in s.items() if k != "frames"}
+        rec["lut"] = {k: v for k, v in rec["lut"].items() if k != "file"}
+        if s["lut"]["file"] not in luts:
+            h = _digest()
+            _file(h, bake / s["lut"]["file"])
+            luts[s["lut"]["file"]] = h.hexdigest()
+        h = _digest()
+        h.update(json.dumps([rec, luts[s["lut"]["file"]]], sort_keys=True).encode("utf-8"))
+        look = h.hexdigest()
+        for k in range(max(int(s["frames"][0]) - frame0, 0), min(int(s["frames"][1]) - frame0 + 1, n)):
+            out[k] = look
+    return out
 
 
 def _shows(doc, data, n):
@@ -84,9 +110,9 @@ def _shows(doc, data, n):
 def signature(bake, doc=None):
     """{"static": hex, "parts": {name: hex} (what the static digest is made of: bake.json, bake.bin's values that are
     not a row a frame, each other file of the bake mkr reads, the textures), "frames": [hex per frame], "scoped":
-    {scope: [hex per frame]}, "shows": {scope: [bool per frame]}} of the bake folder `bake` (`doc`: its bake.json, read
-    already); None when the bake does not say what it holds a row a frame (an older mk's: `mk build --bake` writes
-    it). ReuseError for a `per_frame` table that does not fit bake.bin."""
+    {scope: [hex per frame]}, "shows": {scope: [bool per frame]}, "view": [hex or None per frame] (`_views`)} of the
+    bake folder `bake` (`doc`: its bake.json, read already); None when the bake does not say what it holds a row a
+    frame (an older mk's: `mk build --bake` writes it). ReuseError for a `per_frame` table that does not fit bake.bin."""
     bake = Path(bake)
     if doc is None:
         doc = json.loads((bake / "bake.json").read_text(encoding="utf-8"))
@@ -124,7 +150,8 @@ def signature(bake, doc=None):
     return {"static": static.hexdigest(), "parts": parts, "frames": [h.hexdigest() for h in frames],
             "scoped": {s: [h.hexdigest() for h in hs] for s, hs in scoped.items()},
             "shows": {s: flags.tolist() for s, flags in _shows(doc, data, n).items()
-                      if s in scoped and not flags.all()}}
+                      if s in scoped and not flags.all()},
+            "view": _views(bake, doc, n)}
 
 
 def keys(sig, frame0, frames, settings, layers, cameras=None):
@@ -133,6 +160,7 @@ def keys(sig, frame0, frames, settings, layers, cameras=None):
     shutter, the output), `layers(frame)` the frame's own layers (JSON), `cameras(frame)` the names of the cameras the
     frame and its layers are seen through (None, or no `cameras`: every camera's rows count)."""
     n = len(sig["frames"])
+    views = sig.get("view")                                # per frame: the look of the [[look.span]] that holds it
     base = _digest()
     base.update(json.dumps([VERSION, sig["static"], settings], sort_keys=True, ensure_ascii=False).encode("utf-8"))
     reach = {}                                             # scope: the frames whose shutter can reach one that shows it
@@ -146,6 +174,9 @@ def keys(sig, frame0, frames, settings, layers, cameras=None):
             continue
         h = base.copy()
         h.update(json.dumps(layers(f), sort_keys=True, ensure_ascii=False).encode("utf-8"))
+        look = views[k] if views else None
+        if look is not None:                               # a [[look.span]]'s: the view's own is in the static digest
+            h.update(b"view:" + look.encode())
         seen = cameras(f) if cameras is not None else None
         seen = None if seen is None else {"camera:" + c for c in seen}
         window = range(k - RADIUS, k + RADIUS + 1)

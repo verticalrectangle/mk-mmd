@@ -55,6 +55,7 @@ Version 5: what versions 4 had, and the `lit` section the GPU renderer mkr draws
                        matrices, visibility and shape-key values)
   lit.bin     the lit meshes' vertex attributes, triangles and shape-key deltas, little-endian (bake_lit.py)
   view_lut.bin  Blender's display transform for the scene's view settings, captured (bake_lit.py)
+  view_lut_<i>.bin  the same for each other look a [[look.span]] shows its frames through (bake_lit.py: `view` spans)
   looks_lut.bin  the Standard view the looks' passes go through, captured the same way
   images/     the packed and generated images the lit materials use, as files
 

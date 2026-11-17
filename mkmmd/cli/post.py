@@ -20,6 +20,7 @@ from .. import framefx as FF
 from .. import gpulock as GL
 from .. import master as MS
 from .. import memory as MEM
+from .. import post as P
 from .. import postframes as PF
 from .. import postgpu as PG
 from ..core import excerpt as EX
@@ -51,7 +52,10 @@ full size and without sound. `[post] screen = "over"` lays the screen type over 
 exactly as written, no grain or vignette on it: type set on a photograph) instead of under the grade ("graded", the
 default). `[post] keep = {cast, materials, saturation}` keeps those materials of a cast member in colour where they are
 seen (her eyes in a black-and-white picture) through the mask mk render draws beside each frame (keep/<frame>.png): a
-missing mask is an error unless --allow-gaps; inside a cut effect's window the frame is graded whole.
+missing mask is an error unless --allow-gaps; inside a cut effect's window the frame is graded whole. [[post.span]]
+entries grade a part of the clip their own way: from, to (clip seconds: the frames a [[shot]] with the same numbers
+holds), fade (seconds its grade takes to come in and to go out: a number or [in, out], default 0) and any of the grade's
+keys, laid over [post]'s (docs/design.md: Post); --gpu leaves a project with spans to the CPU.
 
 [[transition]], [[insert]] and [[glitch]] entries (docs/design.md: Shots: Transitions and inserts, Glitches) are
 composited from the layers mk render drew next to the frames, before the grade: the grade, grain and vignette cover the
@@ -209,6 +213,10 @@ def run(args):
         excerpts = [] if still else EX.normalize(proj.data.get("excerpt"), proj.duration, proj.fps,
                                                  [o.name for o in proj.outputs])
     except EX.ExcerptError as e:
+        raise UsageError(str(e)) from None
+    try:                                                       # [[post.span]]: a wrong one before anything is drawn
+        P.spans(post, proj.fps, proj.frame0, proj.last_frame)
+    except P.SpanError as e:
         raise UsageError(str(e)) from None
     gpu = bool(args.gpu if args.gpu is not None else post.get("gpu", False))
     if not args.no_audio and au.get("file") and not still:

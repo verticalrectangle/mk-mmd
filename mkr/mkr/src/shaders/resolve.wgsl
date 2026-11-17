@@ -1,5 +1,5 @@
-// The film, part 2: the weighted sum divided by the weights, through the view LUT, quantised to 8 bits after Blender's
-// dither (its fixed per-pixel pattern, computed on the CPU: `dither.rs`).
+// The film, part 2: the weighted sum divided by the weights, through the frame's view LUT, quantised to 8 bits after
+// Blender's dither (its fixed per-pixel pattern, computed on the CPU: `dither.rs`).
 
 struct Resolve {
     width: u32,
@@ -13,7 +13,8 @@ struct Resolve {
     zero: vec4<f32>,                // the view's output for black
     exposure: f32,                  // scale on the scene-linear values
     frame: u32,
-    pad2: vec2<u32>,
+    lut_base: u32,                  // the frame's LUT: its first float in `lut` (the view's own, then its spans')
+    pad2: u32,
 }
 
 @group(0) @binding(0) var<storage, read> film_in: array<vec4<f32>>;
@@ -25,7 +26,7 @@ var<immediate> res: Resolve;
 
 fn lut_at(r: u32, g: u32, b: u32) -> vec3<f32> {
     let n = res.lut_n;
-    let i = ((b * n + g) * n + r) * 3u;
+    let i = res.lut_base + ((b * n + g) * n + r) * 3u;
     return vec3<f32>(lut[i], lut[i + 1u], lut[i + 2u]);
 }
 

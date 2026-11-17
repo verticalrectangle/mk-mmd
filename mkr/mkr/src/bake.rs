@@ -289,6 +289,45 @@ pub struct View {
     pub lut: LutRec,
     #[serde(default)]
     pub zero: Option<[f32; 3]>,
+    /// [[look.span]]s: the runs of frames seen through another look than the view's own (bake_lit `view`); none: every
+    /// frame is seen through `lut`.
+    #[serde(default)]
+    pub spans: Vec<ViewSpan>,
+}
+
+/// A run of frames seen through another look: Blender frames [first, last], that look's LUT and its output for black.
+#[derive(Deserialize, Debug, Clone)]
+pub struct ViewSpan {
+    pub frames: [i64; 2],
+    pub lut: LutRec,
+    #[serde(default)]
+    pub zero: Option<[f32; 3]>,
+}
+
+impl View {
+    /// The LUTs its frames are seen through, each file once (the view's own first, then the spans' in their order),
+    /// with their outputs for black (None: the LUT's first entry); and per span its Blender frames [first, last] and
+    /// the index of its LUT among them (`lut_at`).
+    pub fn luts(&self) -> (Vec<(&LutRec, Option<[f32; 3]>)>, Vec<([i64; 2], usize)>) {
+        let mut luts = vec![(&self.lut, self.lut.zero.or(self.zero))];
+        let mut spans = Vec::with_capacity(self.spans.len());
+        for s in &self.spans {
+            let i = match luts.iter().position(|(r, _)| r.file == s.lut.file) {
+                Some(i) => i,
+                None => {
+                    luts.push((&s.lut, s.lut.zero.or(s.zero)));
+                    luts.len() - 1
+                }
+            };
+            spans.push((s.frames, i));
+        }
+        (luts, spans)
+    }
+}
+
+/// The index (into `View::luts`) of the LUT Blender frame `frame` is seen through: its span's, else 0, the view's own.
+pub fn lut_at(spans: &[([i64; 2], usize)], frame: i64) -> usize {
+    spans.iter().find(|(f, _)| f[0] <= frame && frame <= f[1]).map_or(0, |&(_, i)| i)
 }
 
 fn one() -> f64 {
@@ -712,4 +751,45 @@ fn map(path: &Path) -> Result<Option<memmap2::Mmap>> {
     // SAFETY: the bake is written once by `mk build` and only read while mkr runs.
     let m = unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("cannot map {}", path.display()))?;
     Ok(Some(m))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(spans: Value) -> View {
+        let lut = |file: &str| serde_json::json!({"file": file, "n": 65, "lo": -12.5, "hi": 12.5});
+        let mut doc = serde_json::json!({"transform": "AgX", "lut": lut("view_lut.bin"), "zero": [0.0, 0.0, 0.0]});
+        if let Value::Array(items) = spans {
+            doc["spans"] = Value::Array(items.into_iter().map(|s| {
+                serde_json::json!({"frames": s[0], "lut": lut(s[1].as_str().unwrap()), "zero": s[2]})
+            }).collect());
+        }
+        View::deserialize(&doc).unwrap()
+    }
+
+    #[test]
+    fn a_frame_is_seen_through_its_spans_lut() {
+        // two runs of one look and one of another, between them frames of the view's own
+        let v = view(serde_json::json!([[[11, 20], "view_lut_0.bin", [0.1, 0.1, 0.1]],
+                                         [[25, 25], "view_lut_1.bin", [0.2, 0.2, 0.2]],
+                                         [[26, 30], "view_lut_0.bin", [0.1, 0.1, 0.1]]]));
+        let (luts, spans) = v.luts();
+        let files: Vec<&str> = luts.iter().map(|(r, _)| r.file.as_str()).collect();
+        assert_eq!(files, ["view_lut.bin", "view_lut_0.bin", "view_lut_1.bin"], "each look once, the view's own first");
+        assert_eq!(luts[1].1, Some([0.1, 0.1, 0.1]));
+        let at = |f| lut_at(&spans, f);
+        assert_eq!([at(10), at(11), at(20), at(21), at(24)], [0, 1, 1, 0, 0], "a span's first and last frame are its");
+        assert_eq!([at(25), at(26), at(30), at(31)], [2, 1, 1, 0]);
+    }
+
+    #[test]
+    fn without_spans_every_frame_is_seen_through_the_views_own() {
+        let v = view(Value::Null);
+        let (luts, spans) = v.luts();
+        assert_eq!(luts.len(), 1);
+        assert_eq!(luts[0].1, Some([0.0, 0.0, 0.0]));
+        assert!(spans.is_empty());
+        assert_eq!(lut_at(&spans, 11), 0);
+    }
 }

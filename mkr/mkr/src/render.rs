@@ -167,7 +167,9 @@ struct ResolveGpu {
     zero: [f32; 4],
     exposure: f32,
     frame: u32,
-    pad2: [u32; 2],
+    /// The frame's LUT: its first float in the LUTs buffer.
+    lut_base: u32,
+    pad2: u32,
 }
 
 pub(crate) fn mat(m: &Mat4) -> [[f32; 4]; 4] {
@@ -353,7 +355,11 @@ pub struct Renderer<'b> {
     pub(crate) param_layout: ParamLayout,
     /// Geometry's material index to the compiled material.
     pub(crate) mat_of: Vec<usize>,
-    pub(crate) lut: ViewLut,
+    /// The view LUTs, back to back in `lut_buf`: the view's own first, then each other look a [[look.span]] shows its
+    /// frames through (bake `lit.view.spans`, `View::luts`).
+    pub(crate) luts: Vec<ViewLut>,
+    /// Per span: its Blender frames [first, last] and its LUT in `luts` (`bake::lut_at`).
+    pub(crate) lut_spans: Vec<([i64; 2], usize)>,
     pub(crate) filter: Filter,
     pub(crate) lights: Vec<LightRec>,
     pub(crate) light_threshold: f32,
@@ -471,9 +477,10 @@ impl<'b> Renderer<'b> {
         let geo = Geometry::load(bake, &|m: &str| mats.attributes(m))?;
         eprintln!("mkr: geometry loaded ({:.1} s)", t0.elapsed().as_secs_f64());
         let mat_of: Vec<usize> = geo.materials.iter().map(|n| mats.index(n)).collect::<Result<_>>()?;
-        let lut_rec = &lit.view.lut;
-        let lut = ViewLut::load(&bake.dir.join(&lut_rec.file), lut_rec.n, lut_rec.lo as f32, lut_rec.hi as f32,
-                                lut_rec.zero.or(lit.view.zero))?;
+        let (lut_recs, lut_spans) = lit.view.luts();
+        let luts = lut_recs.iter()
+            .map(|(r, zero)| ViewLut::load(&bake.dir.join(&r.file), r.n, r.lo as f32, r.hi as f32, *zero))
+            .collect::<Result<Vec<_>>>()?;
         let filter = Filter { radius: lit.film.filter_size as f32 * params.filter_scale, sigma: params.filter_sigma };
         let eevee_f = |key: &str, d: f64| lit.eevee.get(key).and_then(|v| v.as_f64()).unwrap_or(d);
         let light_threshold = eevee_f("light_threshold", 0.01) as f32;
@@ -567,7 +574,13 @@ impl<'b> Renderer<'b> {
         let samples_buf = sized(device, "samples", 16, rw);
         let params_buf = sized(device, "material params", (param_layout.count.max(1) * 16) as u64, rw);
         let image_map_buf = storage(device, "image map", bytemuck::cast_slice(&mats.image_map), wgpu::BufferUsages::empty());
-        let lut_buf = storage(device, "view lut", bytemuck::cast_slice(&lut.data), wgpu::BufferUsages::empty());
+        let lut_buf = match luts.as_slice() {
+            [own] => storage(device, "view lut", bytemuck::cast_slice(&own.data), wgpu::BufferUsages::empty()),
+            all => {
+                let data: Vec<f32> = all.iter().flat_map(|l| l.data.iter().copied()).collect();
+                storage(device, "view luts", bytemuck::cast_slice(&data), wgpu::BufferUsages::empty())
+            }
+        };
         let indirect = sized(device, "indirect draws", (draws.len() * 8 + 64) as u64 * INDIRECT_STRIDE,
                              wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST);
 
@@ -691,7 +704,8 @@ impl<'b> Renderer<'b> {
             mats,
             param_layout,
             mat_of,
-            lut,
+            luts,
+            lut_spans,
             filter,
             rest,
             attrs,
@@ -2045,19 +2059,22 @@ impl<'b> Renderer<'b> {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("resolve"), timestamp_writes: None });
             pass.set_pipeline(&self.resolve_pipe);
             pass.set_bind_group(0, &t.resolve_bg, &[]);
+            let li = crate::bake::lut_at(&self.lut_spans, job.frame);
+            let lut = &self.luts[li];
             let r = ResolveGpu {
                 width: w,
                 height: h,
-                lut_n: self.lut.n as u32,
+                lut_n: lut.n as u32,
                 per_channel: (lit.view.transform == "Standard") as u32,
-                lo: self.lut.lo,
-                hi: self.lut.hi,
+                lo: lut.lo,
+                hi: lut.hi,
                 dither: (lit.view.dither as f32) * self.params.dither,
                 bias: self.params.dither_bias,
-                zero: [self.lut.zero[0], self.lut.zero[1], self.lut.zero[2], 0.0],
+                zero: [lut.zero[0], lut.zero[1], lut.zero[2], 0.0],
                 exposure: self.params.exposure.exp2(),
                 frame: job.frame as u32,
-                pad2: [0; 2],
+                lut_base: self.luts[..li].iter().map(|l| l.data.len() as u32).sum(),
+                pad2: 0,
             };
             pass.set_immediates(0, bytemuck::bytes_of(&r));
             pass.dispatch_workgroups(gw, gh, 1);

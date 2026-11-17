@@ -1,6 +1,7 @@
-//! The view transform as the bake captured it (bake v5 `lit.view.lut`): Blender's display-referred output for
-//! scene-linear inputs 2^(lo + (hi - lo) i / (n - 1)) per channel, f32 RGB at ((b n + g) n + r) 3. Looked up trilinearly
-//! in log2 space; inputs at or below 2^lo map as 2^lo does, black as the capture's `zero`.
+//! The view transform as the bake captured it (bake v5 `lit.view.lut`, and each `lit.view.spans` look's): Blender's
+//! display-referred output for scene-linear inputs 2^(lo + (hi - lo) i / (n - 1)) per channel, f32 RGB at
+//! ((b n + g) n + r) 3. Looked up trilinearly in log2 space; inputs at or below 2^lo map as 2^lo does, black as the
+//! capture's `zero`.
 
 use std::path::Path;
 

@@ -438,7 +438,10 @@ from the bake (`mk build --bake` after saving the .blend by hand), as Blender wo
 engine drew each and why. `mk post --preset draft` grades and encodes `out/<name>_<output>_draft.mp4` with the song; `mk render ... --post` runs it beside the render, each video finished as its frames come (its minutes inside the render's, not after them: a 22 s show's final took six to post on its own). Review the draft (`mk play` opens it in the player of the `player` setting, with the shots as chapters), fix, render `--preset preview` for motion blur, then `final`. A missing
 layer or frame is an error unless `--allow-gaps`; after changing text, delete the preset's frames. `mk post --to DIR` copies the videos. A loop for a feed or a
 teaser is an `[[excerpt]] {name, from, to, outputs, loop}` ([Excerpts](design.md#excerpts)): `mk post` writes that span beside each output as it encodes it. The grade is `[post]`
-([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black. A video watched on phones
+([Rendering and post](design.md#rendering-and-post)): check `min_luma` in the report if you care about black. A clip of two scenes that want
+different pictures (a room at night, then a bright collage) gives a part of it its own: `[[look.span]] {from, to, exposure, contrast, gamma}`
+for what the renderer sees it through ([Lights and the look](design.md#lights-and-the-look)) and `[[post.span]] {from, to, fade, ...}` for its
+grade; both switch on the frame a cut written with the same seconds does, and a project with post spans is graded on the CPU. A video watched on phones
 wants `[audio.master]` when its beat lives in the bass (808s, kicks: a phone's speakers play little below 250 Hz): it gives the
 booms of a hits lane overtones a phone can play, and the report's `boom_phone_db` says how far they stand out there, before and after.
 

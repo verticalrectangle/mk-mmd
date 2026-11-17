@@ -62,14 +62,17 @@ def _png_ok(path, size, layer=False):
 
 
 def refused(post):
-    """Why mkr-post cannot finish any output of a project whose `[post]` table is `post`: no binary, or a grade part it
-    does not draw yet; None when it can."""
+    """Why mkr-post cannot finish any output of a project whose `[post]` table is `post`: no binary, a grade part it
+    does not draw yet, or `[[post.span]]` (mkr-post takes one vignette and grain field an output, and mixes no two
+    grades over a fade); None when it can."""
     if binary() is None:
         return "no mkr-post binary (cargo build --release in mkr/, or MK_MKR_POST)"
     if post.get("halation"):
         return "[post] halation is drawn on the CPU"
     if post.get("streaks"):
         return "[post] streaks are drawn on the CPU"
+    if post.get("span"):
+        return "[[post.span]] (a part of the clip graded its own way) is drawn on the CPU"
     return None
 
 

@@ -19,8 +19,13 @@ display space (0..1, sRGB as rendered through the view transform).
   vignette = 0.12                     corner darkening (fraction)
   grain = {amount = 0.012, size = 1.5, seed = 7}
 
+[[post.span]] (any number)            a part of the clip graded its own way (Spans): from, to (clip seconds: the
+                                      frames a [[shot]] with the same numbers holds), fade = 0 or [in, out] (seconds:
+                                      its grade comes in after `from` and goes out before `to`) and any of contrast,
+                                      pivot, saturation, split, floor, toe, halation, vignette, grain, over [post]'s
+
 With `[look] breathe` (Breath) every colour post takes from the palette is resolved with both palettes and mixed by
-each frame's mix: the cut plan's entries (BR.Pair), the grade's and the streaks' colours (Mixed)."""
+each frame's mix: the cut plan's entries (BR.Pair), the grade's, the spans' grades' and the streaks' colours (Mixed)."""
 import copy
 import math
 
@@ -29,12 +34,15 @@ import numpy as np
 from PIL import Image
 
 from .core import breathe as BR
+from .core import transition as TR
 from .core.palette import darkest, resolve, srgb
 
 Y_W = np.array([0.2126, 0.7152, 0.0722], np.float32)
 
 STREAKS = {"strength": 0.35, "threshold": 0.88, "length": 0.15, "core": 0.02, "tint": "foam", "mix": 0.75, "cap": 1.0}
 STREAK_SCALE = (4, 2)               # the streaks are made at a quarter of the width and half of the height
+SPAN_GRADE = ("contrast", "pivot", "saturation", "split", "floor", "toe", "halation", "vignette", "grain")
+SPAN_KEYS = ("from", "to", "fade") + SPAN_GRADE     # what a [[post.span]] gives: the rest of [post] is the project's
 
 
 class Streaks:
@@ -95,20 +103,31 @@ Y_W = np.array([0.2126, 0.7152, 0.0722], np.float32)
 class Grade:
     COLOURS = ("floor", "split", "hal")     # what it takes from the palette (`_colour`; Mixed mixes them)
 
-    def __init__(self, spec, palette, size):
+    def __init__(self, spec, palette, size, like=None):
+        """The grade `spec` (the [post] table, or a span's: Spans) in `palette` for frames of `size` (w, h); `like` a
+        Grade whose grain field and vignette it takes where its own would be made of the same numbers (a span's grade
+        takes [post]'s: the same field, so a fade between the two does not thin the grain, and no copy of either)."""
         self.spec = spec or {}
         self.w, self.h = size
         g = self.spec.get("grain", {})
         self.grain_amt = float(g.get("amount", 0.012))
         gs = max(1.0, float(g.get("size", 1.5)))
-        rng = np.random.default_rng(int(g.get("seed", 7)))
-        gw, gh = max(2, int(self.w / gs)), max(2, int(self.h / gs))
-        self.grain = [cv2.resize(rng.standard_normal((gh, gw)).astype(np.float32), (self.w, self.h),
-                                 interpolation=cv2.INTER_LINEAR) for _ in range(8)]
+        seed = int(g.get("seed", 7))
         v = float(self.spec.get("vignette", 0.12))
-        yy, xx = np.mgrid[0:self.h, 0:self.w].astype(np.float32)
-        r = np.hypot((xx - self.w / 2) / (self.w / 2), (yy - self.h / 2) / (self.h / 2)) / np.sqrt(2)
-        self.vig = (1.0 - v * np.clip(r, 0, 1) ** 2.2)[..., None].astype(np.float32)
+        self._made = {"grain": (self.w, self.h, gs, seed), "vig": (self.w, self.h, v)}     # what those two are made of
+        if like is not None and like._made["grain"] == self._made["grain"]:
+            self.grain = like.grain
+        else:
+            rng = np.random.default_rng(seed)
+            gw, gh = max(2, int(self.w / gs)), max(2, int(self.h / gs))
+            self.grain = [cv2.resize(rng.standard_normal((gh, gw)).astype(np.float32), (self.w, self.h),
+                                     interpolation=cv2.INTER_LINEAR) for _ in range(8)]
+        if like is not None and like._made["vig"] == self._made["vig"]:
+            self.vig = like.vig
+        else:
+            yy, xx = np.mgrid[0:self.h, 0:self.w].astype(np.float32)
+            r = np.hypot((xx - self.w / 2) / (self.w / 2), (yy - self.h / 2) / (self.h / 2)) / np.sqrt(2)
+            self.vig = (1.0 - v * np.clip(r, 0, 1) ** 2.2)[..., None].astype(np.float32)
         self.toe = float(self.spec.get("toe", 0.12))
         self.keep_sat = float((self.spec.get("keep") or {}).get("saturation", 1.0))
         self._colour(palette)
@@ -191,6 +210,123 @@ class Mixed:
         out = copy.copy(self.a)
         out.__dict__.update(self.pair.at(m))
         return out
+
+
+class SpanError(ValueError):
+    """A `[[post.span]]` mk post cannot use: the message names the span and says why."""
+
+
+def _seconds(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def spans(post, fps, frame0, last_frame):
+    """The `[[post.span]]` entries of the `[post]` table `post` checked against the clip (Blender frames `frame0` to
+    `last_frame` at `fps`), in time order: [{index, name (how its errors name it), from, to (Blender frames, from <=
+    frame < to: the frames a [[shot]] with the same clip seconds holds, by the shots stage's rounding,
+    mkmmd.core.transition.frame_of), at (from, to) and fade (in, out) in seconds, spec (its grade: `post` with the
+    span's grade keys laid over it, each replacing that key's whole value)}]; [] without any. A SpanError names the
+    span and says why: a key a span does not give, `from` not before `to`, a span under a frame or with frames outside
+    the clip, a fade that is not seconds or is longer than the span, two spans with a frame in common."""
+    entries = (post or {}).get("span")
+    if entries is None:
+        return []
+    if not isinstance(entries, list) or not all(isinstance(s, dict) for s in entries):
+        raise SpanError("[[post.span]] is an array of tables: one [[post.span]] for each part of the clip")
+    base = {k: v for k, v in post.items() if k != "span"}
+    out = []
+    for i, s in enumerate(entries):
+        name = f"post span {i}"
+        if _seconds(s.get("from")) and _seconds(s.get("to")):
+            name += f" ({s['from']}-{s['to']} s)"
+        unknown = sorted(set(s) - set(SPAN_KEYS))
+        if unknown:
+            raise SpanError(f"{name}: unknown key{'s' if len(unknown) > 1 else ''} {', '.join(unknown)} (a span "
+                            f"gives {', '.join(SPAN_KEYS)}; the rest of [post] is the project's)")
+        for k in ("from", "to"):
+            if not _seconds(s.get(k)):
+                raise SpanError(f"{name}: {k} = {s.get(k)!r}: clip seconds")
+        a, b = float(s["from"]), float(s["to"])
+        if a >= b:
+            raise SpanError(f"{name}: from is not before to")
+        f0, f1 = TR.frame_of(a, fps, frame0), TR.frame_of(b, fps, frame0)
+        if f1 <= f0:
+            raise SpanError(f"{name}: under a frame, it holds none")
+        if f0 < frame0 or f1 - 1 > last_frame:
+            raise SpanError(f"{name}: frames {f0}..{f1 - 1} reach outside the clip ({frame0}..{last_frame})")
+        fade = s.get("fade", 0.0)
+        ends = fade if isinstance(fade, (list, tuple)) else [fade, fade]
+        if len(ends) != 2 or not all(_seconds(v) and v >= 0 for v in ends):
+            raise SpanError(f"{name}: fade = {fade!r}: seconds, 0 or more: one number for both ends, or [in, out]")
+        fade_in, fade_out = float(ends[0]), float(ends[1])
+        if fade_in + fade_out > b - a + 1e-9:                     # (to a nanosecond: the sum of two decimal fractions)
+            raise SpanError(f"{name}: fade = {fade!r} is longer than the span ({fade_in + fade_out:g} s in and out "
+                            f"over {b - a:g} s)")
+        out.append({"index": i, "name": name, "from": f0, "to": f1, "at": (a, b), "fade": (fade_in, fade_out),
+                    "spec": {**base, **{k: s[k] for k in SPAN_GRADE if k in s}}})
+    out.sort(key=lambda e: e["from"])
+    for e, n in zip(out, out[1:]):
+        if n["from"] < e["to"]:
+            raise SpanError(f"{e['name']} and {n['name']} overlap in frames {n['from']}..{min(e['to'], n['to']) - 1}"
+                            f": one grade at a time")
+    return out
+
+
+def weight(e, frame, fps, frame0):
+    """How far span `e` (spans) grades Blender frame `frame` its own way, 0 to 1: 0 outside it; inside, rising
+    linearly from 0 at its `from` to 1 at `from + in` and falling to 0 at its `to` from `to - out` (its fade, clip
+    seconds), 1 from its first frame (to its last) where that end has no fade."""
+    if not e["from"] <= frame < e["to"]:
+        return 0.0
+    t = frame - frame0                                  # the frame's clip time, in frames
+    (a, b), (fade_in, fade_out), w = e["at"], e["fade"], 1.0
+    if fade_in > 0.0:
+        w = min(w, (t - a * fps) / (fade_in * fps))
+    if fade_out > 0.0:
+        w = min(w, (b * fps - t) / (fade_out * fps))
+    return min(1.0, max(0.0, w))
+
+
+class Faded:
+    """Grades `a` and `b` run on the same picture, with the same grain frame and keep mask, and mixed `w` of the way
+    toward b's: `(1 - w) * a(img) + w * b(img)`, a frame in a span's fade (Spans.at)."""
+
+    def __init__(self, a, b, w):
+        self.a, self.b, self.w = a, b, float(w)
+
+    def __call__(self, img, i=0, keep=None):
+        return (1.0 - self.w) * self.a(img, i, keep=keep) + self.w * self.b(img, i, keep=keep)
+
+
+class Spans:
+    """The `[[post.span]]` of the `[post]` table `post` (spans: the clip's Blender frames `frame0` to `last_frame` at
+    `fps`) and their grades at `size` in `palette`: each a Grade of its spec that takes `base`'s grain field and
+    vignette where its own would be made of the same numbers (Grade's `like`), with `other` (a breathing palette's
+    other palette) mixed as [post]'s is (Mixed). A SpanError names a span whose grade cannot be made."""
+
+    def __init__(self, post, palette, size, fps, frame0, last_frame, base, other=None):
+        self.fps, self.frame0 = float(fps), int(frame0)
+        self.entries, self.grades = spans(post, fps, frame0, last_frame), []
+        for e in self.entries:
+            try:
+                g = Grade(e["spec"], palette, size, like=base)
+                self.grades.append(g if other is None else Mixed(g, other))
+            except (KeyError, ValueError, TypeError, AttributeError) as err:
+                why = err.args[0] if isinstance(err, KeyError) and err.args else err
+                raise SpanError(f"{e['name']}: {why}") from None
+
+    def at(self, frame, base, mix=None):
+        """The grade of Blender frame `frame` whose grade outside every span is `base` ([post]'s, in the frame's
+        colours): `base` outside every span and where its span's weight is 0, the span's grade (with a breathing
+        palette, in the colours of the frame's `mix`) where it is 1, else the two mixed by it (Faded)."""
+        for e, g in zip(self.entries, self.grades):
+            if e["from"] <= frame < e["to"]:
+                w = weight(e, frame, self.fps, self.frame0)
+                if w <= 0.0:
+                    return base
+                own = g if mix is None else g.at(mix)
+                return own if w >= 1.0 else Faded(base, own, w)
+        return base
 
 
 def _named(kind, e):

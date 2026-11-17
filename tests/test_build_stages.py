@@ -671,6 +671,58 @@ def test_shot_mistakes_are_build_errors_that_list_what_there_is(make):
         assert all(f in out["error"] for f in frags), (frags, out["error"])
 
 
+# ---------------------------------------------------------------- the look
+LOOK_SPAN = """[look]
+exposure = 0.25
+
+[[look.span]]
+from = 0.5
+to = 1.0
+exposure = -1.0
+contrast = "Medium High Contrast"
+
+[[prop]]
+name = "floor"
+card = "library:floor"
+
+[[shot]]
+name = "a"
+from = 0.0
+to = 2.0
+at = [0.0, -4.0, 1.5]
+look = [0.0, 0.0, 0.5]
+
+[[freeze]]
+from = 0.8
+to = 1.3
+"""
+
+
+def test_a_look_span_keys_its_frames_and_the_bake_sees_them_through_its_own_look(make, capsys):
+    """[[look.span]] from 0.5 to 1.0 s: the scene's view settings keyed on frames 46..60 (a shot's frames), [look]'s on
+    every other frame, the pre-roll too; the bake's view record [look]'s, with the span's look as a run of frames of its
+    own. A freeze from 0.8 s holds the world on frame 55, inside the span, until frame 70: the look goes on with the
+    clock, so the frames after the span stay [look]'s. A key a span does not have is a build error that names it."""
+    code, out = make(LOOK_SPAN, with_cast=False)
+    assert code == 0, out.get("error")
+    base, span = ["None", 0.25], ["AgX - Medium High Contrast", -1.0]
+    assert out["stages"]["lights"]["look"]["spans"] == [{"frames": [46, 60], "look": span[0], "exposure": -1.0,
+                                                         "gamma": 1.0}]
+    code, q = cli(["q", str(make.root / "build" / "t.blend"), "(scene.view_settings.look, scene.view_settings.exposure)",
+                   "--frames", "1,30,45,46,60,61,90", "--project", str(make.root)], capsys)
+    assert code == 0, q
+    assert q["values"] == [base, base, base, span, span, base, base]
+    bake = make.root / "build" / "t.bake"
+    view = json.loads((bake / "bake.json").read_text())["lit"]["view"]
+    assert [view["look"], view["exposure"]] == base
+    assert [(s["frames"], s["lut"]["file"], s["look"], s["exposure"]) for s in view["spans"]] == \
+        [([46, 60], "view_lut_0.bin", span[0], -1.0)]
+    assert (bake / "view_lut_0.bin").stat().st_size == 65 ** 3 * 12
+    assert (bake / "view_lut_0.bin").read_bytes() != (bake / "view_lut.bin").read_bytes()
+    code, out = make(LOOK_SPAN.replace("contrast =", "saturation = 2\ncontrast ="), with_cast=False, until="lights")
+    assert code == 3 and "look span 0: unknown keys ['saturation']" in out["error"], out.get("error")
+
+
 # ---------------------------------------------------------------- props
 SCALED = """[[prop]]
 name = "box"

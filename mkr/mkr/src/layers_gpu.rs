@@ -780,6 +780,8 @@ impl Renderer<'_> {
         let readback = (0..RING)
             .map(|_| sized(device, "layer readback", bytes, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST))
             .collect();
+        // only screen type goes through a LUT (its own Standard one); figures and keep masks read none: the view's
+        // LUTs stand in
         let lut_buf = kit.screen.as_ref().map(|s| &s.lut_buf).unwrap_or(&self.lut_buf);
         let film_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("layer film"),
@@ -794,7 +796,7 @@ impl Renderer<'_> {
         });
         let lut = match &kit.screen {
             Some(s) => (s.lut.n as u32, s.lut.lo, s.lut.hi, [s.lut.zero[0], s.lut.zero[1], s.lut.zero[2], 0.0]),
-            None => (self.lut.n as u32, self.lut.lo, self.lut.hi, [0.0; 4]),
+            None => (self.luts[0].n as u32, self.luts[0].lo, self.luts[0].hi, [0.0; 4]),
         };
         kit.targets = Some(Targets { layers, depth, pixels, stride, readback, film_bg, lut });
     }

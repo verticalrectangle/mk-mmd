@@ -53,3 +53,37 @@ def test_a_frame_keeps_its_key_until_something_it_shows_changes(tmp_path):
     assert after("f", HAT + 2) == [100, 101, 102, 103, 104]         # ... and while frames in the shutter's reach do
     assert len(after("g", REST + 3)) == N                           # what no mark covers is part of every frame
     assert RU.signature(bake(tmp_path / "h", floats, marks=False)) is None      # an older bake: nothing to go by
+
+
+def test_a_spans_look_is_its_own_frames(tmp_path):
+    """A [[look.span]] (bake.json lit.view `spans`) is part of its frames alone: a span added, or its LUT changed, draws
+    its frames again and no others; the same look under another file name changes nothing; the view's own look is
+    every frame's."""
+    floats = np.arange(REST + 4, dtype=np.float32)
+
+    def looked(name, spans=(), luts=None, own=b"own"):
+        path = bake(tmp_path / name, floats)
+        doc = json.loads((path / "bake.json").read_text())
+        doc["lit"]["view"] = {"look": "None", "lut": {"file": "view_lut.bin", "n": 2, "lo": -1, "hi": 1}}
+        if spans:
+            doc["lit"]["view"]["spans"] = list(spans)
+        (path / "bake.json").write_text(json.dumps(doc))
+        (path / "view_lut.bin").write_bytes(own)
+        for file, data in (luts or {}).items():
+            (path / file).write_bytes(data)
+        return keys(path)
+
+    def span(first, last, file, exposure=-1.0):
+        return {"frames": [first, last], "lut": {"file": file, "n": 2, "lo": -1, "hi": 1}, "zero": [0, 0, 0],
+                "floor": [0, 0, 0], "look": "AgX - Punchy", "exposure": exposure, "gamma": 1.0}
+    dark = {"view_lut_0.bin": b"dark"}
+    plain = looked("plain")
+    one = looked("one", [span(102, 104, "view_lut_0.bin")], dark)
+    assert changed(plain, one) == [102, 103, 104]                   # a span added: its frames, its first and last too
+    assert changed(one, looked("lut", [span(102, 104, "view_lut_0.bin")], {"view_lut_0.bin": b"darker"})) == \
+        [102, 103, 104]                                             # its LUT changed
+    assert changed(one, looked("rec", [span(102, 104, "view_lut_0.bin", -1.5)], dark)) == [102, 103, 104]
+    two = looked("two", [span(102, 104, "view_lut_1.bin"), span(108, 109, "view_lut_0.bin", -2.0)],
+                 {"view_lut_1.bin": b"dark", "view_lut_0.bin": b"night"})
+    assert changed(one, two) == [108, 109]                          # another span: its frames; the first's look renamed
+    assert len(changed(one, looked("own", [span(102, 104, "view_lut_0.bin")], dark, own=b"own2"))) == N   # every frame's
