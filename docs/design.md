@@ -6075,7 +6075,10 @@ normal and its point of the light kept above that normal's horizon, as EEVEE's d
 the geometric normal Crimson's figure was 0.03 levels and lab `mmd_model` 0.01-0.04 further from EEVEE's frames); the
 blended surfaces lit forward, back to front; with motion blur, EEVEE's post process smearing the sample's picture
 (below); and the film taking the
-samples four at a time. Then the view transform's table, EEVEE's dither and 8
+samples four at a time. A frame's commands go to the GPU a sample a submission: the driver gives up on a submission that
+runs for a couple of seconds and resets the device (amdgpu's ring timeout: a pane of beaded glass across the whole
+picture, 12 lights, took six seconds for a final frame's 36 samples and lost it), and no sample takes that long; the
+frames are the same bytes and take the same time as in one submission. Then the view transform's table, EEVEE's dither and 8
 bits, read back and written while the next frame draws. Dithered materials whose shadows follow their alpha cast
 EEVEE's hashed shadow, a texel stopping the light with the probability of the caster's opacity per sample: the maps hold
 their nearest partly transparent layer over the opaque casters and the product of the layers' transparencies.

@@ -1643,8 +1643,10 @@ impl<'b> Renderer<'b> {
         }
     }
 
-    /// Record and submit one frame. Returns the submission, and the CPU milliseconds spent posing the frame (`stage`)
-    /// and finishing and submitting its commands.
+    /// Record and submit one frame, a sample a submission: the driver gives up on a submission that runs for a couple
+    /// of seconds and resets the device (a pane of beaded glass across the whole picture took six for a frame's 36
+    /// samples), and no sample takes that long. Returns the last submission, and the CPU milliseconds spent posing the
+    /// frame (`stage`) and finishing and submitting its commands.
     #[allow(clippy::too_many_arguments)]
     fn encode_frame(&mut self, output: &str, job: &Job, samples: &[Sample], opts: &Options, w: u32, h: u32, slot: usize)
                     -> Result<(wgpu::SubmissionIndex, f64, f64)> {
@@ -1847,6 +1849,7 @@ impl<'b> Renderer<'b> {
             Some(p) if lights.len() > pipelines::TILED_FROM => p,
             _ => &self.pipes.light,
         };
+        let mut submit_ms = 0.0;
         for si in 0..samples.len() {
             let imm = |di: usize| Immediate { draw: di as u32, sample: si as u32 };
             {
@@ -2026,6 +2029,12 @@ impl<'b> Renderer<'b> {
                 pass.dispatch_workgroups(gw, gh, 1);
             }
             stamp(&mut enc, &mut marks, 7, &self.timers);
+            if si + 1 < samples.len() {
+                let t_submit = Instant::now();
+                let next = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+                self.gpu.queue.submit(Some(std::mem::replace(&mut enc, next).finish()));
+                submit_ms += t_submit.elapsed().as_secs_f64() * 1e3;
+            }
         }
         // the depth of field's post process on the film, then the view transform
         if let (Some(rec), Some(post), Some(dt)) = (&dof_rec, &self.dof_post, &self.dof_targets) {
@@ -2067,7 +2076,7 @@ impl<'b> Renderer<'b> {
         }
         let t_submit = Instant::now();
         let index = self.gpu.queue.submit(Some(enc.finish()));
-        Ok((index, stage_ms, t_submit.elapsed().as_secs_f64() * 1e3))
+        Ok((index, stage_ms, submit_ms + t_submit.elapsed().as_secs_f64() * 1e3))
     }
 }
 
