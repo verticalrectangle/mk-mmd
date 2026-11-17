@@ -31,9 +31,11 @@ EST_MB = {50: 0.9, 100: 3.2}          # rough PNG size per 1080-class frame at t
 HELP = """Render the project's cut (shot cameras, per output) to PNG frames in
 <project>/renders/<preset>/<output>/<frame>.png (<frame> is the Blender frame, five digits). Frames already on disk are
 skipped, so a stopped render resumes; frames (and their layers) older than the built scene are not: they show the scene
-of an earlier build, so they are drawn again (the report's `stale` counts them; --keep takes them as they are, for a
-scene built again without a change). --jobs N runs N Blender processes that share the frames. Before starting, mk
-checks that the disk can hold the frames.
+of an earlier build, so they are drawn again (the report's `stale` counts them; --keep takes them as they are). An mkr
+render keeps the ones the build left as they were (the report's `reused`): each frame's key, in keys.json beside the
+frames, says what went into it (the bake's rows of the frames its shutter reaches, of what it shows, and everything
+that is part of every frame; docs/design.md: Rendering), and a frame whose key has not changed is not drawn again.
+--jobs N runs N Blender processes that share the frames. Before starting, mk checks that the disk can hold the frames.
 
 Presets: draft (50 %, 16 samples, no motion blur), preview (50 %, 32 samples, motion blur), final (100 %, 64 samples,
 motion blur; engine mkr draws them as 36 samples of twice the scene's shadow rays, as close to EEVEE's 64, faster). [render]
@@ -123,6 +125,53 @@ def stale_files(d, frames, built):
         if d.exists() else []
 
 
+def frame_keys(bake, doc, req, drawn, outs, frames, cfg, sampling):
+    """({output: {frame: key}}, {output: what they are made under}) (mkmmd.render.reuse: keys, and the signature's parts
+    with the run's settings, for `changed`) of the frames of `outs` mkr draws whole: the frame and every layer of it,
+    none left to Blender, none in a look (a composer finishes those). ({}, {}) for a bake that does not say what it
+    holds a row a frame (`mk build --bake` with this mk writes it)."""
+    from ..core import shotstyle as SS
+    from ..render import mkr as MKR
+    from ..render import reuse as RU
+    try:
+        sig = RU.signature(bake, doc)
+    except (OSError, RU.ReuseError):
+        sig = None
+    if sig is None:
+        return {}, {}
+    exe = MKR.binary().stat()
+    base = {"mkr": [exe.st_size, exe.st_mtime_ns], "percent": cfg["percent"],
+            "samples": sampling["samples"] if sampling is not None else cfg["samples"],
+            "params": sampling["params"] if sampling is not None else None,
+            "shutter": float(cfg.get("shutter", 0.35)) if cfg.get("motion_blur") else None}
+    keep = (req.get("keep") or {}).get("materials")
+    screen = {int(f) for f in req.get("screen") or ()}
+    table = {e["name"]: e for e in doc.get("shots") or []}
+    out, about = {}, {}
+    for o in outs:
+        plan = drawn["outputs"][o.name]
+        looks = (((req.get("looks") or {}).get("outputs") or {}).get(o.name) or {}).get("frames") or {}
+        theirs = {int(f) for f in looks} | set(plan["keep"]["blender"]) | set(plan["screen"]["blender"])
+        theirs |= {f for f, why in plan["layers"].items() if any(why)}
+        theirs |= {int(f) for f, items in req["items"].items()
+                   if any(o.name in (it.get("looks") or {}) for it in items)}
+        whole = [f for f in plan["draw"] if f not in theirs]
+
+        def cameras(f, name=o.name):
+            """The cameras frame f is seen through: its shot's in the cut, and the shots' its layers name (a shot or a
+            camera not found: None, every camera's rows then count)."""
+            shots = [SS.shot_at(doc.get("shots"), f)]
+            shots += [table.get(it.get("shot")) for it in req["items"].get(str(f), ())]
+            names = [(e.get("cameras") or {}).get(name) if e else None for e in shots]
+            return None if None in names else names
+        settings = dict(base, output=o.name, size=list(o.size))
+        about[o.name] = {"parts": sig["parts"], "settings": settings}
+        out[o.name] = RU.keys(sig, doc["frame0"], whole, settings,
+                              lambda f: {"items": req["items"].get(str(f)), "keep": keep, "screen": f in screen},
+                              cameras)
+    return out, about
+
+
 def mk_plan(proj, outs, frames, percent):
     """mk's renderer's plan for these frames (mkmmd.render.plan) from the scene's bake, which must be as new as the scene."""
     from ..render import plan as PL
@@ -185,10 +234,37 @@ def run(args):
     if keep:                                               # the mask of where those materials are seen: keep/<frame>.png
         keep = {"armature": CN.armature_name(next(c for c in proj.cast if c.get("name") == keep["cast"])),
                 "materials": keep["materials"]}
-    stale = {}
+    kept, keys, drawn, doc, because = {o.name: set() for o in outs}, {}, {}, {}, {}
+    if own == "mkr":                                       # its frames a rebuild left as they were stay (RU)
+        from ..render import mkr as MKR
+        from ..render import reuse as RU
+        bake, doc = mkr_bake(proj)
+        try:
+            req = MKR.request(doc, demands, keep, frames, outputs=[o.name for o in outs])
+        except (ValueError, MKR.EngineError) as e:
+            raise UsageError(str(e)) from None
+        try:
+            drawn = MKR.plan(bake, [o.name for o in outs], frames, req)
+        except MKR.EngineError as e:
+            raise UsageError(f"engine = \"mkr\": {e}") from None
+        # final frames at the preset's own samples: mkr's sampling for them (MKR.FINAL)
+        sampling = MKR.sampling(args.preset, proj.data.get("render"), args.samples)
+        keys, about = frame_keys(bake, doc, req, drawn, outs, frames, cfg, sampling)
+        for o in outs:
+            d = frames_dir(proj, args.preset, o.name)
+            stored = RU.load(d)
+            kept[o.name] = {f for f, k in keys.get(o.name, {}).items() if stored.get(f) == k}
+            if stored and keys.get(o.name) and not kept[o.name]:      # none stays: what every frame reads changed
+                because[o.name] = RU.changed(RU.load(d, about=True), about[o.name])
+            if stored and not args.keep:                   # a stored key says what its file shows, not a new drawing
+                RU.save(d, {f: k for f, k in stored.items() if f in kept[o.name] or f not in frames})
+    stale, reused = {}, {}
+    built = proj.blend.stat().st_mtime
     for o in outs:                                         # frames of an earlier build are not this scene's frames
-        old = stale_files(frames_dir(proj, args.preset, o.name), frames, proj.blend.stat().st_mtime)
+        d = frames_dir(proj, args.preset, o.name)
+        old = stale_files(d, [f for f in frames if f not in kept[o.name]], built)
         stale[o.name] = len(old)
+        reused[o.name] = len({p.stem[:5] for p in stale_files(d, sorted(kept[o.name]), built) if p.parent == d})
         for p in ([] if args.keep else old):
             p.unlink()
     need_mb = 0.0
@@ -212,7 +288,7 @@ def run(args):
                 p.unlink()
         TR.clear_claims(d)
     t0 = time.time()
-    drawn, own_frames, engine_run, doc = {}, {o.name: [] for o in outs}, None, {}
+    own_frames, engine_run = {o.name: [] for o in outs}, None
     promised = {o.name: None for o in outs}               # the files each output's frames get (None: not known)
     if own == "mk":
         from ..render import engine as EN
@@ -232,18 +308,8 @@ def run(args):
                 engine_run["error"] = str(e)
         engine_run["thread"] = threading.Thread(target=draw, daemon=True)
     elif own == "mkr":
-        from ..render import mkr as MKR
         from ..render import plan as PL
-        bake, doc = mkr_bake(proj)
         blob = PL.load(bake)[1]
-        try:
-            req = MKR.request(doc, demands, keep, frames, outputs=[o.name for o in outs])
-        except (ValueError, MKR.EngineError) as e:
-            raise UsageError(str(e)) from None
-        try:
-            drawn = MKR.plan(bake, [o.name for o in outs], frames, req)
-        except MKR.EngineError as e:
-            raise UsageError(f"engine = \"mkr\": {e}") from None
         todo = {}
         for o in outs:
             d = frames_dir(proj, args.preset, o.name)
@@ -262,8 +328,6 @@ def run(args):
                       "blender_would_draw": {n: s for n, s in share.items() if s}})
                 return CHECK_FAILED
         engine_run = {"result": None, "error": None}
-        # final frames at the preset's own samples: mkr's sampling for them (MKR.FINAL)
-        sampling = MKR.sampling(args.preset, proj.data.get("render"), args.samples)
 
         def draw():
             try:
@@ -304,14 +368,26 @@ def run(args):
                     time.sleep(8)                          # stagger loading
             return [f.result() for f in futs]
     with GL.held("mk render --post" if args.post else "mk render"):    # the post alongside runs inside this hold
-        return finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_frames, engine_run, promised,
-                          blender, stale)
+        code = finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_frames, engine_run, promised,
+                          blender, stale, reused, because)
+    if keys and code == 0:                                 # what this run drew whole, and what it kept, by its key
+        for o in outs:
+            d = frames_dir(proj, args.preset, o.name)
+            stored = RU.load(d)
+            for f, k in keys[o.name].items():
+                if f in kept[o.name] or all((d / r).exists() and (d / r).stat().st_mtime >= t0 - 2.0
+                                            for r in promised[o.name][f]):
+                    stored[f] = k
+            RU.save(d, stored, about[o.name])
+    return code
 
 
 def finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_frames, engine_run, promised, blender,
-               stale=None):
+               stale=None, reused=None, because=None):
     """The drawing of a render (mk's engine's thread `engine_run`, Blender's jobs `blender(o)`) under its manifests,
-    with `mk post --follow` alongside when asked; its report emitted, its exit code."""
+    with `mk post --follow` alongside when asked; its report emitted, its exit code. `stale`: {output: files of an
+    earlier build found}; `reused`: {output: frames older than the scene kept because it left them as they were};
+    `because`: {output: what changed for every frame, when none could be kept (mkmmd.render.reuse.changed)}."""
     for o in outs:                                         # what each frame gets, for mk post --follow
         PR.write(frames_dir(proj, args.preset, o.name), promised[o.name], frames)
     post = start_post(args, proj, outs) if args.post else None
@@ -379,6 +455,10 @@ def finish_run(args, proj, outs, frames, t0, own, keep, demands, drawn, own_fram
         report[o.name]["frames_on_disk"] = len(on_disk(frames_dir(proj, args.preset, o.name)))
         if (stale or {}).get(o.name):
             report[o.name]["stale"] = {"files": stale[o.name], "kept" if args.keep else "drawn_again": True}
+            if (because or {}).get(o.name):            # the parts of the bake every frame reads, or the run's settings
+                report[o.name]["stale"]["every_frame_because"] = because[o.name]
+        if (reused or {}).get(o.name):
+            report[o.name]["reused"] = reused[o.name]
     out["render_seconds"] = round(time.time() - t0, 1)
     if post is not None:                                   # the videos, finished as the frames came
         out["post"], ok = posted(post)
