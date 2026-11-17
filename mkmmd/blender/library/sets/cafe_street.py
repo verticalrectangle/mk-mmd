@@ -12,6 +12,7 @@ import bpy
 from mathutils import Vector
 
 from ..props.cafe_kit import drive, mix
+from ..mesh import steady_order
 from .cafe_nodes import finish, hide_from_rays, box_geo
 
 WINDOW_X = -0.80
@@ -327,6 +328,7 @@ class Outside:
         sky_me = bpy.data.meshes.new(R.oname("Sky"))
         bm = bmesh.new()
         bmesh.ops.create_uvsphere(bm, u_segments=48, v_segments=24, radius=SKY_RADIUS)
+        steady_order(bm)
         bmesh.ops.reverse_faces(bm, faces=bm.faces)
         bm.to_mesh(sky_me)
         bm.free()

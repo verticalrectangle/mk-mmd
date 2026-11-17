@@ -24,6 +24,14 @@ light, no surface flowing into the next. This page is the standard for everythin
 5. **Graphic layers are not forms.** A display segment, a label stripe, a seam ribbon, a decal lifted a fraction of a
    millimetre off a surface may be flat quads: tag the object `exempt(obj)` (custom property `mk_form_exempt`) and the
    check skips it. Never use it to hide a form.
+6. **A prop builds the same mesh every time.** A render keeps the frames a rebuild left as they were
+   ([Rendering](design.md#rendering)), and tells by the bake: a builder whose mesh differs from one build to the next has
+   every frame of its scene drawn again. Building from arrays, profiles, lofts and lathes is steady. bmesh's
+   `create_uvsphere` and `extrude_face_region` and an exact Boolean are not: they hand their faces (and edges) over in an
+   order of their own on every run. After a sphere, `steady_order(bm, its_faces)` (`mkmmd/blender/library/mesh.py`; the
+   kit's `bm_uv_sphere` does it); a shell with cutters is baked (`shell_object(..., bake_it=True)`), which orders its
+   faces; push a region in by hand rather than extrude it when a bevel follows (`bedroom_tech_geo.pocket`). Never
+   iterate a `set` of faces, edges or names to build geometry. To check, build the scene twice and compare `lit.bin`.
 
 No logos, badges, lettering or brand names on a model; references are looked at, never copied or traced.
 

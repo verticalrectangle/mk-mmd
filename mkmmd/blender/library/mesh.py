@@ -28,6 +28,31 @@ def as_collider(o):
     o["mk_collider"] = True
 
 
+def steady_order(bm, faces=None, edges=True):
+    """Put `faces` of `bm` (default: all of them) and their edges in the order of their vertices, among the places
+    they hold: the other faces and edges stay where they are. Blender hands over the faces and the edges that
+    create_uvsphere and extrude_face_region make, and the faces of an exact Boolean, in an order that differs from run
+    to run (each face is the same, corner for corner, and so are the vertices; Blender 4.2): a scene built twice then
+    holds two different meshes (after a bevel, which follows the edges, not even the same points), and the second
+    one's bake differs from the first's, so a render cannot tell a scene that was built again from one that changed
+    (mkmmd.render.reuse). Call it after the operator; `edges` False leaves the edges alone (a finished mesh: nothing
+    follows them). The sort moves what it reorders: a BMFace or BMEdge of theirs held from before names another one
+    afterwards (bmesh's sort), so take them again from their vertices (`v.link_faces`, `bm.faces.get(verts)`), which
+    do not move."""
+    bm.verts.index_update()
+    bm.edges.index_update()
+    bm.faces.index_update()
+    fs = list(bm.faces if faces is None else faces)
+    es = [] if not edges else list(bm.edges) if faces is None else list({e for f in fs for e in f.edges})
+    for seq, items, key in ((bm.edges, es, lambda e: tuple(sorted(v.index for v in e.verts))),
+                            (bm.faces, fs, lambda f: tuple(v.index for v in f.verts))):
+        keys = {x.index: key(x) for x in items}
+        to = dict(zip(sorted(keys, key=keys.__getitem__), sorted(keys)))     # an index -> the place it takes
+        if any(a != b for a, b in to.items()):
+            seq.sort(key=lambda x: to.get(x.index, x.index))
+            seq.index_update()
+
+
 def box(name, center, size, coll, parent, rot=(0.0, 0.0, 0.0), mat=None, collider=False):
     bm = bmesh.new()
     bmesh.ops.create_cube(bm, size=1.0)

@@ -13,10 +13,12 @@ again replaces the old object.
 """
 import math
 
+import bmesh
 import bpy
 import numpy as np
 
-from .mesh import as_collider  # noqa: F401  (re-exported: hidden collider boxes live next to the cutters)
+from .mesh import as_collider, steady_order  # noqa: F401  (as_collider re-exported: hidden collider boxes live next to
+#                                                         the cutters)
 
 
 def purge(name):
@@ -124,6 +126,11 @@ def bake(o, level=None):
             md.levels = int(md.render_levels if level is None else level)
     dg = bpy.context.evaluated_depsgraph_get()
     me = bpy.data.meshes.new_from_object(o.evaluated_get(dg), preserve_all_data_layers=False, depsgraph=dg)
+    bm = bmesh.new()                             # the Boolean hands its faces over in an order of its own: two of a car
+    bm.from_mesh(me)                             # body's 160 000 changed places every other build
+    steady_order(bm, edges=False)
+    bm.to_mesh(me)
+    bm.free()
     old = o.data
     o.modifiers.clear()
     o.data = me

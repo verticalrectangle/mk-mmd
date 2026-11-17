@@ -21,7 +21,7 @@ import bpy
 from mathutils import Matrix, Vector
 
 from ....core import palette as PAL
-from ..mesh import as_collider
+from ..mesh import as_collider, steady_order
 from .cafe_colors import DAWN, Colors, mix, shade  # noqa: F401  (re-exported for the builders)
 
 
@@ -276,6 +276,7 @@ def bm_append(dst, src, mat4=None, mat_offset=0):
 def bm_uv_sphere(bm, r, loc=(0, 0, 0), seg=16, rings=8, mat=0, scale=(1, 1, 1)):
     g = bmesh.ops.create_uvsphere(bm, u_segments=seg, v_segments=rings, radius=r)
     vs = g["verts"]
+    steady_order(bm, {f for v in vs for f in v.link_faces})
     bmesh.ops.scale(bm, vec=Vector(scale), verts=vs)
     bmesh.ops.translate(bm, vec=Vector(loc), verts=vs)
     fs = {f for v in vs for f in v.link_faces}

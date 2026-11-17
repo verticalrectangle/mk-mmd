@@ -262,9 +262,29 @@ def pocket(bm, fr, rect, depth, mat=0, col=None, floor_mat=None, d_plane=0.0, dr
         c = f.calc_center_median() - plane_pt
         if u0 - 1e-6 <= c.dot(fr.u) <= u1 + 1e-6 and v0 - 1e-6 <= c.dot(fr.v) <= v1 + 1e-6:
             inside.append(f)
-    ext = bmesh.ops.extrude_face_region(bm, geom=inside)
-    moved = [g for g in ext["geom"] if isinstance(g, bmesh.types.BMVert)]
-    floor = [g for g in ext["geom"] if isinstance(g, bmesh.types.BMFace)]
+    # pushed in by hand: bmesh's extrude_face_region makes the walls and their edges in an order, and the edges in a
+    # direction, of its own on every run, and the bevel that follows (soften) then gives another mesh each time, which
+    # a render cannot tell from a scene that changed (mkmmd.render.reuse)
+    twin = {}                                    # each vertex of the region: the floor's
+    for f in inside:
+        for v in f.verts:
+            if v not in twin:
+                twin[v] = bm.verts.new(v.co, v)
+    floor, walls, rim = [], [], set(inside)
+    for f in inside:
+        nf = bm.faces.new([twin[v] for v in f.verts], f)
+        for a, b in zip(f.loops, nf.loops):
+            b.copy_from(a)
+        floor.append(nf)
+    for f in inside:
+        for lp in f.loops:
+            if sum(g in rim for g in lp.edge.link_faces) == 1:       # an edge the region ends on: a wall down from it
+                nx = lp.link_loop_next
+                w = bm.faces.new((nx.vert, lp.vert, twin[lp.vert], twin[nx.vert]), f)
+                for a, b in zip((nx, lp, lp, nx), w.loops):
+                    b.copy_from(a)
+                walls.append(w)
+    moved = list(twin.values())
     bmesh.ops.translate(bm, vec=-fr.d * depth, verts=moved)
     if draft_deg:
         t = depth * math.tan(math.radians(draft_deg))
@@ -275,8 +295,6 @@ def pocket(bm, fr, rect, depth, mat=0, col=None, floor_mat=None, d_plane=0.0, dr
             v.co += fr.u * (du * (hu - t) / hu - du) + fr.v * (dv * (hv - t) / hv - dv)
     bmesh.ops.delete(bm, geom=inside, context="FACES_ONLY")
     bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
-    fl = set(floor)
-    walls = {f for v in moved for f in v.link_faces if f not in fl}
     lay = layer(bm)
     for group, m in ((floor, mat if floor_mat is None else floor_mat), (walls, mat)):
         for f in group:
@@ -285,7 +303,7 @@ def pocket(bm, fr, rect, depth, mat=0, col=None, floor_mat=None, d_plane=0.0, dr
             if col is not None:
                 for lp in f.loops:
                     lp[lay] = col
-    return floor, list(walls)
+    return floor, walls
 
 
 def from_arrays(bm, V, Q, T, col=None, mat=0, smooth=True):
