@@ -916,9 +916,15 @@ drops and fog, which mkr draws), `colors` (role to slot or `#hex`: `plaster`, `w
 `oak_dark`, `cream`, `fog_tint`, ...). Room frame: a character sits at the origin facing -Y, +X is her left, the window wall is
 x = -0.80, the wall behind her y = 1.05; the big window spans y -1.75..0.65, z 0.82..2.85 and a small round table is expected at
 (0, -0.48). Animatable custom properties on the set root (key them with `[[key]]`; the initial values are also spec keys):
-`steam` (0..1, 0.6: the `cafe_mug` prop follows it), `fog` (0.12), `outside_sat` (1), `sun` (0), `bolt` (0), `bolt_variant` (0 or 1),
-`bolt_rig` (0 front, 1 behind, 2 side), `flash` (0), `refl` (0: her reflection in the pane), `clip_t` (seconds since clip start, driven by the
-frame). Card: `use.look` `window`, `street`, `pendant`, `sky`; `use.surface` the 16 panes (`pane_r1c3`, ...) and `back_wall`.
+`steam` (0..1, 0.6: the `cafe_mug` prop follows it), `fog` (0.12), `outside_sat` (1), `sun` (0), `night` (0), `bolt` (0),
+`bolt_variant` (0 or 1), `bolt_rig` (0 front, 1 behind, 2 side), `flash` (0), `refl` (0: her reflection in the pane), `clip_t`
+(seconds since clip start, driven by the frame). `night` (0..1) is the hour: at 1 the street is dark and blue with half
+its windows lit (one in four by day), the daylight through the window, the room's fills and the sky's ambient are nearly
+out, and the pendant lights the table instead of the room: its all-round light a fifth, a cone straight down (the lamp's
+pool: the table, whoever sits at it and a round of floor) and a little of it back up off the table top onto her face
+(EEVEE bounces none), so the walls fall dark. What colours them then is the project's: `[[light]]`s for neon at the
+window, `[look] exposure` and `contrast`; a strike (`flash`) lights the night too. At 0 the set draws as it did.
+Card: `use.look` `window`, `street`, `pendant`, `sky`; `use.surface` the 16 panes (`pane_r1c3`, ...) and `back_wall`.
 
 **`bedroom_80s`** keys (all optional): `size` ([3.6, 3.2, 2.55]: interior width, depth, height), `wall` (0.2), `open` (walls and parts
 to leave out: "front", "back", "left", "right", "ceiling", "floor"), `window` (`{x 0.4, width 1.3, height 1.2, sill 0.95, cols 2, rows
@@ -1619,6 +1625,7 @@ leaves it at the mic and plays with the other hand only, except `hands_up` and `
 | `reach_up` | a pose: the hand half raised toward something high in front of it, up and out to its own side (the moon she looks at), open, the fingers up toward it; `calm`. It keys no lean or turn, so the project turns her toward what she reaches for |
 | `swing_back` | a pose: both arms swung down and back behind the hips, a jump's wind-up as the knees bend; follow it with `drive` |
 | `drive` | a reaction (as `flung`): both arms thrown forward from where they are, under the shoulders, and on up over the head, as a jump pushes off; they hold up to its end |
+| `freefall` | one arm of a body falling feet first, played on each hand (start the left a few frames after the right: a mirror-perfect pair reads as a cheer): the air drags it up. It is out to the side about level, the elbow bent and the hand trailing up; by 30 % of the move dragged up, the elbow out and clearly bent, the hand above the head's height and wider than the shoulder, the wrist limp (the fingers up and a little out, relaxed), the palm turned in and forward, never flat to the lens; at 55 % it settles a little, lower and wider; and it ends down and out (`float_low`), nearly home, for the landing. The elbows bend up and down, not fore and aft, so the bend shows from the front. No lean, tilt, turn or face: the project keys them (a `rock` over the move keeps the pair from standing square to the lens) |
 | `wings` | both arms out to the sides, the hands trailing, coming down on every second beat inside the move (or on its `hits`) and up between, like slow wings: for a floating body; `calm` |
 | `blow` | the palm up in front of the mouth, then pushed on out and open at half the move, blowing something off it (a kiss, a butterfly); `u` lips (not over sung words), `calm` |
 | `giggle` | a pose: the fingers over the lips, hiding a giggle, the head tilted toward the hand; `smile_eyes`, `blush` |
