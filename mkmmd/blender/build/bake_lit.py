@@ -1012,12 +1012,13 @@ class _ObjectAttrs:
     def sample(self, k, ob, sc, by=None, psys=None):
         self.vals[k] = [_object_attr(key, ob, sc, by, psys) for key in self.keys]
 
-    def record(self, put):
+    def record(self, put, scope=None):
         out = {}
         for j, key in enumerate(self.keys):
             v = self.vals[:, j]
             still = np.allclose(v, v[:1])
-            out[key] = {"offset": put(v[:1] if still else v), "frames": 1 if still else len(v)}
+            out[key] = {"offset": put(v[:1] if still else v, per_frame=not still, scope=scope),
+                        "frames": 1 if still else len(v)}
         return out
 
 
@@ -1399,9 +1400,10 @@ class Lit:
     """The lit section (module docstring): made before the bake's frame loop, `sample`d on every frame, `capture`d on
     the export frame before the glTF export rewires the MMD materials, written by `finish`, checked by `check`."""
 
-    def __init__(self, sc, n, cams, part, log, ctx=None, outputs=()):
+    def __init__(self, sc, n, cams, part, log, ctx=None, outputs=(), last=None):
         t0 = time.time()
         self.sc, self.n, self.part, self.log = sc, n, part, log
+        self.last, self.last_bends = last, None           # the bake this one replaces, and its meshes' fan edges
         self.frame0 = ctx.frame0 if ctx is not None else sc.frame_start
         self.view = view(sc, part)
         self.t_lut = time.time() - t0
@@ -1857,7 +1859,8 @@ class Lit:
             fan, nfan, smooth_e, cnext, cprev, ce = fans
             nface, ns = len(me.polygons), len(g["src"])
             b = BD.fit(_get(me.vertices, "co", nv, 3).astype(float), _get(me.corner_normals, "vector", nl, 3), cv, ce,
-                       cpoly, nface, fan, nfan, smooth_e, cnext, cprev, [t.fit[k] for k in sorted(t.fit)])
+                       cpoly, nface, fan, nfan, smooth_e, cnext, cprev, [t.fit[k] for k in sorted(t.fit)],
+                       prior=lambda v: self._bend_prior(o.name, g["src"], v))
             anyv = np.zeros(nv, np.int64)
             anyv[g["src"]] = np.arange(ns)                 # a vertex of each of Blender's, for its position
             per = np.zeros((ns, 3))
@@ -1892,6 +1895,29 @@ class Lit:
                            (d[live][:, g["src"]] @ AXES3.T).astype(np.float32))
         t.geom = g
 
+    def _bend_prior(self, name, src, v):
+        """Each fan's reference and other vertex (Blender's indices) as the bake this one replaces has them for the
+        mesh `name`, when that bake holds the same mesh (`src`: Blender's vertex of each baked one; `v`: each fan's own
+        vertex now); else None. BD.fit keeps them where they are still about as good."""
+        if self.last_bends is None:
+            self.last_bends = {}
+            try:
+                with open(os.path.join(self.last, "bake.json"), encoding="utf-8") as fh:
+                    lit = json.load(fh).get("lit") or {}
+                path = os.path.join(self.last, lit.get("file") or "lit.bin")
+                for m in lit.get("meshes") or []:
+                    b = m.get("bend")
+                    if b:
+                        self.last_bends[m["name"]] = (m["vertices"], [np.fromfile(path, "<u4", b["fans"], offset=b[k])
+                                                                      for k in ("center", "ref", "other")])
+            except (OSError, ValueError, KeyError, TypeError):       # no bake before this one, or not one to read
+                self.last_bends = {}
+        vertices, arrays = self.last_bends.get(name, (None, ()))
+        if vertices != len(src) or any(len(a) != len(v) or (len(a) and a.max() >= len(src)) for a in arrays):
+            return None
+        center, ref, other = (src[a.astype(np.int64)] for a in arrays)
+        return (ref, other) if np.array_equal(center, v) else None
+
     def _capture_source(self, o):
         """An instanced object's mesh in its own space, or the reason it cannot be held."""
         if o.type != "MESH":
@@ -1904,23 +1930,24 @@ class Lit:
 
     # ------------------------------------------------------------------------------------------------- writing
     def finish(self, put, armatures, looks=()):
-        """Write lit.bin and the per-frame values (`put` adds float32 to bake.bin, answering the FLOAT offset); answers
-        the "lit" record. `armatures`: bake.json's armature entries; `looks`: the names bake.json's `objects` records."""
+        """Write lit.bin and the per-frame values (`put` adds float32 to bake.bin, answering the FLOAT offset; what has
+        one row a frame is marked `per_frame`, bake.py's put); answers the "lit" record. `armatures`: bake.json's
+        armature entries; `looks`: the names bake.json's `objects` records."""
         t0 = time.time()
         n = self.n
         blob = _Blob(os.path.join(self.part, "lit.bin"))
         arm_names = {a["name"] for a in armatures}
 
-        def matrix(M):
+        def matrix(M, scope=None):
             m = _affine(_gl4(M))
             still = np.allclose(m, m[:1], atol=1e-7)
-            return {"offset": put(m[:1] if still else m), "frames": 1 if still else n}
+            return {"offset": put(m[:1] if still else m, per_frame=not still, scope=scope), "frames": 1 if still else n}
 
         def shown(flags):
-            return None if flags.all() else put(flags.astype(np.float32))
+            return None if flags.all() else put(flags.astype(np.float32), per_frame=True)
 
-        def oattrs(h):
-            return h.oattr.record(put) if h.oattr is not None else {}
+        def oattrs(h, scope):
+            return h.oattr.record(put, scope) if h.oattr is not None else {}
 
         meshes = []
         for t in self.tracks:
@@ -1931,8 +1958,8 @@ class Lit:
             rec = {"name": o.name, "kind": t.kind,
                    "materials": [s.material.name if s.material else None for s in o.material_slots] or [None],
                    "visible": _visible(o), "aspect": o.get("mk_aspect"), "object": _object_rec(o),
-                   "object_attrs": oattrs(t), "instance": None,
-                   "shown": shown(t.shown), "matrix": matrix(t.M), "armature": None, "dqs": False,
+                   "object_attrs": oattrs(t, f"mesh:{o.name}"), "instance": None,
+                   "shown": shown(t.shown), "matrix": matrix(t.M, f"mesh:{o.name}"), "armature": None, "dqs": False,
                    "vertices": int(len(g["src"])), "attributes": attrs, "triangles": tris, "slots": g["slots"],
                    "morphs": None, "bend": None, "by_frame": None}
             if t.kind == "skinned":
@@ -1946,7 +1973,8 @@ class Lit:
             if g.get("morphs") and g["morphs"][0]:
                 names, idx, d = g["morphs"]
                 vals = t.keys[:, idx] * np.array([not o.data.shape_keys.key_blocks[i].mute for i in idx], np.float32)
-                rec["morphs"] = {"names": names, "deltas": blob.put(d, "f32"), "values": put(vals)}
+                rec["morphs"] = {"names": names, "deltas": blob.put(d, "f32"),
+                                 "values": put(vals, per_frame=True, scope=f"mesh:{o.name}")}
             if g.get("bend") is not None:
                 b = g["bend"]
                 rec["attributes"]["fan"] = {"offset": blob.put(b["fan"], "u32"), "comp": 1, "type": "u32"}
@@ -1973,11 +2001,13 @@ class Lit:
             M = r.M.copy()
             M[~r.seen] = M[np.argmax(r.seen)]
             attrs, tris = by_source[r.of]
-            meshes.append({"name": f"{r.by}/{r.of}/{'.'.join(str(i) for i in r.pid)}", "kind": "static",
+            name = f"{r.by}/{r.of}/{'.'.join(str(i) for i in r.pid)}"
+            meshes.append({"name": name, "kind": "static",
                            "materials": [s.material.name if s.material else None for s in o.material_slots] or [None],
                            "visible": _visible(o), "aspect": o.get("mk_aspect"), "object": _object_rec(o),
-                           "object_attrs": oattrs(r),
-                           "instance": {"by": r.by, "of": r.of, "id": r.pid}, "shown": shown(shows), "matrix": matrix(M),
+                           "object_attrs": oattrs(r, f"mesh:{name}"),
+                           "instance": {"by": r.by, "of": r.of, "id": r.pid}, "shown": shown(shows),
+                           "matrix": matrix(M, f"mesh:{name}"),
                            "armature": None, "dqs": False, "vertices": int(len(src["src"])), "attributes": attrs,
                            "triangles": tris, "slots": src["slots"], "morphs": None, "bend": None, "by_frame": None})
         for fx in self.flex:
@@ -1994,9 +2024,10 @@ class Lit:
                     spec["offset"] += base
             o = fx.ob
             meshes.append({"name": o.name, "kind": "by_frame", "materials": fx.mats or [None], "visible": _visible(o),
-                           "aspect": o.get("mk_aspect"), "object": _object_rec(o), "object_attrs": oattrs(fx),
-                           "instance": None,
-                           "shown": shown(fx.frames >= 0), "matrix": matrix(fx.matrices()), "armature": None,
+                           "aspect": o.get("mk_aspect"), "object": _object_rec(o),
+                           "object_attrs": oattrs(fx, f"mesh:{o.name}"), "instance": None,
+                           "shown": shown(fx.frames >= 0), "matrix": matrix(fx.matrices(), f"mesh:{o.name}"),
+                           "armature": None,
                            "dqs": False, "why": fx.why_flex, "vertices": None, "attributes": None, "triangles": None,
                            "slots": None, "morphs": None, "bend": None,
                            "by_frame": {"geoms": fx.geoms, "frames": [int(f) for f in fx.frames]}})
@@ -2036,7 +2067,7 @@ class Lit:
                     runs[-1][1] = k + 1
                 else:
                     runs.append([k, k + 1, p["shots"][k]])
-            points[key] = {"expr": p["expr"], "offset": put(p["xyz"]), "frames": runs,
+            points[key] = {"expr": p["expr"], "offset": put(p["xyz"], per_frame=True), "frames": runs,
                            "errors": [{"error": e, "frames": fs} for e, fs in p["errors"].items()]}
         if self.screen_doc is not None:
             self.screen_doc.update(meshes=screen, left_out=screen_left)
@@ -2050,8 +2081,9 @@ class Lit:
             lights.append({"name": o.name, "type": L.type, "shape": L.shape if L.type == "AREA" else None,
                            "use_shadow": L.use_shadow, "visible": _visible(o), "aspect": o.get("mk_aspect"),
                            "props": _props(L, skip=_skip("id") | {"node_tree"}), "frames": 1 if still else n,
-                           "offset": put(rows[:1] if still else rows)})
-        cameras = {c: {"type": bpy.data.objects[c].data.type, "offset": put(self.cam_rows[c])} for c in self.cams}
+                           "offset": put(rows[:1] if still else rows, per_frame=not still)})
+        cameras = {c: {"type": bpy.data.objects[c].data.type,
+                       "offset": put(self.cam_rows[c], per_frame=True, scope=f"camera:{c}")} for c in self.cams}
         owners = {"material": self.mat_docs, "group": self.group_docs}
         for kind, owner, node, s, io, vals in self.chans:
             doc = (self.world_doc if self.world_doc and self.world_doc["name"] == owner else None) if kind == "world" \
@@ -2060,7 +2092,8 @@ class Lit:
                 continue
             still = np.allclose(vals, vals[:1])
             doc["anim"].append({"node": node, "socket": s.identifier, "io": io, "size": int(vals.shape[1]),
-                                "offset": put(vals[:1] if still else vals), "frames": 1 if still else n})
+                                "offset": put(vals[:1] if still else vals, per_frame=not still),
+                                "frames": 1 if still else n})
         left = [{"name": name, "why": why, "shows": _ranges(self.shown.get(of, np.zeros(n, bool)))}
                 for name, (why, of) in sorted(self.left.items())]
         sc = self.sc

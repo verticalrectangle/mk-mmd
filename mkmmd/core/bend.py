@@ -97,12 +97,21 @@ def _face_normals(P, cv, cnext, cpoly, nface):
     return _unit(np.stack([np.bincount(cpoly, w[:, j], nface) for j in range(3)], 1))
 
 
-def fit(rest, rest_cn, cv, ce, cpoly, nface, fan, nfan, smooth_e, cnext, cprev, shapes):
+KEEP = np.radians(0.1)      # a fan keeps the edge it had while that edge's rebuild is no worse than the best one's by
+#                             this much a shape
+
+
+def fit(rest, rest_cn, cv, ce, cpoly, nface, fan, nfan, smooth_e, cnext, cprev, shapes, prior=None):
     """Alpha and beta per corner and each fan's frame for a mesh at rest (positions `rest` per vertex, Blender's corner
     normals `rest_cn`; each corner's vertex, edge and face; fans from `fans`). The reference edge is, of the fan's edges
     (an open fan's: its two boundary edges), the one whose rebuild lands nearest Blender's corner normals on the
     deformed `shapes` [(positions per vertex, corner normals)]; on a tie (or none), the edge from the fan's first corner
-    to the next vertex (an open fan's: the boundary edge before its first corner). A dict: per fan `vertex`, `ref`,
+    to the next vertex (an open fan's: the boundary edge before its first corner). `prior(vertex)` -> (ref, other) per
+    fan, or None: the edges an earlier fit of this mesh picked (`vertex`: each fan's own, to tell the mesh is the same);
+    a fan keeps its edge while that is within KEEP a shape of the best. Many fans have two edges about as good, and
+    which one wins by a hair follows the shapes, so without it any change of the motion on a fitted frame moves a few
+    hundred fans to another edge: no worse, but every frame's normals are then not what they were, and a render has
+    to draw the whole clip again for a change of a second of it (mkmmd.render.reuse). A dict: per fan `vertex`, `ref`,
     `other` (vertices), `edge_fan` and `edge_far` (its edges, by fan); per corner `alpha` and `beta`."""
     nl = len(cv)
     c0 = np.full(nfan, nl)
@@ -138,7 +147,14 @@ def fit(rest, rest_cn, cv, ce, cpoly, nface, fan, nfan, smooth_e, cnext, cprev, 
         rk, ok, sk = frames(co, ln[cf], v[cf], cref, coth)
         n = custom(ln[cf], ra[cf], rk, ok, sk, alpha[c0[cf]], beta_c)
         err += np.nan_to_num(_angle(n, cn[c0[cf]]), nan=np.pi)
-    pick = np.lexsort((cref != first_ref[cf], np.round(err, 6), cf))     # per fan: least error, then the first edge
+    was = prior(v) if prior is not None else None
+    held = np.zeros(len(cf), bool)
+    if was is not None:
+        best = np.full(nfan, np.inf)
+        np.minimum.at(best, cf, err)
+        held = (cref == was[0][cf]) & (coth == was[1][cf]) & (err <= best[cf] + KEEP * len(shapes))
+    # per fan: the edge it had if that is still about as good, else the least error, then the first edge
+    pick = np.lexsort((cref != first_ref[cf], np.round(err, 6), ~held, cf))
     pick = pick[np.r_[True, cf[pick][1:] != cf[pick][:-1]]]
     ref, other = cref[pick], coth[pick]
     r, o, span = frames(rest, ln0, v, ref, other)                       # each corner's beta in its fan's frame

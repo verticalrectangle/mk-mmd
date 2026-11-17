@@ -60,6 +60,7 @@ Version 5: what versions 4 had, and the `lit` section the GPU renderer mkr draws
 
 A vertex v of a mesh (its glTF positions, morph targets added) is at N v on a frame, N the mesh's node matrix; a skinned
 one at sum_i w_i J_i N v, J_i its joints' matrices on that frame."""
+import contextlib
 import json
 import os
 import shutil
@@ -126,6 +127,35 @@ def plain_materials(objs):
                 rgb = col.default_value[:3] if col is not None and hasattr(col, "default_value") else m.diffuse_color[:3]
                 bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
             nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+
+@contextlib.contextmanager
+def quick_links():
+    """While it is open a node socket's `links` come from a table made once per node tree, the same links in the same
+    order. Blender's own property walks every link of the tree on each read, and the glTF exporter reads it at every
+    step of its search behind each material socket: a scene with a hundred procedural materials spent 93 of its 109
+    export seconds there. The trees must not change while it is open."""
+    cls = bpy.types.NodeSocket
+    own = cls.__dict__["links"]
+    tables = {}
+
+    def links(sock):
+        tree = sock.id_data
+        table = tables.get(tree.as_pointer())
+        if table is None:
+            table = tables[tree.as_pointer()] = {}
+            for link in tree.links:
+                for end in {link.from_socket.as_pointer(), link.to_socket.as_pointer()}:
+                    table.setdefault(end, []).append(link)
+        found = table.get(sock.as_pointer(), [])
+        if not sock.is_output:
+            found = sorted(found, key=lambda link: link.multi_input_sort_id, reverse=True)
+        return tuple(found)
+    cls.links = property(links, doc=own.__doc__)
+    try:
+        yield
+    finally:
+        cls.links = own
 
 
 def _cut(sc, ctx, outputs):
@@ -429,7 +459,7 @@ def bake(ctx, out_dir):
     part = out_dir + ".part"
     shutil.rmtree(part, ignore_errors=True)
     os.makedirs(part)
-    lit = BL.Lit(sc, n, cams, part, ctx.log, ctx=ctx, outputs=outputs)
+    lit = BL.Lit(sc, n, cams, part, ctx.log, ctx=ctx, outputs=outputs, last=out_dir)
     loop = dict.fromkeys(("frame_set", "transforms", "by_frame", "lit", "rings_tints"), 0.0)   # seconds, all frames
     t_setup = time.time() - t0
     order = {o.name: i for i, o in enumerate(bpy.data.objects)}     # every object's matrix and visibility in one read
@@ -519,29 +549,47 @@ def bake(ctx, out_dir):
     t_glb = time.time()
     glb = os.path.join(part, "scene.glb")
     if keep:
-        bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_apply=False,
-                                  export_animations=False, export_skins=True, export_morph=True,
-                                  export_morph_normal=False, export_cameras=False, export_lights=False, export_yup=True,
-                                  export_current_frame=True)    # frame0, where nodes[...][0] is; not frame 0, where a
-        spaces = vertex_spaces(glb, keep, nodes)                # root keyed by a walk or a vehicle stands elsewhere
+        # exported on frame0, where nodes[...][0] is; not on frame 0, where a root keyed by a walk or a vehicle stands
+        # elsewhere
+        with quick_links():
+            bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_apply=False,
+                                      export_animations=False, export_skins=True, export_morph=True,
+                                      export_morph_normal=False, export_cameras=False, export_lights=False,
+                                      export_yup=True, export_current_frame=True)
+        spaces = vertex_spaces(glb, keep, nodes)
     else:
         _empty_glb(glb)
         spaces = {}
     t_glb = time.time() - t_glb
 
     blob, size = [], 0
+    rows = []                                      # what is written a row a frame: [float offset, floats a row] or
+    #                                                [..., scope]: the rows of one thing only some frames show
     index = {"armatures": [], "nodes": [], "shown": [], "morphs": [], "cameras": [], "by_frame": []}
 
-    def put(arr):
+    def put(arr, per_frame=False, scope=None):
+        """Add float32 values to bake.bin; the float offset they start at. `per_frame`: `arr` has one row for each of
+        the clip's frames, which bake.json's `per_frame` then lists: a render compares a frame's rows with the last
+        bake's to keep the frames a rebuild did not change (mkmmd.render.reuse). `scope`: whose rows they are, when
+        only the frames that show it read them: "camera:NAME" (where it is, its lens, its clip range, its focus: the
+        frames seen through it), "armature:NAME" (its joints: the frames that show a mesh it bends), "mesh:NAME" (a
+        mesh's own matrix, shape keys and attributes: the frames that show it). Anything not marked counts as part of
+        every frame, so a mark is only ever a claim that row k is frame k's, and a scope that only its own frames
+        read it."""
         nonlocal size
         a = np.ascontiguousarray(arr, np.float32).ravel()
+        if per_frame and a.size:
+            if len(arr) != n:
+                raise BuildError(f"bake: an array of {len(arr)} rows marked as one row a frame of {n}")
+            rows.append([size, a.size // n] + ([scope] if scope else []))
         blob.append(a)
         size += a.size
         return size - a.size
 
     for a in arms:
         if a.name in used_arms:
-            index["armatures"].append({"name": a.name, "bones": [b.name for b in a.pose.bones], "offset": put(joints[a.name])})
+            index["armatures"].append({"name": a.name, "bones": [b.name for b in a.pose.bones],
+                                       "offset": put(joints[a.name], per_frame=True, scope=f"armature:{a.name}")})
     for o in keep:
         if o.name not in spaces:
             continue
@@ -551,16 +599,18 @@ def bake(ctx, out_dir):
         m = affine(N)
         still = np.allclose(m, m[:1], atol=1e-7)
         index["nodes"].append({"name": o.name, "vertices": spaces[o.name], "frames": 1 if still else n,
-                               "offset": put(m[:1] if still else m),
+                               "offset": put(m[:1] if still else m, per_frame=not still, scope=f"mesh:{o.name}"),
                                "armature": o.find_armature().name if o.find_armature() is not None else None})
         if not shown[o.name].all():
-            index["shown"].append({"name": o.name, "offset": put(shown[o.name].astype(np.float32))})
+            index["shown"].append({"name": o.name, "offset": put(shown[o.name].astype(np.float32), per_frame=True)})
         if o.name in morphs:
-            index["morphs"].append({"name": o.name, "count": int(morphs[o.name].shape[1]), "offset": put(morphs[o.name])})
+            index["morphs"].append({"name": o.name, "count": int(morphs[o.name].shape[1]),
+                                    "offset": put(morphs[o.name], per_frame=True, scope=f"mesh:{o.name}")})
     for c in cams:
         cd = bpy.data.objects[c].data
         rec = {"name": c, "sensor": float(cd.sensor_width), "sensor_height": float(cd.sensor_height), "fit": cd.sensor_fit,
-               "offset": put(cam_data[c]), "clip_at": put(cam_clip[c])}
+               "offset": put(cam_data[c], per_frame=True, scope=f"camera:{c}"),
+               "clip_at": put(cam_clip[c], per_frame=True, scope=f"camera:{c}")}
         try:
             fish = FE.params(FEB.fields(cd))
         except FE.FisheyeError as e:
@@ -591,8 +641,8 @@ def bake(ctx, out_dir):
                         "baked": kind, **({"why": why} if why else {}), "shows": ranges})
     ring_doc = {"table": ring_tab or None, "points": {}, "errors": {str(i): e for i, e in ring_errors.items()}}
     for i, c in centres.items():
-        ring_doc["points"][str(i)] = put(c)
-    look_doc = {"tints": [{"object": holder, "prop": prop, "offset": put(tint_vals[i])}
+        ring_doc["points"][str(i)] = put(c, per_frame=True)
+    look_doc = {"tints": [{"object": holder, "prop": prop, "offset": put(tint_vals[i], per_frame=True)}
                           for i, (holder, prop) in enumerate(tints)], "lut": standard_view(sc, part)}
     lit_doc = lit.finish(put, index["armatures"], looks={o["name"] for o in objects})
     np.concatenate(blob).astype("<f4").tofile(os.path.join(part, "bake.bin"))
@@ -602,7 +652,7 @@ def bake(ctx, out_dir):
            "blocks": [{"name": b.name, "why": why, "shows": _ranges(vis[b.name])} for b, why in blocks],
            "materials": {m: _material(bpy.data.materials[m], wb_nodes[m]) for m in mat_names},
            "rings": ring_doc, "workbench": _workbench(sc), "screen": sum(1 for o in sc.objects if "mk_screen" in o.keys()),
-           "medium": json.loads(sc.get("mk_medium") or "[]"), "looks": look_doc, "lit": lit_doc}
+           "medium": json.loads(sc.get("mk_medium") or "[]"), "looks": look_doc, "lit": lit_doc, "per_frame": rows}
     with open(os.path.join(part, "bake.json"), "w", encoding="utf-8") as fh:
         json.dump(doc, fh, ensure_ascii=False)
     shutil.rmtree(out_dir, ignore_errors=True)
