@@ -19,7 +19,7 @@ PLACES = ("rest", "dainty", "dainty_one", "mic", "mic_lens", "mic_up", "mic_acro
           "peace", "paw", "sparkle", "up", "drip_in", "drip_out", "ears", "heart_push", "bunny", "bonk_up", "bonk", "hair",
           "hair_out", "hip", "gun", "float_low", "float", "peek", "butterfly", "butterfly_shut", "bud", "bloom", "reach",
           "reach_up", "wings_up", "wings_down", "blow", "blow_out", "giggle", "behind", "behind_one", "clasp", "clasp_one",
-          "skirt", "swing_back")
+          "skirt", "swing_back", "fall_out", "fall_up", "fall_flop")
 DREAMY = ("peek", "butterfly", "bloom", "reach", "reach_up", "wings", "blow", "giggle")   # the moves of the dreamy set
 
 
@@ -464,12 +464,12 @@ def test_a_hand_on_the_hip_comes_in_from_the_side_and_rests_on_the_body():
 
 
 # ---------------------------------------------------------------- the dreamy set
-@pytest.mark.parametrize("name", DREAMY)
+@pytest.mark.parametrize("name", DREAMY + ("freefall",))
 def test_each_move_of_the_dreamy_set_plays_its_places_on_its_time_at_a_human_pace(name):
     """A move of the dreamy set (a ring at the eye, butterfly wings, a flower opening, a reach to the lens, wings, a blow,
-    a giggle) puts its hands at its places on its time with its fingers (a beat move on the beats inside it, `wings` on
-    every second one), both hands for a two-hand move, mirror images of each other; the hand comes from its rest place
-    and goes back to it at the human pace and never leaves the arm's reach."""
+    a giggle) or the arm of a falling body puts its hands at its places on its time with its fingers (a beat move on the
+    beats inside it, `wings` on every second one), both hands for a two-hand move, mirror images of each other; the hand
+    comes from its rest place and goes back to it at the human pace and never leaves the arm's reach."""
     m = MV.MOVES[name]
     out = MV.compile([{"name": name, "t": 1.0, "dur": 1.6, "hand": "L"}], MARKS, BEATS)
     sides = ("L", "R") if m.get("both") else ("L",)
@@ -516,6 +516,43 @@ def test_the_dreamy_set_s_faces_and_poses_and_its_two_hand_shapes_need_both_hand
     down = near(MV.resolve("wings_down", "L", MARKS)[0])
     assert [k["t"] for k in placed(wings["hands"]["L"]) if k["at"] == down] == pytest.approx([1.2, 1.7, 2.2])  # its hits
     assert len(wings["hands"]["R"]) == 1                                 # the mic hand stays at the mic
+
+
+# ---------------------------------------------------------------- the falling arm
+@pytest.mark.parametrize("scale", [0.85, 1.0, 1.2])
+@pytest.mark.parametrize("side, s", [("L", 1.0), ("R", -1.0)])
+def test_a_falling_arm_is_dragged_up_its_elbow_bent_in_view_its_hand_limp_and_never_flat_to_the_lens(side, s, scale):
+    """The air drags a falling body's arm up: out to the side about level, then the hand over the height of the head and
+    wider than the shoulder, the wrist limp, the palm turned in and forward. At every place the elbow is clearly bent
+    (never a straight arm) in the plane the lens sees (an elbow bent fore and aft reads as a straight arm from the front,
+    as the pose stage's own elbow does), the palm is not flat to the lens and the fingers never point at it."""
+    m = body(scale)
+    S = np.asarray(m[f"arm.{side}"], float)
+    head_top = m["eye"][2] + 0.105 * scale
+    for name in ("fall_out", "fall_up", "fall_flop"):
+        pt, d, p, _, _, bend, pole = MV.resolve(name, side, m)
+        E = MV.elbow(side, m, pt, pole)
+        line = (pt - S) / np.linalg.norm(pt - S)
+        off = (E - S) - ((E - S) @ line) * line                         # where the elbow sits off the shoulder-wrist line
+        assert 45.0 < MV.bend(E - S, pt - E) < 90.0, name               # clearly bent, never straight, never folded shut
+        assert abs(off[1]) < 0.5 * np.linalg.norm(off), name            # up or down from the line, not toward or from the lens
+        assert -p[1] < 0.8 and -d[1] < 0.5, name                        # the palm not flat to the lens, the fingers not at it
+        assert s * (pt[0] - S[0]) > 0.25 * m["reach"], name             # out past the shoulder
+        if name == "fall_out":
+            assert abs(pt[2] - S[2]) < 0.2 * m["reach"]                 # about level with the shoulder
+        else:
+            assert pt[2] + d[2] * m["hand"] > head_top + 0.03 * scale   # the fingers over the head's height
+            assert 25.0 <= bend <= MV.WRIST                             # the wrist limp, not past what a wrist bends
+
+
+def test_a_falling_pair_starts_a_few_frames_apart_each_hand_on_its_own_time():
+    """`freefall` is one arm's move, played on each hand (a mirror-perfect pair reads as a cheer): the left hand starts
+    after the right and each reaches its first place on its own time."""
+    es = [{"name": "freefall", "t": 1.0, "dur": 1.0, "hand": "R"}, {"name": "freefall", "t": 1.07, "dur": 0.93, "hand": "L"}]
+    out = MV.compile(es, MARKS)["hands"]
+    for sd, t in (("R", 1.0), ("L", 1.07)):
+        out_at = near(MV.resolve("fall_out", sd, MARKS)[0])
+        assert [k["t"] for k in placed(out[sd]) if k["at"] == out_at][0] == pytest.approx(t)
 
 
 def test_a_peek_on_the_clip_s_first_frame_already_holds_its_ring_there():

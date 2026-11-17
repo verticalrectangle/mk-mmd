@@ -125,6 +125,9 @@ POLES = {  # places that hold the elbow their own way: its pole from the arm joi
     "heart_push": (0.35, 0.05, 0.3),                   # in front; the two-hand heart: the elbows out, the forearms inward
     "bud": (0.25, -0.1, 0.5), "bloom": (0.3, -0.05, 0.5), "clasp": (0.25, 0.0, 0.5),   # before the chest: the elbow down
     "behind": (0.3, 0.45, 0.25), "behind_one": (0.3, 0.45, 0.25),                       # behind the back: the elbow back
+    "fall_out": (0.3, -0.2, 0.25),                    # falling, arm out: the elbow low and forward, the forearm rising
+    "fall_up": (0.4, 0.05, -0.05),                    # dragged up: the elbow out and a little up, the forearm rising
+    "fall_flop": (0.4, -0.15, 0.1),                   # settled: the elbow out, a little forward and lower
 }
 SHAPES = {                       # finger shapes (mkmmd.core.fingers tables) the moves use
     "relaxed": "relaxed", "flat": "flat", "fist": "fist", "point": "point", "curled": "curled",
@@ -201,6 +204,9 @@ OUT = {  # place: (direction from the arm joint for the left hand, x mirrored fo
     "wings_up": ((0.92, 0.05, 0.38), 0.92),
     "wings_down": ((0.92, 0.0, -0.4), 0.92),
     "skirt": ((0.22, -0.12, -1.0), 0.99),
+    "fall_out": ((0.93, -0.05, 0.08), 0.88),      # out to the side about level, the elbow bent: starting to fall
+    "fall_up": ((0.38, -0.08, 0.92), 0.87),       # dragged up: over the head's height, wider than the shoulder
+    "fall_flop": ((0.52, -0.14, 0.84), 0.82),     # ... settling a little: lower and wider
 }
 AIM = {  # a fist round a handle (a mic, a hammer): where the handle points, for the left hand, x mirrored for the right. A
     # fist holds a handle across its palm, so a straight wrist keeps it square to the forearm: the aims lean from upright
@@ -293,6 +299,12 @@ def place(name, side, marks):
         "swing_back": (out("swing_back"), _v(s * 0.1, 0.45, -0.89), _v(-s, 0, 0), "relaxed"),   # the arm back
         "wings_up": (out("wings_up"), _v(s * 0.97, 0, -0.12), _v(0, 0.3, -1), "relaxed"),      # the hand trailing down
         "wings_down": (out("wings_down"), _v(s * 0.92, 0, 0.38), _v(0, 0.2, -1), "relaxed"),   # ... and up
+        "fall_out": (out("fall_out"), _v(s * 0.8, -0.2, 0.55), _v(-s * 0.15, -0.55, -0.8),
+                     "relaxed"),                       # the hand trailing up, the palm down and forward
+        "fall_up": (out("fall_up"), _v(s * 0.42, -0.22, 0.88), _v(-s * 0.9, -0.4, 0.2),
+                    "relaxed"),                        # limp: the fingers up and a little out, the palm in and forward
+        "fall_flop": (out("fall_flop"), _v(s * 0.5, -0.3, 0.81), _v(-s * 0.88, -0.42, 0.2),
+                      "relaxed"),                      # ... a little more out
         "blow": (mouth + _v(s * 0.04, -0.17, -0.07), _v(-s * 0.25, -0.9, 0.2), _v(0, 0.1, 1), "flat"),   # palm up
         "blow_out": (mouth + _v(s * 0.06, -0.3, -0.06), _v(-s * 0.1, -0.9, 0.35), _v(0, 0.3, 1), "open"),
         "giggle": (mouth + _v(s * 0.03, -0.04, -0.11), _v(-s * 0.3, -0.1, 0.95), _v(0, 1, 0), "giggle"),   # the lips
@@ -768,6 +780,9 @@ MOVES = {
     "reach_up": {"hand": "places", "places": (("reach_up", 0.0),), "face": [("calm", 0.3)]},
     "swing_back": {"hand": "places", "places": (("swing_back", 0.0),), "both": True},
     "drive": {"hand": "places", "places": (("bounce", 0.0), ("up", 0.25)), "both": True, "react": True},
+    # one arm of a falling body, played on each hand a few frames apart: out, dragged up, settling, then down and out
+    "freefall": {"hand": "places",
+                 "places": (("fall_out", 0.0), ("fall_up", 0.3), ("fall_flop", 0.55), ("float_low", 1.0))},
     "wings": {"hand": "beats", "place": "wings_down", "off_place": "wings_up", "on": (0, 0, 0), "off": (0, 0, 0),
               "both": True, "every": 2, "face": [("calm", 0.5)]},
     "blow": {"hand": "places", "places": (("blow", 0.0), ("blow_out", 0.5)), "face": [("u", 0.7), ("calm", 0.4)]},
