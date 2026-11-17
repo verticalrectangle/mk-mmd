@@ -133,7 +133,10 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   move), turns the pelvis with the legs and the chest against it; a strut is `cross = 1, sway = 0.035, twist = 8, list = 4,
   arms = 0.13` (the feet on one line, the hips over the foot that is down and swinging). Do not play a walk VMD's arms on her
   instead: a VMD turns each bone from its own model's rest pose, and on a model whose arms rest another way they come out
-  splayed with the wrists kinked (it happened: forearms 30 to 44 degrees out all through a walk).
+  splayed with the wrists kinked (it happened: forearms 30 to 44 degrees out all through a walk). Look at a walk from the
+  front, every third frame, before it is done, and give it an `arm_sweep` check (under 20): arms that fold in across the
+  body and out again at every step are a stiff sideways sway, whatever their splay and their wrists measure (that
+  happened too, 28 degrees, with the elbows out to the sides: the walk now keeps them behind her).
   Keyed curves (`lean`, `tilt`, `turn`, `head_*`, `crouch`) pass the keys they meet on their way and stop only where they
   turn round or hold, so key a body the way one moves: nothing arrives at once (the hips, then the chest a few frames later,
   then the head; the side lean after the forward one), a move runs a little past its end and comes back (a key beyond, then
