@@ -77,9 +77,10 @@ not hold them at a worker's peak, about 1.7 GB at 1920 x 1080; one process for a
 gpu) mkr-post finishes what it can of each frame and writes it into the encoder itself, the workers (default up to 3)
 only planning the frames ahead of it. The outputs are finished one after another, sharing the workers; a run that uses
 the GPU (--gpu, or the vaapi encoder) holds the GPU lock (mkmmd.gpulock) while it runs. The encoder is [post] encoder
-(or --encoder): "x264" (the default: libx264 at [post] x264_preset or --x264-preset, "slow" by default, --crf 15) or
-"vaapi" (the GPU's H.264 encoder through VAAPI on the config's vaapi_device, constant QP --crf: many times faster,
-larger files).
+(or --encoder): "x264" (the default: libx264 at [post] x264_preset or --x264-preset, --crf 15; without either "slow"
+for the final preset and "veryfast" for the others, whose videos are looked at and thrown away: a third off a draft's
+post for a larger file) or "vaapi" (the GPU's H.264 encoder through VAAPI on the config's vaapi_device, constant QP
+--crf: many times faster, larger files).
 
 --follow takes the frames as a running `mk render` writes them: each frame once every file the render promised for it
 (its manifest, render.json in the output's folder) is there. The render holds the GPU while it draws, so run them as
@@ -109,7 +110,8 @@ def add(sub):
     p.add_argument("--crf", type=int, default=15, help="quality, lower is better: x264's CRF, VAAPI's constant QP "
                    "(default 15)")
     p.add_argument("--encoder", choices=ENCODERS, help="x264 (default, or [post] encoder) or vaapi (the GPU's H.264)")
-    p.add_argument("--x264-preset", choices=X264_PRESETS, help="x264's preset (default [post] x264_preset, else slow)")
+    p.add_argument("--x264-preset", choices=X264_PRESETS, help="x264's preset (default [post] x264_preset, else slow "
+                   "for --preset final and veryfast for the others)")
     p.add_argument("--jobs", type=int, metavar="N", help="processes that finish the frames of an output (default [post] "
                    "jobs, else up to 4 as the memory available allows; up to 3 with --gpu, which only plan them)")
     p.add_argument("--gpu", action=argparse.BooleanOptionalAction, default=None,
@@ -173,11 +175,12 @@ def mastered(proj, au, f, start, duration):
 
 
 def encoding(args, post):
-    """(encoder, x264 preset) from the flags, else [post] encoder and x264_preset; a UsageError for an unknown one."""
+    """(encoder, x264 preset) from the flags, else [post] encoder and x264_preset, else x264 at `slow` for the final
+    preset and `veryfast` for the others (videos for review); a UsageError for an unknown one."""
     enc = args.encoder or post.get("encoder", "x264")
     if enc not in ENCODERS:
         raise UsageError(f"[post] encoder = {enc!r}: one of {', '.join(map(repr, ENCODERS))}")
-    preset = args.x264_preset or post.get("x264_preset", "slow")
+    preset = args.x264_preset or post.get("x264_preset") or ("slow" if args.preset == "final" else "veryfast")
     if preset not in X264_PRESETS:
         raise UsageError(f"[post] x264_preset = {preset!r}: one of {', '.join(X264_PRESETS)}")
     device = CFG.load()["vaapi_device"]
