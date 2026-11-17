@@ -75,8 +75,9 @@ The frames are finished by worker processes over chunks of consecutive frames an
 same frames whatever their number, --jobs or [post] jobs (default: up to 4, fewer when half the memory available would
 not hold them at a worker's peak, about 1.7 GB at 1920 x 1080; one process for a little work). With --gpu (or [post]
 gpu) mkr-post finishes what it can of each frame and writes it into the encoder itself, the workers (default up to 3)
-only planning the frames ahead of it. The outputs are finished one after another, sharing the workers; a run that uses
-the GPU (--gpu, or the vaapi encoder) holds the GPU lock (mkmmd.gpulock) while it runs. The encoder is [post] encoder
+only planning the frames ahead of it. The outputs are finished one after another, each by workers of its own, counted
+when it starts (the workers of the output before have stopped); a run that uses the GPU (--gpu, or the vaapi encoder)
+holds the GPU lock (mkmmd.gpulock) while it runs. The encoder is [post] encoder
 (or --encoder): "x264" (the default: libx264 at [post] x264_preset or --x264-preset, --crf 15; without either "slow"
 for the final preset and "veryfast" for the others, whose videos are looked at and thrown away: a third off a draft's
 post for a larger file) or "vaapi" (the GPU's H.264 encoder through VAAPI on the config's vaapi_device, constant QP
@@ -246,7 +247,6 @@ def run(args):
          "still": still}
     post_cache = proj.mk_dir / "cache" / "post"
     MEM.sweep("mkpost", [SHM, tempfile.gettempdir(), post_cache])   # what runs killed outright left in memory, on disk
-    pools = {}                                                 # worker processes, shared by the outputs in turn
     on_gpu = (gpu or encoder == "vaapi") and not still
     kept = clip_frames(post_cache, plan, todo) if gpu and not still else None
     encoders = []                                              # (encoder, video) still writing their last frames
@@ -257,7 +257,7 @@ def run(args):
             for i, t in enumerate(todo):
                 got = ready.result()
                 ready = Ahead(prepare, proj, todo[i + 1], s) if i + 1 < len(todo) else None   # the next one's meanwhile
-                report[t["name"]], ff = finish(proj, t, s, pools, kept, got)
+                report[t["name"]], ff = finish(proj, t, s, kept, got)
                 if ff is not None:
                     encoders.append((ff, t["out"]))
             while encoders:
@@ -267,8 +267,6 @@ def run(args):
     finally:
         for ff, _ in encoders:                                 # an error: the videos before it end as they are
             ff.wait()
-        for pool in pools.values():
-            pool.close()
         if kept is not None:
             kept.close()
     if args.to:
@@ -375,7 +373,7 @@ class Ahead:
 
 def prepare(proj, t, s):
     """What output `t` (frames_of) is finished with, worked out before its turn (while the output before it is
-    finished): {size, job (its PF.Output), why_cpu (why mkr-post does not finish it, None when it does), jobs}."""
+    finished): {size, job (its PF.Output), why_cpu (why mkr-post does not finish it, None when it does)}."""
     plan, frames, follow, still = s["plan"], s["frames"], t["follow"], s["still"]
     size = size_of(t, still)
     try:
@@ -386,26 +384,24 @@ def prepare(proj, t, s):
     why_cpu = None if s["gpu"] else "not asked (--gpu, [post] gpu)"
     if s["gpu"] and not still:
         why_cpu = PG.unusable(job, files=follow is None)
-    n_jobs = s["jobs"] or PF.jobs(len(frames), size)
-    if not s["jobs"] and why_cpu is None:                     # mkr-post finishes them: the workers only plan
-        n_jobs = min(n_jobs, PF.GPU_JOBS)
-    return {"size": size, "job": job, "why_cpu": why_cpu, "jobs": n_jobs}
+    return {"size": size, "job": job, "why_cpu": why_cpu}
 
 
-def finish(proj, t, s, pools, clips, ready):
+def finish(proj, t, s, clips, ready):
     """Output `t` (frames_of) finished and encoded, or its still written, with the settings `s` and what `prepare`
-    worked out for it (`ready`): (its report, its encoder still writing its last frames, None for a still). Worker
-    processes come from `pools` ({count: PF.Planners}, shared by the outputs), made there the first time; the footage
-    clips' frames from `clips` (clip_frames, or None) where an output before this one decoded them."""
+    worked out for it (`ready`): (its report, its encoder still writing its last frames, None for a still). Its worker
+    processes are its own, as many as the memory available now allows (the outputs before have let theirs go), and
+    stop with it; the footage clips' frames come from `clips` (clip_frames, or None) where an output before this one
+    decoded them."""
     t0 = time.time()
     if clips is not None:
         clips.begin(t["name"])
     plan, frames, out, follow, still = s["plan"], s["frames"], t["out"], t["follow"], s["still"]
     waited = follow.waited if follow is not None else 0.0  # what its setup waited, the output before it running
-    size, job, why_cpu, n_jobs = ready["size"], ready["job"], ready["why_cpu"], ready["jobs"]
-    pool = None
-    if n_jobs > 1 and len(frames) > PF.CHUNK:
-        pool = pools.get(n_jobs) or pools.setdefault(n_jobs, PF.Planners(n_jobs))
+    size, job, why_cpu = ready["size"], ready["job"], ready["why_cpu"]
+    n_jobs = s["jobs"] or PF.jobs(len(frames), size)
+    if not s["jobs"] and why_cpu is None:                     # mkr-post finishes them: the workers only plan
+        n_jobs = min(n_jobs, PF.GPU_JOBS)
     ff = None if still else encode(frames, size, proj.fps, out, s["audio"], s["crf"], s["encoder"], s["x264_preset"],
                                    t["excerpts"])
     server = None
@@ -418,7 +414,7 @@ def finish(proj, t, s, pools, clips, ready):
             ff.kill()
             raise
     lmin, bare, typed, kept = 1.0, 0, 0, 0
-    done = PF.finished(job, n_jobs, server=server, pool=pool, kept=clips)
+    done = PF.finished(job, n_jobs, server=server, kept=clips)
     try:
         for _k, data, (luma, n_typed, n_kept, n_bare) in done:
             lmin, typed, kept, bare = min(lmin, luma), typed + n_typed, kept + n_kept, bare + n_bare

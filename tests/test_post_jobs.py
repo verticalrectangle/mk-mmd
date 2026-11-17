@@ -7,6 +7,7 @@ processes come from [post] or the flags. Tiny synthetic frames, the encoder and 
 ffmpeg."""
 import json
 import queue
+import shutil
 import threading
 import time
 import types
@@ -121,6 +122,46 @@ def test_the_encoder_and_the_processes_come_from_post_or_the_flags(tmp_path, cap
         project(tmp_path, bad)
         code, rep, _ = run_post(tmp_path, capsys, monkeypatch)
         assert code == 2 and said in rep["error"], rep
+
+
+class Workers:
+    """Stands in for PF.Planners, its workers taking memory while it lives: each run planned on a thread of this
+    process; `made` notes how many workers of other pools were still alive when each pool was made."""
+    alive, made = 0, []
+
+    def __init__(self, n):
+        Workers.made.append(Workers.alive)
+        Workers.alive += n
+        self.n, self.ex = n, ThreadPoolExecutor(1)
+
+    def submit(self, out, ks):
+        return self.ex.submit(lambda: ([(k, *out.plan(k)) for k in ks], out.notes))
+
+    def stop(self):
+        self.ex.shutdown(cancel_futures=True)
+        Workers.alive -= self.n
+
+    def close(self):
+        self.ex.shutdown(wait=True)
+        Workers.alive -= self.n
+
+
+def test_each_output_gets_the_workers_the_memory_gives_it_on_its_own(tmp_path, capsys, monkeypatch):
+    project(tmp_path)
+    toml = tmp_path / "mk.toml"
+    toml.write_text(toml.read_text().replace('[[shot]]', f'[[output]]\nname = "wide2"\nsize = [{W}, {H}]\n[[shot]]', 1))
+    rendered(tmp_path)
+    shutil.copytree(tmp_path / "renders" / "draft" / "wide", tmp_path / "renders" / "draft" / "wide2")
+    per = PF.WORKER_BASE + PF.WORKER_BYTES * W * H / (1920 * 1080)
+    monkeypatch.setattr(PF, "INLINE_WORK", 0)
+    monkeypatch.setattr(PF.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(PF.MEM, "available", lambda: (3.5 - Workers.alive) * per / PF.MEMORY_SHARE)   # room for 3
+    monkeypatch.setattr(PF, "Planners", Workers)
+    monkeypatch.setattr(Workers, "made", [])
+    code, rep, _ = run_post(tmp_path, capsys, monkeypatch)
+    assert code == 0, rep
+    assert [rep["outputs"][o]["jobs"] for o in ("wide", "wide2")] == [3, 3]     # the last one is not left with one
+    assert Workers.made == [0, 0] and Workers.alive == 0         # the first output's workers gone before the next's
 
 
 class Pool:

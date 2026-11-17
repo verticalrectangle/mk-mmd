@@ -284,7 +284,7 @@ class Output:
         entries = ffx.entries(f) if ffx else []
         img, bare, ops = None, 0, []
         if fx and fx.active(f):
-            img = self._inputs(f)[0]
+            img = self._picture(g)
             try:
                 img = fx.frame(f, img)
             except FileNotFoundError:                             # layers missing (allowed): the plain cut shows
@@ -302,7 +302,7 @@ class Output:
                     if PG.first(entries[cut], got):               # a pixel sort: what comes before it is drawn here
                         break
                 for e in entries[:cut]:
-                    img = ffx._apply(e, f, self._inputs(f)[0] if img is None else img)
+                    img = ffx._apply(e, f, self._picture(g) if img is None else img)
                 ops = [op for got in reversed(tail) for op in got]
             except (FT.FootageError, FX.FxError):                 # a clip that fails, a pivot with no figure: an error
                 raise
@@ -328,6 +328,11 @@ class Output:
             job["keep"] = str(mask)
         return "gpu", job, (None, int("layer" in job), int("keep" in job), bare)
 
+    def _picture(self, g):
+        """The picture of the rendered frame `g` (None: before the first one rendered, which stands in) without its
+        layers: what `plan` works from (mkr-post reads the screen type and the keep mask itself)."""
+        return self.lead if g is None else P.read(self.files[g], self.size)
+
 
 # ---------------------------------------------------------------- over processes
 def jobs(n, size):
@@ -346,9 +351,8 @@ def jobs(n, size):
 
 
 class Planners:
-    """Worker processes that plan chunks of an output's frames (Output.plan), made once for a run and shared by its
-    outputs, which go one after another: a worker builds an output's Output the first time it gets a chunk of it (and
-    lets the one before go)."""
+    """Worker processes that plan chunks of one output's frames (Output.plan), each building the output's Output the
+    first time it gets a chunk of it."""
 
     def __init__(self, n):
         self.n = n
@@ -378,8 +382,7 @@ def _start():
 
 def _chunk(args, ks):
     global _OUT
-    if _OUT is None or _OUT.name != args["name"]:
-        _OUT = None
+    if _OUT is None:
         _OUT = Output(**args)
     return [(k, *_OUT.plan(k)) for k in ks], _OUT.notes
 
@@ -536,14 +539,14 @@ class _Sender:
             self.thread.join(SEND_WAIT)
 
 
-def finished(out, jobs=1, chunk=None, server=None, pool=None, kept=None):
+def finished(out, jobs=1, chunk=None, server=None, kept=None):
     """Every frame of `out` (an Output) finished, in order: (k, rgb24 bytes, (darkest luma, screen type frames, kept,
-    effects that found a layer missing)), by this process or `jobs` worker processes (_planned; `pool` a Planners the
-    run's outputs share) and, with `server` (a mkmmd.postgpu.Server; `out` built with `gpu`), mkr-post for the frames it
-    can finish, sent in order by a thread of their own (_Sender; `kept` the clip frames the run's outputs share,
-    mkmmd.gpufx.footage.Kept), LOOKAHEAD of them in flight. A server with a sink writes every frame into the encoder
-    itself, the ones finished here handed through it in order, SINK_LOOKAHEAD in flight; their bytes come out None."""
-    planned = _planned(out, jobs, chunk or CHUNK, pool)
+    effects that found a layer missing)), by this process or `jobs` worker processes of its own (_planned) and, with
+    `server` (a mkmmd.postgpu.Server; `out` built with `gpu`), mkr-post for the frames it can finish, sent in order by a
+    thread of their own (_Sender; `kept` the clip frames the run's outputs share, mkmmd.gpufx.footage.Kept), LOOKAHEAD
+    of them in flight. A server with a sink writes every frame into the encoder itself, the ones finished here handed
+    through it in order, SINK_LOOKAHEAD in flight; their bytes come out None."""
+    planned = _planned(out, jobs, chunk or CHUNK)
     sink = server is not None and server.sink is not None
     ahead = SINK_LOOKAHEAD if sink else LOOKAHEAD
     sender = None if server is None else _Sender(out, server, kept)
