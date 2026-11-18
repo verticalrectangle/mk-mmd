@@ -16,13 +16,17 @@ is, so locks lying side by side carry one picture:
     strands   streaks running down the lock, coarse and fine, wavering a little, and a few fine dark lines in its free
               part
     sheen     the crown ring (`Sheen`): one band round the head, toothed above and below, `tooth` metres a tooth,
-              brighter at its heart; each lock paints its piece of it; faint on the rows under. `bands` are more
-              such bands of any colour: `[{drop, width, colour, strength, tooth}, ...]`, `drop` metres below the
-              hair's top (a second sheen, a toothed shade under the first: how a cel shades hair)
+              brighter at its heart; each lock paints its piece of it; faint on the rows under. `sheen_break` fades
+              each lock's piece toward its edges and `sheen_shift` (metres) moves it up or down, each lock its own way,
+              so the locks break the band up. `bands` are more such bands of any colour: `[{drop, width, colour,
+              strength, tooth}, ...]`, `drop` metres below the hair's top (a second sheen, a toothed shade under the
+              first: how a cel shades hair)
     tips      `{colour, length, strength}`: every lock's last `length` metres go to `colour` (hair that ends in
               another colour, each lock on its own, not by its height)
+    crease    `{strength, reach}`: where a lock lies under or beside other locks (how far their surface rises over
+              it within `reach` metres: the lock hairdo's `occlusion`), it goes toward the family's `deep`: the shade
+              in the creases where lock lies on lock
     under     the rows under (`under`) a shade darker
-
 `[hair.paint]` sets how strong each is (PAINT), `hard` how crisp (0 airbrushed, 1 cut like a cel). `Atlas` packs the
 cells and holds the picture; a lock's UVs come from its cell (`Cell.uv`)."""
 from dataclasses import dataclass
@@ -34,7 +38,8 @@ from .hair_tex import _grad, _noise1, _sm
 PAINT = {"strands": 0.10, "lines": 5, "line": 0.22, "edge": 0.30, "edge_width": 0.34, "rim": 0.30, "form": 0.05,
          "root": 0.12, "tip": 0.14, "sheen": 0.85, "sheen_width": 1.0, "glow": 0.30, "tooth": 0.012, "hard": 0.0,
          "under": 0.84, "cap": 0.80, "bands": [], "tips": {"colour": None, "length": 0.06, "strength": 0.85},
-         "ramp": [[0.0, "shadow:base:0.5"], [0.22, "base"], [0.62, "base:tip:0.4"], [1.0, "tip"]]}
+         "ramp": [[0.0, "shadow:base:0.5"], [0.22, "base"], [0.62, "base:tip:0.4"], [1.0, "tip"]],
+         "sheen_break": 0.0, "sheen_shift": 0.0, "crease": {"strength": 0.0, "reach": 0.015}}
 BAND = {"drop": 0.10, "width": 0.015, "colour": "shadow", "strength": 0.6, "tooth": 0.012, "fall": 0.0,
         "turn": [0.0, 180.0]}
 ROOT_SHADE = 0.02               # metres from the root over which `root` fades
@@ -209,12 +214,14 @@ class Sheen:
         return _edge(1.0 - d, hard), _edge(1.0 - d / 0.5, hard), glow, strength
 
 
-def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=None, under=False, bands=(), ends=True):
+def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=None, under=False, bands=(), ends=True,
+               crease=None):
     """The picture (h, w, 3) of a lock's cell. `z` and `around` (h, w): each point's height and its angle round the
     head (radians: 0 the front, her left positive); `arc` (h,) the metres from the root down the lock and `free` (h,)
     how free it hangs there (0 lying with its neighbours .. 1 on its own); `sheen` the crown's Sheen (None: none);
     `bands` [(a Sheen, its colour, its strength)] drawn under it; `ends` False for a lock that ends in a tie: it has
-    no point of its own (no `tip` shade, no `tips` colour)."""
+    no point of its own (no `tip` shade, no `tips` colour); `crease` (h, w) 0 .. 1 how deep each point lies in a
+    crease (None: nowhere)."""
     h, w = cell.h, cell.w
     x = np.linspace(-1.0, 1.0, w)
     hard = float(look["hard"])
@@ -252,10 +259,15 @@ def paint_lock(cell, z, around, arc, free, pal, look, rng, z_top, z_bot, sheen=N
         on = band.on(z, around, hard)[0] * (0.4 if under else 1.0)
         rgb = rgb + (np.asarray(tint, float) - rgb) * np.clip(float(k) * on, 0.0, 1.0)[..., None]
     if sheen is not None and look["sheen"] > 0.0:
-        band, core, glow, strength = sheen.on(z, around, hard)
+        shift = float(look["sheen_shift"]) * rng.uniform(-1.0, 1.0) if look["sheen_shift"] > 0.0 else 0.0
+        band, core, glow, strength = sheen.on(np.asarray(z, float) + shift, around, hard)
         amp = look["sheen"] * (0.3 if under else 1.0) * strength * (1.0 - 0.7 * free * rim[None, :])
+        amp = amp * (1.0 - float(look["sheen_break"]) * x * x)[None, :]     # the lock's own piece of the band
         rgb = rgb + (pal["ring"] - rgb) * np.clip(amp * np.maximum(band, glow), 0.0, 1.0)[..., None]
         rgb = rgb + (pal["ring_core"] - rgb) * np.clip(0.55 * amp * core, 0.0, 1.0)[..., None]
+    if crease is not None and look["crease"]["strength"] > 0.0:
+        k = np.clip(float(look["crease"]["strength"]) * np.asarray(crease, float), 0.0, 1.0)
+        rgb = rgb + (pal["deep"] - rgb) * k[..., None]
     if under:
         rgb = _tone(rgb, np.full((h, w), look["under"]), pal)
     return rgb

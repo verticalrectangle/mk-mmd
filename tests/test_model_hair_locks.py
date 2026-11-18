@@ -10,7 +10,7 @@ from mkmmd.core import families
 from mkmmd.model import part as PT
 from mkmmd.model.parts import hair, hair_braids_tex as HBT, hair_locks as HL, hair_paint as HP, hair_tex
 from mkmmd.model.parts.hair_fit import HeadFit, Volume, unit
-from mkmmd.model.parts.hair_geo import arclen
+from mkmmd.model.parts.hair_geo import arclen, frames, solid_normals, sweep
 from mkmmd.model.parts.hair_rig import Rig
 
 PART = [[30, 40], [50, 30], [100, 20], [150, 14]]
@@ -257,3 +257,154 @@ def test_a_lock_can_end_in_another_colour_and_cross_a_band_of_shade():
     shade = HP.Sheen(1.30, 0.02, 0.012, 0.0, np.random.default_rng(2))
     banded = paint(plain, bands=[(shade, pal["shadow"], 1.0)])
     assert np.allclose(banded[50, 8], pal["shadow"], atol=0.05) and np.allclose(banded[[5, 95]], flat[[5, 95]])
+
+
+def test_a_flipped_end_turns_out_and_up(tmp_path):
+    def tips(flip):
+        g = {"family": "back", "count": 3, "layer": 0, "tuck": 0.0, "free": 0.04, "cut": 1.17, "flip": flip,
+             "guides": [{"root": ["part", 1.0], "to": [140, 104]}, {"root": ["part", 1.0], "to": [-140, 104]}]}
+        ctx = HF.make_ctx(tmp_path, spec({"nape": g}))
+        hh = HL.LockHair(ctx, HeadFit(ctx.parts["head"].info), ctx.cfg, Rig(), hair_tex.palette(ctx.get("colors.hair")))
+        return [lk.path for _, _, locks in hh.plan() for lk in locks]
+    out = tips({"len": 0.04, "out": 0.02})
+    up = tips({"len": 0.04, "out": 0.02, "up": 0.02})
+    for a, b in zip(out, up):
+        assert b[-1, 2] - a[-1, 2] == pytest.approx(0.02, abs=0.004)       # the end rises by `up`
+        assert a[-1, 2] < a[-2, 2] and b[-1, 2] > b[-2, 2]                 # out and down; out and up
+        above = b[b[:, 2] > 1.25]                                          # above its last `len` it lies as it did
+        assert np.linalg.norm(above[:, None] - a[None], axis=2).min(1).max() < 0.0015
+
+
+def test_staggered_locks_end_apart_and_each_flips_its_own_way(tmp_path):
+    def paths(**more):
+        g = {"family": "back", "count": 5, "layer": 0, "tuck": 0.0, "free": 0.04, "cut": 1.17,
+             "flip": {"len": 0.04, "out": 0.03, "up": 0.015}, **more,
+             "guides": [{"root": ["part", 1.0], "to": [140, 104]}, {"root": ["part", 1.0], "to": [-140, 104]}]}
+        ctx = HF.make_ctx(tmp_path, spec({"nape": g}))
+        hh = HL.LockHair(ctx, HeadFit(ctx.parts["head"].info), ctx.cfg, Rig(), hair_tex.palette(ctx.get("colors.hair")))
+        return [lk.path for _, _, locks in hh.plan() for lk in locks]
+    even = paths()
+    staggered = paths(stagger=[0.0, 0.012])
+    for i, (a, b) in enumerate(zip(even, staggered)):
+        assert b[-1, 2] == pytest.approx(a[-1, 2] - (0.012 if i % 2 else 0.0), abs=0.002)   # every other one 12 mm lower
+    rise = [p[-1, 2] - p[-6, 2] for p in paths(jitter={"flip": 0.6})]
+    assert np.ptp(rise) > 0.006                                                # the ends turn up each their own way
+
+
+BACK = {"family": "back", "count": 3, "layer": 1, "width": 0.04, "free": 0.04, "tuck": 0.0, "cup": 0.0,
+        "lift": [[0.0, 0.0], [0.05, 0.003]], "thick_max": 0.02,
+        "guides": [{"root": ["part", 1.0], "to": [140, 90], "length": 0.08},
+                   {"root": ["part", 1.0], "to": [-140, 90], "length": 0.08}]}
+
+
+def laid(tmp_path, locks, **hair_tables):
+    """(LockHair, {group: [Lock]}) of `locks` laid on the stand-in head; `hair_tables` more [hair] tables."""
+    s = spec(locks)
+    s["hair"].update(hair_tables)
+    ctx = HF.make_ctx(tmp_path, s)
+    hh = HL.LockHair(ctx, HeadFit(ctx.parts["head"].info), ctx.cfg, Rig(), hair_tex.palette(ctx.get("colors.hair")))
+    return hh, {name: got for name, _, got in hh.plan()}
+
+
+def ring_at(st, at):
+    """(the ring of a swept lock nearest `at` metres from its root, its q round it, the way across it, through it)."""
+    n, R = st.rings, st.R
+    k = int(np.argmin(np.abs(st.arc[:n * R:R] - at)))
+    ring, q = st.verts[k * R:(k + 1) * R], st.q[:R]
+    across = unit(ring[np.argmax(q)] - ring[np.argmin(q)])
+    t = unit(st.ctr[min(k + 1, n - 1) * R] - st.ctr[max(k - 1, 0) * R])
+    return ring, q, across, unit(np.cross(t, across))
+
+
+def test_a_solid_lock_is_a_round_volume_on_the_head_and_where_it_hangs(tmp_path):
+    hh, thin = laid(tmp_path / "thin", {"back": BACK})
+    lk = thin["back"][1]
+    ring, _, across, through = ring_at(hh.clump(lk), 0.5 * lk.extra["s_leave"])
+    assert np.ptp(ring @ through) < 0.06 * np.ptp(ring @ across)            # by default paper-thin where it lies
+    hh, solid = laid(tmp_path / "solid", {"back": {**BACK, "solid": 0.32}})
+    lk = solid["back"][1]
+    st = hh.clump(lk)
+    for at in (0.5 * lk.extra["s_leave"], st.length - 0.5 * lk.extra["free"]):     # on the head, hanging free
+        ring, q, across, through = ring_at(st, at)
+        assert np.ptp(ring @ through) / np.ptp(ring @ across) == pytest.approx(0.32, abs=0.03)
+        for e, (a, b) in ((int(np.argmin(q)), (1, -1)), (int(np.argmax(q)), (-1, 1))):   # each edge is round,
+            u, v = unit(ring[(e + a) % len(q)] - ring[e]), unit(ring[(e + b) % len(q)] - ring[e])   # not a knife
+            assert np.degrees(np.arccos(np.clip(u @ v, -1.0, 1.0))) > 75.0
+    n = solid_normals(st, hh.proxy_normals(st.verts), 0.88)
+    edges = (np.abs(st.q) == 1.0) & (st.ring >= 0) & (st.arc > 0.2 * st.length) & (st.arc < 0.8 * st.length)
+    across = unit(st.verts[edges] - st.ctr[edges])
+    assert (np.einsum("ij,ij->i", n[edges], across) > 0.9).all()           # its edges shade by their own round form
+
+
+def test_a_solid_lock_tucked_under_keeps_its_inner_face_off_the_skin(tmp_path):
+    tucked = {**BACK, "solid": 0.32, "lift": [-0.012, 0.0]}
+    hh, got = laid(tmp_path, {"back": tucked}, volume={"top": 0.008, "front": 0.004, "side": 0.010, "back": 0.010})
+    c = hh.skull.center
+    for lk in got["back"]:
+        V = hh.clump(lk).verts
+        assert (np.linalg.norm(V - c, axis=1) - hh.skull.radius(unit(V - c))).min() > 0.0, lk.name
+
+
+def test_a_curl_bends_the_lock_about_its_width_and_never_twists_it():
+    a = np.radians(np.linspace(0.0, 90.0, 40))                             # down, then out (+y): a quarter circle
+    P = np.stack([np.zeros_like(a), 0.05 * (1.0 - np.cos(a)), 1.30 - 0.05 * np.sin(a)], 1)
+    turn = np.radians(np.linspace(0.0, 60.0, 40))                          # the head's facing turns on the way
+    N = np.stack([np.sin(turn), np.cos(turn), np.zeros_like(turn)], 1)
+    _, B, _ = frames(P, N)
+    assert abs(B[-1] @ B[0]) < 0.6                                          # faced the head's way, the end twists
+    _, B, _ = frames(P, HL.curled(P, N, 0.0))
+    assert (np.abs(B @ B[0]) > 0.999).all()                                 # curled, its width keeps its way
+    st = sweep(P, HL.curled(P, N, 0.0), 0.03, 0.009, solid=0.3, section="round", k_outer=7)
+    _, _, across, _ = ring_at(st, st.length - 0.006)
+    assert abs(across @ B[0]) > 0.99
+
+
+def test_a_flipped_lock_remembers_its_curl(tmp_path):
+    hh, got = laid(tmp_path, {"back": {**BACK, "cut": 1.20, "flip": {"len": 0.05, "out": 0.04, "up": 0.02}}})
+    assert all(lk.extra["curl"] == pytest.approx(0.05) for lk in got["back"])
+    _, plain = laid(tmp_path / "plain", {"back": BACK})
+    assert all(lk.extra["curl"] == 0.0 for lk in plain["back"])
+
+
+def test_a_lock_lying_on_another_shades_it_deep_under_its_end(tmp_path):
+    over, under = {**BACK, "layer": 2, "cut": 1.25}, {**BACK, "layer": 1, "cut": 1.18}
+    hh, got = laid(tmp_path, {"over": over, "under": under})
+    locks = got["under"] + got["over"]
+    cells, _ = hh.atlas.cells([(lk.width, float(arclen(lk.path)[-1])) for lk in locks], [HL.CAP_PX])
+    acc = HL.MeshAccum("hair_head", ["髪"])
+    for lk, cell in zip(locks, cells):
+        lk.extra["cell"] = cell
+        hh.emit(acc, lk)
+    deep = hh.occlusion(locks, 0.016)
+    top, low = got["over"][1], got["under"][1]
+    arcs, q, occ = deep[locks.index(low)]
+    z = low.extra["rings"][3][:, len(q) // 2, 2]                            # the middle of its outer side, down it
+    end = top.path[-1, 2]
+    assert occ[(z > end - 0.012) & (z < end + 0.002), len(q) // 2].max() > 0.2     # just under the upper lock's end
+    assert occ[np.abs(z - (end - 0.04)) < 0.006, len(q) // 2].max() < 0.1         # well below it, out in the open
+    arcs, q, occ = deep[locks.index(top)]
+    free = int(np.argmin(np.abs(arcs - (arcs[-1] - 0.5 * top.extra["free"]))))
+    assert occ[free, len(q) // 2] < 0.05                                    # its own ridge, nothing over it
+    pal = hair_tex.palette({})
+    look = {**HP.PAINT, "crease": {"strength": 1.0, "reach": 0.016}}
+    rgb = HP.paint_lock(HP.Cell(0, 0, 8, 16, 64), np.full((16, 8), 1.30), np.zeros((16, 8)), np.linspace(0, 0.1, 16),
+                        np.zeros(16), pal, look, np.random.default_rng(1), 1.45, 1.15, crease=np.ones((16, 8)))
+    assert np.allclose(rgb, pal["deep"])                                    # the crease's colour is the deep one
+
+
+def test_the_locks_break_the_sheen_up():
+    pal = hair_tex.palette({})
+    z = np.broadcast_to(np.linspace(1.43, 1.37, 61)[:, None], (61, 21))
+    around = np.zeros((61, 21))
+
+    def lock(rng, **more):
+        look = {**HP.PAINT, "strands": 0.0, "lines": 0, "edge": 0.0, "rim": 0.0, "root": 0.0, "tip": 0.0,
+                "form": 0.0, "tooth": 0.0, **more}
+        sheen = HP.Sheen(1.40, 0.02, 0.0, 0.0, np.random.default_rng(5))
+        return HP.paint_lock(HP.Cell(0, 0, 21, 61, 128), z, around, np.linspace(0.05, 0.11, 61), np.zeros(61), pal,
+                             look, np.random.default_rng(rng), 1.45, 1.20, sheen).sum(2)
+    whole, broken = lock(1), lock(1, sheen_break=0.8)
+    assert np.allclose(whole[30, 0], whole[30, 10])                         # one even band across the lock
+    assert broken[30, 10] - broken[30, 0] > 0.5 * (whole[30, 10] - whole[0, 10])   # its piece fades to its edges
+    rows = [int(np.argmax(lock(seed, sheen_shift=0.006)[:, 10])) for seed in (1, 2, 3, 4)]
+    assert np.ptp(rows) >= 3                                                # each lock's piece a little up or down

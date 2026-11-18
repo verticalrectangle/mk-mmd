@@ -1,5 +1,6 @@
 """Textures of the cat ears and tails (numpy + PIL): black fur with a faint cool sheen, the dark-red -> pink inner ear with
-soft fur lines, pale tufts. Every function returns an (h, w, 4) uint8 sRGB image, v UP (row 0 = v 1).
+soft fur lines, pale tufts; and the soft look of an ear (`*_soft`): toon gradients only, no fibres or lines, as a face is
+drawn. Every function returns an (h, w, 4) uint8 sRGB image, v UP (row 0 = v 1).
 
 Layouts (matching the UVs of `cat_ear_geo` and `tails`):
   ear fur, ear inner   u across the ear (0 = inner edge .. 1 = outer edge), v = (t + 0.5) / 1.5 with t the height above
@@ -128,6 +129,36 @@ def tuft(pal, rng, w=64, h=128):
     img = img * (1.0 - 0.10 * edge)[None, :, None]
     img = img * _fibres(rng, w, h, 0.7)[..., None]
     return _to_u8(img)
+
+
+def ear_fur_soft(pal, w=64, h=256):
+    """A soft ear's fur: outer_shadow down in the hair, deepening into the outer colour by the middle of the ear, flat above
+    it but for a broad faint outer_sheen across its upper part (where the light lands on a round top)."""
+    v = 1.0 - (np.arange(h) + 0.5) / h
+    base, deep = pal["outer"], pal["outer_shadow"]
+    col = _grad(v, [(0.0, deep), (0.33, deep), (0.50, base), (1.0, base)])
+    k = 0.30 * np.exp(-(((v - 0.80) / 0.13) ** 2))
+    img = col * (1.0 - k)[:, None] + pal["outer_sheen"][None, :] * k[:, None]
+    return _to_u8(np.repeat(img[:, None, :], w, axis=1))
+
+
+def ear_inner_soft(pal, w=64, h=256):
+    """A soft ear's inside: the inner colour at the root and up its walls (u toward the rim), lightening to inner_light up
+    its middle; smooth gradients only."""
+    v = 1.0 - (np.arange(h) + 0.5) / h
+    u = (np.arange(w) + 0.5) / w
+    inner, light = pal["inner"], pal["inner_light"]
+    up = _grad(v, [(0.0, inner * 0.88), (0.36, inner), (0.55, _mix(inner, light, 0.55)), (0.75, light), (1.0, light)])
+    wall = _smooth((np.abs(2.0 * u - 1.0) - 0.30) / 0.40)
+    img = up[:, None, :] * (1.0 - wall)[None, :, None] + inner[None, None, :] * wall[None, :, None]
+    return _to_u8(img)
+
+
+def tuft_soft(pal, w=32, h=64):
+    """A soft ear's pale tuft: a little of the inner colour at its root, the tuft colour from a third of the way up."""
+    v = 1.0 - (np.arange(h) + 0.5) / h
+    col = _grad(v, [(0.0, _mix(pal["tuft"], pal["inner"], 0.35)), (0.35, pal["tuft"]), (1.0, pal["tuft"])])
+    return _to_u8(np.repeat(col[:, None, :], w, axis=1))
 
 
 # ---------------------------------------------------------------- tail

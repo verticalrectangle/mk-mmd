@@ -1,9 +1,15 @@
-"""Rin's two black cat ears (a slice of the hair part, called by hair.py as `build_ears(ctx, fit, cfg, rig, pal)`).
+"""Two animal ears on the head (a slice of the hair part, called by hair.py as `build_ears(ctx, fit, cfg, rig, pal)`): by
+default Rin's black cat ears, or round ears drawn soft.
 
-Each ear is a pointed triangular shell, cupped and leaning forward, standing on the scalp at `fit.cat[side]` and tilted
-outward and a little forward; its base runs down through the hair volume and is clipped onto the skin (sunk 5 mm), so the
-head hair parts around it. Outer shell and rim: black fur (`猫耳`), the recessed inner face: dark red -> pink (`猫耳内`)
-inside the rim, a few pale tufts curling from the lower inner edge (`猫耳毛`).
+Each ear is a shell, cupped and leaning forward, standing on the scalp at `fit.cat[side]` and tilted outward and a little
+forward; its base runs down through the hair volume and is clipped onto the skin (sunk 5 mm), so the head hair parts
+around it. Outer shell and rim: fur (`猫耳`), the recessed inner face (`猫耳内`) inside the rim, pale tufts curling from
+the lower inner edge (`猫耳毛`). `shape` is its planform (cat_ear_geo): "point", a cat's triangle drawn to a needle tip,
+or "round", straight sides rising into a round top of radius `tip_radius`, its tufts small soft puffs with round ends.
+`look` is how it is painted (cat_tex): "fur", black fur with a cool sheen and fur lines, dark red -> pink inside; or
+"soft", toon gradients only, as a face is drawn: [colors.ears] outer deepening to outer_shadow at the root with a faint
+outer_sheen, inner lightening to inner_light, tuft; its toon shade is outer_shadow over outer and its outlines a darker
+shade of each colour.
 
 Rig per side: a static twitch bone `猫耳左` / `猫耳右` (parent 頭, head at the base centre, pointing up the ear's axis, with a
 tiny static body as the joint partner) and a stiff dynamic chain `猫耳左1..3` hanging from it (kind "ears"). mk's `twitch`
@@ -15,9 +21,11 @@ import numpy as np
 
 from . import cat_common as CC
 from . import cat_ear_geo as EG
-from .cat_tex import ear_fur, ear_inner, tuft
+from . import hair_tex as TEX
+from .cat_tex import ear_fur, ear_fur_soft, ear_inner, ear_inner_soft, tuft, tuft_soft
 from .hair_fit import angles
 from .hair_geo import MeshAccum, Piece, unit
+from .hair_head import DEFAULTS as HAIR
 from .. import spec as SP
 from ..part import Bone, Material, RigidBody
 
@@ -27,6 +35,9 @@ DEFAULTS = {
     "height": None,             # m, visible height above the hair (None: height_ratio x head width)
     "width_ratio": 0.50,        # x head width (0.095 m on the 0.19 m head of the reference proportions)
     "height_ratio": 0.46,       # x head width (0.087 m)
+    "shape": "point",           # planform: "point" (a cat's, to a needle tip) or "round" (a round top)
+    "tip_radius": None,         # m, radius of a round ear's top arc (None: 0.3 x width)
+    "look": "fur",              # "fur" (black fur, a cool sheen, fur lines) or "soft" (toon gradients of [colors.ears])
     "tilt_out_deg": 17.0,       # axis tilt from vertical, outward
     "tilt_fwd_deg": 8.0,        # axis tilt from vertical, forward
     "face_out_deg": 28.0,       # the inner face looks forward and this far outward
@@ -126,6 +137,35 @@ def ear_frame(fit, side, cfg):
                 normal=np.asarray(anchor["normal"], float))
 
 
+def soft_palette(ctx, col):
+    """The soft look's colours: CC.palette's plus [colors.ears] outer_shadow and inner_light (without them the outer colour
+    at 0.64 of its value, and the inner a third of the way to white)."""
+    got = ctx.get("colors.ears", {}) or {}
+    out = dict(col)
+    for key, made in (("outer_shadow", col["outer"] * 0.64), ("inner_light", col["inner"] + 0.35 * (1.0 - col["inner"]))):
+        out[key] = TEX.srgb(got[key]) if isinstance(got.get(key), str) else made
+    return out
+
+
+def _soft_materials(ctx, pal, tex):
+    """The three ear materials of the soft look (draw order: fur, inner, tufts): one toon ramp, shaded to outer_shadow
+    over outer with the hair's soft step, outlines a darker shade of each colour (none darker than the fur's shadow)."""
+    shade = tuple(float(x) for x in np.clip(pal["outer_shadow"] / np.maximum(pal["outer"], 1e-3), 0.3, 0.95))
+    toon = ctx.save_png("toon_ear_soft", TEX.toon_ramp(shade, edge=HAIR["toon"]["edge"], soft=HAIR["toon"]["soft"]))
+    edge = {"fur": pal["outer_shadow"], "inner": np.maximum(pal["inner"] * 0.62, pal["outer_shadow"]),
+            "tuft": np.maximum(pal["tuft"] * 0.62, pal["outer_shadow"])}
+    look = dict(diffuse=(1.0, 1.0, 1.0, 1.0), specular=(0.0, 0.0, 0.0), shininess=0.0, ambient=(0.5, 0.5, 0.5),
+                toon=toon, edge=True)
+    return [
+        Material("猫耳", name_en="ear", texture=tex["fur"], edge_color=CC.srgb_u8(edge["fur"]) + (1.0,), edge_size=0.8,
+                 comment="ear fur: the outer colour drawn soft (generated)", **look),
+        Material("猫耳内", name_en="ear inner", texture=tex["inner"], edge_color=CC.srgb_u8(edge["inner"]) + (1.0,),
+                 edge_size=0.5, comment="inside of the ear: dusty rose, lighter in its middle (generated)", **look),
+        Material("猫耳毛", name_en="ear tuft", texture=tex["tuft"], edge_color=CC.srgb_u8(edge["tuft"]) + (1.0,),
+                 edge_size=0.45, comment="a pale tuft at the lower inner edge (generated)", **look),
+    ]
+
+
 def _materials(ctx, pal, tex):
     """The three ear materials (draw order: fur, inner, tufts)."""
     toon_f = CC.toon(ctx, "toon_cat_fur", (0.55, 0.55, 0.62))
@@ -151,16 +191,27 @@ def build_ears(ctx, fit, cfg, rig, pal):
     cfg = SP.merge(DEFAULTS, cfg)
     if not cfg["enabled"]:
         return Piece(info={"enabled": False})
+    if cfg["shape"] not in ("point", "round") or cfg["look"] not in ("fur", "soft"):
+        raise ValueError(f"[hair.ears] shape {cfg['shape']!r} (point, round), look {cfg['look']!r} (fur, soft)")
     rng = ctx.rng_for(cfg["seed"])
     col = CC.palette(ctx)
     hw = head_width(fit)
     W = float(cfg["width"]) if cfg["width"] else float(cfg["width_ratio"]) * hw
     H = float(cfg["height"]) if cfg["height"] else float(cfg["height_ratio"]) * hw
     k = W / REF_W
-    tex = {"fur": ctx.save_png("cat_ear_fur", ear_fur(col, ctx.rng_for(cfg["seed"] + ".fur"))),
-           "inner": ctx.save_png("cat_ear_inner", ear_inner(col, ctx.rng_for(cfg["seed"] + ".inner"))),
-           "tuft": ctx.save_png("cat_ear_tuft", tuft(col, ctx.rng_for(cfg["seed"] + ".tuft")))}
-    materials = _materials(ctx, col, tex)
+    if cfg["look"] == "soft":
+        col = soft_palette(ctx, col)
+        tex = {"fur": ctx.save_png("ear_fur", ear_fur_soft(col)), "inner": ctx.save_png("ear_inner", ear_inner_soft(col)),
+               "tuft": ctx.save_png("ear_tuft", tuft_soft(col))}
+        materials = _soft_materials(ctx, col, tex)
+    else:
+        tex = {"fur": ctx.save_png("cat_ear_fur", ear_fur(col, ctx.rng_for(cfg["seed"] + ".fur"))),
+               "inner": ctx.save_png("cat_ear_inner", ear_inner(col, ctx.rng_for(cfg["seed"] + ".inner"))),
+               "tuft": ctx.save_png("cat_ear_tuft", tuft(col, ctx.rng_for(cfg["seed"] + ".tuft")))}
+        materials = _materials(ctx, col, tex)
+    shape = {}
+    if cfg["shape"] == "round":
+        shape = dict(shape="round", tip_r=float(cfg["tip_radius"]) if cfg["tip_radius"] else 0.3 * W, **EG.ROUND)
     acc = MeshAccum("cat_ears", [m.name for m in materials])
     info = {"enabled": True, "size": {"width": W, "height": H, "scale": k, "head_width": hw}, "bones": [], "twitch": [],
             "sides": {}}
@@ -172,7 +223,7 @@ def build_ears(ctx, fit, cfg, rig, pal):
         zh = float(fr["hull_z"](np.zeros(1), np.zeros(1), cfg["hair_offset"])[0])
         p = EG.EarParams(W=W, H=H, z_h=zh, thick=cfg["thick"] * W, rim_front=0.0025 * k, rim_back=0.0015 * k,
                          cup_depth=cfg["cup"] * W, lip=cfg["lip"], lean=cfg["lean"], curl=cfg["curl"],
-                         apex_shift=cfg["apex_shift"])
+                         apex_shift=cfg["apex_shift"], **shape)
         shell = EG.build_shell(p, fr["skin_z"])
         sh = shell["shape"]
         Vw = fr["world"](shell["verts"])

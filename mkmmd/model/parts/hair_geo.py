@@ -165,7 +165,7 @@ class Strip:
 
 def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, root_w=1.0, root_len=0.15, curv=0.0,
           rings=None, ring_step=0.018, k_outer=5, outer_frac=0.6, bulge=0.7, tilt=0.0, close_root=True,
-          width_fn=None, thick_fn=None, end_taper=0.0, curv_fn=None, place=None):
+          width_fn=None, thick_fn=None, end_taper=0.0, curv_fn=None, place=None, section="lens", solid=0.0):
     """Sweep a clump along the centreline P (m,3) with outward hint N.
 
     width, thick   full width / thickness (m) of the clump; width_fn(s') / thick_fn(s') -> multipliers (s' in 0..1)
@@ -177,8 +177,13 @@ def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, roo
     rings          number of rings (default: one per ring_step metres, at least 7; a round tip has ROUND_RINGS more)
     outer_frac     share of the thickness on the outer side of the centreline; bulge shapes the lens (< 1 = fuller)
     end_taper      blunt tips only: the width falls by this fraction over the last 15 % (rounded corners)
-    place          place(points (R, 3) across a ring's middle surface, the ring's s') -> where they lie: a clump laid
-                   on a surface (the hair on a head) instead of swept flat across; the thickness is added after"""
+    place          place(points (R, 3) across a ring's middle surface, the ring's s', metres the section reaches under
+                   its middle there) -> where they lie: a clump laid on a surface (the hair on a head) instead of
+                   swept flat across; the thickness is added after
+    section        "lens": the section's points evenly across it, its edges thin; "round": evenly round it by angle,
+                   so its edges are round (with `bulge` 0.5 the section is an ellipse)
+    solid          > 0: the clump is this share of its width thick wherever it is (into its point and its root with
+                   its width), never more than `thick`; thick_fn still scales it"""
     P = np.asarray(P, float)
     L = float(arclen(P)[-1])
     if rings is None:
@@ -202,13 +207,13 @@ def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, roo
         w = w * (1.0 - end_taper * smoothstep((sp - 0.85) / 0.15))
     if root_w != 1.0:
         w = w * (root_w + (1.0 - root_w) * smoothstep(sp / max(root_len, 1e-6)))
-    th = thick * taper_factor(sp, tip, tip_start, 1.0) ** 0.6
+    th = np.minimum(solid * w, thick) if solid > 0.0 else thick * taper_factor(sp, tip, tip_start, 1.0) ** 0.6
     if thick_fn is not None:
         th = th * thick_fn(sp)
     cv = curv * (np.ones(n_r) if curv_fn is None else curv_fn(sp))
     # cross-section
     m = k_outer
-    qo = np.linspace(-1.0, 1.0, m)
+    qo = -np.cos(np.linspace(0.0, np.pi, m)) if section == "round" else np.linspace(-1.0, 1.0, m)
     qi = qo[1:-1][::-1]                                         # inner arc, right to left, interior only
     qs = np.concatenate([qo, qi])
     sd = np.concatenate([np.ones(m), -np.ones(len(qi))])
@@ -220,7 +225,7 @@ def sweep(P, N, width, thick, *, tip="point", tip_start=0.55, tip_power=1.5, roo
         x = qs * w[i] * 0.5
         mid = Pc[i] + np.outer(x, Bc[i]) - np.outer(0.5 * cv[i] * x * x, Nn[i])
         if place is not None:
-            mid = place(mid, float(sp[i]))
+            mid = place(mid, float(sp[i]), float(th[i]) * (1.0 - outer_frac))
         y = np.where(sd >= 0, th[i] * outer_frac, -th[i] * (1.0 - outer_frac)) * lens
         verts[i * Rn:(i + 1) * Rn] = mid + np.outer(y, Nn[i])
     if tip == "blunt" and tilt:
@@ -323,6 +328,18 @@ def shell_normals(verts, faces, side, hint, mix):
     m = np.asarray(mix, float)
     m = m[:, None] if m.ndim else m
     return unit(m * np.asarray(side, float)[:, None] * unit(hint) + (1.0 - m) * geo)
+
+
+def solid_normals(st, hint, mix):
+    """Unit normals of a solid clump (`sweep(section="round", solid=...)`: a closed section with round edges, one
+    vertex at each edge): its own geometric normals blended toward `hint` (n, 3) over its outer side and away from it
+    over its inner side, by `mix` (a number or one per vertex) times how far round the section the vertex is from its
+    edges (all of it at the middle of each side, none at the edges). So a clump shades like the head across its face
+    and by its own round form at its sides."""
+    geo = vertex_normals(st.verts, st.faces)
+    m = np.asarray(mix, float) * np.sqrt(np.clip(1.0 - st.q * st.q, 0.0, 1.0))
+    sign = np.where(st.side < 0, -1.0, 1.0)
+    return unit((m * sign)[:, None] * unit(hint) + (1.0 - m)[:, None] * geo)
 
 
 # ---------------------------------------------------------------- accumulate into Mesh objects
