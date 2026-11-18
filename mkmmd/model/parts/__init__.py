@@ -6,6 +6,9 @@ or name another module in `[model.builders]` (`tails = "mkmmd.model.parts.hair"`
 
 KNOWN = ("mannequin", "body", "head", "hair", "outfit", "sweater", "skirt", "pants", "socks", "sneakers", "choker",
          "hair_bow", "horns", "bangles", "gown", "mob_cap")
+KNOWN += ("smock", "bubble_skirt", "zori")
+KNOWN += ("leaf", "glasses", "hangings")
+KNOWN += ("tail",)
 
 
 def module_for(name, overrides=None):

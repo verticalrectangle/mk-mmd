@@ -91,8 +91,10 @@ def hidden_faces(verts, tris, G, land, hide):
 
     `hide` (all optional): groups (default torso, shoulder, arm), neck_z (neck triangles whose centre is below it are
     covered: the line inside the collar), wrist_back (metres: the arm skin stops this far before the wrist head, inside the
-    sleeve, so the cuff never shows a hole), leg_z (leg triangles above it are covered: under the skirt). Hand, head and the
-    legs below leg_z stay visible."""
+    sleeve, so the cuff never shows a hole), armpit (metres: the skin within it of each shoulder joint, `arm.L` / `arm.R`,
+    stays: seen through a sleeveless top's armholes, else one looks through her), leg_z (leg triangles above it are
+    covered: under the skirt), foot_z (leg triangles below it are covered: the feet inside socks or shoes). Hand, head
+    and the legs between foot_z and leg_z stay visible."""
     V, T = np.asarray(verts, float), np.asarray(tris, int)
     fg = face_groups(T, G)
     c = V[T].mean(axis=1)
@@ -107,12 +109,19 @@ def hidden_faces(verts, tris, G, land, hide):
             s = (c - e) @ u
             near = (fg == GROUPS.index("arm")) & (c[:, 0] * sx > 0) & (s > ln - back)
             hidden &= ~near
+    if hide.get("armpit"):                                              # seen through the armholes of a sleeveless top
+        for side in ("L", "R"):
+            if f"arm.{side}" in land:
+                hidden &= np.linalg.norm(c - np.asarray(land[f"arm.{side}"], float), axis=1) > float(hide["armpit"])
     if hide.get("neck_z") is not None:
         neck = fg == GROUPS.index("neck")
         hidden |= neck & (c[:, 2] < float(hide["neck_z"]))
     if hide.get("leg_z") is not None:
         leg = fg == GROUPS.index("leg")
         hidden |= leg & (c[:, 2] > float(hide["leg_z"]))
+    if hide.get("foot_z") is not None:                                  # inside socks or shoes: the feet under them
+        leg = fg == GROUPS.index("leg")
+        hidden |= leg & (c[:, 2] < float(hide["foot_z"]))
     return hidden
 
 

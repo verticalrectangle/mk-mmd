@@ -530,17 +530,18 @@ def build(ctx):
 
 def _mix_morphs(pieces, defs, panel_of):
     """[[head.morphs]]: new vertex morphs mixed from the imported ones (head_edit.mix_morphs), each {name, en, panel,
-    mix = {morph: weight}, move = {material: [dx, dy, dz]}}; they join `panel_of` (so a bake compensates them like the
-    others). Returns their part.Morph declarations."""
+    mix = {morph: weight or [left, right]}, midline, move = {material: [dx, dy, dz]}}; they join `panel_of` (so a bake
+    compensates them like the others). Returns their part.Morph declarations."""
     out = []
     for d in defs:
         name, mix, move = str(d.get("name") or ""), dict(d.get("mix") or {}), dict(d.get("move") or {})
         bad = [k for k in mix if k not in panel_of] + [k for k in move if k not in pieces]
+        bad += [f"{k} = {w!r}" for k, w in mix.items() if isinstance(w, (list, tuple)) and len(w) != 2]
         if not name or not (mix or move) or bad or name in panel_of:
-            raise ValueError(f"[[head.morphs]] {name!r}: needs a new name and a mix of the face's vertex morphs and/or "
-                             f"moves of its materials (unknown: {bad}; morphs: {sorted(panel_of)}; "
-                             f"materials: {sorted(pieces)})")
-        HE.mix_morphs(pieces, name, mix, move)
+            raise ValueError(f"[[head.morphs]] {name!r}: needs a new name and a mix of the face's vertex morphs (a weight, "
+                             f"or [left, right]) and/or moves of its materials (unknown: {bad}; morphs: "
+                             f"{sorted(panel_of)}; materials: {sorted(pieces)})")
+        HE.mix_morphs(pieces, name, mix, move, float(d.get("midline", 0.012)))
         panel = str(d.get("panel", "other"))
         panel_of[name] = panel
         out.append(Morph(name, panel, str(d.get("en", ""))))

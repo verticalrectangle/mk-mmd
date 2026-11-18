@@ -19,8 +19,10 @@ Spec (`[body]` in body.toml): `source = "pmx"` and the table `[body.pmx]`:
   [body.pmx.hide]  the skin an outfit covers in every pose (moved to the hidden material, alpha 0, still weighted and part of
                    the mesh so garments fit and transfer weights from the whole body): groups (default torso, shoulder, arm),
                    neck_z (or collar_z + neck_inside = 0.03: the neck skin stays visible down to that height, inside the
-                   collar), wrist_back (m, default 0.035: the sleeves end this far before the wrist), leg_z (legs above it
-                   are covered; below it everything shows)
+                   collar), wrist_back (m, default 0.035: the sleeves end this far before the wrist), armpit (m: the
+                   skin that near each shoulder joint stays, seen through a sleeveless top's armholes), leg_z (legs above
+                   it are covered), foot_z (legs below it are covered: the feet inside socks or shoes); between the two
+                   everything shows
 
 The surface keeps the source's materials exactly (colours, toon, sphere, edge, flags); the skeleton is the source's, pruned.
 Published in `Part.info`: take (the `pmx_take.Take`, also as `base`), landmarks (+ tail_root, tail_normal, bust_front),

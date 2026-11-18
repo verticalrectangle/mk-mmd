@@ -182,13 +182,14 @@ class Rig:
                     spring_move=tuple(tp["spring_move"]), spring_rot=tuple(tp["spring_rot"])))
         return out
 
-    def ring(self, names, pts, anchor, kind, radius, statics=(), anchor_body=None, english="Chain"):
+    def ring(self, names, pts, anchor, kind, radius, statics=(), anchor_body=None, english="Chain", physics=None):
         """Chains round her like a skirt's: `names[r][c]` (row r, column c; column 0 at the middle of her front, counted
         toward her left) through `pts` (C, R + 1, 3), hung from the bone `anchor`, each tied sideways to its neighbours
         round the ring. A capsule is `radius` thick, or as thin as the room to the static colliders `statics` at rest
         leaves it (MIN_RADIUS at least); a capsule inside one at rest is thrown out by physics, so past a chain's
         first bone (which collides with nothing of the body) its points are moved level away from the ring's middle
-        until a capsule of MIN_RADIUS has room. Without `anchor_body` they are bones alone. Returns the radii (C, R)."""
+        until a capsule of MIN_RADIUS has room. Without `anchor_body` they are bones alone. `physics` overrides keys of
+        the kind's PHYSICS (a firmer skirt). Returns the radii (C, R)."""
         pts = np.array(pts, float)
         C, R = pts.shape[0], pts.shape[1] - 1
         room = np.full((C, R), np.inf)
@@ -210,7 +211,7 @@ class Rig:
         for c in range(C):
             self.chain([names[r][c] for r in range(R)], pts[c], anchor, kind, rad[c], anchor_body=anchor_body,
                        x_hint=G.tangent_ccw(c * G.TAU / C), name_en=[f"{english}{c:02d}_{r + 1}" for r in range(R)],
-                       dynamic=anchor_body is not None)
+                       physics=physics, dynamic=anchor_body is not None)
         if anchor_body is not None:
             self.tie([[names[r][c] for r in range(R)] for c in range(C)], closed=True)
         return rad

@@ -237,18 +237,30 @@ def make_fang(skin, mouth_loop_ids, morph_names, cfg, teeth, mats):
 
 
 # ------------------------------------------------------------------------------------------------------- morph bakes
-def mix_morphs(pieces, name, mix, move=None):
+def side_share(x, left, right, midline=0.012):
+    """Per-vertex weight (n,) of a morph mixed `left` on her left (+x) and `right` on her right: the two blend smoothly
+    over the `midline` metres across the middle (the lips' middle moves by their mean, nothing tears there)."""
+    t = smooth3((np.asarray(x, float) + 0.5 * midline) / max(float(midline), 1e-9))
+    return float(right) + (float(left) - float(right)) * t
+
+
+def mix_morphs(pieces, name, mix, move=None, midline=0.012):
     """A new vertex morph `name` in every piece: the weighted sum of the piece's offsets of the morphs in `mix` ({morph:
-    weight}; a morph a piece does not have counts as zero), plus `move` ({piece name: (dx, dy, dz)}): that whole piece
-    moved rigidly (the eye highlights following a lowered lid). A piece none of them moves gets none. Returns the number
-    of pieces it is in."""
+    weight}, or {morph: [left, right]} for a different weight on each side: `side_share`; a morph a piece does not have
+    counts as zero), plus `move` ({piece name: (dx, dy, dz)}): that whole piece moved rigidly (the eye highlights
+    following a lowered lid). A piece none of them moves gets none. Returns the number of pieces it is in."""
     n = 0
     for key, p in pieces.items():
         acc = None
         for m, w in mix.items():
             off = p.morphs.get(m)
-            if off is not None:
-                acc = float(w) * off if acc is None else acc + float(w) * off
+            if off is None:
+                continue
+            if isinstance(w, (list, tuple)):
+                w = side_share(p.verts[:, 0], w[0], w[1], midline)[:, None]
+            else:
+                w = float(w)
+            acc = w * off if acc is None else acc + w * off
         if move and key in move:
             shift = np.broadcast_to(np.asarray(move[key], float), p.verts.shape)
             acc = shift.copy() if acc is None else acc + shift

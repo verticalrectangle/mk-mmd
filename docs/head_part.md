@@ -184,10 +184,11 @@ with `color` set the generated ears take the skin colour of the band's inner rin
 | `name` | (required) | a new morph name (PMX) |
 | `en` | "" | English name |
 | `panel` | "other" | eye, brow, mouth or other; the morph joins its panel, so a bake compensates it like the imported ones |
-| `mix` | {} | `{morph: weight}`: the weighted sum of the imported vertex morphs' offsets |
+| `mix` | {} | `{morph: weight}`: the weighted sum of the imported vertex morphs' offsets; `{morph: [left, right]}` weighs each side on its own, blending over `midline` metres across her middle (`head_edit.side_share`): a one-sided smile from a symmetric one |
 | `move` | {} | `{material: [dx, dy, dz]}` metres: that whole material moved rigidly in the morph (eye highlights dropping with a lowered lid) |
+| `midline` | 0.012 | metres across her middle over which a per-side `mix` blends from one side's weight to the other's |
 
-A semantic name for rig.json comes from `core.bonemap.MORPHS` (`sleepy`: ねむい, 眠い).
+A semantic name for rig.json comes from `core.bonemap.MORPHS` (`sleepy`: ねむい, 眠い; `smug`: ドヤ顔, ドヤ).
 
 ### Edits (`[head.edit]`, `head_edit.py`)
 

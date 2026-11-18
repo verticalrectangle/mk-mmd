@@ -362,7 +362,8 @@ it; MMD has the PMX's own chains and fold shapes.
 are listed under `missing_required` when a character lacks them. **Semantic morphs** (`morphs`): `blink`, `wink_l`, `wink_r`,
 `wink2_l`, `wink2_r`, `smile_eyes`, `a`, `i`, `u`, `e`, `o`, `a2`, `n`, `cheerful`, `serious`, `troubled`, `angry`, `sad`,
 `surprised`, `brow_up`, `brow_down`, `jito`, `calm`, `sleepy`, `hau`, `star_eyes`, `heart_eyes`, `pupils_small`, `mouth_smile`,
-`mouth_down`, `mouth_wide`, `omega`, `tongue`, `blush`, `tears`, `pale` (each found by the PMX names a model commonly uses).
+`mouth_down`, `smug`, `mouth_wide`, `omega`, `tongue`, `blush`, `tears`, `pale` (each found by the PMX names a model commonly
+uses).
 
 ## Prop card
 
@@ -7199,8 +7200,11 @@ wound off the curve as the section turns, an open spiral) makes an antelope's tw
 them; `[colors.horns]`; `mkmmd/model/parts/horns.py`), `bangles` (rings round a limb, an anklet or a
 bracelet: `[bangles] rings = [{on, toward, at, width, thick, offset, color}, ...]`, each round the limb from the
 landmark `on` toward the landmark `toward`, following the skin's section there and carrying its weights;
-`[colors.bangles]`), `gown` (a long loose nightgown under a capelet, with full sleeves, ankle socks and flats, below)
-and `mob_cap` (a soft puffed cap on a band, below). The
+`[colors.bangles]`), `gown` (a long loose nightgown under a capelet, with full sleeves, ankle socks and flats, below),
+`mob_cap` (a soft puffed cap on a band, below), and a set made for a short dress (below): `smock` (a sleeveless smock
+with shoulder flaps and straps), `bubble_skirt` (a round printed skirt, a lantern or flared, with bloomers), `zori`
+(split-toe socks and straw sandals), `glasses`, `leaf` (a leaf lying on the head), `hangings` (things on cords at her
+hip) and `tail` (one big bushy tail). The
 hair is combed in one of two hairdos (`[hair] style`: `clumps`, the bases'; `locks`,
 groups of locks laid from guides, partings and ties, any hairdo that can be written down the way it is combed, hair
 gathered to a tie and the tail or braid that hangs from it included: [hair_part.md](hair_part.md)). Pants and socks are
@@ -7284,7 +7288,9 @@ false` (no strap, buckle or bow) and a low `collar` line, the sole's colour only
 `[colors.gown]` (`ground`, `stripe`, `robe`, `trim`, `bow`, `sock`, `shoe`, each with its `_shadow`, and `sole`);
 every cloth matte, toon shade = its shadow swatch over its colour (`[gown.toon] edge soft`: horizontal faces stay
 lit), outline a dark shade of the shadow. A character hides the skin it covers with `[body.pmx.hide]` (groups, `neck_z`
-under the collar, `wrist_back` inside the band, `leg_z` above the knees). Materials ガウン, ケープ, ガウン袖, ガウンフリル,
+under the collar, `wrist_back` inside the band, `armpit` the skin by each shoulder joint seen through a sleeveless top's
+armholes, `leg_z` above the knees, `foot_z` the feet inside socks or shoes: a source model's foot has toes a sock would
+show). Materials ガウン, ケープ, ガウン袖, ガウンフリル,
 ガウンリボン, ガウン裏, ケープ裏, ソックス, フラット靴, フラット靴底. For a strumming forearm (8 strokes a second) give
 the `sleeve` family the capsules' own size and heavy damping in the show (`[sim.<cast>.params.sleeve] radius = 1`,
 `zeta = 1`); in MMD the sleeve chains' own PMX settings are `outfit_rig.PHYSICS["sleeve"]`.
@@ -7377,6 +7383,87 @@ under it).
 | `bow.span`, `loop`, `fold`, `knot` | 0.045, [0.018, 0.014, 0.005], 0.3, 0.008 | width, each loop long/high/thick, its fold, the knot |
 | `bow.tails`, `tail_width`, `splay` | 0.030, 0.008, 40 | two tails laid on the band and the frill |
 | `around`, `rings`, `bone` | 144, 56, 頭 | columns round the cap, rings up the crown, the bone it rides |
+
+**The smock** (`smock`, `mkmmd/model/parts/smock.py`): one piece of cloth cut from her skin and hung from it, a yoke on
+her shoulders and upper chest, then falling from her bust and shoulder blades round a vertical axis through her hips
+(`[smock.hang]`: ease, `taper`, `waist`, soft `folds`) and flaring over its last `hem.flare` to `hem.off` off her hips,
+the hem waving with the flutes. It is cut along level lines of fields (`outfit_shell.Shell.clip`): the neckline, the
+armholes, the hem with a low arch at her back (`[smock.arch]`) and a tube round a tail (`[smock.tail] path radius
+margin`, model space; garments built after it take the same cut); every cut edge is rolled back toward her. Lace points
+hang from the hem (`[smock.lace]`). On each shoulder a flap like a small wing (`[smock.flap]`: out past the shoulder
+joint, drooping `droop` degrees, edged with lace, taking the arm's weights toward its edge) under a strap with a stud
+(`[smock.strap]`). `info` publishes the hang radii, where the lace's tips hang all round (`lace_tips`) and the tail's
+tube. Colours `[colors.smock]`, `[colors.flaps]`, `[colors.straps]` (`stud`), `[colors.trim]`; materials スモック,
+肩フラップ, 肩ストラップ, スモックレース. A sleeveless top shows the skin inside its armholes: keep it with `[body.pmx.hide]
+armpit` (else one looks through her). Every key and its default: the module's DEFAULTS.
+
+**The round skirt** (`bubble_skirt`, `mkmmd/model/parts/bubble_skirt.py`): printed cotton in rings round the smock's
+axis, gathered into a band at her waist, fanning out inside the smock and its lace and leaving it just inside the
+lace's tips. `[bubble_skirt.body] form`: `"lantern"` swells to its widest (`widest`, an ellipse `rx` by `ry`) and
+rounds in to a hem gathered `hem.off` off her legs, its `segments` panels between sharp creases; `"flare"` runs out to
+an open hem where it is widest (at least the ellipse `hem.rx` by `hem.ry`), rounding out first by `bell`, its
+`segments` soft rolling folds out and in (`waist` where it leaves the smock growing to `hem` at the hem). A lantern
+bobs; a flare swings clear of her legs and rides up over a raised knee (in the show its chains are the family
+`skirt`, `[bubble_skirt.chains] spring swing` for MMD). The creases (a flare's troughs) are painted darker; the
+picture (`[bubble_skirt.print]`) lays soft-edged motifs round it: `spiral` (a fat curl with three dots), `leaf`,
+`flame` (a broad tongue curling over into a hook, `streaks` up it; set low it rises from the hem), each `at` a turn
+round her, `z` over the hip joints, `size`, `turn`, `mirror` and `color` (a key of `[colors.skirt]`: `print` or
+`accent`, its line `<key>_shadow`), over an optional `band` of waves along the hem (`height`, `wave`, `waves`,
+`color`). Each row of the picture is as long as the cloth round her there, so a motif keeps its shape on a skirt that
+widens. Bloomers under it (`[bubble_skirt.bloomers]`: her skin from `top` to the cuffs `cuff`, `off` off it, rows of
+pleated frills whose hems rise and fall `scallop` of their length: 0.05 a soft ruffle) take no cast shadow, so they
+stay white under the skirt. Colours `[colors.skirt]` (base, shadow, light, print, print_shadow, accent,
+accent_shadow) and `[colors.bloomers]`; materials バルーンスカート, ブルマー; landmarks `skirt_widest`, `skirt_hem`.
+
+**Split-toe socks and straw sandals** (`zori`, `mkmmd/model/parts/zori.py`): socks are her skin from the heel up to
+`[zori.socks] top`, a toe box lofted through her foot's sections with the cleft pressed in (`cleft`, `at`); her feet
+under them are hidden (`[body.pmx.hide] foot_z`). Under each foot a sole fills the space to the floor (`[zori.sole]`: a
+straw pad `layer` thick with `ridges`, over a base drawn in `inset`) and a dark V strap runs from the cleft to the
+sole's sides (`[zori.strap]`). Colours `[colors.socks]`, `[colors.sandals]`; materials 足袋, 草履, 草履台, 鼻緒.
+
+**The glasses** (`glasses`, `mkmmd/model/parts/glasses.py`): round wire glasses rigid on the head bone, two lenses
+`size` across of wire `wire` thick, a short bridge arched over the nose and temples running back along the head into
+the side hair. `[glasses.place] height` puts the rims' tops on the eye opening as a share of its height (0 the lower
+lash line: she looks over them; above 1 the whole eye inside), `x` the lenses' centres (0: on the pupils); `gap` is the
+least distance to the head's meshes at rest and in every eye, mouth and brow morph (each temple steps back along the
+head keeping it, ending where the ear begins). Keep the lenses clear (`alpha` 0): mkr draws transparency hashed, so a
+tint is grain over the irises; one crisp glint each (`[glasses.glint]`). `[colors.glasses]`; materials 眼鏡, 眼鏡レンズ.
+
+**The leaf** (`leaf`, `mkmmd/model/parts/leaf.py`): one broad leaf lying on the head, rigid on the head bone: an ovate
+blade with a bite out of one edge, a midrib and veins, a closed solid with a rolled edge. `[leaf.lay]`: its middle `at`
+from the head's centre, its tip `toward` degrees from her front, lying `lift` over what is under it (list it after the
+hair), its tip curling `curl`; `tilt` turns its face toward her front so it reads from in front (it then rests on the
+hair where it comes nearest) and `over` slides its tip that far past the front edge. `[colors.leaf]`; material 葉っぱ.
+
+**Hangings** (`hangings`, `mkmmd/model/parts/hangings.py`): things on cords from a place on her body, `[[hangings.items]]`
+`kind` (`jug`: a sake jug with a cork and its brushed mark; `book`: an account book bound along its top), `at` [degrees
+round her from her front toward her left, height] (with `[hangings] hem = "<part>"` the height counts from that
+garment's hem), `cord`, `size`. Cord and thing come to rest as a weight on a cord does against what they hang over,
+`gap` off it and leaning out `lean` degrees at most. They swing on two bones each from `bone` (family `accessory`), or,
+with `[hangings] ride = "<part>"` (a flared skirt that swings), they have no chain and take that part's weights where
+they lie on it, so they move with the cloth and never pass into it. `[colors.jug]`, `[colors.ledger]`; materials 吊り紐,
+徳利, 徳利栓, 帳面, 帳面表紙; landmarks `hang.<i>`.
+
+**The tail** (`tail`, `mkmmd/model/parts/tail.py`): one big bushy tail from the body's `tail_root`, a soft tube along
+a centre line whose elevation is given against its length (`[tail.path] s elev`), its plane turned `turn` degrees and
+leaning (`lean`) toward her left, its half-width through `radius` stations, its end a brush of lobes like a soft flame
+(`[tail.brush]`). Fur is tufts in two places: a ring at each band's far edge (the band's zigzag edge,
+`[tail.tufts.ring]`) and single tufts off the outside of the curve; bands of `[colors.tail]` dark and tan
+(`[tail.bands]`). Rig: an aim bone 尻尾 a show keys (or flicks with `twitch` family `tail`) and a chain 尻尾1..N of kind
+`tail`; the base blends from 下半身 to the aim bone over `rig.base`, so a turned aim bone bends the tail at its root.
+mk's solver: a big upright tail falls over with the family's defaults; give the show `[sim.<cast>.params.tail] sag =
+[0.6, 2.0], zeta = 1.2, drag = 6, inertia = 0.6, bend_max = 22, radius = 0.9, radius_max = 0.10` (measured on a dance:
+it sways and follows without folding). Seated on a chair with a back, turn its simulation off for the shot and key it
+round her side to stand beside the back. Every key and its default: the module's DEFAULTS. Material 尻尾.
+
+**Round ears and the hair's lock keys.** `[hair.ears] shape = "round"` (with `tip_radius`, `look = "soft"`: toon
+gradients of `[colors.ears]` `outer`, `outer_shadow`, `outer_sheen`, `inner`, `inner_light`, `tuft`; a negative `sink`
+sets the base over the skin) makes a round ear, a tanuki's or a bear's, with the cat ear's twitch bone and chain;
+the default `"point"` is the cat's. Lock groups gain `flip.up` (a flipped end that also rises), `stagger` (lengths in
+turn, so a layer does not end on a level line), `jitter.flip` (each end curls its own way) and `solid` (each lock a
+closed lens that share of its width thick, its section round; a flip bends it without twisting it edge-on);
+`[hair.paint]` gains `crease` (shade toward `deep` where lock lies on lock), `sheen_break` and `sheen_shift` (the
+sheen one broad band the locks break up). All are off by default ([hair_part.md](hair_part.md) has the hairdo).
 
 `[body] bust` (metres, the mesh body) moves each breast's front forward as it is, keeping the donor's round shape; the
 flesh it grows follows the chest (`body_donor.chest_flesh`: the shoulder girdle's weights go to 上半身2 there), so the

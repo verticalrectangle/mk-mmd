@@ -344,3 +344,15 @@ def test_the_fade_copy_shows_the_decal_at_rest_and_sinks_back_in_its_morph():
     # every other morph rides along
     assert np.allclose(cp.morphs["smile"], smile[:3]) and np.array_equal(cp.uv, p.uv[:3])
     assert HE.fade_copy(p, "smile") is not None and HE.fade_copy(p, "nothing") is None
+
+
+def test_a_mix_weighted_left_and_right_moves_one_side_and_blends_across_the_middle():
+    from types import SimpleNamespace
+    x = np.linspace(-0.03, 0.03, 61)
+    v = np.stack([x, np.zeros_like(x), np.zeros_like(x)], 1)
+    up = np.tile([0.0, 0.0, 0.001], (61, 1))
+    pieces = {"face": SimpleNamespace(verts=v, morphs={"smile": up, "lid": 2.0 * up})}
+    assert HE.mix_morphs(pieces, "smug", {"smile": [1.0, 0.0], "lid": 0.5}, midline=0.012) == 1
+    dz = pieces["face"].morphs["smug"][:, 2]
+    assert np.allclose(dz[x >= 0.006], 0.002) and np.allclose(dz[x <= -0.006], 0.001)   # her left smiles, both lids
+    assert dz[30] == pytest.approx(0.0015) and (np.diff(dz) >= -1e-12).all()             # the middle moves by the mean

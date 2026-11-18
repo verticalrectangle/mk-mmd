@@ -249,6 +249,23 @@ def test_resolve_hide_derives_the_neck_line_from_the_collar():
     assert "neck_z" not in body_pmx.resolve_hide({}, {})
 
 
+def test_hidden_skin_follows_the_cut_of_socks_skirt_and_armholes():
+    """Three leg triangles (a foot, a shin, a thigh) and two of the torso (a waist, an armpit): `foot_z` covers the
+    foot alone, `leg_z` the thigh alone, a covered group goes whole but for what `armpit` keeps by a shoulder joint
+    (seen through a sleeveless top's armholes)."""
+    z = [0.05, 0.30, 0.60, 0.90, 1.08]
+    verts = np.array([[0.10 + x, 0.0, h] for h in z for x in (0.0, 0.01, 0.02)])
+    tris = np.arange(15).reshape(5, 3)
+    G = np.zeros((15, len(F.GROUPS)))
+    G[:9, F.GROUPS.index("leg")] = 1.0
+    G[9:, F.GROUPS.index("torso")] = 1.0
+    hide = {"groups": ["torso"], "foot_z": 0.13, "leg_z": 0.5}
+    assert F.hidden_faces(verts, tris, G, {}, hide).tolist() == [True, False, True, True, True]
+    land = {"arm.L": [0.09, 0.0, 1.12], "arm.R": [-0.09, 0.0, 1.12]}
+    assert F.hidden_faces(verts, tris, G, land, {**hide, "armpit": 0.10}).tolist() == [True, False, True, True, False]
+    assert F.hidden_faces(verts, tris, G, {}, {"groups": []}).tolist() == [False] * 5
+
+
 def test_missing_configuration_is_an_error(tmp_path):
     spec = {"model": {"name": "t", "parts": ["body"]}, "body": {"source": "pmx", "pmx": {"materials": ["a"]}}}
     with pytest.raises(build.BuildError, match="path"):

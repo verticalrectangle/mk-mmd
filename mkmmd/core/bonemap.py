@@ -105,6 +105,7 @@ MORPHS = {
     "pupils_small": ["瞳小"],
     "mouth_smile": ["口角上げ", "にやり", "∧"],
     "mouth_down": ["口角下げ"],
+    "smug": ["ドヤ顔", "ドヤ", "smug"],
     "mouth_wide": ["口横広げ"],
     "omega": ["ω", "ω□"],
     "tongue": ["ぺろっ", "てへぺろ"],
