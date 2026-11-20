@@ -107,18 +107,24 @@ def _shifted(a, dx, dy):
 
 def _spread(colour, mask, inside, r):
     """`colour` (h, w, 3) carried from the pixels of `inside` out over the rest of `mask` up to `r` px: a piece grown past
-    its cut keeps its own colours at the margin."""
-    have = inside.copy()
+    its cut keeps its own colours at the margin. Each step, left, right, down, up in turn, every pixel still without a
+    colour takes its neighbour's that has one. The pixels to fill are a thin ring round the piece: only they are looked
+    at (whole planes shifted and stacked for every step were two thirds of a final frame's compose)."""
     out = colour.copy()
+    have = inside.copy()
+    h, w = have.shape
+    ys, xs = np.nonzero(mask & ~have)                        # the ring: all that is ever filled
     for _ in range(int(math.ceil(r))):
-        if not (mask & ~have).any():
+        if not len(ys):
             break
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            src = _shifted(have, dx, dy)
-            take = src & mask & ~have
-            if take.any():
-                out[take] = np.stack([_shifted(out[..., c], dx, dy) for c in range(3)], -1)[take]
-                have = have | take
+            sy, sx = ys - dy, xs - dx                        # the neighbour a pixel takes from
+            ok = (sy >= 0) & (sy < h) & (sx >= 0) & (sx < w)
+            ok[ok] = have[sy[ok], sx[ok]]
+            if ok.any():
+                out[ys[ok], xs[ok]] = out[sy[ok], sx[ok]]    # from pixels that have theirs: never one taken in this step
+                have[ys[ok], xs[ok]] = True
+                ys, xs = ys[~ok], xs[~ok]
     return out
 
 
