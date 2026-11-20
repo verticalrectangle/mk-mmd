@@ -7081,7 +7081,9 @@ grain, the box down to the frame in numpy's order and the type laid over it. Eve
 product kept apart from the sum it goes into (the driver would fuse them into one fma, and a scissors' cut that falls
 exactly between two pixels went the other way). What it does not port is composed on the CPU as before, chosen per job,
 and the report's `looks` says how many went which way (`gpu` {finished, seconds}, `cpu_because` {why: jobs}): a
-silhouette look, a vector look without `cutout` (lines, the sketch), a matte, a frame with a ring live on it;
+silhouette look, a vector look without `cutout` (lines, the sketch), a matte, a frame with a ring live on it, a `seed`
+past what mkr carries exactly in 64 bits (seed x 104729 + 3 under 2^64); a pass id the job's tables do not hold stops mkr
+as it stops the CPU, and a shadow offset past every window casts nothing, as on the CPU;
 `MK_MKR_LOOKS=cpu` composes them all on the CPU (to check the GPU's against). On a paper theatre of some 25 pieces (final,
 three outputs, 77 frames each: 1200 to 1260 and 16 spread over its four shots, boil steps and a cut-out [[medium]]
 window) the GPU's frames are the CPU's to within one level: 0.000006 to 0.000008 levels mean |difference|, 0.0016 to

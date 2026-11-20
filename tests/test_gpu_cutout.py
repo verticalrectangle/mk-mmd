@@ -76,13 +76,25 @@ def _job(cutout, path, t=1.3, role="frame", look="vector", rings=()):
             "ring_t": t, "t": t, "files": [str(path)], "centres": {}}
 
 
-@pytest.mark.parametrize("cutout", [{"fps": 8}, {"rim": False, "shadow": False, "lift": 0.0, "rough": 3.0}])
-def test_the_gpu_cuts_the_paper_the_cpu_cuts(tmp_path, cutout):
+@pytest.mark.parametrize("cutout, case", [
+    ({"fps": 8}, "figure"),
+    ({"rim": False, "shadow": False, "lift": 0.0, "rough": 3.0}, "figure"),
+    # no grain, no scissors, one cut; a drop shadow cast 2^32 + 40 px right: past every window, so none on the CPU (a
+    # shift narrowed to 32 bits once landed it 40 px right)
+    ({"grain": 0.0, "rough": 0.0, "fps": 0.0, "shadow": {"offset": [(2 ** 32 + 40) / (2 * H), -0.02]}}, "figure"),
+    ({"fps": 8}, "empty"),                                     # no piece at all: the paper and the type
+    ({"fps": 8}, "bad id"),                                    # an id the tables do not hold: both stop
+])
+def test_the_gpu_cuts_the_paper_the_cpu_cuts(tmp_path, cutout, case):
     try:
         exe = MKR.binary()
     except MKR.EngineError as e:
         pytest.skip(str(e))
     passes = _passes()
+    if case == "empty":
+        passes["id"][:] = 0
+    elif case == "bad id":
+        passes["id"][10:12, 10:12] = len(MATERIALS) + 3
     job = _job(cutout, tmp_path / "gpu.png")
     _write_look(tmp_path / "0.look", 0, passes)
     rec, why = CO.gpu_finish(job)
@@ -93,28 +105,38 @@ def test_the_gpu_cuts_the_paper_the_cpu_cuts(tmp_path, cutout):
     if r.returncode != 0 and any(w in r.stderr for w in ("Vulkan adapter", "needs a GPU", "cannot open the GPU",
                                                          "the adapter")):
         pytest.skip(f"mkr has no GPU: {r.stderr.strip()[-200:]}")
+    head, raw = CO.read_look(tmp_path / "0.look")
+    if case == "bad id":
+        with pytest.raises(IndexError):
+            CO.compose_look(CO.look_passes(raw, "vector"), job)
+        assert r.returncode != 0 and not (tmp_path / "gpu.png").exists()
+        assert "material id 9, and the finish record's tables hold 7" in r.stderr, r.stderr[-500:]
+        return
     assert r.returncode == 0, r.stderr[-2000:]
     gpu = np.asarray(Image.open(tmp_path / "gpu.png").convert("RGB")).astype(np.int16)
-    head, raw = CO.read_look(tmp_path / "0.look")
     cpu = CO.compose_look(CO.look_passes(raw, "vector"), job)
     cpu = (np.clip(cpu, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8).astype(np.int16)
     assert gpu.shape == cpu.shape == (H, W, 3)
     d = np.abs(gpu - cpu).max(2)
     assert d.max() <= 1 and (d > 0).mean() < 1e-3, (int(d.max()), float((d > 0).mean()))
-    assert len(np.unique(cpu.reshape(-1, 3), axis=0)) > 1000                  # paper, shadows, tones: a real picture
+    if case == "figure":
+        assert len(np.unique(cpu.reshape(-1, 3), axis=0)) > 1000              # paper, shadows, tones: a real picture
 
 
 def test_mkr_finishes_the_cut_out_paper_and_leaves_the_rest_to_the_cpu(monkeypatch, tmp_path):
     jobs = {0: _job(True, tmp_path / "a.png"), 1: _job(True, tmp_path / "b.png", role="plate"),
             2: _job(True, tmp_path / "c.png", role="matte"), 3: _job(False, tmp_path / "d.png"),
             4: dict(_job(True, tmp_path / "e.png"), look="silhouette"),
-            5: _job(True, tmp_path / "f.png", rings=[{"ring": 1}])}
-    monkeypatch.setattr(CO.RG, "live", lambda rings, t: list(rings))
+            5: _job(True, tmp_path / "f.png", rings=[{"live": True}]),
+            6: _job(True, tmp_path / "g.png", role="bare"),
+            7: _job(True, tmp_path / "h.png", rings=[{"live": False}]),            # rings, none live on its frame
+            8: _job({"seed": 1 << 60}, tmp_path / "i.png")}                        # numpy takes it; 64 bits do not
+    monkeypatch.setattr(CO.RG, "live", lambda rings, t: [r for r in rings if r["live"]])
     finish, because = MKR.finishes(jobs)
-    assert sorted(finish) == [0, 1]
+    assert sorted(finish) == [0, 1, 6, 7]
     assert finish[1]["files"] == [str(tmp_path / "b.png")] and finish[0]["step"] == 10        # 1.3 s at 8 cuts a second
     assert because == {"a matte": 1, "a vector look without cutout": 1, "a silhouette look": 1,
-                       "rings live on the frame": 1}
+                       "rings live on the frame": 1, "a cutout seed past 64 bits": 1}
     monkeypatch.setenv("MK_MKR_LOOKS", "cpu")
     finish, because = MKR.finishes(jobs)
-    assert finish == {} and because == {"MK_MKR_LOOKS=cpu": 6}
+    assert finish == {} and because == {"MK_MKR_LOOKS=cpu": 9}

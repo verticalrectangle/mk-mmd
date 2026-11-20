@@ -224,21 +224,29 @@ impl Round {
 /// `alpha` of it laid in `color`.
 #[derive(Clone, Copy, Debug)]
 pub struct Cast {
-    pub dx: i64,
-    pub dy: i64,
+    pub dx: i32,
+    pub dy: i32,
     pub r: u32,
     pub alpha: f32,
+}
+
+/// A shift held to this many pixels either way: past every window (a pass is at most 16384 px a side), so it casts
+/// nothing there, as cutout._shifted gives an empty mask once a shift passes the window; and the shader's sums of a
+/// pixel and a shift stay well inside i32.
+pub const SHIFT_MAX: i64 = 1 << 24;
+
+/// Pixels held to what a window can be (any margin past this takes the whole pass, as on the CPU).
+const MARGIN_MAX: f64 = 1e9;
+
+fn margin(v: f64) -> usize {
+    v.ceil().clamp(0.0, MARGIN_MAX) as usize
 }
 
 impl Cast {
     fn new(sh: &Shadow, h: usize, px: f64, scale: f64, alpha: f64) -> Cast {
         let r = pyround(0.5 * sh.blur * px * scale);
-        Cast {
-            dx: pyround(sh.offset[0] * h as f64 * scale),
-            dy: pyround(sh.offset[1] * h as f64 * scale),
-            r: if r < 1 { 0 } else { r as u32 },
-            alpha: alpha as f32,
-        }
+        let shift = |o: f64| pyround(o * h as f64 * scale).clamp(-SHIFT_MAX, SHIFT_MAX) as i32;
+        Cast { dx: shift(sh.offset[0]), dy: shift(sh.offset[1]), r: if r < 1 { 0 } else { r as u32 }, alpha: alpha as f32 }
     }
 }
 
@@ -327,7 +335,7 @@ impl Palette {
 pub struct Piece {
     pub group: u32,
     pub paper: [u32; 2],
-    pub lift: [i64; 2],
+    pub lift: [i32; 2],
 }
 
 /// Everything about a frame of the cut-out the CPU works out (cutout.compose's numbers, its order and its fields).
@@ -362,15 +370,17 @@ impl Plan {
         let px = w.min(h) as f64 / 1080.0;
         let s = &fin.cutout;
         let ngroups = groups.iter().map(|g| g[0] as usize).max().unwrap_or(0) + 1;
-        let group = |id: usize| groups.get(id).map_or(0, |g| g[0] as usize);
-        // the figure's box, its groups and their depths, a band of rows at a time
-        let bands: Vec<([usize; 4], Vec<Vec<f32>>)> = (0..h).collect::<Vec<_>>().par_chunks(32).map(|rows| {
+        // the figure's box, its groups and their depths, a band of rows at a time; and the largest id the passes hold
+        let bands: Vec<([usize; 4], Vec<Vec<f32>>, usize)> = (0..h).collect::<Vec<_>>().par_chunks(32).map(|rows| {
             let mut b = [usize::MAX, 0, usize::MAX, 0];
             let mut depths = vec![Vec::new(); ngroups];
+            let mut top = 0;
             for &y in rows {
                 for x in 0..w {
                     let i = y * w + x;
-                    let g = group(p.id_at(i));
+                    let id = p.id_at(i);
+                    top = top.max(id);
+                    let g = groups.get(id).map_or(0, |g| g[0] as usize);
                     if g == 0 {
                         continue;
                     }
@@ -378,26 +388,40 @@ impl Plan {
                     depths[g].push(p.depth_at(i));
                 }
             }
-            (b, depths)
+            (b, depths, top)
         }).collect();
-        let (mut y0, mut y1, mut x0, mut x1) = (usize::MAX, 0, usize::MAX, 0);
+        let (mut y0, mut y1, mut x0, mut x1, mut top) = (usize::MAX, 0, usize::MAX, 0, 0);
         let mut depths: Vec<Vec<f32>> = vec![Vec::new(); ngroups];
-        for (b, d) in bands {
+        for (b, d, t) in bands {
             (y0, y1, x0, x1) = (y0.min(b[0]), y1.max(b[1]), x0.min(b[2]), x1.max(b[3]));
+            top = top.max(t);
             for (all, v) in depths.iter_mut().zip(d) {
                 all.extend(v);
             }
         }
+        // the CPU look indexes its tables with the ids and stops at one they do not hold
+        if top >= groups.len() {
+            bail!("the passes hold material id {top}, and the finish record's tables hold {} (ids 0 to {})",
+                  groups.len(), groups.len() - 1);
+        }
+        // numpy seeds its generators with whole numbers of any size; these are carried exactly in 64 bits or not at all
+        let seeded = |k: u64, add: u64| s.seed.checked_mul(k).and_then(|v| v.checked_add(add))
+            .with_context(|| format!("cutout seed {} does not fit the 64 bits mkr seeds with", s.seed));
         let mut plan = Plan {
-            w, h, px, bbox: None, sheet_seed: s.seed * 7919 + 1, rough: Vec::new(), tex: Vec::new(), rim_paper: [0, 0],
+            w, h, px, bbox: None, sheet_seed: seeded(7919, 1)?, rough: Vec::new(), tex: Vec::new(), rim_paper: [0, 0],
             figure: None, figure_cast: None, pieces: Vec::new(), grow: None, spread_steps: 0, piece_cast: None, margin: 0,
         };
+        let tex_seed = seeded(104729, 3)?;
         if depths.iter().all(|v| v.is_empty()) {
             return Ok(plan);
         }
         let rim = s.rim.as_ref().map_or(0.0, |r| r.width * px);
         let reach = s.shadow.as_ref().map_or(0.0, |sh| (sh.offset[0].abs() + sh.offset[1].abs()) * h as f64 + 3.0 * sh.blur * px);
-        let m = (rim + 2.0 * s.rough * px + 2.0 * s.lift * px + reach).ceil() as usize + 4;
+        if !reach.is_finite() {
+            // cutout.compose's int(math.ceil(...)) raises on it too
+            bail!("a cutout shadow offset past any float's reach");
+        }
+        let m = margin(rim + 2.0 * s.rough * px + 2.0 * s.lift * px + reach) + 4;
         let (by0, by1) = (y0.saturating_sub(m), (y1 + m + 1).min(h));
         let (bx0, bx1) = (x0.saturating_sub(m), (x1 + m + 1).min(w));
         let (bh, bw) = (by1 - by0, bx1 - bx0);
@@ -408,7 +432,7 @@ impl Plan {
                 plan.rough.push(Noise::new(&mut rng, bh, bw, c * px, c * px));
             }
         }
-        plan.tex = fibres(bh + 2 * PAD, bw + 2 * PAD, px, s.seed * 104729 + 3).into();
+        plan.tex = fibres(bh + 2 * PAD, bw + 2 * PAD, px, tex_seed).into();
         let paper = |j: u64| {
             let mut r = Rng::new(&[s.seed, j, 99]);
             let oy = r.below(2 * PAD as u64) as u32;
@@ -427,7 +451,8 @@ impl Plan {
         for &(_, g) in &far {
             let off = if lift >= 0.5 {
                 let turn = Rng::new(&[s.seed, g as u64, 31]).uniform(0.0, 2.0 * std::f64::consts::PI);
-                [pyround(lift * turn.cos()), pyround(lift * turn.sin())]
+                // `lift` is at most 40 px at 1080 (cutout.normalize): a few hundred pixels at the most
+                [pyround(lift * turn.cos()) as i32, pyround(lift * turn.sin()) as i32]
             } else {
                 [0, 0]
             };
@@ -439,7 +464,7 @@ impl Plan {
         }
         plan.piece_cast = s.shadow.as_ref().map(|sh| Cast::new(sh, h, px, PIECE_SHADOW, 0.8 * sh.alpha));
         let shade = s.shadow.as_ref().map_or(0.0, |sh| PIECE_SHADOW * (reach + 2.0 * sh.blur * px));
-        plan.margin = (2.0 * lift + shade).ceil() as usize + 2;
+        plan.margin = margin(2.0 * lift + shade) + 2;
         Ok(plan)
     }
 }

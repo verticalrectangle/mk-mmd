@@ -78,9 +78,9 @@ fn byte_at(i: u32, which: u32) -> u32 {
     }
 }
 
+// every id is one the tables hold: cutout.rs (Plan::new) stops on one they do not, as the CPU look does
 fn id_at(i: u32) -> u32 {
-    let id = (idb[i >> 1u] >> (16u * (i & 1u))) & 0xffffu;
-    return select(0u, id, id < fr.misc2.x);
+    return (idb[i >> 1u] >> (16u * (i & 1u))) & 0xffffu;
 }
 
 fn group_at(i: u32) -> u32 {

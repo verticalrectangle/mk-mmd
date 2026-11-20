@@ -125,6 +125,8 @@ def gpu_finish(job):
         return None, "a matte"
     if job["rings"] and RG.live(job["rings"], job["ring_t"]):
         return None, "rings live on the frame"
+    if cut["seed"] * 104729 + 3 >= 1 << 64:         # cutout.compose's largest seed: mkr seeds numpy's streams in 64 bits
+        return None, "a cutout seed past 64 bits"
     from ..core import cutout as CU
     names = list(spec["tones"])
     tones_of, groups_of = job["table"]

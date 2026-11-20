@@ -179,8 +179,8 @@ fn dilate(pass: &mut wgpu::ComputePass, pipes: &Pipes, win: [usize; 4], round: R
 }
 
 /// Cast the shadow of the mask in half `cur` lifted by `lift` into the blur buffer's first half, boxed `r` px.
-fn cast(pass: &mut wgpu::ComputePass, pipes: &Pipes, win: [usize; 4], cur: i32, shift: [i64; 2], lift: [i64; 2], r: u32) {
-    dispatch(pass, &pipes.cast, &Op { a: [shift[0] as i32, shift[1] as i32, lift[0] as i32, lift[1] as i32], b: [cur, 0, 0, 0], ..op(win) });
+fn cast(pass: &mut wgpu::ComputePass, pipes: &Pipes, win: [usize; 4], cur: i32, shift: [i32; 2], lift: [i32; 2], r: u32) {
+    dispatch(pass, &pipes.cast, &Op { a: [shift[0], shift[1], lift[0], lift[1]], b: [cur, 0, 0, 0], ..op(win) });
     if r > 0 {
         for k in 0..4 {
             // crayon.blur's order: down the columns, then along the rows, twice
@@ -394,7 +394,7 @@ impl CutoutKit {
                     }
                     let m = plan.margin;
                     let win = [(b[0] as usize).saturating_sub(m), (b[1] as usize).saturating_sub(m),
-                               (b[2] as usize + m + 1).min(bw), (b[3] as usize + m + 1).min(bh)];
+                               (b[2] as usize).saturating_add(m + 1).min(bw), (b[3] as usize).saturating_add(m + 1).min(bh)];
                     dispatch(&mut pass, &pipes.mask_init, &Op { a: [g as i32, 0, 0, 0], ..op(win) });
                     let mut cur = 0;
                     if let Some(r) = plan.grow {
@@ -410,7 +410,7 @@ impl CutoutKit {
                         cast(&mut pass, pipes, win, cur, [c.dx, c.dy], pc.lift, c.r);
                     }
                     dispatch(&mut pass, &pipes.piece, &Op {
-                        a: [pc.lift[0] as i32, pc.lift[1] as i32, pc.paper[0] as i32, pc.paper[1] as i32],
+                        a: [pc.lift[0], pc.lift[1], pc.paper[0] as i32, pc.paper[1] as i32],
                         b: [cur, plan.piece_cast.is_some() as i32, 0, 0],
                         f: [plan.piece_cast.map_or(0.0, |c| c.alpha), 0.0, 0.0, 0.0],
                         ..op(win)
