@@ -11,11 +11,14 @@
 //!                   accent_color: [r, g, b] linear, samples} |
 //!                  {kind: "vector", hide, subject, type, ids: {material: id}, tex: bool, light: [x, y, z], samples}],
 //!       "jobs":   [{id, role: frame | plate | bare | matte, frame, shot, set, camera, look}],
-//!       "frames": {frame: job id}}}}
+//!       "frames": {frame: job id},
+//!       "finish": {job id: record}}}}
 //!
 //! A frame of the cut in a look is drawn by its frame job; a layer item (layers.rs) seen through a look names its job
-//! (`looks` {output: job id}). Each job's passes go to SPOOL/<job>.look (written as <job>.part, then renamed), once fewer
-//! than `limit` such files wait there (the composer deletes each when it is done):
+//! (`looks` {output: job id}). A job `finish` lists is finished by mkr itself: a vector look's cut-out paper, on the GPU
+//! (cutout.rs says the record), its PNG written where the record says. Each other job's passes go to SPOOL/<job>.look
+//! (written as <job>.part, then renamed), once fewer than `limit` such files wait there (the composer deletes each when
+//! it is done):
 //!
 //!   "MKRLOOK1", u32 header length, header JSON {job, passes: {name: {offset, shape, type}}}, then the arrays at their
 //!   byte offsets from the file's start (u8 / u16 / f32, little-endian, top row first):
@@ -153,6 +156,8 @@ pub struct OutputLooks {
     pub jobs: Vec<LookJob>,
     /// The cut's frames in a look: frame -> job.
     pub frames: BTreeMap<i64, usize>,
+    /// The jobs mkr finishes itself (cutout.rs): job -> its record.
+    pub finish: BTreeMap<usize, crate::cutout::Finish>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -170,6 +175,8 @@ struct RawOutput {
     jobs: Vec<LookJob>,
     #[serde(default)]
     frames: BTreeMap<String, usize>,
+    #[serde(default)]
+    finish: BTreeMap<String, crate::cutout::Finish>,
 }
 
 impl LookRequest {
@@ -195,7 +202,15 @@ impl LookRequest {
                 if let Some((f, j)) = frames.iter().find(|(_, j)| **j >= raw.jobs.len()) {
                     bail!("looks {name}: frame {f} names job {j} of {}", raw.jobs.len());
                 }
-                outputs.insert(name.clone(), OutputLooks { sets: raw.sets, jobs: raw.jobs, frames });
+                let mut finish = BTreeMap::new();
+                for (j, rec) in raw.finish {
+                    let j = j.parse::<usize>().with_context(|| format!("looks {name}: finish {j} is not a job"))?;
+                    if j >= raw.jobs.len() {
+                        bail!("looks {name}: finish names job {j} of {}", raw.jobs.len());
+                    }
+                    finish.insert(j, rec);
+                }
+                outputs.insert(name.clone(), OutputLooks { sets: raw.sets, jobs: raw.jobs, frames, finish });
             }
         }
         Ok(LookRequest { spool, limit, outputs })
@@ -434,6 +449,33 @@ pub fn write_passes(spool: &Path, job: usize, passes: &[PassData]) -> Result<()>
     let tmp = spool.join(format!("{job}.part"));
     std::fs::write(&tmp, &buf).with_context(|| format!("cannot write {}", tmp.display()))?;
     std::fs::rename(&tmp, spool.join(format!("{job}.look"))).with_context(|| format!("cannot finish {}", tmp.display()))
+}
+
+/// The passes of a pass file `write_passes` wrote (the names it writes; others are skipped).
+pub fn read_passes(path: &Path) -> Result<Vec<PassData>> {
+    const NAMES: [&str; 10] = ["flat", "soft", "type", "knock", "screen_knock", "matte", "id", "depth", "shade", "tex"];
+    let buf = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    if buf.len() < 12 || &buf[..8] != b"MKRLOOK1" {
+        bail!("{} is not a look's pass file", path.display());
+    }
+    let n = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]) as usize;
+    let head: Value = serde_json::from_slice(buf.get(12..12 + n).context("a pass file cut short")?)?;
+    let mut out = Vec::new();
+    for (name, rec) in head.get("passes").and_then(|p| p.as_object()).context("a pass file without passes")? {
+        let Some(&name) = NAMES.iter().find(|n| **n == name) else { continue };
+        let shape: Vec<usize> = serde_json::from_value(rec["shape"].clone())?;
+        let (kind, size) = match rec["type"].as_str() {
+            Some("u8") => ("u8", 1),
+            Some("u16") => ("u16", 2),
+            Some("f32") => ("f32", 4),
+            t => bail!("pass {name}: element type {t:?}"),
+        };
+        let at = rec["offset"].as_u64().context("a pass without its offset")? as usize;
+        let len = shape.iter().product::<usize>() * size;
+        let bytes = buf.get(at..at + len).with_context(|| format!("pass {name} runs past the file's end"))?.to_vec();
+        out.push(PassData { name, shape, kind, bytes });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

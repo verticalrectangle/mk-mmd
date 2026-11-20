@@ -4,7 +4,8 @@ frames from the scene's bake (version 5: `mk build` writes it) on the GPU, as Bl
 objects hidden), figures (a collage's coverage, as Workbench antialiases it), points, keep masks and screen type. A frame
 or layer in a render-time look (a shot's or a [[medium]] window's silhouette or vector look) is drawn as passes, the
 ones styles.Looks renders in Blender (mkr/mkr/src/looks.rs), which worker processes here compose with the same
-compose_silhouette / compose_vector while mkr draws the next (`Composer`, mkmmd.render.compose.finish_look).
+compose_silhouette / compose_vector while mkr draws the next (`Composer`, mkmmd.render.compose.finish_look); a vector look
+cut out of paper mkr finishes itself on the GPU (`finishes`, mkr/mkr/src/cutout.rs).
 
     req = request(doc, demands, keep, frames, outputs)   # every layer and look, patterns resolved on the bake
     pl = plan(bake, outputs, frames, req)                 # `mkr info`: which frames and layers mkr draws, why Blender the rest
@@ -488,8 +489,9 @@ def draw(bake, output, frames, out_dir, cfg, layers=None, timeout=3600 * 12, ext
     beside them, with the preset in `cfg` (samples, percent, motion_blur, shutter) and any `extra` mkr arguments
     (`--params FILE`), or with `sampling` ({samples, params}: FINAL) mkr's own samples and tunables for the preset's
     (the tunables of an `extra` --params over them); mkr's report. `looks` ({job id: `compose_jobs` record}) are the look
-    jobs of `layers`: mkr draws their passes into a Composer's spool, whose workers finish them meanwhile (the report's
-    "looks")."""
+    jobs of `layers`: mkr finishes those it can itself on the GPU (`finishes`) and draws the passes of the others into a
+    Composer's spool, whose workers finish them meanwhile (the report's "looks": the Composer's counts, `gpu` {finished,
+    seconds} and `cpu_because` {why: jobs})."""
     if not frames and empty(layers):
         return {"rendered": 0}
     samples = sampling["samples"] if sampling is not None else cfg["samples"]
@@ -514,16 +516,38 @@ def draw(bake, output, frames, out_dir, cfg, layers=None, timeout=3600 * 12, ext
     argv += extra
     if not looks:
         return _call(argv, timeout, None if empty(layers) else layers, params=params)
-    composer = Composer(looks)
+    finish, because = finishes(looks)
+    composer = Composer({j: rec for j, rec in looks.items() if int(j) not in finish})
     try:
-        layers = dict(layers, looks=dict(layers["looks"], spool=composer.spool, limit=composer.limit))
+        outs = layers["looks"]["outputs"]
+        mine = dict(outs[output], finish={str(j): rec for j, rec in finish.items()})
+        layers = dict(layers, looks=dict(layers["looks"], spool=composer.spool, limit=composer.limit,
+                                         outputs=dict(outs, **{output: mine})))
         rep = _call(argv, timeout, layers, composer, params=params)
     finally:
         stats = composer.close()
     if composer.errors:
         raise EngineError(f"composing mkr's look passes: {composer.errors[0]}")
-    rep["looks"] = stats
+    drawn = rep.get("looks") or {}
+    if drawn.get("finished", 0) != len(finish):
+        raise EngineError(f"mkr finished {drawn.get('finished', 0)} of the {len(finish)} look jobs it was to finish")
+    rep["looks"] = dict(stats, gpu={"finished": len(finish), "seconds": drawn.get("finish_seconds", 0.0)},
+                        cpu_because=because)
     return rep
+
+
+def finishes(looks):
+    """({job id: mkr's finish record}, {why: jobs}) for `looks` ({job id: `compose_jobs` record}): the look jobs mkr
+    finishes on the GPU itself (mkmmd.render.compose.gpu_finish: the cut-out paper), and why each other one is composed
+    here. MK_MKR_LOOKS=cpu composes them all here (the reference the GPU's are checked against)."""
+    finish, because = {}, {}
+    for jid, job in looks.items():
+        rec, why = (None, "MK_MKR_LOOKS=cpu") if os.environ.get("MK_MKR_LOOKS") == "cpu" else CO.gpu_finish(job)
+        if rec is None:
+            because[why] = because.get(why, 0) + 1
+        else:
+            finish[int(jid)] = rec
+    return finish, because
 
 
 def compose_workers():

@@ -6,7 +6,9 @@ Blender's passes, and written as the frame's 8-bit PNG (whole or not at all). Ru
                bottom row first), for engine = "mk"
   finish_look  a look's passes as mkr wrote them (mkr/mkr/src/looks.rs: one file per frame or layer, top row first), for
                engine = "mkr": a silhouette's or a vector look's frame, a plate or a bare frame in its look, or a matte
-               (the frame without its figure, back/, then the figure's coverage, matte/)"""
+               (the frame without its figure, back/, then the figure's coverage, matte/)
+  gpu_finish   what mkr needs to finish a look job on the GPU itself instead (a vector look cut out of paper:
+               mkr/mkr/src/cutout.rs), or why it is composed here"""
 import json
 import os
 
@@ -107,6 +109,40 @@ def compose_look(p, job, subject=True):
         a = np.clip(p["type"][..., 3:4], 0.0, 1.0)
         img = img * (1.0 - a) + p["type"][..., :3] * a
     return img
+
+
+def gpu_finish(job):
+    """(record, None) when mkr can finish look job `job` (a compose_jobs record) on the GPU itself, as compose_look
+    would compose it (mkr/mkr/src/cutout.rs: the record), else (None, why): a vector look cut out of paper, in a frame, a
+    plate or a bare frame with no ring live on it (the type laid over it is mkr's too). The rest stays here."""
+    if job["look"] != "vector":
+        return None, "a silhouette look"
+    spec = job["spec"]
+    cut = spec.get("cutout")
+    if not cut:
+        return None, "a vector look without cutout"
+    if job["role"] == "matte":
+        return None, "a matte"
+    if job["rings"] and RG.live(job["rings"], job["ring_t"]):
+        return None, "rings live on the frame"
+    from ..core import cutout as CU
+    names = list(spec["tones"])
+    tones_of, groups_of = job["table"]
+    ids = [[0, -1]] + [[int(g), names.index(t)] for t, g in zip(tones_of[1:], groups_of[1:])]
+    tones = []
+    for name in names:                       # _vector_slots' slots and _vector_palette's colours, tone by tone
+        t = spec["tones"][name]
+        if t["kind"] == "drawn":
+            tones.append({"kind": "drawn", "cel": False, "colors": t["colors"], "at": t["at"], "grey": t["grey"]})
+        elif t["kind"] == "flat" or (t["kind"] == "cel" and t["shade"] is None):
+            tones.append({"kind": "flat", "cel": t["kind"] == "cel", "colors": [t["lit"]]})
+        else:
+            tones.append({"kind": "lit", "cel": t["kind"] == "cel", "colors": [t["lit"], t["shade"]]})
+    # _lit's test on the shade pass as look_passes reads it, for each of its bytes
+    lit = (np.arange(256).astype(np.float32) / 255.0) >= spec["shadow"] * SS.LIGHT_FULL
+    return {"files": job["files"], "step": CU.boil_step(cut, job["t"]), "background": spec["colors"]["background"],
+            "cutout": {k: cut[k] for k in ("rough", "grain", "lift", "seed", "rim", "shadow")},
+            "shade_level": int(np.argmax(lit)) if lit.any() else 256, "ids": ids, "tones": tones}, None
 
 
 def finish_look(path, job):

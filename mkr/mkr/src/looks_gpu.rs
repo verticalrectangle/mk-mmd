@@ -34,10 +34,13 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
 
 use crate::camera::{Cam, render_size};
+use crate::cutout::Passes;
+use crate::cutout_gpu::CutoutKit;
 use crate::film::{self, Sample, TAP_COUNT};
 use crate::looks::{Class, Kind, LookJob, LookSet, OutputLooks, PassData, Role, casts_shadow, wait_for_room,
                    workbench_material, write_passes};
 use crate::lut::ViewLut;
+use crate::output::{Pixels, Writer};
 use crate::pipelines::{self, COLOR_FORMAT, DEPTH_FORMAT, Immediate};
 use crate::render::{Renderer, SampleGpu, mat, sized, storage};
 use crate::scene::ShapeKind;
@@ -451,6 +454,10 @@ pub struct LookCounts {
     pub silhouette: usize,
     pub vector: usize,
     pub seconds: f64,
+    /// Jobs finished here in their cut-out paper (cutout_gpu.rs) rather than written to the spool, and the seconds
+    /// that took (the passes drawn not counted).
+    pub finished: usize,
+    pub finish_seconds: f64,
 }
 
 /// The draws (indices into the renderer's draws) of the meshes a class of a look holds that show on the frame.
@@ -468,10 +475,11 @@ impl Draws {
 
 impl Renderer<'_> {
     /// Draw the passes of look jobs `ids` of `output` (a `size` frame at `percent`) and write them into `spool`, waiting
-    /// while `limit` pass files are there (looks.rs).
+    /// while `limit` pass files are there (looks.rs); a job the looks list under `finish` is finished here instead, its
+    /// cut-out paper on the GPU (`cut`, made when first needed) and its frame queued on `writer`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_looks(&mut self, output: &str, size: [u32; 2], percent: u32, looks: &OutputLooks, ids: &[usize],
-                      spool: &Path, limit: usize) -> Result<LookCounts> {
+                      spool: &Path, limit: usize, cut: &mut Option<CutoutKit>, writer: &mut Writer) -> Result<LookCounts> {
         let t0 = std::time::Instant::now();
         let [w, h] = render_size(size, percent);
         if w == 0 || h == 0 {
@@ -492,8 +500,22 @@ impl Renderer<'_> {
             let job = looks.job(id)?;
             let set = looks.set_of(job);
             let passes = self.look_job(&mut kit, output, job, set, &wb, total, w, h)?;
-            wait_for_room(spool, limit)?;
-            write_passes(spool, id, &passes)?;
+            if let Some(fin) = looks.finish.get(&id) {
+                let t = std::time::Instant::now();
+                if cut.is_none() {
+                    *cut = Some(CutoutKit::new(&self.gpu)?);
+                }
+                let ck = cut.as_mut().context("no cut-out kit")?;
+                let (fw, fh, rgba) = ck.finish(&self.gpu, &Passes::of(&passes)?, fin)
+                    .with_context(|| format!("look job {id} (frame {}) in its cut-out paper", job.frame))?;
+                let path = fin.files.first().with_context(|| format!("look job {id}: no file to finish"))?;
+                writer.push(path.clone(), fw, fh, Pixels::Rgbx(rgba), 4)?;
+                counts.finished += 1;
+                counts.finish_seconds += t.elapsed().as_secs_f64();
+            } else {
+                wait_for_room(spool, limit)?;
+                write_passes(spool, id, &passes)?;
+            }
             match job.role {
                 Role::Frame => counts.frames += 1,
                 Role::Matte => counts.mattes += 1,
@@ -505,6 +527,7 @@ impl Renderer<'_> {
             }
         }
         counts.seconds = (t0.elapsed().as_secs_f64() * 100.0).round() / 100.0;
+        counts.finish_seconds = (counts.finish_seconds * 100.0).round() / 100.0;
         Ok(counts)
     }
 

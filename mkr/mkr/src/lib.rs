@@ -3,6 +3,8 @@
 pub mod bake;
 pub mod bend;
 pub mod camera;
+pub mod cutout;
+pub mod cutout_gpu;
 pub mod dither;
 pub mod dof;
 pub mod film;
@@ -19,6 +21,7 @@ mod looks_soft;
 pub mod lut;
 pub mod materials;
 pub mod motion_blur;
+pub mod nprng;
 pub mod output;
 pub mod params;
 pub mod pipelines;

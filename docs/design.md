@@ -3469,7 +3469,8 @@ crayon line art on a Dawn page: `sketch = {pen = "crayon", paper = "base", ink =
 with `lines = {outline = 7, inner = 4}`.
 
 `cutout = true | {rim, shadow, rough, grain, lift, fps, seed}` (a shot's or a medium window's, not with a `sketch`) cuts
-the look's fills out of construction paper (`mkmmd/core/cutout.py`, numpy only): no lines; every line group a piece of
+the look's fills out of construction paper (`mkmmd/core/cutout.py`, numpy only; mkr finishes it on the GPU: [mkr's
+looks](#mkrs-looks)): no lines; every line group a piece of
 coloured paper with a mottle and fibres of its own (`grain` 0..1, 0.6), its edge cut by a wandering pair of scissors
 (`rough` px at 1080, 1.6) again `fps` times a second (8; 0: one cut, a stop-motion boil otherwise), grown a little and set
 off its place by up to `lift` px (3), laid far to near (by depth), each casting a soft shadow on the pieces under it. The
@@ -7065,6 +7066,30 @@ outputs) 0.003 to 0.004 levels mean |error|, under 0.01 % of pixels off by more 
 outputs) silhouettes 0.01 to 0.02 levels, vector close-ups with drawn tones 0.08 to 0.11 levels (0.11 to 0.14 % over 8),
 medium windows (sketch and cel) 0.20 to 0.34 levels (0.10 to 0.30 %); Playing Possum's final 16:9 silhouettes and
 sketches 0.002 levels. A silhouette frame costs about 0.3 s of wall time with eight workers composing.
+
+A vector look cut out of paper (`cutout`) is finished in mkr itself, on the GPU, straight after its passes are drawn
+(`mkr/mkr/src/cutout.rs`, `cutout_gpu.rs`, `shaders/cutout.wgsl`): `mk render` gives each such job a record in the
+request's looks (`finish`: mkmmd.render.compose.gpu_finish, the job's file, its boil step, the lit threshold as a shade
+byte, the piece and tone of every material id, the tones' colours and steps) and mkr writes the frame's PNG itself.
+mkmmd.core.cutout stays the reference and the GPU follows it step for step: the same random fields, from numpy's own
+generator ported bit for bit (`nprng.rs`: SeedSequence and PCG64; the scissors' wander, both sheets' fibres, each
+piece's paper and lift), the lit mask opened and closed, the drawn tones' brightness steps as numpy takes them in
+float64 (a table per step of the least blue byte per red and green), the pieces far to near by the median depth of
+each, each grown by dilate_round's square and cross steps, its colours carried out by `_spread`'s own sub-steps, lifted,
+its shadow cast and boxed in its own window with the window's edges held, then the rim, the drop shadow, the papers'
+grain, the box down to the frame in numpy's order and the type laid over it. Every float step is numpy's float32 one, a
+product kept apart from the sum it goes into (the driver would fuse them into one fma, and a scissors' cut that falls
+exactly between two pixels went the other way). What it does not port is composed on the CPU as before, chosen per job,
+and the report's `looks` says how many went which way (`gpu` {finished, seconds}, `cpu_because` {why: jobs}): a
+silhouette look, a vector look without `cutout` (lines, the sketch), a matte, a frame with a ring live on it;
+`MK_MKR_LOOKS=cpu` composes them all on the CPU (to check the GPU's against). On a paper theatre of some 25 pieces (final,
+three outputs, 77 frames each: 1200 to 1260 and 16 spread over its four shots, boil steps and a cut-out [[medium]]
+window) the GPU's frames are the CPU's to within one level: 0.000006 to 0.000008 levels mean |difference|, 0.0016 to
+0.0023 % of pixels off by one (where the boxed shadows round the other way: a box sum against numpy's cumulative sums,
+3e-5 at most before rounding), none by more but two pixels of one 9:16 frame, 8 levels, where mkr's passes themselves
+came out otherwise on that run (drawn again, the frame matched; the CPU's frames show the same now and then). A final
+theatre frame's look went from 3.1 s (1:1), 4.2 s (9:16) and 4.7 s (16:9) of wall time with four workers composing to
+0.4 to 0.6 s, its passes included; the cut-out itself takes 0.07 to 0.15 s.
 
 ### Post
 

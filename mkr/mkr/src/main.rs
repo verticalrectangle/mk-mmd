@@ -3,6 +3,7 @@
 //!   mkr render --bake DIR --output NAME [--frames SPEC] --out DIR [--layers FILE.json] [--samples 64] [--percent 100]
 //!              [--motion-blur] [--shutter 0.35] [--params FILE.json] [--threads N]
 //!   mkr info --bake DIR [--output NAME]... [--frames SPEC] [--layers FILE.json]
+//!   mkr cutout --look FILE.look --finish FILE.json
 //!   mkr params
 //!
 //! `--layers` is a request for the layers mk render writes beside the frames (mkr/mkr/src/layers.rs). Each command
@@ -52,6 +53,8 @@ fn look_sum(mut a: LookCounts, b: LookCounts) -> LookCounts {
     a.silhouette += b.silhouette;
     a.vector += b.vector;
     a.seconds += b.seconds;
+    a.finished += b.finished;
+    a.finish_seconds += b.finish_seconds;
     a
 }
 
@@ -106,6 +109,16 @@ enum Cmd {
         #[arg(long)]
         layers: Option<PathBuf>,
     },
+    /// Finish a vector look's pass file (looks.rs) in its cut-out paper on the GPU, as `mkr render` finishes the look
+    /// jobs its request's looks list under `finish` (cutout.rs): the job's PNG written where the record says.
+    Cutout {
+        /// The pass file.
+        #[arg(long)]
+        look: PathBuf,
+        /// The job's finish record (JSON).
+        #[arg(long)]
+        finish: PathBuf,
+    },
     /// The tunables `--params` takes, with their defaults.
     Params,
 }
@@ -117,6 +130,7 @@ fn main() {
             render(bake, output, frames, out, samples, percent, motion_blur.then_some(shutter), params, threads, layers)
         }
         Cmd::Info { bake, output, frames, layers } => run_info(bake, output, frames, layers),
+        Cmd::Cutout { look, finish } => run_cutout(look, finish),
         Cmd::Params => serde_json::to_value(Params::default()).map_err(Into::into),
     };
     match result {
@@ -126,6 +140,23 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// `mkr cutout`: one pass file finished on the GPU (cutout_gpu.rs), its frame written where its record says.
+fn run_cutout(look: PathBuf, finish: PathBuf) -> Result<serde_json::Value> {
+    let t0 = Instant::now();
+    let text = std::fs::read(&finish).with_context(|| format!("cannot read {}", finish.display()))?;
+    let fin: mkr::cutout::Finish = serde_json::from_slice(&text).with_context(|| format!("{}", finish.display()))?;
+    let passes = mkr::looks::read_passes(&look)?;
+    let gpu = Gpu::new()?;
+    let mut kit = mkr::cutout_gpu::CutoutKit::new(&gpu)?;
+    let t1 = Instant::now();
+    let (w, h, rgba) = kit.finish(&gpu, &mkr::cutout::Passes::of(&passes)?, &fin)?;
+    let seconds = t1.elapsed().as_secs_f64();
+    let path = fin.files.first().context("the finish record names no file")?;
+    mkr::output::write_image(path, w, h, 3, &mkr::output::Pixels::Rgbx(rgba).rows(w, h)?)?;
+    Ok(json!({"files": fin.files, "finish_seconds": (seconds * 1000.0).round() / 1000.0,
+              "seconds": (t0.elapsed().as_secs_f64() * 100.0).round() / 100.0}))
 }
 
 fn run_info(bake: PathBuf, outputs: Vec<String>, frames: Option<String>, layers: Option<PathBuf>)
@@ -260,6 +291,8 @@ fn render(bake: PathBuf, output: String, frames: Option<String>, out: PathBuf, s
     let (mut draw_s, mut flat_s) = (0.0, 0.0);
     let mut stats: Option<Stats> = None;
     let mut looked: Option<LookCounts> = None;
+    // the cut-out paper finished on the GPU (cutout_gpu.rs), made at the first job that asks for it
+    let mut cut: Option<mkr::cutout_gpu::CutoutKit> = None;
     for chunk in ks.chunks(CHUNK) {
         let last = chunk[chunk.len() - 1];
         let j1 = jobs.partition_point(|j| j.k <= last);
@@ -283,7 +316,7 @@ fn render(bake: PathBuf, output: String, frames: Option<String>, out: PathBuf, s
         }
         let l1 = look_ids.partition_point(|&id| look_k(id) <= last);
         if let (true, Some((l, spool, limit))) = (l1 > l0, looks_req.as_ref()) {
-            let c = renderer.draw_looks(&output, size, percent, l, &look_ids[l0..l1], spool, *limit)?;
+            let c = renderer.draw_looks(&output, size, percent, l, &look_ids[l0..l1], spool, *limit, &mut cut, &mut writer)?;
             looked = Some(match looked.take() { Some(a) => look_sum(a, c), None => c });
             l0 = l1;
         }
