@@ -100,7 +100,9 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
 4. **Build the places.** Library sets and props ([Sets](design.md#sets), [Props](design.md#props)), placed by rules instead of coordinates
    ([Placement](design.md#placement)): `place = { on = "room:floor", align = "edge:back" }`. A placement that cannot be met fails with the
    numbers and the prop in the way. Props from MMD accessory models need no card ([PMX props](design.md#pmx-props)). Run `mk build --until props` and
-   look at the room with `mk look` (an orbit camera clips at 100 m: look through a shot camera to see a far skyline).
+   look at the room with `mk look` (an orbit camera clips at 100 m: look through a shot camera to see a far skyline). A toy paper theatre
+   round a marionette is `kind = "paper_theatre"`: give it `arrive` (its proscenium drops in, its clouds, stars and moon fall in on their
+   threads) and `step = 12` with `step_from` your `[[stepped]]` window's `from`, so the set and the cast change pose on the same frames.
 5. **Model what is missing** with the loop under [Modelling props](#modelling-props), and measure it with `form`.
 6. **Measure real people (optional, for performances).** `mk ref search "woman singing in car"`, `mk ref add ID...`, `mk ref track`, `mk ref measure`
    give blink, gaze, nod, sway and mouth numbers shaped like `[perform.<cast>]`, each with a confidence; `mk ref sheet` shows what was
@@ -204,6 +206,13 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   hand from the thumb side, the index side and along the strings before showing a close-up. The
   strings the hand plays vibrate on their own ([Strings that ring](design.md#strings-that-ring): only those strings, from the fret
   held, a strum's one after another): look at a close-up of the neck and of the picking hand frame by frame before trusting a take.
+  A pick hand that leaves the strings (lifted off after the last chord, a peace sign by her face) takes `keys` on its strum
+  grip, `{t, grip = true}` where it leaves and comes back ([Letting go](design.md#playing-a-worn-guitar)): end the strum first.
+- **Marionettes** ([Marionette](design.md#marionette)): a `library:marionette` prop and `[perform.<cast>] marionette = {prop,
+  from, ...}` hang her on threads from a wooden cross over her head: key the cross (`tilt`, `sway`, `rock` on the beats, `knees`
+  in turn, `hops`) and she follows late and loose, then `cuts` let her go a thread at a time and she takes over with a
+  `groove` of her own. Step through each arrival and each cut at full size in the shot's camera, and through a beat of
+  the dance from the front: a thread through the guitar or her face, a hand through the guitar after its cut.
 - **Gag props** (their rows in [Props](design.md#props)): `library:pillow_cloud` (key `puff` 0 -> 1: the pillow puffs into a cloud; `hug`
   anchor, `hold_L` / `hold_R` palms), `giant_carrot` (key `bite1`..`bite4` CONSTANT at the chomps, in order; `use.grip` `hold`, `use.bite`
   points; the chunks fly and fall on their own), `record_treadmill` (stand the cast at [-0.45, 0, 0.16] with `feet = "<name>:run"`, key
@@ -253,7 +262,12 @@ fingertip bone's `.tail` and the prop.
   with `out = "expand"`); `ring = "vinyl" | "plate" | "lens"` makes it a portal (a spinning record round it, a dinner plate with googly-eyed veggie
   `sprites` on its rim, TikTok chrome lens rings). `kind = "page"` turns the frame over like a picture book's page onto the next shot; put one at
   the clip's end (`at = [project] duration`) and it is the loop's wrap onto frame 0 as it finally looks, its `[[fx]]` and type on (nothing needs
-  keeping off frame 0). Preview a frame inside one with `mk look`.
+  keeping off frame 0). The physical cuts: `kind = "peel"` pulls the picture off the next one as a sticker from a corner (a hand's pinch, pull
+  and flick; `mkmmd.core.peel.corner` is where the pinched corner is, for a hand to ride), `"shatter"` breaks it like plastic (`material =
+  "paper" | "glass"`) and throws the shards at the lens, `"tear"` rips it down a jagged line and swings the halves off (`tear.grips` for two
+  hands). Their first window frame is the impact, the pinch or the rip: put `at` a `dur` after the beat. Preview a frame inside one with `mk look`.
+  A transition carries off only the cut's picture: mark the `[[fx]]` that make the picture (a sheet, the smears on it) `under = true` and
+  they are drawn before it and go with the outgoing shot, while the rest (a hand riding the corner) stays on top.
 - **Glitches** ([Glitches](design.md#glitches)): `[[glitch]] {from, to, objects}` makes a character (its meshes, `"Rin_*"`, and what it holds) break up in
   jumping slices and colour ghosts and vanish by `to`; the build keeps it hidden after that. Start it on a hit; `seed` gives another take.
 - **Frame effects** ([Frame effects](design.md#frame-effects)): `[[fx]]` bends, smears and draws over the finished pictures: `lens` (a black hole's
@@ -279,6 +293,16 @@ fingertip bone's `.tail` and the prop.
   framing (a far one leaves tiny clones; an orbit's `scale` brings her near) and put it first in the table, before a zoom or a
   shock that should move it. A `clip` turns footage round: the video itself as a die-cut sticker over the picture (a rounded
   `rect`, a `circle`, a `heart` or a `star`, moved by `keys`; `blend = "screen"` for night light trails, the clip's black gone).
+  A `cutout` lays real hands on: a clip cut out by its own matte (`hand.mp4` beside `hand.matte.mp4`), stepped at 12 poses a
+  second, `sync = [video second, clip second]` landing a slap, a snip or a tear on a beat, its `anchor` (the fingertip) at
+  `at` (a frame point or `{point = ...}`), with a white `edge`, a `shadow` and a light `grade` (design.md: Cutouts).
+  A hand has to be seen to do its thing, in every output: look at it frame by frame. It holds what it holds only if its
+  fingertip is `anchor`ed there (a hand that sways in its own clip takes a track, `anchor = [[video second, x, y], ...]`);
+  it takes a sticker a sheet peels with `at = {sticker = <the peel's t>}`, and a peel transition's corner with `{peel =
+  ...}`: a frame place keyed by eye fits one output and is off in the others. Blades go across what they cut (`turn`).
+  Its arm must leave the picture inside the clip's own frame (turn it, size it, bring it in from the side the arm comes
+  from): past the clip's border the arm is only that border's line drawn on. A `keys` row keeps what it leaves out, so an
+  arrival names its zeros (`{t, dx = 0, dy = 0}`).
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
   transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round
@@ -308,7 +332,12 @@ fingertip bone's `.tail` and the prop.
   under them give them its `edge` and `shadow`. The paper world ([Activity book and labels](design.md#activity-book-and-labels)):
   `activity` lays the frame on a workbook page (a crayon sketch of her drawn on it) and does its exercises on the hits, a dotted outline
   traced (her own silhouette with `shape = "figure"`), numbered dots joined until a sprite appears, a colour by number filled a region a
-  hit; `label` sets tiny editorial type ("1967", "SIDE A") with a dotted leader to a scene point. The toy paint app
+  hit; `label` sets tiny editorial type ("1967", "SIDE A") with a dotted leader to a scene point. A sticker sheet
+  ([Sticker sheets](design.md#sticker-sheets-paper-live-stickers-hollows-doodles)): `sheet` lays her as a live die-cut sticker
+  on drifting paper (`slap` it down with a squash on frame 0, `peel` it off at the end), with `hollows` (the outline a peeled
+  sticker leaves: her own rim frozen at a second, paper inside; with its own `peel` the blank sticker is still there, fades
+  and is taken in the span, so the hollow means something when it shows) and pen-kit `doodles` that `jump` out from under the slap, `hop`
+  on the beats and peel off; `fling` throws such stickers from a `{point}` (a guitar's body) at the lens on the hits. The toy paint app
   ([Toy paint app](design.md#toy-paint-app)): `paintapp` lays a kids' paint program's chrome over the frames (its toolbar on the left,
   at the bottom of a 9:16 frame) and a cursor that picks its tools: `stamps` pop googly-eyed sprites on the hits, `bucket` floods a
   colour region round a point (pin it with `{point}` on the set when the camera moves), `undo` takes the last one back, and an `eraser`
@@ -342,6 +371,7 @@ fingertip bone's `.tail` and the prop.
   goes on round it; mirrored, a second window shows). Convert a recorder's AV1 take with `ffmpeg` first.
 - **Type**: text on a sign, a screen or a page (`[[text]] on = "road:gantry1_panel1"`), lyric type (one text per sung word on its onset), handwriting that appears behind a pen's
   nib, and screen type laid over the picture (`negative = true` makes it a photographic negative of the picture under its glyphs). Fonts are registered assets (`mk assets add FILE --kind font`); use static fonts. Words come from the timeline and never reach a log.
+  A word or line is in place when it is sung: whatever travels (a `drop`, `slide` or `slam` word, a craft unit's slap, a pen) plays before its onset frame.
   Delete `renders/<preset>` when type changes: a stale `screen/` or `negative/` folder stays with the frames it belongs to. Words a character has to dodge are lyric type with
   `bullets = {at = "cast:rin.center", offsets = [...]}` ([Lyrics](design.md#lyrics)): each flies past where she is on the frame it lands; key her hop or duck on
   the same onsets and prove it with a `clearance` check. Persona's kinetic type is screen type with `lyrics = {style = "slam", layout = "same",
@@ -354,6 +384,10 @@ fingertip bone's `.tail` and the prop.
   Toy alphabet blocks are `lyrics = {style = "blocks"}` (or a label: `text` with `blocks = {...}`) ([Block type](design.md#block-type)): a 3D wooden
   block per letter that drops in and lands on the onset, `blocks.hits` hop (`jump`) or `slam` them on a lane, `next = "tumble"` knocks a line off
   as the next comes down and `crash` scatters a pile; as screen type over the picture or standing in the scene (`size` is a block's edge).
+  Lines that arrive whole or in two or three chunks, made by hand, are craft type ([Craft type](design.md#craft-type)): `craft = {kind}`
+  (`emboss` label tape, `masking` tape written on, a die-cut `sticker`, `cutpaper` labels, `brush` letters) with `screen` and `lyrics =
+  {line, units = [{words = [i, j], t}], leave = "peel"}`, drawn by `mk post` (no rebuild); `under = true` lays it under the `[[fx]]` so a
+  smear drags its ink. Give 9:16 two rows (`aspect.9x16 = {craft = {rows = 2}}`) and look at every line at full size in every output.
 
 ## 7. Checks
 

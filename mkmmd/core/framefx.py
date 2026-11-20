@@ -56,9 +56,10 @@ camcorder. The toy paint app `paintapp` (its chrome, a cursor, stamps, bucket fi
 mkmmd.core.paintapp's. The paper world's `activity` (a workbook page and its exercises done on the hits) and `label`
 (tiny editorial type with dotted leaders) are mkmmd.core.activity's and mkmmd.core.labels'. `lasers` (fans of festival
 laser beams sweeping on the hits from points of the frame or the scene) are mkmmd.core.lasers'. A video sticker `clip`
-(a clip cut out in a shape, a die-cut sticker laid over the picture, screened onto it for light trails) is
-mkmmd.core.videosticker's. `prints` (real photographs dealt over the picture as prints on cream cards, scattered, on a
-ring round a point or pinned over a base print) are mkmmd.core.prints'. `key` (a colour of the picture keyed out and
+(a clip cut out in a shape, a die-cut sticker laid over the picture, screened onto it for light trails) and a `cutout`
+(a clip cut out by its own matte, stepped: real hands) are mkmmd.core.videosticker's. `prints` (real photographs dealt
+over the picture as prints on cream cards, scattered, on a ring round a point or pinned over a base print) are
+mkmmd.core.prints'. `key` (a colour of the picture keyed out and
 pushed too far: a video, a colour or the frame before burning through in colour fringes and crushed steps) is
 mkmmd.core.colorkey's, and `shapes` (the picture as flat circles, squares, triangles and diamonds, a cell each,
 refining on the hits) is mkmmd.core.shapes'. The haze (`mist`: a bloom and a diffusion filter, `fog`: haze drifting
@@ -89,6 +90,7 @@ from . import picturefx as PF
 from . import prints as PR
 from . import remap as RM
 from . import shapes as SH
+from . import sheet as ST
 from . import shotstyle as SS
 from . import stack as SK
 from . import tween as TW
@@ -97,7 +99,7 @@ from . import videosticker as VS
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
          "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS + \
-    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS + IN.KINDS
+    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS + IN.KINDS + ST.KINDS
 CLIPS = ("footage",) + VS.KINDS + CK.KINDS + IN.KINDS   # the kinds that show a video `clip` (mkmmd.footage reads it)
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 SILK = "silkscreen"                                     # a collage's fill: the figure printed in flat inks, Warhol's
@@ -207,6 +209,8 @@ KEYS.update({k: _COMMON | own for k, own in PR.KEYS.items()})
 DEFAULTS.update(PR.DEFAULTS)
 KEYS.update({k: _COMMON | own for k, own in {**CK.KEYS, **SH.KEYS}.items()})
 DEFAULTS.update({**CK.DEFAULTS, **SH.DEFAULTS})
+KEYS.update({k: _COMMON | own for k, own in ST.KEYS.items()})
+DEFAULTS.update(ST.DEFAULTS)
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
 AXES = ("x", "y", "xy")                                 # a mirror's fold: about a vertical line, a horizontal one, both
 FITS = ("cover", "contain")                             # how footage meets the frame: filled and cropped, or whole
@@ -312,9 +316,15 @@ def normalize(spec, palette, what="fx"):
     if kind not in KINDS:
         raise FxError(f"{what}: kind {kind!r} is none of {', '.join(KINDS)}")
     label, what = what, f"{what} ({kind})"
-    extra = sorted(set(spec) - KEYS[kind])
+    own = {"name", "under"}       # `name`: what a [[text]] `under` lays its type before; `under`: drawn before the cut effects
+    extra = sorted(set(spec) - KEYS[kind] - own)
     if extra:
-        raise FxError(f"{what}: unknown keys {extra} (known: {sorted(KEYS[kind])})")
+        raise FxError(f"{what}: unknown keys {extra} (known: {sorted(KEYS[kind] | own)})")
+    if "name" in spec and (not isinstance(spec["name"], str) or not spec["name"].strip()):
+        raise FxError(f"{what}: name = {spec['name']!r}: a non-empty string")
+    if not isinstance(spec.get("under", False), bool):
+        raise FxError(f"{what}: under = {spec['under']!r}: true (the effect belongs to the cut's own picture: drawn "
+                      f"before the transitions, inserts and glitches) or false")
     for k in ("from", "to"):
         if k not in spec:
             raise FxError(f"{what}: `{k}` (clip seconds) is required")
@@ -449,6 +459,8 @@ def normalize(spec, palette, what="fx"):
         CK.normalize(spec, out, palette, what)
     elif kind in SH.KINDS:
         SH.normalize(spec, out, palette, what)
+    elif kind in ST.KINDS:
+        ST.normalize(spec, out, palette, what)
     out["aspect"] = _aspects(spec, palette, label, what)
     return out
 
@@ -783,7 +795,7 @@ def plan(data, fps, frame0, palette, last_frame=None):
             e.update(index=i, f0=f0, f1=f1)
             if e["kind"] == "push":
                 e["inside_frame"] = frame_of(e["inside"], fps, frame0)
-            if e["kind"] in PF.HOLDS or e["kind"] == "stack":
+            if e["kind"] in PF.HOLDS or e["kind"] in ("stack", "sheet"):
                 e["frame_rate"] = float(fps)
             if e["kind"] in ER.KINDS:
                 ER.timed(e, data, fps, frame0)
@@ -793,6 +805,8 @@ def plan(data, fps, frame0, palette, last_frame=None):
             last_inside = fx["inside_frame"] + (f1 - 1 - f0 if fx["play"] else 0)
             if last_frame is not None and last_inside > last_frame:
                 raise FxError(f"fx {i} (push): the frames inside ({fx['inside_frame']}..{last_inside}) run past the clip")
+        if fx["kind"] == "sheet" and last_frame is not None and any(g > last_frame for g in ST.frozen(fx, fps, frame0)):
+            raise FxError(f"fx {i} (sheet): a hollow's or the peel's `t` lies past the clip's end")
         for name, e in fx["aspect"].items():
             _same_reads(fx, e, name, frame0)
         out.append(fx)
@@ -820,7 +834,7 @@ def points(fx):
     """[(key, expression)]: the scene points an effect needs projected through the camera of the shot in the cut on
     the frames of its span (point/<key>/): its `center` (key x<i>), a doodle's marks at a {point} (x<i>m<j>), the
     points a label's leaders run to (x<i>l<j>), a paint app's bucket fills' {point} seeds (x<i>b<j>) and the {point}
-    origins of a lasers entry's fans (x<i>o<j>)."""
+    origins of a lasers entry's fans (x<i>o<j>), and a cutout's {point} `at` (x<i>)."""
     out = []
     c = fx.get("center")
     if isinstance(c, dict) and c["mode"] == "point":
@@ -834,15 +848,17 @@ def points(fx):
         out += PA.points(fx, point_key(fx))
     if fx["kind"] in LZ.KINDS:
         out += LZ.points(fx)
+    if fx["kind"] in VS.KINDS:
+        out += VS.points(fx)
     return out
 
 
 def uses_figure(fx):
     """Whether an effect reads the layer of its figure (figure/<key>/): a collage, or an effect with a `mask` (a pixel
     sort, a mosh, a colour field) kept inside or outside the figure, a mandala of it, its trails, an activity page
-    tracing her silhouette, a mitosis."""
+    tracing her silhouette, a mitosis, a sheet's live sticker."""
     return fx["kind"] in FIGURES or fx.get("mask") is not None or (fx["kind"] in MD.KINDS and MD.uses_figure(fx)) or \
-        (fx["kind"] in AC.KINDS and AC.uses_figure(fx)) or fx["kind"] in MT.KINDS
+        (fx["kind"] in AC.KINDS and AC.uses_figure(fx)) or fx["kind"] in MT.KINDS or ST.uses_figure(fx)
 
 
 def holds(fx):
@@ -920,6 +936,8 @@ def sources(fx, frame, frame0, hits=None):
         out = CK.sources(fx, frame)
     elif k in MT.KINDS:
         out = MT.sources(fx, frame)
+    elif k in ST.KINDS:
+        out = ST.sources(fx, frame, frame0)
     else:
         out = []
     if k in FIGURES and _found_pivot(fx) and frame != fx["f0"] and fx["f0"] not in out:

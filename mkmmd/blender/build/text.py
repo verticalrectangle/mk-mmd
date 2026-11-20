@@ -86,6 +86,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix
 
+from ...core import crafttype as CRT
 from ...core import glyphs as GL
 from ...core import screentype as SR
 from ...core import wordtype as LY
@@ -1320,6 +1321,11 @@ def run(ctx):
         specs = SR.resolve_entries(ctx.data.get("text", []))
     except T.TextError as e:
         raise BuildError(str(e)) from None
+    for s in specs:
+        if s.get("under") is not None and not CRT.is_craft(s):
+            raise BuildError(f"text {s.get('name', '?')!r}: under = true is for craft type (`craft = {{kind = ...}}`), "
+                             "which mk post draws; type built here is laid over the frame effects")
+    specs = [s for s in specs if not CRT.is_craft(s)]   # craft type is drawn by mk post (mkmmd/crafttype.py)
     if not specs:
         return {}
     coll = collection("Text")

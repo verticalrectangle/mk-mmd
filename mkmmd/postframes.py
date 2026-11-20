@@ -1,5 +1,7 @@
 """The frames of one output as `mk post` encodes them (docs/design.md: Post): the cut's frame and the layers mk render drew
-beside it, the cut effects (mkmmd.cutfx), the frame effects (mkmmd.framefx), the lens streaks, the screen type, the loop's
+beside it, the cut effects (mkmmd.cutfx; inside their windows over the frame effects marked `under`, drawn on the cut's
+own frame first), the craft type laid under the frame effects, the frame effects (mkmmd.framefx),
+the lens streaks, the screen type (with the craft type over the effects: mkmmd.crafttype), the loop's
 wrap and the grade (mkmmd.post), finished in frame order by this process or by worker processes over chunks of
 consecutive frames, and handed on in order; following a running render (mkmmd.core.progress), each frame once the
 render has its files.
@@ -29,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import crafttype as CRF
 from . import cutfx as CF
 from . import footage as FT
 from . import framefx as FF
@@ -44,6 +47,7 @@ from .core import keep as KP
 from .core import palette as PAL
 from .core import screentype as SRT
 from .core import transition as TR
+from .core.typeset import TextError
 
 CHUNK = 12                  # consecutive frames a worker finishes in one go (an effect running on frame to frame goes on)
 AHEAD = 2                   # chunks in flight per worker, so the encoder seldom waits for one to start
@@ -160,6 +164,17 @@ class Output:
                                       paths=GFX.Paths(files, src, sz, plan), breath=breath)
             except FX.FxError as e:
                 raise SetupError(str(e)) from None
+        self.under = frozenset(e["index"] for e in self.ffx.fxs if e.get("under")) if self.ffx else frozenset()
+        names = {}                                         # [[fx]] name -> its place in the chain (`under = "<name>"`)
+        for e in (plan or {}).get("fx") or []:
+            if e.get("name") is not None:
+                if e["name"] in names:
+                    raise SetupError(f"[[fx]] name {e['name']!r} is given twice")
+                names[e["name"]] = e["index"]
+        try:                                               # craft type: lyric lines made by hand, drawn here
+            self.craft = CRF.Crafts.of(proj, name, self.size, PFX.font_source(proj.root), names)
+        except (TextError, FX.FxError) as e:
+            raise SetupError(str(e)) from None
         self.wrap = TR.wrap_of(plan)                       # the loop's wrap; frame 0 as finished, under its page
         self.lead = P.read(self.files[min(self.files)], self.size)   # stands in for frames before the first one rendered
         self._held = None
@@ -229,31 +244,61 @@ class Output:
         found a layer missing)."""
         raw, layer, km, neg = self._inputs(f)
         fx, ffx = self.fx, self.ffx
-        mask = None if km is None or (fx and fx.active(f)) or (ffx and ffx.active(f)) else km[..., 0]
+        cut = bool(fx and fx.active(f))
+        mask = None if km is None or cut or (ffx and ffx.active(f)) else km[..., 0]
         img, bare, typed = raw, 0, 0
-        if fx and fx.active(f):
+        groups = self.craft.groups(f) if self.craft is not None else {}
+        over = groups.pop(None, None)                             # craft type over the effects: with the screen type
+        if over:
+            layer = CRF.as_layer(layer, over, self.size)
+        if groups:                                                # under all of them (-1) or just before one of them
+            typed = 1
+            if mask is not None:
+                for got in groups.values():
+                    mask = mask * (1.0 - CRF.as_layer(None, got, self.size)[..., 3])
+        entries = ffx.entries(f) if ffx and ffx.active(f) else []
+        early = [e for e in entries if e.get("under")] if cut else []
+        if early:                                                 # `under` effects: the cut's own picture's, so drawn
+            entries = [e for e in entries if not e.get("under")]  # on it before the cut effects compose, with the
+            mine = {s: groups.pop(s) for s in list(groups) if s == -1 or s in self.under}   # type laid under them
+            img, missed = self._chain(f, img, early, mine)
+            bare += missed
+        if cut:
             try:
-                img = fx.frame(f, raw)
+                img = fx.frame(f, img)
             except FileNotFoundError:                             # layers missing (allowed): the plain cut shows
                 bare += 1
-        if ffx and ffx.active(f):
-            try:
-                img = ffx.frame(f, img)
-            except (FT.FootageError, FX.FxError):                 # a clip that fails, a pivot with no figure: an error
-                raise
-            except FileNotFoundError:                             # a point or a frame missing (allowed): left out there
-                bare += 1
+        img, missed = self._chain(f, img, entries, groups)
+        bare += missed
         if self.streaks is not None:                              # lens streaks: from the picture's lights, not the type
             img = (self.streaks if self._streaks is None else self._streaks.at(self.breath.mix(f)))(img)
         if layer is not None and self.screen == "graded":        # screen type: over the cut and what its effects made of it
             img = SRT.composite(img, layer, neg)                  # (negative type last: it inverts the type under it too)
-            typed += 1
+            typed = 1
             if mask is not None:                                  # the type over a kept eye is graded as type
                 mask = mask * (1.0 - layer[..., 3])
                 if neg is not None:
                     mask = mask * (1.0 - neg[..., 3])
         over = layer if self.screen == "over" else None           # or over the finished picture, the grade under it
         return img, over, mask, neg if over is not None else None, typed, bare
+
+    def _chain(self, f, img, entries, groups):
+        """`img` with `entries` (frame effects on `f`, in table order) drawn on it, the craft type of `groups` ({slot:
+        patches}) laid just before the entry of its slot (where it would be in the chain when that one is not on `f`):
+        (picture, 1 when an effect found a point or a frame missing and the rest were left out, else 0)."""
+        try:
+            for e in entries:
+                for slot in sorted(s for s in groups if s <= e["index"]):
+                    img = CRF.lay(img, groups.pop(slot))
+                img = self.ffx._apply(e, f, img)
+            missed = 0
+        except (FT.FootageError, FX.FxError):                     # a clip that fails, a pivot with no figure: an error
+            raise
+        except FileNotFoundError:                                 # a point or a frame missing (allowed): left out there
+            missed = 1
+        for slot in sorted(groups):                               # its effect is not on this frame: where it would be
+            img = CRF.lay(img, groups[slot])
+        return img, missed
 
     def finish(self, k):
         """The clip's frame at index `k` finished: (rgb24 bytes, (darkest luma, screen type frames, kept, effects that
@@ -286,10 +331,15 @@ class Output:
         if self.gpu is None or (w is not None and (f == w["still"] or w["first"] <= f <= w["last"])):
             return ("cpu", *self.finish(k))
         g = f if f in self.files else max((h for h in self.frames if h < f and h in self.files), default=None)
+        groups = self.craft.groups(f) if self.craft is not None else {}
+        if any(s is not None and s >= 0 for s in groups):         # craft type between named effects: finished here
+            return ("cpu", *self.finish(k))
         fx, ffx = self.fx, self.ffx
         if ffx is not None:
             ffx.paths.scratch = self.gpu                          # where sticker tiles are written for mkr-post
         entries = ffx.entries(f) if ffx else []
+        if fx and fx.active(f) and any(e.get("under") for e in entries):   # `under` effects in a window: here
+            return ("cpu", *self.finish(k))
         img, bare, ops = None, 0, []
         if fx and fx.active(f):
             img = self._picture(g)
@@ -297,6 +347,9 @@ class Output:
                 img = fx.frame(f, img)
             except FileNotFoundError:                             # layers missing (allowed): the plain cut shows
                 bare += 1
+        under = groups.get(-1, [])
+        if under:                                                 # craft type under the frame effects: in the picture
+            img = CRF.lay(self._picture(g) if img is None else img, under)
         if entries:
             before = img
             try:
@@ -331,10 +384,15 @@ class Output:
             neg = self.src / SRT.negative_rel(g)
             if neg.exists():
                 job["negative"] = str(neg)
-        mask = None if g is None or not self.keep or (fx and fx.active(f)) or entries else self.src / KP.rel(g)
+        over = groups.get(None, [])
+        if over:                                                  # craft type over the effects: one layer with the
+            own = P.read_rgba(job["layer"], self.size) if "layer" in job else None      # screen type, for mkr-post
+            job["layer"] = str(self.gpu / f"{os.getpid()}-{k}.type.png")
+            CRF.write_layer(job["layer"], CRF.as_layer(own, over, self.size))
+        mask = None if g is None or not self.keep or (fx and fx.active(f)) or entries or under else self.src / KP.rel(g)
         if mask is not None and mask.exists():
             job["keep"] = str(mask)
-        return "gpu", job, (None, int("layer" in job), int("keep" in job), bare)
+        return "gpu", job, (None, int("layer" in job or bool(under)), int("keep" in job), bare)
 
     def _picture(self, g):
         """The picture of the rendered frame `g` (None: before the first one rendered, which stands in) without its

@@ -17,6 +17,12 @@ frames outside every window come back untouched. The layers an effect needs were
     page                the outgoing frame turned over as a picture book's page onto the incoming shot, its paper back
                         showing (mkmmd.pageturn). The loop's wrap, a page turn at the clip's end, is not one of these:
                         mk post and mk look turn the finished frames over frame 0 (mkmmd.pageturn.wrap).
+    peel                the outgoing frame pulled off the incoming one as a sticker by a hand: lifted at a corner, rolled
+                        back over a cylinder, its paper back showing, its shadow on the picture under it (mkmmd.peel).
+    shatter             the outgoing frame broken like plastic, paper or glass: cracks run out from the impact, then the
+                        shards tumble toward the lens and fall, each casting its shadow (mkmmd.shatter).
+    tear                the outgoing frame torn in two along a jagged line, the halves swung off about their far corners,
+                        their torn edges white paper fibre (mkmmd.tear).
     insert              a thought bubble over the host frame holds the other shot at reduced size (picture in picture),
                         popping in and out, or growing until its picture is the whole frame; or a split screen, the host
                         and the other shot (or a video, mkmmd.footage) side by side, sliding in, trading sides, sliding out;
@@ -37,6 +43,9 @@ from PIL import Image
 from . import iris as IRIS
 from . import matte as M
 from . import pageturn as PAGE
+from . import peel as PEEL
+from . import shatter as SHATTER
+from . import tear as TEAR
 from . import post as P
 from .core import glitch as GL
 from .core import iris as IR
@@ -174,7 +183,20 @@ class CutFx:
             return self._spin(spec, frame, main)
         if spec["kind"] == "page":
             return self._page(spec, frame, main)
+        if spec["kind"] == "peel":
+            return PEEL.frame(spec, frame, main, self._plate(spec["plate"], frame, main))
+        if spec["kind"] == "shatter":
+            return SHATTER.frame(spec, frame, main, self._plate(spec["plate"], frame, main), self._impact(spec),
+                                 self.plan["fps"])
+        if spec["kind"] == "tear":
+            return TEAR.frame(spec, frame, main, self._plate(spec["plate"], frame, main), self.plan["fps"])
         return self._matte(spec, frame, main)
+
+    def _impact(self, tr):
+        """A shatter's impact (px): its `center` in the frame, or its scene point on the window's first frame."""
+        if tr["center"]["mode"] == "frame":
+            return M.frac_to_px(tr["center"]["at"], self.size)
+        return tuple(read_point(self.dir, f"t{tr['index']}", tr["first"], self.size)[0])
 
     # ---------------------------------------------------------------- layers
     def _rgb(self, rel):

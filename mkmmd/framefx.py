@@ -2,6 +2,7 @@
 that mkmmd.core.framefx checks and times. `mk post` hands each frame of the cut to FrameFx.frame after the cut's own
 effects (mkmmd.cutfx) and before the screen type and the grade; `mk look` does the same for the frames it draws. Images are
 float RGB in display space (0..1), (h, w, 3); a figure is its coverage, (h, w) in 0..1 over the same picture."""
+import json
 import math
 from collections import OrderedDict
 from pathlib import Path
@@ -25,6 +26,7 @@ from . import picturefx as PF
 from . import prints as PRF
 from . import remap as RMF
 from . import shapes as SHF
+from . import sheet as STF
 from . import stack as SKF
 from . import videosticker as VSF
 from .core import breathe as BR
@@ -869,25 +871,42 @@ def stem_source(root, cache_dir):
 
 
 def project_hits(root, data):
-    """The [audio] hits file of a project (mk.toml `data`, at `root`) as {lane: [...]}, or None when it names none; a
-    zoom or a shock on a lane is then an error that says to write it."""
-    rel = (data.get("audio") or {}).get("hits")
-    if not rel:
-        return None
-    p = Path(rel).expanduser()
-    try:
-        return LN.load(p if p.is_absolute() else Path(root) / p)
-    except LN.LaneError as e:
-        raise FileNotFoundError(str(e)) from None
+    """The [audio] hits file of a project (mk.toml `data`, at `root`) as {lane: [...]}, or None when it names none and
+    there is no timeline; a zoom or a shock on a lane is then an error that says to write it. The timeline's beats and
+    downbeats (`[audio] timeline`, default audio/timeline.json, when it is there) come along as the lanes `beats` and
+    `downbeats` unless the file has lanes of those names (a sheet's doodles hop on them: `hop = {beats = true}`)."""
+    audio = data.get("audio") or {}
+    rel = audio.get("hits")
+    out = None
+    if rel:
+        p = Path(rel).expanduser()
+        try:
+            out = LN.load(p if p.is_absolute() else Path(root) / p)
+        except LN.LaneError as e:
+            raise FileNotFoundError(str(e)) from None
+    tl = Path(audio.get("timeline", "audio/timeline.json")).expanduser()
+    tl = tl if tl.is_absolute() else Path(root) / tl
+    if tl.is_file():
+        try:
+            doc = json.loads(tl.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+        for lane in ("beats", "downbeats"):
+            if isinstance(doc.get(lane), list):
+                out = {} if out is None else out
+                out.setdefault(lane, [float(b) for b in doc[lane]])
+    return out
 
 
 def clip_of(fx, footage_of):
     """The clip of an entry that shows one (a footage collage, a video sticker: FX.CLIPS; `footage_of(clip)`,
-    mkmmd.footage.source) with its span checked against its length: a FootageError naming the entry when the clip is
-    missing or unreadable, or its span starts past its end without `loop`."""
+    mkmmd.footage.source) with its span checked against its length (and a cutout's matte opened): a FootageError naming
+    the entry when the clip is missing or unreadable, or its span starts past its end without `loop`."""
     try:
         clip = footage_of(fx["clip"])
         clip.index(0.0, fx["in"], fx["rate"], fx["loop"])
+        if fx["kind"] == "cutout":
+            clip.matte()
     except FT.FootageError as e:
         raise FT.FootageError(f"fx {fx['index']} ({fx['kind']}): {e}") from None
     return clip
@@ -906,7 +925,7 @@ def check_footage(fxs, footage_of):
 # ================================================================================================= over a cut
 class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
               SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx, CKF.KeyFx, SHF.ShapesFx,
-              HZF.HazeFx, MTF.MitosisFx, INF.InsetFx):
+              HZF.HazeFx, MTF.MitosisFx, INF.InsetFx, STF.SheetFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
@@ -973,6 +992,7 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         self._prints_init()
         self._key_init()
         self._mitosis_init()
+        self._sheet_init()
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))

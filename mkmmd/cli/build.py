@@ -12,7 +12,7 @@ from .. import memory as MEM
 from .common import add_project_arg, emit, get_project, UsageError
 
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
-          "keys", "breathe", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
+          "keys", "breathe", "sim", "folds", "cloth", "stepped", "marionette", "clip", "save", "bake"]
 BUILDING = STAGES[:-3]                     # what --until names; clip, save and bake follow
 PEAK_FILE = "build_memory.json"            # in the project's cache: the last build's peak (one Blender's resident memory)
 MARGIN = 2e9                               # bytes to spare beyond two Blenders at that peak

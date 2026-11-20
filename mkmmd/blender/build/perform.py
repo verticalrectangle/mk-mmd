@@ -85,6 +85,10 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      volume: the cast root scaled about her feet (mkmmd.core.perform.squash)
   mouth = [[t0, t1], ...]            spans where the expressions on the vowels win over `sing` (the moves stage writes them
                                      for a yawn, a chomp, a brush)
+  marionette = {prop, from, drop, height, rock, tilt, turn, sway, raise, hops, knees, cuts, throw, ...}   she hangs on
+                                     the threads of a library:marionette prop, moved from outside, late and loose; the
+                                     cuts let her go (mkmmd.core.marionette, build/marionette.py; docs/design.md:
+                                     Marionette)
 A table that is empty does nothing (the log says so); a table named after no cast member or holding a key this stage does
 not read is refused (mkmmd.core.tables).
 Everything is composed in the armature's frame (correct for characters riding vehicles), keyed per frame (LINEAR)."""
@@ -105,6 +109,7 @@ from .. import keys as K
 from .. import scope as SCOPE
 from .. import scene as S
 from . import BuildError, targets
+from . import marionette as MAR
 from . import strings as STRINGS
 
 SPINE = ("upper_body", "upper_body2", "neck", "head")
@@ -200,6 +205,13 @@ def _strum(ctx, name, m, specs):
             ctx.log("WARNING", f"{where}: no strokes (rhythm and window select no strike time)")
             out[side] = {"strokes": 0}
             continue
+        hand = (((ctx.data.get("pose") or {}).get(name) or {}).get("hands") or {}).get(side) or {}
+        if hand.get("keys") and not SM.fingerstyle(first):   # the places the pick hand lets go to (pose stage)
+            win = SM.window(strokes, **keep)
+            for a, b in SM.clashes(SM.let_go(hand["keys"]), win):
+                raise BuildError(f"{where}: the hand strums from {win[0]:.2f} to {win[1]:.2f} s (its approach and retreat "
+                                 f"too) and is off the strings from {a:g} to {b:g} s ([pose.{name}.hands.{side}] keys): "
+                                 f"end the strum before it lets go or bring it back first")
         if first.get("windmill") and not SM.fingerstyle(first):  # the strokes a windmill goes round instead of: not played
             for s in SM.windmilled(strokes, first["windmill"], float(first.get("windmill_dur", 0.5)))[1]:
                 s.ghost, s.accent = True, False
@@ -778,7 +790,7 @@ def _soft_knees(m, smap, W, centre0, feet0, settle, offs, turns, feet, soft, wav
     return need, bend
 
 
-def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=None):
+def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=None, mario=None):
     """bounce, crouch, rise, kick, air, a step_turn's or spin's feet, a walk's feet and the rock's hips: the hips (the
     `center` bone) and the feet (the leg IK bones) move on top of the offsets the pose stage gave them (eased in over the
     settle like them). `bounce` dips the hips on the beats while the feet stay planted (the knees bend: a punk's pump);
@@ -790,12 +802,13 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
     (`_turn`), steps the feet round to the turned stance and sinks the hips while the root turns, and for a spin on the
     ground carries the hips over the foot turned on, lifts the other and raises the heel (the body with it) about the
     toes; `walk`, a walk's plan (`_walk`), steps the feet, dips the hips as each comes down and tucks the legs over its
-    hops. Returns report numbers."""
+    hops; `mario`, a marionette's body (mkmmd.core.marionette.body_plan: her weight on the threads, the hips swinging
+    under the shoulders, the knees the leg bar lifts and the toes that hang down). Returns report numbers."""
     bn, rs, kk, cr, ai = spec.get("bounce"), spec.get("rise"), spec.get("kick"), spec.get("crouch"), spec.get("air")
     rocks = [(r, win) for r, win in _rocks(spec, "rock", name) if float(r.get("hips", 0.0))]
     if walk and walk.get("air"):
         ai = (list(ai) if isinstance(ai, list) else [ai] if ai else []) + [{"from": a, "to": b} for a, b in walk["air"]]
-    if not (bn or rs or kk or cr or rocks or ai or turn or (walk and walk.get("feet")) or groove):
+    if not (bn or rs or kk or cr or rocks or ai or turn or (walk and walk.get("feet")) or groove or mario):
         return {}
     arm = m.arm
     smap = S.semantic_map(arm)
@@ -838,6 +851,8 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
     if rs:
         lift = PF.eased_keys(ts, rs)
         info["rise_mm"] = round(float(np.abs(lift).max()) * 1000, 1)
+    if mario is not None:                                        # hung on threads: lifted, swung, dropped into the knees
+        lift, side, behind, dip = lift + mario["rise"], side + mario["side"], behind + mario["behind"], dip + mario["dip"]
     kick_side, kick, reach = None, None, np.zeros(3)
     if kk:
         kick_side = kk.get("foot", "L")
@@ -863,7 +878,7 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
         if kicks:
             info["air"]["kicks"] = kicks
     feet, flat = {}, {}                                          # {side: (leg IK bone, offsets, yaw, heel)}: the feet's part
-    for s in ("L", "R") if rs or kk or ai or turn or (walk and walk.get("feet")) or groove else ():
+    for s in ("L", "R") if rs or kk or ai or turn or (walk and walk.get("feet")) or groove or mario else ():
         ik = smap.get(f"leg_ik.{s}")
         if not ik:
             continue
@@ -873,6 +888,8 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
             d += kick[:, None] * reach
         if air_off is not None:
             d += air_off[s]
+        if mario is not None:
+            d += mario["feet"][s]
         yaw_rel = np.zeros(n)
         if turn and s in turn["feet"]:
             P, y = turn["feet"][s] - turn["shift"], turn["yaw"]       # about the moving point turned about
@@ -936,6 +953,8 @@ def _body(ctx, name, m, spec, ts, frames, settle, turn=None, walk=None, groove=N
         K.key_bone_locs(arm, ik, frames, [tuple(f0 * float(st) + W @ Vector(d[i])) for i, st in enumerate(settle)],
                         interp="LINEAR")
         pitch = air_pitch[s] if air_pitch is not None else np.zeros(n)
+        if mario is not None:
+            pitch = pitch + mario["point"][s]
         lat = Vector((1.0, 0.0, 0.0))
         across = turn["toe_axis"].get(s, lat) if turn else lat      # a spin's heel lifts about the foot's own across
         if (turn and s in turn["feet"]) or pitch.any() or heel.any():   # the foot's yaw and its toes, on top of the pose's
@@ -1156,6 +1175,7 @@ def run(ctx):
                              f"{', '.join(moving)} (the face's keys stay: {', '.join(sorted(FACE - {'body'}))})")
         plan, turn_info = _turn(ctx, name, m, spec, ts, frames)  # the root turns before the gaze is sampled
         wplan, walk_info = _walk(ctx, name, m, spec, ts, frames, plan)    # and walks, hops and tumbles
+        mp = MAR.prepare(ctx, name, m, ts, frames) if body else None      # on threads: the cross keyed before the gaze
         lat, back, up = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))     # armature axes (faces -Y)
         fwd = -back
         # ---- targets: idle look + gaze events (eye height, 3 m ahead by default)
@@ -1244,6 +1264,11 @@ def run(ctx):
                 head_pitch_x = head_pitch_x + swing
             else:
                 head_yaw_x = head_yaw_x + swing
+        if mp is not None:                                       # a marionette: moved from outside, late and loose
+            mb = mp["body"]
+            lean_x, tilt_x, turn_x = lean_x + mb["lean"], tilt_x + mb["tilt"], turn_x + mb["turn"]
+            head_tilt_x, head_pitch_x = head_tilt_x + mb["head_tilt"], head_pitch_x + mb["head_nod"]
+            head_yaw_x = head_yaw_x + mb["head_turn"]
         k_head = float(spec.get("head_share", 0.7))
         k_neck = float(spec.get("neck_share", 0.35))
         head_limits = spec.get("head_limits")
@@ -1291,7 +1316,7 @@ def run(ctx):
                 K.key_bone_quats(arm, b, frames, loc, interp="LINEAR")
         info = {"gaze_events": len(events), "glances": len(glances), "frames": len(frames), **turn_info, **walk_info}
         if body:
-            info.update(_body(ctx, name, m, spec, ts, frames, settle, plan, wplan, gv))
+            info.update(_body(ctx, name, m, spec, ts, frames, settle, plan, wplan, gv, mp["body"] if mp else None))
         info["body"] = body
         # ---- face: blinks + lids
         bl = spec.get("blink", {})
@@ -1364,6 +1389,8 @@ def run(ctx):
             info["drum"] = _drum(ctx, name, m, spec["drum"], ts, frames)
         if spec.get("squash"):
             info["squash"] = _squash(ctx, name, m, spec["squash"], ts, frames)
+        if mp is not None:                                       # after the strum: the guitar, a cut hand, the hand bar
+            info["marionette"] = dict(mp["body"]["report"], **MAR.hands(ctx, name, m, mp, ts, frames))
         out[name] = info
         ctx.log("perform", name, json.dumps(info, ensure_ascii=False))
     return out

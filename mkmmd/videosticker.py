@@ -1,9 +1,9 @@
 """Video stickers on the finished pictures (docs/design.md: Frame effects, Video stickers): the picture work of the `clip`
-kind that mkmmd.core.videosticker checks and lays out. The clip's frame is fitted (cover) into the sticker's box at the
-size the box shows at, carried into the frame with the box's outline and cut out by it (antialiased), and laid on the
-picture under its die-cut edge and drop shadow (mkmmd.framefx `_grow` and `_cast`, as a collage's figure wears them),
-all of it worked on the sticker's part of the frame alone. Images are float RGB in display space (0..1), (h, w, 3); pixel
-(i, j) is centred on (i, j), as OpenCV's."""
+and `cutout` kinds that mkmmd.core.videosticker checks and lays out. The clip's frame is fitted (cover) into the sticker's
+box at the size the box shows at, carried into the frame with the box's outline (a cutout's: its matte's frame) and cut
+out by it (antialiased), and laid on the picture under its die-cut edge and drop shadow (mkmmd.framefx `_grow` and
+`_cast`, as a collage's figure wears them), all of it worked on the sticker's part of the frame alone. Images are float
+RGB in display space (0..1), (h, w, 3); pixel (i, j) is centred on (i, j), as OpenCV's."""
 import math
 
 import cv2
@@ -16,6 +16,8 @@ from .core import videosticker as VS
 REACH = 4.0                      # a shadow's blur reaches this many of its sigmas
 MARGIN = 3.0                     # px round the sticker, its edge and its shadow that its part of the frame takes in
 SUPER = 4                        # an outline is filled at this many times the frame's resolution, then averaged down
+MATTE_FLOOR = 4.0 / 255.0        # a cutout's matte under this is nothing (the codec's noise in its black)
+SOFT = 4.0                       # px of its clip over which a cutout's matte may fade toward the frame's border (`heal`)
 
 
 def _ff():
@@ -152,6 +154,58 @@ def lay(img, tile, M, box, shape, radius=0.0, blend="over", edge=None, shadow=No
     return out
 
 
+def grade(rgb, g):
+    """A cutout's picture `rgb` graded by `g` ({gain, lift, warm, saturation, toward}: mkmmd.core.videosticker._grade):
+    times `gain`, its saturation scaled about its luma, warmed by the gains of VS.WARM (`warm` times their way from 1),
+    then lifted `lift` of the way toward the colour `toward` (a paper). Near-white paper it holds (luma from VS.PAPER[0]
+    up, chroma under VS.PAPER[1]: a card, a sticker's back) stays as shot, so a grade that warms skin never yellows it."""
+    w = np.array([0.2126, 0.7152, 0.0722], np.float32)
+    out = rgb * np.float32(g["gain"])
+    luma = out @ w
+    out = luma[..., None] + (out - luma[..., None]) * np.float32(g["saturation"])
+    out = out * (1.0 + (np.asarray(VS.WARM, np.float32) - 1.0) * np.float32(g["warm"]))
+    out = out + (np.asarray(g["toward"], np.float32) - out) * np.float32(g["lift"])
+    chroma = rgb.max(-1) - rgb.min(-1)
+    keep = np.clip((rgb @ w - VS.PAPER[0]) / 0.08, 0.0, 1.0) * np.clip((VS.PAPER[1] - chroma) / 0.05, 0.0, 1.0)
+    out = out + (rgb - out) * keep[..., None]
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def heal(tile, alpha, b):
+    """A cutout's `tile` and matte `alpha` (copies) with each border the matte meets made whole: where the matte
+    reaches a border and the line `b` px in from it is solid, that line is laid over the `b` lines outside it. A matte
+    softened by its maker fades over its own last lines (the blur saw black beyond the frame); repeated outward
+    (`extend`) they drew an empty box in a rim where the arm should go on."""
+    h, w = alpha.shape
+    if b < 1 or h <= 2 * b or w <= 2 * b:
+        return tile, alpha
+    tile, alpha = tile.copy(), alpha.copy()
+    if alpha[0].max() > MATTE_FLOOR and alpha[b].max() > 0.5:
+        tile[:b], alpha[:b] = tile[b], alpha[b]
+    if alpha[-1].max() > MATTE_FLOOR and alpha[h - 1 - b].max() > 0.5:
+        tile[h - b:], alpha[h - b:] = tile[h - 1 - b], alpha[h - 1 - b]
+    if alpha[:, 0].max() > MATTE_FLOOR and alpha[:, b].max() > 0.5:
+        tile[:, :b], alpha[:, :b] = tile[:, b:b + 1], alpha[:, b:b + 1]
+    if alpha[:, -1].max() > MATTE_FLOOR and alpha[:, w - 1 - b].max() > 0.5:
+        tile[:, w - b:], alpha[:, w - b:] = tile[:, w - 1 - b:w - b], alpha[:, w - 1 - b:w - b]
+    return tile, alpha
+
+
+def reach(M, box, tile, size):
+    """(left, top, right, bottom): tile px to add on each side of a cutout's tile of `tile` (w, h) px, spread over its
+    box (`box` (w, h) px, about its middle) and carried by `M`, so that it reaches past every edge of a picture of
+    `size` (w, h) in that direction."""
+    A = np.vstack([np.asarray(M, np.float64), [0.0, 0.0, 1.0]])
+    W, H = size
+    corners = np.array([[-1.0, -1.0, 1.0], [W, -1.0, 1.0], [W, H, 1.0], [-1.0, H, 1.0]])
+    b = (np.linalg.inv(A) @ corners.T)[:2].T                       # the picture's corners in the box's own px
+    t = (b + np.asarray(box, np.float64) / 2.0) * (np.asarray(tile, np.float64) / np.asarray(box, np.float64)) - 0.5
+    lo, hi = t.min(0), t.max(0)
+    cap = 4 * max(tile)
+    return tuple(int(min(max(math.ceil(v), 0), cap)) + 2 for v in (-lo[0], -lo[1], hi[0] - tile[0] + 1,
+                                                                     hi[1] - tile[1] + 1))
+
+
 # ================================================================================================= over a cut
 class StickerFx:
     """The video stickers' part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, fps, _t, _edge, _shadow and
@@ -192,3 +246,67 @@ class StickerFx:
                                 fx["in"], fx["rate"], fx["loop"], "cover", fx["focus"], fx["mirror"], crop=fx["crop"])
         return lay(img, tile, M, box, fx["shape"], fx["radius"], fx["blend"], self._edge(fx), self._shadow(fx), scale, s,
                    self._letters(fx) if fx["shape"] == "text" else None)
+
+    def _cutout(self, fx, frame, img):
+        """A cutout on this frame: its clip's picture and matte at the video second of its held pose (VS.clock), its
+        frame (or `crop`) as large as it shows, at most the clip's own size; its anchor at `at` (a frame point, or a scene
+        point projected on this frame); cut out by the matte and laid on the picture in its edge and shadow (lay)."""
+        s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0))
+        if s <= 0.0:
+            return img
+        if self._footage_of is None:
+            raise FileNotFoundError(f"fx {fx['index']} (cutout): no footage to read")
+        clip = _ff().clip_of(fx, self._footage_of)
+        held, video = VS.clock(fx, self._t(frame), self.fps)
+        c = fx["crop"] or (0.0, 0.0, 1.0, 1.0)
+        cw, ch = (c[2] - c[0]) * clip.size[0], (c[3] - c[1]) * clip.size[1]
+        at = self._cutout_at(fx, frame)
+        M, box, scale = VS.place_cutout(fx, held, self.size, cw / ch, at, video)
+        k = min(scale * box[1], ch) / box[1]                 # px of the tile per px of the box: no larger than the clip
+        size = (max(int(round(box[0] * k)), 1), max(int(round(box[1] * k)), 1))
+        args = (video, size, 0.0, 1.0, fx["loop"], "cover", (0.5, 0.5), fx["mirror"])
+        alpha = clip.matte().picture(*args, crop=fx["crop"])[..., 0]
+        if not (alpha > MATTE_FLOOR).any():                  # the hand is out of its frame
+            return img
+        tile = clip.picture(*args, crop=fx["crop"])
+        pads = (0, 0, 0, 0)
+        if fx["extend"]:                                     # the arm goes on past the clip's border, to the picture's edge
+            tile, alpha = heal(tile, alpha, max(int(math.ceil(SOFT * size[1] / ch)), 1))
+            touch = (alpha[:, 0].max(), alpha[0].max(), alpha[:, -1].max(), alpha[-1].max())
+            pads = tuple(p if t > 0.5 else 0 for p, t in zip(reach(M, box, size, self.size), touch))
+            if any(pads):
+                pl, pt, pr, pb = pads
+                tile = cv2.copyMakeBorder(tile, pt, pb, pl, pr, cv2.BORDER_REPLICATE)
+                alpha = cv2.copyMakeBorder(alpha, pt, pb, pl, pr, cv2.BORDER_REPLICATE)
+        ys, xs = np.nonzero(alpha > MATTE_FLOOR)
+        y0, y1 = max(int(ys.min()) - 1, 0), min(int(ys.max()) + 2, alpha.shape[0])
+        x0, x1 = max(int(xs.min()) - 1, 0), min(int(xs.max()) + 2, alpha.shape[1])
+        tile = tile[y0:y1, x0:x1]
+        alpha = np.where(alpha[y0:y1, x0:x1] > MATTE_FLOOR, alpha[y0:y1, x0:x1], np.float32(0.0))
+        if fx["grade"] is not None:
+            tile = grade(tile, fx["grade"])
+        u = box[0] / size[0], box[1] / size[1]               # the box's px per tile px: the part that shows, in the box
+        x0, x1, y0, y1 = x0 - pads[0], x1 - pads[0], y0 - pads[1], y1 - pads[1]   # in the unpadded tile's px
+        part = ((x1 - x0) * u[0], (y1 - y0) * u[1])
+        mid = ((x0 + x1 - size[0]) / 2.0 * u[0], (y0 + y1 - size[1]) / 2.0 * u[1])
+        M = FX.compose(M, [[1.0, 0.0, mid[0]], [0.0, 1.0, mid[1]]])
+        return lay(img, tile, M, part, "rect", 0.0, "over", self._edge(fx), self._shadow(fx), scale, s, alpha)
+
+    def _cutout_at(self, fx, frame):
+        """The frame pixel a cutout's anchor stands on at `frame`: its `at`, a frame point, a scene point projected
+        there, a peel's lifted corner (mkmmd.core.peel.corner), one of a tear's grips (mkmmd.core.tear.grips) or the
+        grip of a sticker peeled off a sheet (mkmmd.sheet.SheetFx.sticker_grip)."""
+        a, (W, H) = fx["at"], self.size
+        if a["mode"] == "frame":
+            p = a["at"]
+        elif a["mode"] == "point":
+            return self._point_of(FX.point_key(fx), frame)[0]
+        elif a["mode"] == "peel":
+            from .core import peel as PL
+            p = PL.corner(a["tr"], frame, self.size)["p"]
+        elif a["mode"] == "sticker":
+            p = self.sticker_grip(a["tr"], frame)
+        else:
+            from .core import tear as TE
+            p = TE.grips(a["tr"], frame, self.fps, self.size)["ab"[a["grip"]]]
+        return (p[0] * W - 0.5, p[1] * H - 0.5)

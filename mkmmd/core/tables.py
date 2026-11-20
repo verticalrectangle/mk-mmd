@@ -8,6 +8,7 @@ tuple (the keys of a table, or of every table in a list of tables, e.g. `[[pose.
 `gaze`; values of other kinds pass) or a dict (the same, one schema per key). The stages read the keys; this is the list of
 the ones they read, so a key added to a stage is added here too."""
 from . import fretting
+from . import marionette
 from . import perform as PF
 from . import strum
 
@@ -16,7 +17,7 @@ SIDES = ("L", "R")
 HAND = {k: None for k in ("at", "dir", "palm", "pole", "rest", "along", "offset", "lift", "ride", "fingers", "grip", "clock",
                           "approach", "wrap", "edge", "face", "seeds", "skin_radius", "posture", "track", "channel", "fret",
                           "chord", "press", "move", "thumb", "tip", "clear", "hold", "ik")}
-HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers", "pole", "sight", "carry")
+HAND["keys"] = ("t", "at", "dir", "palm", "fret", "chord", "move", "fingers", "pole", "sight", "carry", "grip", "off")
 HAND["wobble"] = ("deg", "tau", "seed")
 HAND["notes"] = fretting.NOTES_KEYS
 
@@ -49,6 +50,7 @@ PERFORM = {
                                   "kick", "windmill", "windmill_dur", "ring", "technique") + tuple(strum.DEFAULTS)
                                  + tuple(strum.FINGERS))),
     "drum": ("hand", "fingers", "deg", "lift", "roll", "timeline", "beats", "downbeat_accent", "from", "to"),
+    "marionette": marionette.KEYS,
 }
 
 SIM = {k: None for k in ("families", "params", "colliders", "props", "fingers", "floor", "wind", "use_masks", "anchor_free",

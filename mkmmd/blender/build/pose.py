@@ -1043,6 +1043,60 @@ def _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1):
     return mats
 
 
+def _let_go_goals(ctx, m, smap, name, side, h, f1, goal, prop):
+    """[(frame, IK goal matrix)] of a pick hand's keys beside its strum grip (mkmmd.core.strum.let_go): a grip key puts it
+    back on the strings (`goal`, the grip's); a place key takes it `off` that many metres from there in the frame of
+    `prop` (the guitar: x across the strings, -y off its face, z up the neck), turned as on the strings, or its wrist to
+    `at` (a target), pointing along `dir` with the palm to `palm` (the hand turned as on the strings when it gives
+    neither)."""
+    arm, out = m.arm, []
+    keys = h["keys"]
+    pts = iter(_key_points(ctx, m, [k for k in keys if k.get("at") is not None], "at", f1))
+    length = arm.data.bones[smap[f"wrist.{side}"]].length
+    turn = prop.root.matrix_world.to_3x3().normalized()
+    for k in keys:
+        fr = ctx.frame(float(k["t"]))
+        if k.get("grip"):
+            out.append((fr, goal.copy()))
+        elif k.get("off") is not None:
+            M = goal.copy()
+            M.translation = goal.translation + turn @ Vector(k["off"])
+            out.append((fr, M))
+        elif k.get("dir") is None and k.get("palm") is None:
+            M = goal.to_3x3().to_4x4()
+            M.translation = next(pts)
+            out.append((fr, M @ Matrix.Translation((0.0, length, 0.0))))
+        else:
+            d = k.get("dir") or tuple(goal.to_3x3() @ Vector((0.0, 1.0, 0.0)))
+            out.append((fr, _hand_matrix(arm, smap, side, next(pts), d, k.get("palm"))))
+    return out
+
+
+def _let_go_fingers(ctx, arm, smap, side, h, f1, seq):
+    """A pick hand's finger keys `seq` [(frame, {bone: quaternion})] (the grip's) with its let-go keys' shapes: a key's
+    `fingers` reached at its time, the grip's back on the strings, a key without either holding the shape before it.
+    Every shape names every bone (the grip's or the shape's; a bone one leaves out keeps its last turn)."""
+    shapes = [(f, {b: tuple(q) for b, q in bn.items()}) for f, bn in seq]
+    grip = shapes[-1][1]
+    for k in h["keys"]:
+        fr = max(ctx.frame(float(k["t"])), f1)
+        if k.get("grip"):
+            shapes.append((fr, dict(grip)))
+        elif k.get("fingers"):
+            shapes.append((fr, {b: tuple(q) for b, q in _finger_quats(arm, smap, side, k["fingers"]).items()}))
+    bones = sorted({b for _, s in shapes for b in s})
+    out, last = [], {b: (1.0, 0.0, 0.0, 0.0) for b in bones}
+    for f, s in sorted(shapes, key=lambda fs: fs[0]):
+        full = {}
+        for b in bones:
+            q = s.get(b, last[b])
+            if sum(a * c for a, c in zip(q, last[b])) < 0.0:      # the short way round from the shape before
+                q = tuple(-v for v in q)
+            full[b] = last[b] = q
+        out.append((f, full))
+    return out
+
+
 def _hand_track(ctx, where, h):
     """(frames, positions) of a hand's `track`: a bare name is the project's tracks/<name>.json, anything ending in
     .json a file path; `channel` (default "target") names the positions."""
@@ -1837,11 +1891,17 @@ def run(ctx):
                                  f"(grip = \"<prop>:neck\")")
             if h.get("grip"):
                 neck = gu is not None and gu.get("type") == "neck"
-                if h.get("keys") and not neck:
-                    raise BuildError(f"pose.{name}.hands.{side}: grip and keys cannot be combined (only a neck grip takes "
-                                     f"keys: {{t, fret, chord}})")
                 pluck = (gu is not None and gu.get("type") == "strum"
                          and any(SM.fingerstyle(s) for s in strum_specs(ctx, name, side, gu, f"pose.{name}.hands.{side}")))
+                pick = gu is not None and gu.get("type") == "strum" and not pluck
+                if h.get("keys") and not (neck or pick):
+                    raise BuildError(f"pose.{name}.hands.{side}: grip and keys cannot be combined (only a neck grip takes "
+                                     f"keys: {{t, fret, chord}}, and a pick hand's strum grip places it lets go to)")
+                if h.get("keys") and pick:
+                    try:
+                        SM.let_go(h["keys"])
+                    except SM.StrumError as e:
+                        raise BuildError(f"pose.{name}.hands.{side}: {e}") from None
                 grip = (_neck_grips if neck else _pluck_grips if pluck else _grip)(ctx, m, smap, name, side, h, back,
                                                                                   out_dir, pole_w)
                 if neck:                                   # the strings it holds down, for the strings that ring
@@ -1864,6 +1924,9 @@ def run(ctx):
                         grip["digest"]["pole_turn_deg"] = turned
                 info.setdefault("grip", {})[side] = grip["digest"]
                 ctx.log("grip", name, side, grip["digest"])
+                if pick and h.get("keys"):                 # where the pick hand lets go of the strings, and back
+                    mats += _let_go_goals(ctx, m, smap, name, side, h, f1, grip["goal"], gp)
+                    probe[name, side] = np.union1d(probe[name, side], [math.ceil(ctx.frame(float(k["t"]))) for k in h["keys"]])
             else:
                 mats = _hand_targets(ctx, name, side, h, arm, smap, back, out_dir, f1)
             mats.sort(key=lambda fm: fm[0])
@@ -1889,7 +1952,9 @@ def run(ctx):
             fp = h.get("fingers")
             if grip:
                 seq = FR.change_keys(grip["bones"], grip.get("changes", []), f1, 1)
-                for b in grip["bones"]:
+                if pick and h.get("keys"):                 # the fingers let go too: the keys' shapes, the grip's on the strings
+                    seq = _let_go_fingers(ctx, arm, smap, side, h, f1, seq)
+                for b in seq[0][1]:
                     K.key_bone_quats(arm, b, [f0] + [f for f, _ in seq], [(1, 0, 0, 0)] + [bn[b] for _, bn in seq],
                                      interp="BEZIER")
             elif fp or any(k.get("fingers") for k in h.get("keys", [])):

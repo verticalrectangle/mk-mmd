@@ -18,6 +18,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   sim      secondary motion (hair, ears, tails, skirts) solved outside Blender, baked to keys
   folds    fold shapes a joint angle drives (rig.json folds), keyed from the final pose on every frame
   cloth    garments' cloth copies (rig.json cloth) simulated with Blender's cloth, their faces following it
+  marionette  a marionette's threads from the cross's anchors to her bones on every frame (after stepped)
   save     the .blend
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python, cached by a hash of their inputs."""
 import hashlib
@@ -34,7 +35,7 @@ from ..runtime import CTX, op
 
 TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
 STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
-          "keys", "breathe", "sim", "folds", "cloth", "stepped", "clip", "save", "bake"]
+          "keys", "breathe", "sim", "folds", "cloth", "stepped", "marionette", "clip", "save", "bake"]
 
 
 class BuildError(RuntimeError):

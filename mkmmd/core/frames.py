@@ -30,6 +30,9 @@ def parse(spec, fps=None, frame0=None, duration=None):
         while t0 + k * step <= t1 + 1e-9:
             out.append(_num(frame0 + (t0 + k * step) * fps))
             k += 1
+        if duration is not None:                 # a range up to the clip's end ends on its last frame
+            end = int(frame0) + int(round(duration * fps))
+            out = [f for f in out if f < end] or out
         return out
     out = []
     for part in spec.split(","):

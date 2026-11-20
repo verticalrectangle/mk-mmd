@@ -65,6 +65,7 @@ DRIP_LEAD = 0.03                                    # s: a tick this close befor
 DRIP_SPREAD = 0.10                                  # s: the letters of a word leave within this window
 DRIP_TAU = 0.17                                     # s: time constant of the stretch
 DRIP_FALL = 150.0                                   # the gravity constants are in px/s^2 at a 150 px em (the size they were measured at)
+DROP_FALL = 0.115                                    # s: a `drop` word's fall, before it lands on its onset
 
 
 class LyricsError(ValueError):
@@ -281,7 +282,7 @@ def pop_scale(tau, a=0.30, td=0.075, tp=0.22):
 
 def drop_state(tau):
     """A word dropping into its cell: (offset in cell heights, up is positive, y squash, x stretch)."""
-    t1 = 0.115
+    t1 = DROP_FALL
     if tau < t1:
         x = tau / t1
         return 0.50 * (1.0 - x * x), 1.0 + 0.05 * x, 1.0 - 0.02 * x
@@ -1260,7 +1261,7 @@ def _expand(entry, name, lyr, tl, fps, frame0, panel, measure, only=None, words=
         wow_k = (wow_p, 2.0 * math.pi * h01(w.line, w.index, 41)) if wow_p and TF.wow_held(w.start, w.voiced_end, wow_p) else None
         rew_k = (rew_t0[k], rew) if rew_t0[k] is not None else None
         kin = sub["kinetic"] = _kinetic(w, k, n, lands, hide[k], k_style, pw, fps, spread_k, wt_k, rcw, vs, tilt, drip,
-                                        drip_t0[k], rec, group, t_last, wow_k, rew_k, gone[k])
+                                        drip_t0[k], rec, group, t_last, wow_k, rew_k, gone[k], first)
         if ring is not None:                    # carried round the turning ring, the letters following its curve
             kin["orbit"] = {"center": [off0[0] + ring["center"][0], off0[1] + ring["center"][1]],
                             "keys": compress(TR.orbit_keys(ring["turn"], ring_t0[ring["ring"]], *kin["show"]))}
@@ -1390,8 +1391,24 @@ def _drip_ranks(order, places, n):
     return [0] * n
 
 
-def _arrive_keys(style, land, hide, p, fps):
-    """Per-frame arrival channels of one word, from its landing to the end of the style's span."""
+def travel(style, p):
+    """Seconds a style's word travels before it is at its place (`drop`'s fall, `slide`'s run in, `slam`'s descent):
+    that travel plays before the landing frame, so the word is in place when it is sung; 0 for the others."""
+    return DROP_FALL if style == "drop" else float(p["dur"]) if style in ("slide", "slam") else 0.0
+
+
+def arrive_start(style, land, p, fps, first=None):
+    """The clip frame a word's arrival begins: its travel before the landing frame `land`, never before `first` (the
+    entry's `from`) or the clip's first frame, where it is cut short (the word drawn where its motion has got to)."""
+    pre = travel(style, p)
+    if pre <= 0:
+        return land
+    return min(land, max(land - int(math.ceil(pre * fps - 1e-9)), 0 if first is None else int(first), 0))
+
+
+def _arrive_keys(style, land, hide, p, fps, first=None):
+    """Per-frame arrival channels of one word, from the start of its travel (arrive_start) to the end of the style's
+    span: at the landing frame it is at its place (the arrival's clock reads its `travel` there)."""
     span = STYLE_SPAN.get(style, 0.0)
     if style == "rise":
         span = p["span"] + 0.25
@@ -1400,9 +1417,10 @@ def _arrive_keys(style, land, hide, p, fps):
     if p.get("alpha0", 1.0) < 1.0:
         span = max(span, p["alpha_frames"] / fps)
     last = min(land + int(math.ceil(span * fps)) + 1, hide - 1)
+    pre = travel(style, p)
     rows = {k: [] for k in ("scale", "dx", "dy", "dxp", "dyp", "sx", "sy", "rot", "alpha")}
-    for c in range(land, max(last, land) + 1):
-        ch = arrival(style, (c - land) / fps, p)
+    for c in range(arrive_start(style, land, p, fps, first), max(last, land) + 1):
+        ch = arrival(style, (c - land) / fps + pre, p)
         for k in rows:
             rows[k].append((c / fps, ch[k]))
     return rows
@@ -1430,7 +1448,8 @@ def _tape(arr, w, land, last, fps, wow, rew):
         c1 = max(c1, min(last, int(math.ceil((w.voiced_end + wow[0]["tail"]) * fps))))
     if rew is not None:
         c1 = max(c1, last)
-    cur = {ch: _held(arr[ch], land, c1, fps, REST[ch]) for ch in ("dx", "dy", "dxp", "sx", "rot", "alpha")}
+    c0 = min((int(round(k[0][0] * fps)) for k in arr.values() if k), default=land)   # the travel before the landing
+    cur = {ch: _held(arr[ch], min(c0, land), c1, fps, REST[ch]) for ch in ("dx", "dy", "dxp", "sx", "rot", "alpha")}
     for c in range(land, c1 + 1):
         t = c / fps
         if wow is not None:
@@ -1449,13 +1468,13 @@ def _tape(arr, w, land, last, fps, wow, rew):
 
 
 def _kinetic(w, k, n, lands, hide, style, p, fps, spread_k, wt, rc, vs, tilt, drip, drip_t0, rec, slot_of, t_last,
-             wow=None, rew=None, gone=None):
+             wow=None, rew=None, gone=None, first=None):
     """The `kinetic` table of one word (the keys are listed in mkmmd/core/typefx.py); `gone` is the frame its `hold` is
-    over (None: it has none)."""
+    over (None: it has none), `first` the entry's `from` frame (a travel before the landing never starts before it)."""
     land = lands[k]
     last = hide - 1
-    kin = {"show": [land / fps, hide / fps]}
-    arr = _arrive_keys(style, land, hide, p, fps)
+    kin = {"show": [arrive_start(style, land, p, fps, first) / fps, hide / fps]}
+    arr = _arrive_keys(style, land, hide, p, fps, first)
     if p.get("jitter"):
         arr["dx"] = [(t, v * (2.0 * h01(w.line, w.index, 21) - 1.0)) for t, v in arr["dx"]]
     if p.get("wobble") and k % 2 == 0:

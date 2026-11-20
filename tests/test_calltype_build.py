@@ -118,6 +118,7 @@ layout = {{ kind = "slots", slots = [{{ at = [-0.25, 0.2] }}, {{ at = [0.25, -0.
 OUTPUTS = ("16x9", "9x16")
 LAND = {1: (61, 76), 2: (91, 106), 3: (106, 121)}   # Blender frames: kicks at 1.0, 2.0 and 2.5 s (not the -9 dB one at
 #                                                   1.5); c1 gives slot 0 up at its hold's end, c3 takes it later
+SHOWN = {k: (a - 2, b) for k, (a, b) in LAND.items()}   # a slam's descent (0.05 s: two frames here) plays before its landing
 
 
 def write_project(root, body=PROJECT):
@@ -212,10 +213,10 @@ def test_a_calls_entry_slams_its_calls_onto_the_loud_hits_of_a_lane_in_each_outp
                                              "skipped": [], "first_frame": 61, "last_frame": 106, "cut_frame": 211}}
         calls = [text[f"cl_c{k}@{o}"] for k in LAND]
         assert [c["widest"] for c in calls] == ["ハイ！", "オイ★", "ハイ！"]      # calls may be reported: round-robin
-        assert [tuple(c["frames"]) for c in calls] == list(LAND.values())
+        assert [tuple(c["frames"]) for c in calls] == list(SHOWN.values())
         assert [c.get("missing_glyphs") for c in calls] == [None, 1, None]
         assert f"text cl_c2@{o}: the font fonts/tiny.ttf has no glyph for ★ (U+2605){fallback}" in warns
     expr = ('{o.name: [list(o["mk_show"]), o.get("mk_aspect"), o.get("mk_screen"), "mk_lyric" in o] '
             'for o in bpy.data.objects if o.name.startswith("cl_")}')
     got, = query(built, expr, [61], capsys)
-    assert got == {f"cl_c{k}@{o}": [list(f), o, 1, False] for k, f in LAND.items() for o in OUTPUTS}
+    assert got == {f"cl_c{k}@{o}": [list(f), o, 1, False] for k, f in SHOWN.items() for o in OUTPUTS}

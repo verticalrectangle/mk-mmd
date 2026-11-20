@@ -7,6 +7,7 @@ import math
 import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from mkmmd.core import wordtype as L
@@ -366,11 +367,14 @@ def test_type_style_sets_a_typewriter_reveal_over_the_word():
     assert r["from"] == pytest.approx(specs[1]["kinetic"]["show"][0]) and r["to"] == pytest.approx(1.5)
 
 
-def test_drop_style_squashes_about_the_bottom_and_falls_into_the_cell():
+def test_drop_style_squashes_about_the_bottom_and_falls_into_the_cell_before_its_onset():
     tl = timeline()
     specs, _ = run(tl, lyr={"line": 1, "style": "drop", "arrive": {"drop": 1.0}})
     k = specs[0]["kinetic"]
-    assert k["pivot"] == "bottom" and k["dyp"][0][1] == pytest.approx(0.5) and abs(k["dyp"][-1][1]) < 1e-3
+    land = math.floor(tl["lines"][0]["words"][0]["start"] * FPS + 0.4)
+    assert round(k["show"][0] * FPS) == land - math.ceil(L.DROP_FALL * FPS)          # the fall plays before the onset
+    assert k["pivot"] == "bottom" and k["dyp"][0][1] > 0.45 and abs(k["dyp"][-1][1]) < 1e-3
+    assert abs(float(np.interp(land / FPS, *zip(*k["dyp"])))) < 1e-3                  # in its cell when it is sung
     assert "sy" in k and "sx" in k
 
 

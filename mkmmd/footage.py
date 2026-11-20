@@ -10,12 +10,18 @@ over them (mkmmd.framefx); anything else that shows a clip (a split screen's vid
       .frame(i)                       frame i decoded, RGB uint8 (h, w, 3)
       .picture(t, size, start, rate, loop, fit, focus, mirror, back, crop)   float32 RGB 0..1 (h, w, 3) at size (w, h),
                                       the whole frame or a `crop` of it
+      .matte()                        the clip's matte (matte_path: a Clip of its own, read as it is, frame for frame)
+    matte_path(path)             where a clip's matte lies: <stem>.matte<suffix> beside it
     fit(rgb, size, fit, focus, mirror, back)   one decoded frame fitted to a size
     fitted(rgb, size, fit, focus, mirror)      the part of it that shows, resized (uint8), and where it lands
     fit_box(src, size, fit, focus, mirror)     where: the part that shows, the size it takes, where it lands, how
 
+A clip may carry a matte, its alpha, as a second video beside it: `<stem>.matte<suffix>` (`hand.mp4` and
+`hand.matte.mp4`), grey (white the clip, black nothing), the same size and frame count. OpenCV drops a video's own alpha
+channel (VP9, ProRes 4444), so a cut-out clip comes as the two files; the cutout frame effect shows the clip through it.
+
 A FootageError (a FileNotFoundError) says what is wrong: a missing or unreadable clip, one in a codec the OpenCV here
-does not decode (it names the codec and an ffmpeg line), a span that starts past its end."""
+does not decode (it names the codec and an ffmpeg line), a span that starts past its end, a missing or mismatched matte."""
 import math
 from collections import OrderedDict
 from pathlib import Path
@@ -33,6 +39,7 @@ OPEN_BYTES = 600 << 20          # and as many more as fit this (a clip counts w 
                                 # a project that shows four clips frame after frame must not reopen two every frame
 DECODE_THREADS = 4              # FFmpeg's threads per clip: its default, one a core, spends twice the CPU on a frame
                                 # (the frames are the same bytes whatever the count)
+MATTE = ".matte"                # a clip's matte: <stem>.matte<suffix> beside it
 
 
 def _capture(path):
@@ -48,6 +55,12 @@ def is_file(clip):
     """Whether `clip` names a file (a path separator, `~` or a video extension) rather than an asset-registry slug."""
     s = str(clip)
     return any(c in s for c in "/\\~") or Path(s).suffix.lower() in VIDEO_EXT
+
+
+def matte_path(path):
+    """Where the matte of the clip at `path` lies: `<stem>.matte<suffix>` beside it."""
+    p = Path(path)
+    return p.with_name(p.stem + MATTE + p.suffix)
 
 
 def resolve(clip, root=None):
@@ -178,18 +191,36 @@ class Clip:
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         self._cap, self._next = cap, 0                  # the frame the next read() returns
         self._frames, self._pictures = OrderedDict(), OrderedDict()
+        self._matte = None
 
     @property
     def duration(self):
         return self.count / self.fps
 
     def close(self):
-        """Let go of the decoder and of the decoded frames and pictures (a clip not shown for a while)."""
+        """Let go of the decoder and of the decoded frames and pictures (a clip not shown for a while), its matte's too."""
         if self._cap is not None:
             self._cap.release()
         self._cap, self._next = None, 0
         self._frames.clear()
         self._pictures.clear()
+        if self._matte is not None:
+            self._matte.close()
+
+    def matte(self):
+        """The clip's matte (`matte_path`), opened once: a Clip of its own whose frame i (its grey) is the alpha of this
+        clip's frame i. A FootageError when there is none, or it is not this clip's size and length."""
+        if self._matte is None:
+            p = matte_path(self.path)
+            if not p.is_file():
+                raise FootageError(f"{self.path.name}: no matte beside it ({p.name}: a grey video of its size and length, "
+                                   f"white where the clip shows)")
+            m = Clip(p)
+            if m.size != self.size or m.count != self.count:
+                raise FootageError(f"{p.name} is {m.size[0]}x{m.size[1]}, {m.count} frames; its clip "
+                                   f"{self.size[0]}x{self.size[1]}, {self.count}: a matte is its clip's size and length")
+            self._matte = m
+        return self._matte
 
     def index(self, t, start=0.0, rate=1.0, loop=False):
         """The clip's frame (0 .. count - 1) on screen `t` seconds into a span that starts `start` seconds into the clip

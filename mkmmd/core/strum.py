@@ -580,6 +580,46 @@ def strike_times(strokes):
     return [s.t for s in strokes if s.dir > 0], [s.t for s in strokes if s.dir < 0]
 
 
+def let_go(keys):
+    """[(leave, back)] clip seconds a pick hand is off the strings, from the `keys` of its strum grip
+    (`[pose.<cast>.hands.<side>] keys` beside `grip = "<prop>:strum"`): a key with `at` (a target) or `off` (metres from
+    where the grip holds it, in the prop's frame) is a place the hand goes to (a hand lifted off the strings, a wave, a
+    peace sign by the face), `{t, grip = true}` has it on the strings. It leaves from the grip key before a run of places
+    and is back on the grip key after it (`math.inf` when none comes). The keys start on the strings (the first is a grip
+    key: where the hand leaves them, else it would drift off from the end of the settle). Raises StrumError for a key
+    that is not exactly one of the three, or keys out of time order."""
+    spans, leave, last = [], None, None
+    for i, k in enumerate(keys):
+        if "t" not in k:
+            raise StrumError(f"keys[{i}]: every key needs its clip second `t`")
+        t = float(k["t"])
+        if last is not None and t <= last:
+            raise StrumError(f"keys[{i}] (t = {t:g}): the keys go in time order")
+        on = bool(k.get("grip"))
+        at = (k.get("at") is not None) + (k.get("off") is not None)
+        if on + at != 1:
+            raise StrumError(f"keys[{i}] (t = {t:g}): a key is either a place (`at` or `off`) or back on the strings "
+                             f"(`grip = true`)")
+        if at and i == 0:
+            raise StrumError(f"keys[0] (t = {t:g}): the hand starts on the strings: put {{t, grip = true}} where it leaves them")
+        if at and leave is None:
+            leave = last
+        elif on and leave is not None:
+            spans.append((leave, t))
+            leave = None
+        last = t
+    if leave is not None:
+        spans.append((leave, math.inf))
+    return spans
+
+
+def clashes(spans, win):
+    """The let-go spans (`let_go`) that overlap `win` (first, last), the clip seconds the strum keys the hand."""
+    if win is None:
+        return []
+    return [(a, b) for a, b in spans if a < win[1] and b > win[0]]
+
+
 # =============================================================================================== the plucking hand (fingerstyle)
 def stroke_times(stroke, attack, travel=None):
     """{pose: clip time} of one rest stroke: the fingertip swings at a steady speed from "hover" through "cross" to "rest", its

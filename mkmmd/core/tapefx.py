@@ -48,7 +48,7 @@ def slide_state(tau, p):
     e = 1.0 - (1.0 - u) ** 3
     out = {"dxp": side * p["dist"] * (1.0 - e), "rot": side * p["tilt"] * (1.0 - e)}
     v = tau - p["dur"]
-    if v > 0.0:
+    if v >= 0.0:                                     # home: the clunk begins on the frame it arrives
         k = p["clunk"] * math.exp(-v / CLUNK_TAU)
         out["sx"] = 1.0 - k
         out["sy"] = 1.0 + 0.6 * k

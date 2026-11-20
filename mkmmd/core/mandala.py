@@ -25,7 +25,7 @@ from . import tween as TW
 
 KINDS = ("mandala", "trails")
 SHAPES = ("clover", "flower", "heart", "star", "butterfly", "moon", "rabbit", "carrot", "dango", "daisy", "cassette",
-          "pedal", "cherry", "book", "teacup", "potion")
+          "pedal", "cherry", "book", "teacup", "potion", "pick", "note", "sparkle", "cloud", "strawberry")
 ROLES = ("main", "dark", "light", "accent", "accent_dark", "ink", "paper")   # what a shape's part is painted in
 ORIENTS = ("radial", "upright")               # a copy's top: away from the centre, or up the frame
 ORDERS = ("rings", "inward", "around", "random")   # the order a grow pops the copies in
@@ -37,13 +37,15 @@ SHAPE_COLORS = {"clover": ("pine", "foam"), "flower": ("love", "rose", "iris"), 
                 "daisy": ("gold", "rose", "love"), "cassette": ("iris", "foam", "love", "gold"),
                 "pedal": ("love", "pine", "iris", "gold"), "cherry": ("love", "rose"),
                 "book": ("iris", "love", "pine"), "teacup": ("rose", "iris", "foam"),
-                "potion": ("iris", "foam", "love")}
+                "potion": ("iris", "foam", "love"), "pick": ("gold", "love", "iris"), "note": ("iris", "pine", "love"),
+                "sparkle": ("gold", "rose", "foam"), "cloud": ("foam", "iris"), "strawberry": ("love", "rose")}
 SHAPE_ACCENT = {"clover": "gold", "flower": "gold", "heart": "rose", "star": "love", "butterfly": "gold",
                 "moon": "rose", "rabbit": "love", "carrot": "pine", "dango": "foam", "daisy": "gold", "cassette": "gold",
-                "pedal": "gold", "cherry": "pine", "book": "gold", "teacup": "gold", "potion": "gold"}
+                "pedal": "gold", "cherry": "pine", "book": "gold", "teacup": "gold", "potion": "gold", "pick": "rose",
+                "note": "gold", "sparkle": "rose", "cloud": "rose", "strawberry": "pine"}
 PEN = 0.022                                  # the ink line round a drawn sticker's parts, of its box before scaling
 PENNED = ("moon", "rabbit", "carrot", "dango", "daisy", "cassette", "pedal", "cherry", "book", "teacup",
-          "potion")                          # drawn with it: the three kits
+          "potion", "pick", "note", "sparkle", "cloud", "strawberry")   # drawn with it: the four kits
 SCALE = {"figure": 0.25, "sticker": 0.12}    # a ring's `scale` by default: a copy's height (the figure's) or longer side
 RING = {"count": None, "radius": None, "scale": None, "turn": 12.0, "step": 0.0, "phase": 0.0, "mirror": False,
         "spin": 0.0, "orient": "radial", "angle": 0.0, "source": "figure", "fill": None}
@@ -766,10 +768,85 @@ def _cherry():
     return parts
 
 
+def _pick():
+    half = [[0.3, -0.43], [0.45, -0.3], [0.4, -0.06], [0.2, 0.26]]
+    body = _smooth([[0.0, -0.44]] + half + [[0.0, 0.47]] + [[-x, y] for x, y in half[::-1]], n=10)   # point down
+    parts = _drawn("main", body)
+    parts += _drawn("accent", _heart() * 0.26 + (0.0, -0.1), 0.016)                         # a heart printed on it
+    ts = np.radians(np.linspace(200.0, 245.0, 14))
+    return _tilted(parts + [("light", "line", (0.02, -0.02) + 0.36 * np.stack([np.cos(ts), np.sin(ts)], 1), 0.03)],
+                   -12.0)
+
+
+def _note():
+    parts = []
+    for x0, y0, y1 in ((-0.145, 0.27, -0.3), (0.355, 0.15, -0.42)):                         # two stems
+        parts += _drawn("main", _box(x0 - 0.035, y1, x0 + 0.035, y0, 0.015), 0.016)
+    parts += _drawn("main", np.array([[-0.18, -0.34], [0.39, -0.48], [0.39, -0.33], [-0.18, -0.19]]))   # the beam
+    for cx, cy in ((-0.28, 0.32), (0.22, 0.2)):                                                # the heads
+        parts += _drawn("main", _ellipse(cx, cy, 0.165, 0.12, angle=20.0, n=40))
+        parts.append(("light", "fill", _ellipse(cx - 0.05, cy - 0.035, 0.05, 0.025, angle=20.0, n=16), 0.0))
+    return _tilted(parts, 8.0)
+
+
+def _twinkle(cx, cy, r, waist=0.16):
+    """A four-pointed sparkle about (cx, cy), its points `r` out, its sides pulled in toward the middle."""
+    tips = [(0.0, -r), (r * 0.78, 0.0), (0.0, r), (-r * 0.78, 0.0)]
+    pts = []
+    for i in range(4):
+        a, b = np.asarray(tips[i]), np.asarray(tips[(i + 1) % 4])
+        pts.append(_curve(a, (a + b) * waist, b, n=14)[:-1])
+    return np.concatenate(pts) + (cx, cy)
+
+
+def _sparkle():
+    parts = _drawn("main", _twinkle(-0.08, 0.04, 0.46))
+    parts += _drawn("accent", _twinkle(0.31, -0.3, 0.16), 0.016)
+    parts += _drawn("light", _ellipse(0.3, 0.33, 0.055, 0.055, n=20), 0.016)
+    return parts + [("light", "fill", _ellipse(-0.14, -0.06, 0.03, 0.09, angle=-20.0, n=16), 0.0)]
+
+
+def _cloud():
+    """A puffy cloud with a flat foot, a face and blushing cheeks."""
+    bumps = ((-0.3, 0.06, 0.2, 0.2), (-0.1, -0.09, 0.25, 0.25), (0.16, -0.07, 0.22, 0.22), (0.33, 0.08, 0.17, 0.17),
+             (0.0, 0.16, 0.43, 0.13))
+    o = np.array([0.0, 0.05])
+    a = np.linspace(0.0, 2.0 * math.pi, 240, endpoint=False)
+    u = np.stack([np.cos(a), np.sin(a)], 1)
+    reach = np.zeros(len(a))
+    for cx, cy, rx, ry in bumps:                            # where each ray from o leaves the last bump it is in
+        q, v = (o - (cx, cy)) / (rx, ry), u / (rx, ry)
+        A, B, C = (v * v).sum(1), 2.0 * (q * v).sum(1), float(q @ q) - 1.0
+        disc = B * B - 4.0 * A * C
+        t = np.where(disc >= 0.0, (-B + np.sqrt(np.maximum(disc, 0.0))) / (2.0 * A), 0.0)
+        reach = np.maximum(reach, t)
+    parts = _drawn("main", o + u * reach[:, None])
+    ts = np.radians(np.linspace(205.0, 260.0, 12))
+    parts.append(("light", "line", (-0.1, -0.09) + 0.17 * np.stack([np.cos(ts), np.sin(ts)], 1), 0.03))
+    for s in (-1.0, 1.0):
+        parts += [("ink", "fill", _ellipse(0.09 * s, 0.07, 0.024, 0.032, n=16), 0.0),
+                  ("accent", "fill", _ellipse(0.19 * s, 0.13, 0.045, 0.026, n=16), 0.0)]
+    return parts + [("ink", "line", _curve([-0.04, 0.12], [0.0, 0.16], [0.04, 0.12], n=8), 0.014)]
+
+
+def _strawberry():
+    half = [[0.24, -0.3], [0.38, -0.17], [0.34, 0.07], [0.2, 0.31]]
+    berry = _smooth([[0.0, -0.27]] + half + [[0.0, 0.47]] + [[-x, y] for x, y in half[::-1]], n=10)
+    parts = _drawn("main", berry)
+    for x, y in ((-0.2, -0.12), (0.0, -0.1), (0.2, -0.12), (-0.24, 0.07), (-0.08, 0.06), (0.08, 0.06), (0.24, 0.07),
+                 (-0.14, 0.23), (0.14, 0.23), (0.0, 0.36)):                                     # its seeds
+        parts.append(("light", "fill", _ellipse(x, y, 0.018, 0.03, angle=-15.0 * np.sign(x), n=12), 0.0))
+    for a in (-105.0, -55.0, 0.0, 55.0, 105.0):                                                # its leaves
+        parts += _drawn("accent", _turned(_ellipse(0.0, 0.1, 0.052, 0.12, n=28), a) + (0.0, -0.29), 0.016)
+    parts.append(("accent_dark", "line", np.array([[0.0, -0.3], [0.03, -0.4], [0.07, -0.47]]), 0.04))
+    return _tilted(parts, 10.0)
+
+
 _SHAPE_PARTS = {"clover": _clover, "flower": _flower, "heart": _heart_parts, "star": _star, "butterfly": _butterfly,
                 "moon": _moon, "rabbit": _rabbit, "carrot": _carrot, "dango": _dango, "daisy": _daisy,
                 "cassette": _cassette, "pedal": _pedal, "cherry": _cherry, "book": _book, "teacup": _teacup,
-                "potion": _potion}
+                "potion": _potion, "pick": _pick, "note": _note, "sparkle": _sparkle, "cloud": _cloud,
+                "strawberry": _strawberry}
 
 
 def shape_parts(name):

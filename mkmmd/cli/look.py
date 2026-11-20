@@ -463,17 +463,25 @@ def run(args):
         im = None
         if has_fx or has_ffx or layer is not None:
             im = _rgb(s["path"])
+        entries = ffx.entries(f) if has_ffx else []
+        early = [e for e in entries if e.get("under")] if has_fx else []    # the cut's own picture's: before the cut
+        try:                                                                  # effects compose (mkmmd.postframes)
+            for e in early:
+                im = ffx._apply(e, f, im)
+        except (FileNotFoundError, FX.FxError) as e:
+            raise UsageError(str(e)) from None
         if has_fx:
             try:
                 fx.check([f])
                 im = fx.frame(f, im)
             except (TR.TransitionError, FileNotFoundError) as e:
                 raise UsageError(str(e)) from None
-        if has_ffx:
-            try:
-                im = ffx.frame(f, im)
-            except (FileNotFoundError, FX.FxError) as e:
-                raise UsageError(str(e)) from None
+        try:
+            for e in entries:
+                if not (early and e.get("under")):
+                    im = ffx._apply(e, f, im)
+        except (FileNotFoundError, FX.FxError) as e:
+            raise UsageError(str(e)) from None
         if layer is not None:
             im = SRT.composite(im, layer, neg)
         done[s["path"]] = (im, has_fx or has_ffx, layer is not None)

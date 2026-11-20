@@ -1,5 +1,5 @@
-"""Video stickers, bpy-free (docs/design.md: Frame effects, Video stickers): `[[fx]] kind = "clip"` checked and laid out.
-The picture work is mkmmd/videosticker.py.
+"""Video stickers, bpy-free (docs/design.md: Frame effects, Video stickers): `[[fx]] kind = "clip"` and `kind = "cutout"`
+checked and laid out. The picture work is mkmmd/videosticker.py.
 
 A video clip cut out in a shape and laid over the picture as a die-cut sticker: the picture stays and the clip is the
 sticker, where a `footage` collage lays a figure over a clip that fills the frame. The clip is read and fitted by
@@ -15,6 +15,17 @@ picture (an opaque sticker), or its face is light, `screen`ed or `add`ed onto it
 shows no clip: its face is the picture under it inverted (type that answers whatever is behind it), laid as an opaque
 sticker is.
 
+A `cutout` is a clip cut out by its own matte (mkmmd.footage: `<stem>.matte<suffix>` beside it), frame by frame: a real
+hand photographed and cut out like a zine's, its shape changing as it moves. Its whole frame (or its `crop`) is the box,
+`size` frame heights tall in its own proportions, and its point `anchor` (a fingertip, the scissors' crossing) stands at
+`at`, a frame point or a scene point (`{point = ...}`, the camera of the shot in the cut on each frame: a hand riding
+something that moves), turned `turn` degrees and moved by `keys` about that point. A hand that moves in its own frame (it
+rocks, it reaches) takes its fingertip with it: `anchor` is then that point's track over the video's seconds
+(`anchor_at`), and the fingertip stays on `at` while the arm moves. It plays stepped: `fps` poses a second,
+each held (`clock`), and `sync` = [video second, clip second] puts a moment of the video (a contact, a snip) on a beat,
+a step starting exactly there. A light `grade` sits its colours in the palette: lifted toward a paper colour, warmed,
+a little less saturated.
+
 Outlines are polygons in the box's own pixels about its middle, x right and y down, touching its four sides."""
 import math
 
@@ -22,7 +33,7 @@ import numpy as np
 
 from . import mandala as MD
 
-KINDS = ("clip",)
+KINDS = ("clip", "cutout")
 OUTLINED = ("rect", "circle", "heart", "star")             # shapes with an outline (a polygon) and proportions of their own
 SHAPES = OUTLINED + ("text",)                              # and keyed type: the letters of a text are the shape
 BLENDS = ("over", "screen", "add", "negative")   # an opaque sticker, a face of light (the clip's black vanishes), or the
@@ -31,10 +42,22 @@ VIDEO = ("clip", "in", "rate", "loop", "focus", "mirror", "crop")  # the clip's 
 STAR = (0.5, 0.11)                      # a star's inner radius over its outer, its corners' rounding over its outer
 STEP = 1.5                              # px: an outline's points lie about this far apart along its curves
 KEYS = {"clip": {"clip", "in", "rate", "loop", "focus", "mirror", "crop", "shape", "radius", "at", "size", "ratio",
-                 "keys", "edge", "shadow", "blend", "text", "font"}}
+                 "keys", "edge", "shadow", "blend", "text", "font"},
+        "cutout": {"clip", "in", "rate", "loop", "mirror", "crop", "fps", "sync", "anchor", "at", "size", "turn", "keys",
+                   "edge", "shadow", "grade", "extend"}}
 DEFAULTS = {"clip": {"in": 0.0, "rate": 1.0, "loop": False, "focus": [0.5, 0.5], "mirror": False, "crop": None,
                      "shape": "rect", "radius": 0.12, "at": [0.5, 0.5], "size": 0.4, "ratio": None, "keys": None,
-                     "edge": None, "shadow": None, "blend": "over", "text": None, "font": None}}
+                     "edge": None, "shadow": None, "blend": "over", "text": None, "font": None},
+            "cutout": {"in": 0.0, "rate": 1.0, "loop": False, "focus": [0.5, 0.5], "mirror": False, "crop": None,
+                       "fps": 12.0, "sync": None, "anchor": [0.5, 0.5], "at": [0.5, 0.5], "size": 1.0, "turn": 0.0,
+                       "keys": None, "edge": None, "shadow": None, "grade": None, "extend": True}}
+GRADE = {"gain": 1.0, "lift": 0.08, "warm": 1.0, "saturation": 0.9, "toward": "base"}   # a cutout's grade, `grade =
+#                                   {}`: lifted 8 % toward the paper, warmed (WARM at 1), a touch less saturated
+WARM = (1.06, 1.015, 0.92)          # a cutout's warm grade at 1: its red, green and blue gains (0: none)
+PAPER = (0.78, 0.10)                # near-white paper a grade leaves as shot: luma from this up, chroma under this
+RIDES = ("peel", "tear", "sticker")  # what a cutout's `at` may ride: a peel transition's lifted corner, a tear's grips,
+#                                     the grip of a sticker peeled off a sheet
+FPS_MAX = 120.0
 
 
 def _fx():
@@ -45,6 +68,9 @@ def _fx():
 def normalize(spec, out, palette, what):
     """A video sticker's own keys checked and filled in, in place (`out` has the kind's defaults under `spec`)."""
     FX = _fx()
+    if out["kind"] == "cutout":
+        _cutout(spec, out, palette, what)
+        return
     if out["blend"] not in BLENDS:
         raise FX.FxError(f"{what}: blend {out['blend']!r} is none of {', '.join(BLENDS)}")
     if out["blend"] == "negative":                       # its face is the picture under it: there is no video to read
@@ -82,6 +108,164 @@ def normalize(spec, out, palette, what):
                                                                             out["edge"]["width"] <= 0):
         raise FX.FxError(f"{what}: a {out['blend']} sticker's face is light and casts no shadow: give it an `edge` (its "
                          f"rim casts the shadow) or no `shadow`")
+
+
+def _cutout(spec, out, palette, what):
+    """A cutout's own keys checked and filled in, in place: its video (`in` or a `sync`), its stepping, where its anchor
+    stands, its turn and moves, its edge, shadow and grade."""
+    FX = _fx()
+    rate = FX._num(out["rate"], f"{what} rate", -16.0, 16.0)        # below 0 the video plays backwards (a lift: a press)
+    out["rate"] = abs(rate)
+    FX._clip_keys(out, what)
+    out["rate"] = rate
+    if out["crop"] is not None:
+        out["crop"] = FX._part(out["crop"], f"{what}: crop")
+    out["fps"] = FX._num(out["fps"], f"{what} fps", 0.0, FPS_MAX)
+    if out["sync"] is not None:
+        if "in" in spec:
+            raise FX.FxError(f"{what}: give `in` (the video's second on the span's first frame) or `sync` ([video second, "
+                             f"clip second]: that moment of the video on that frame), not both")
+        v, t = FX._pair(out["sync"], f"{what} sync")
+        if v < 0:
+            raise FX.FxError(f"{what}: sync = {out['sync']}: [video second (0 or more), clip second]")
+        out["sync"] = [v, t]
+        out["in"] = v + out["rate"] * (out["from"] - t)          # the video's second on the span's first frame
+    out["anchor"] = _anchor(out["anchor"], f"{what} anchor")
+    out["at"] = _at(out["at"], f"{what} at")
+    if not isinstance(out["extend"], bool):
+        raise FX.FxError(f"{what}: extend is true or false")
+    out["size"] = FX._num(out["size"], f"{what} size", 0.01, 10.0)
+    out["turn"] = FX._num(out["turn"], f"{what} turn")
+    out["keys"] = FX._moves(out["keys"], what)
+    out["edge"] = MD._edge(FX, out["edge"], palette, what)
+    out["shadow"] = FX._shadow(out["shadow"], palette, what)
+    out["grade"] = _grade(out["grade"], palette, what)
+
+
+def _anchor(v, what):
+    """A cutout's `anchor`: [x, y], or the track of a point that moves in the clip's own frame (a fingertip while the hand
+    rocks): [[video second, x, y], ...], two rows or more, their seconds rising."""
+    FX = _fx()
+    if not (isinstance(v, (list, tuple)) and v and isinstance(v[0], (list, tuple))):
+        return FX._pair(v, what)
+    if len(v) < 2 or not all(isinstance(r, (list, tuple)) and len(r) == 3 for r in v):
+        raise FX.FxError(f"{what} = {v!r}: a track is [[video second, x, y], ...], two rows or more")
+    rows = [[FX._num(c, what) for c in r] for r in v]
+    if any(b[0] <= a[0] for a, b in zip(rows, rows[1:])):
+        raise FX.FxError(f"{what}: a track's video seconds rise from row to row ({[r[0] for r in rows]})")
+    return rows
+
+
+def anchor_at(fx, video):
+    """A cutout's anchor (fractions of its clip's frame as the file has it) at the video's second `video`: its point, or
+    its track read there, straight between rows and the end rows' beyond them."""
+    a = fx["anchor"]
+    if not isinstance(a[0], list):
+        return a[0], a[1]
+    v = [r[0] for r in a]
+    return float(np.interp(video, v, [r[1] for r in a])), float(np.interp(video, v, [r[2] for r in a]))
+
+
+def _at(v, what):
+    """A cutout's `at`: [x, y] or {point = expr} (mkmmd.core.framefx._center), or a grab point it rides: a transition's,
+    {peel = <its `at` second>} (the lifted corner) or {tear = <its `at` second>, grip = 0 or 1} (a grip on a half), or
+    {sticker = <second>}, the grip of the sticker a sheet peels off from that second (mkmmd.core.sheet.grip_of)."""
+    FX = _fx()
+    ride = [k for k in RIDES if isinstance(v, dict) and k in v]
+    if not ride:
+        return FX._center(v, what)
+    kind = ride[0]
+    extra = sorted(set(v) - {kind} - ({"grip"} if kind == "tear" else set()))
+    if len(ride) > 1 or extra:
+        raise FX.FxError(f"{what} = {v!r}: expected {{peel = <second>}}, {{tear = <second>, grip = 0 or 1}} or "
+                         f"{{sticker = <second>}}")
+    grip = v.get("grip", 0)
+    if grip not in (0, 1) or isinstance(grip, bool):
+        raise FX.FxError(f"{what}: grip = {grip!r}: 0 or 1, the tear's two hands")
+    return {"mode": kind, "t": FX._num(v[kind], f"{what} {kind}"), "grip": int(grip), "tr": None}
+
+
+def ride(fxs, transitions, fps):
+    """Each cutout (and its aspect.<output> entries) whose `at` rides something gets it in `at["tr"]`: the transition of
+    its kind at that second (within half a frame), or for a `sticker` the sheet whose own peel or whose hollow's peel
+    starts then ({"sheet": its index, "hollow": the hollow's place or None}); a TransitionError-worthy FxError else."""
+    FX = _fx()
+    peels = [(s["index"], i, p["t"]) for s in fxs if s["kind"] == "sheet"
+             for i, p in [(None, s["peel"])] + [(i, h["peel"]) for i, h in enumerate(s["hollows"])] if p is not None]
+    for fx in fxs:
+        for e in [fx, *(fx.get("aspect") or {}).values()]:
+            a = e.get("at") if e["kind"] == "cutout" else None
+            if not isinstance(a, dict) or a["mode"] not in RIDES:
+                continue
+            if a["mode"] == "sticker":
+                got = [{"sheet": s, "hollow": i} for s, i, t in peels if abs(t - a["t"]) <= 0.5 / fps]
+                if not got:
+                    raise FX.FxError(f"fx {e['index']} (cutout): at rides the sticker peeled from {a['t']:g} s; the "
+                                     f"sheets' peels start at {sorted(t for _, _, t in peels) or 'none'}")
+                a["tr"] = got[0]
+                continue
+            got = [tr for tr in transitions if tr["kind"] == a["mode"] and abs(tr["at"] - a["t"]) <= 0.5 / fps]
+            if not got:
+                have = [tr["at"] for tr in transitions if tr["kind"] == a["mode"]]
+                raise FX.FxError(f"fx {e['index']} (cutout): at rides the {a['mode']} at {a['t']:g} s; the "
+                                 f"{a['mode']} transitions are at {have or 'none'}")
+            a["tr"] = got[0]
+
+
+def _grade(v, palette, what):
+    """A cutout's `grade`: None (as shot) or {gain, lift, warm, saturation, toward} with GRADE's defaults (`{}` all of
+    them)."""
+    FX = _fx()
+    if v is None:
+        return None
+    if not isinstance(v, dict) or set(v) - set(GRADE):
+        raise FX.FxError(f"{what}: grade = {v!r}: expected {{gain, lift, warm, saturation, toward}} ({{}}: the defaults)")
+    g = {**GRADE, **v}
+    return {"gain": FX._num(g["gain"], f"{what} grade gain", 0.2, 4.0),
+            "lift": FX._num(g["lift"], f"{what} grade lift", 0.0, 1.0),
+            "warm": FX._num(g["warm"], f"{what} grade warm", -2.0, 2.0),
+            "saturation": FX._num(g["saturation"], f"{what} grade saturation", 0.0, 2.0),
+            "toward": FX._colour(g["toward"], palette, f"{what} grade toward")}
+
+
+def clock(fx, t, frame_rate=None):
+    """A cutout at clip second `t`: (the clip second its pose is held from, the video's second shown). Its steps are
+    1 / `fps` long, counted from its `sync` clip second (else from its span's start), that second taken on the output's
+    frame of it (`frame_rate`, the build's rounding: mkmmd.core.framefx.frame_of) so a step starts on the very frame the
+    beat falls on; `fps` 0 holds nothing. The video runs at `rate` from `in` (or from the sync's video second there)."""
+    sync = fx["sync"]
+    t0 = sync[1] if sync is not None else fx["from"]
+    if frame_rate:
+        t0 = round(t0 * frame_rate) / frame_rate
+    held = t if fx["fps"] <= 0 else t0 + math.floor((t - t0) * fx["fps"] + 1e-6) / fx["fps"]
+    return held, (sync[0] if sync is not None else fx["in"]) + fx["rate"] * (held - t0)
+
+
+def place_cutout(fx, t, size, ratio, at, video):
+    """Where a cutout stands at clip second `t` (its held pose's, `clock`) in a frame of `size` (w, h), its anchor at the
+    frame pixel `at`: (M, box, scale) as `place` gives them. Its box (its clip's frame or crop, `ratio` its width over its
+    height) is `size` frame heights tall; M carries the box's own px (about its middle) so that its `anchor` (fractions of
+    the clip's frame as the file has it, mirrored with it; a track's point at the pose's video second `video`, `clock`'s)
+    lands on `at`, turned `turn` and moved by its `keys` about it."""
+    FX = _fx()
+    H = float(size[1])
+    bh = fx["size"] * H
+    bw = float(ratio) * bh
+    ax, ay = anchor_at(fx, video)
+    if fx["mirror"]:
+        ax = 1.0 - ax
+    a = ((ax - 0.5) * bw, (ay - 0.5) * bh)
+    mv = dict(FX.move_at(fx["keys"], t))
+    mv["turn"] += fx["turn"]
+    M = FX.compose(FX.move_matrix(mv, at, H), [[1.0, 0.0, at[0] - a[0]], [0.0, 1.0, at[1] - a[1]]])
+    return M, (bw, bh), float(mv["scale"])
+
+
+def points(fx):
+    """[(key, expression)]: a cutout's `at` when it is a scene point (key x<i>)."""
+    if fx["kind"] == "cutout" and fx["at"]["mode"] == "point":
+        return [(_fx().point_key(fx), fx["at"]["expr"])]
+    return []
 
 
 def _unit(shape, n):

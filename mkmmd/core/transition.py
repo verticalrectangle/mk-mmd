@@ -4,7 +4,8 @@ each one needs rendered and the files those frames are stored in. `mk build` (ke
 (renders the missing layers), `mk post` and `mk look` (composite them, mkmmd.cutfx and mkmmd.framefx) all read the one plan,
 `plan()`, made from mk.toml alone.
 
-    [[transition]]  at, kind = "expand" | "collapse" | "slash" | "whip" | "slice" | "spin" | "page", dur, ease
+    [[transition]]  at, kind = "expand" | "collapse" | "slash" | "whip" | "slice" | "spin" | "page" | "peel" | "shatter"
+                    | "tear", dur, ease
         expand / collapse: scale = [1, "fill"], turn = [0, 90], center = "subject" | [x, y] | [x, y, z] | "<expression>",
                            edge = {color, width}
         slash:             angle = -20, width = 0.3, color = "love", second = {color, width, offset}, dir = "right"
@@ -17,6 +18,15 @@ each one needs rendered and the files those frames are stored in. `mk build` (ke
         page:              dir = "left", angle = 20, radius = 0.12, back, through = 0.18, shadow = 0.45: a picture-book
                            page turn onto the incoming shot; at the clip's end the loop's wrap onto its first frame, not
                            a cut effect: `wrap_of` (mkmmd.core.pageturn, mkmmd.pageturn.wrap)
+        peel:              from = "bottom-right", angle = 0, radius = 0.05, back, shadow = 0.45, edge = {color, width,
+                           round} (no `ease`: a hand's timing): the outgoing picture peeled off as a sticker
+                           (mkmmd.core.peel, mkmmd.peel; `peel.corner` publishes the pinched corner)
+        shatter:           center = [0.5, 0.45] | {point}, material = "plastic" | "paper" | "glass", count = 80, seed,
+                           crack = 0.05, shadow = 0.4 (no `ease`): the outgoing picture broken, its shards thrown at the
+                           lens (mkmmd.core.shatter, mkmmd.shatter)
+        tear:              center, angle = 6, from = "top", jag = 0.02, run = 0.3, seed, back, shadow = 0.4 (no
+                           `ease`): the outgoing picture torn in two, the halves swung off (mkmmd.core.tear, mkmmd.tear;
+                           `tear.grips` publishes where two hands hold them)
     [[insert]]      from, to, shot, shape = "thought", anchor, radius, size, offset, ratio, outline = {color, width},
                     pop = {dur, overshoot}, out = "pop" | "expand", expand = {dur, turn, ease}, aspect.<output>
                     shape = "split": shot | clip = "<video>" | {src, in, rate, loop, fit, mirror, back}, side, share,
@@ -47,10 +57,13 @@ from pathlib import Path
 from . import framefx as FX
 from . import iris as IR
 from . import pageturn as PG
+from . import peel as PL
+from . import shatter as SH
+from . import tear as TE
 from . import shotstyle as SS
 from . import tween as TW
 
-KINDS = ("expand", "collapse", "slash", "whip", "slice", "spin", "page")
+KINDS = ("expand", "collapse", "slash", "whip", "slice", "spin", "page", "peel", "shatter", "tear")
 SHAPES = ("thought", "split", "iris")
 SLASH_DIRS = ("right", "left")
 WHIP_DIRS = ("left", "right", "up", "down")   # the way the pictures travel: a pan to the right sends them left
@@ -68,8 +81,9 @@ TRANSITION_KEYS = {"expand": _COMMON | {"scale", "turn", "center", "edge"},
                    "whip": _COMMON | {"dir", "blur"},
                    "slice": _COMMON | {"center", "angle", "edge"},
                    "spin": {"at", "kind", "dur", "after", "turns", "blur", "scale", "center", "back"},
-                   "page": PG.KEYS}
-DEFAULT_DUR = {"slash": 0.18, "whip": 0.15, "slice": 0.3, "spin": 0.3, "page": PG.DUR}   # s; expand / collapse: 0.4
+                   "page": PG.KEYS, "peel": PL.KEYS, "shatter": SH.KEYS, "tear": TE.KEYS}
+DEFAULT_DUR = {"slash": 0.18, "whip": 0.15, "slice": 0.3, "spin": 0.3, "page": PG.DUR,   # s; expand / collapse: 0.4
+               "peel": PL.DUR, "shatter": SH.DUR, "tear": TE.DUR}
 DEFAULT_EASE = {"slash": "inout", "whip": "inout", "page": PG.EASE}     # the others ease `in`; a spin has no ease
 INSERT_KEYS = {"from", "to", "shot", "shape", "anchor", "radius", "size", "offset", "ratio", "outline", "pop", "out", "expand",
                "aspect"}
@@ -209,6 +223,8 @@ def normalize_transition(spec, palette):
         return out
     if kind == "page":
         return PG.normalize(spec, out, palette, what)
+    if kind in ("peel", "shatter", "tear"):
+        return {"peel": PL, "shatter": SH, "tear": TE}[kind].normalize(spec, out, palette, what)
     if kind == "spin":
         out["after"] = float(spec.get("after", out["dur"]))
         if out["after"] <= 0:
@@ -602,6 +618,7 @@ def plan(data, fps, frame0, palette):
     last = None if duration is None else int(frame0) + int(round(float(duration) * fps)) - 1
     try:
         out["fx"] = FX.plan(data, fps, frame0, palette, last)
+        FX.VS.ride(out["fx"], out["transitions"], fps)            # cutouts riding a peel's corner or a tear's grips
     except FX.FxError as e:
         raise TransitionError(str(e)) from None
     for fx in out["fx"]:
@@ -705,6 +722,10 @@ def demands(pl, frames=None):
                 add(f, {"kind": "point", "key": f"t{tr['index']}", "expr": tr["center"]["expr"], "shot": tr["matte"]})
         if tr["kind"] == "slice" and tr["matte"] and (want is None or any(f in want for f in window)):
             add(tr["first"], {"kind": "matte", "shot": tr["matte"]}, always=True)   # its figure there holds the cut
+        if (tr["kind"] == "shatter" and tr["center"]["mode"] == "point"
+                and (want is None or any(f in want for f in window))):   # the impact, where the scene point is then
+            add(tr["first"], {"kind": "point", "key": f"t{tr['index']}", "expr": tr["center"]["expr"],
+                              "shot": tr["out"]}, always=True)
     for ins in pl["inserts"]:
         for f in range(ins["f0"], ins["f1"]):
             if ins["shot"] is not None:                      # a split's or an iris's video comes from its file

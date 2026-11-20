@@ -297,6 +297,9 @@ class PropBody(Metric):
         m = data.mesh(st["mesh"])
         root = m["roots"][args["prop"]]
         V = m["vertices"]
+        if not len(V):
+            raise CheckError(f"prop_body: {args['prop']!r} has no geometry at the frame it is read at (hidden there, or all "
+                             f"of it excluded): give `frame`, one where it is in the picture")
         n = int(args.get("samples", 4000))
         V = V[np.linspace(0, len(V) - 1, min(n, len(V))).astype(int)]
         X0 = (V - root[:3, 3]) @ np.linalg.inv(root[:3, :3]).T                            # the prop's own frame

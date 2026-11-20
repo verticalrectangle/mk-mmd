@@ -5,6 +5,7 @@ import re
 import tomllib
 from pathlib import Path
 
+import numpy as np
 import pytest
 from test_wordtype import FPS, entry, fake_measure, no_text_in, timeline, words_of
 
@@ -36,6 +37,19 @@ def test_slide_feeds_each_word_in_from_alternating_sides_and_clunks_home():
     assert k0["dxp"][-1][1] == pytest.approx(0.0) and k0["rot"][0][1] == pytest.approx(4.0)
     assert min(v for _, v in k0["sx"]) < 0.95 and k0["sx"][-1][1] == pytest.approx(1.0, abs=2e-3)      # the clunk dies away
     assert "opacity" not in k0                                                                         # hashed alpha is grainy: none
+
+
+def test_a_slide_word_is_home_on_its_landing_frame_and_slides_in_before_it():
+    tl = timeline()
+    specs, _ = run(tl, lyr={"line": 1, "style": "slide", "spread": False})
+    for s, w in zip(specs, tl["lines"][0]["words"]):
+        k = s["kinetic"]
+        land = math.floor(w["start"] * FPS + 0.4)
+        at = lambda keys, f: float(np.interp(f / FPS, *zip(*keys)))                       # noqa: E731
+        assert round(k["show"][0] * FPS) < land                                          # the slide plays before it
+        assert at(k["dxp"], land) == pytest.approx(0.0, abs=1e-6) and abs(at(k["rot"], land)) < 1e-6
+        assert at(k["sx"], land) < 0.95                                                  # home: the clunk begins there
+        assert abs(at(k["dxp"], land - 1)) > 0.001                                       # still on its way a frame before
 
 
 def test_slide_takes_its_numbers_and_rejects_bad_ones():

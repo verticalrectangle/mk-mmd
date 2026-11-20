@@ -3,8 +3,9 @@
 Words come from a lyrics file when one is given (one line per sung line; blank lines ignored) and otherwise from
 Whisper's own transcription, split into lines at its segment boundaries and at pauses. Either way the text is
 aligned to the vocal stem with wav2vec2 CTC forced alignment, then each word start is snapped to the nearest strong
-vocal onset (or the first sung sound after a breath when the word opens a phrase), and its end follows the voiced
-run. Whisper's own word times are kept for comparison. Nothing here prints lyric text."""
+vocal onset (or the first sung sound after a breath when the word opens a phrase), moved back to the attack of the
+sound its first letter sits in when the aligner put that letter well into it, and its end follows the voiced run.
+Whisper's own word times are kept for comparison. Nothing here prints lyric text."""
 import difflib
 import hashlib
 import os
@@ -221,9 +222,31 @@ def word_timeline(voc, sr, lines, clip_end, whisper=None, hop=S.HOP):
             gap_run = 0
         return best if best is not None and s_ctc - 0.45 <= best <= s_ctc + 0.05 else None
 
+    def attack(s_ctc, lo):
+        """Where the sound a word's first letter sits in began: the last vocal onset from `lo` to the CTC start at
+        which the voice comes up out of a dip (8 dB over its quietest of the 0.09 s before: a second flux peak a
+        tenth of a second into a held sound has no dip of its own) and then holds until that letter. CTC places a
+        letter where it is surest of it, and on a soft attack or a held vowel that is well into the sound: a line
+        that opens on a vowel came out 0.13 to 0.33 s late, past what the snap reaches, with no breath long or clean
+        enough for `phrase_onset` (one voiced hop in the breath, or an attack that rises through -30 dB over a few
+        hops, resets its run). The word began where the sound did."""
+        best, i1 = None, int(round(s_ctc / hop))
+        for t, _ in sorted(onsets):
+            if not lo <= t <= s_ctc + 0.05:
+                continue
+            i = int(round(t / hop))
+            after, before = rel[min(i + 3, m - 1):min(i + 11, m)], rel[max(i - 9, 0):max(i - 2, 1)]
+            if not len(after) or after.max() < -25 or after.max() - before.min() < 8:
+                continue
+            held = rel[min(i + 5, m):min(i1, m)]
+            if len(held) and held.min() < after.max() - 12:
+                continue
+            best = t
+        return best
+
     out = [{"words": []} for _ in lines]
-    prev = -1.0
-    stats = {"snapped": 0, "phrase": 0, "unaligned": 0}
+    prev = prev_e = -1.0
+    stats = {"snapped": 0, "phrase": 0, "attack": 0, "unaligned": 0}
     for wi, w in enumerate(words):
         letters = [ctc[(wi, ci)] for ci in range(len(w)) if (wi, ci) in ctc]
         if not letters:
@@ -239,8 +262,12 @@ def word_timeline(voc, sr, lines, clip_end, whisper=None, hop=S.HOP):
         if po is not None:
             s = po
             stats["phrase"] += 1
+        at = attack(s_ctc, max(prev + 0.05, prev_e - 0.03, s_ctc - 0.6))
+        if at is not None and at < s - 0.02:
+            s = at
+            stats["attack"] += 1
         s = max(s, prev + 0.04)
-        prev = s
+        prev, prev_e = s, e
         whw = wh_of.get(wi)
         out[line_of[wi]]["words"].append({"text": w, "start": round(s, 3), "end": round(max(e, s), 3),
                                           "ctc_start": round(s_ctc, 3),
