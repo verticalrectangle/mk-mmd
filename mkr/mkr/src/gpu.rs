@@ -10,6 +10,8 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub adapter: String,
+    /// wgpu 30 does not expose SHADER_EARLY_DEPTH_TEST on Metal; the g-buffer pass drops its force.
+    pub metal: bool,
     pub timestamps: bool,
     pub timestamp_period: f32,
     /// The driver's pipeline cache, loaded from and saved to `cache_path`.
@@ -18,7 +20,7 @@ pub struct Gpu {
 }
 
 /// What mkr cannot run without.
-pub fn required_features() -> wgpu::Features {
+pub fn required_features(metal: bool) -> wgpu::Features {
     wgpu::Features::EXPERIMENTAL_RAY_QUERY
         | wgpu::Features::TEXTURE_BINDING_ARRAY
         | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
@@ -27,7 +29,6 @@ pub fn required_features() -> wgpu::Features {
         | wgpu::Features::IMMEDIATES
         | wgpu::Features::DUAL_SOURCE_BLENDING
         | wgpu::Features::PRIMITIVE_INDEX
-        | wgpu::Features::SHADER_EARLY_DEPTH_TEST
         | wgpu::Features::INDIRECT_FIRST_INSTANCE
         | wgpu::Features::DEPTH32FLOAT_STENCIL8
         | wgpu::Features::FLOAT32_BLENDABLE
@@ -66,7 +67,8 @@ impl Gpu {
 
     async fn open() -> Result<Gpu> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        desc.backends = wgpu::Backends::VULKAN;
+        desc.backends = wgpu::Backends::from_env()
+            .unwrap_or(if cfg!(target_os = "macos") { wgpu::Backends::METAL } else { wgpu::Backends::VULKAN });
         desc.flags = wgpu::InstanceFlags::empty().with_env();
         let instance = wgpu::Instance::new(desc);
         let adapter = instance
@@ -83,7 +85,9 @@ impl Gpu {
             bail!("only a CPU Vulkan adapter ({}): mkr needs a GPU", info.name);
         }
         let have = adapter.features();
-        let need = required_features();
+        let metal = info.backend == wgpu::Backend::Metal;
+        let need = required_features(metal)
+            | if metal { wgpu::Features::empty() } else { wgpu::Features::SHADER_EARLY_DEPTH_TEST };
         if !have.contains(need) {
             bail!("the adapter {} lacks {:?}", info.name, need - have);
         }
@@ -133,6 +137,7 @@ impl Gpu {
             device,
             queue,
             adapter: format!("{} ({:?}, {})", info.name, info.backend, info.driver_info),
+            metal: info.backend == wgpu::Backend::Metal,
             timestamps,
             timestamp_period,
             cache,

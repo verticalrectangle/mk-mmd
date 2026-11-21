@@ -33,7 +33,14 @@ from . import transition as TRN
 from .ops_core import _namespace
 from .runtime import op
 
-ENGINES = {"eevee": "BLENDER_EEVEE_NEXT", "workbench": "BLENDER_WORKBENCH", "cycles": "CYCLES"}
+def _engine(name):
+    import bpy
+    enum = bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items
+    return {"eevee": "BLENDER_EEVEE_NEXT" if "BLENDER_EEVEE_NEXT" in enum else "BLENDER_EEVEE",
+            "workbench": "BLENDER_WORKBENCH", "cycles": "CYCLES"}[name]
+
+
+ENGINES = {"eevee": _engine("eevee"), "workbench": "BLENDER_WORKBENCH", "cycles": "CYCLES"}
 SURFACES = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
 
 

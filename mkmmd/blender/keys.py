@@ -10,11 +10,33 @@ from mathutils import Matrix, Quaternion, Vector
 INTERP = {"CONSTANT": 0, "LINEAR": 1, "BEZIER": 2}
 
 
+def set_engine(sc, engine):
+    """The render engine by mk's name: BLENDER_EEVEE_NEXT on 4.2, BLENDER_EEVEE from 5 on (the enum was renamed)."""
+    import bpy
+    names = {"eevee": "BLENDER_EEVEE_NEXT", "workbench": "BLENDER_WORKBENCH", "cycles": "CYCLES"}
+    if engine == "eevee" and "BLENDER_EEVEE_NEXT" not in bpy.types.RenderSettings.bl_rna.properties["engine"].enum_items:
+        engine = "BLENDER_EEVEE"
+    else:
+        engine = names.get(engine, engine)
+    sc.render.engine = engine
+
+
 def ensure_action(id_data, name=None):
+    import bpy
     ad = id_data.animation_data or id_data.animation_data_create()
     if ad.action is None:
         import bpy
         ad.action = bpy.data.actions.new(name or f"{id_data.name}_act")
+    # Blender 5: a slotted action plays only when the ID's `action_slot` points at one of
+    # its slots (5.2 leaves it None on a fresh action); without it every fcurve is dead.
+    if ad.action_slot is None and ad.action.slots:
+        want = ad.action.slots[0].target_id_type      # the fcurves' own target type
+        try:
+            if ad.action.slots[0].target_id_type == "OBJECT" and not isinstance(id_data, bpy.types.Object):
+                return ad.action                      # a KEY (shape key) with a stray OB slot: not assignable
+            ad.action_slot = ad.action.slots[0]
+        except RuntimeError:
+            pass                                      # an unsuitable slot: leave it unset (as before the 5 change)
     return ad.action
 
 

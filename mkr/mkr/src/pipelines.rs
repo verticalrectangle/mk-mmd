@@ -298,9 +298,12 @@ fn entry_prepass(m: &Material) -> String {
     format!("@fragment\nfn fa_{id}({ARGS}) {{\n    let threshold = alpha_threshold(in.p, imm.sample);\n    let s = fragment_surface(in, front, prim);\n    if (mat_{id}_alpha(s) <= threshold) {{\n        discard;\n    }}\n}}\n\n")
 }
 
-fn entry_gbuffer(m: &Material) -> String {
+fn entry_gbuffer(m: &Material, early_depth: bool) -> String {
     let id = &m.id;
-    format!("@fragment @early_depth_test(force)\nfn fg_{id}({ARGS}) -> GOut {{\n    let s = fragment_surface(in, front, prim);\n    return gbuffer_write(mat_{id}(s), s, in);\n}}\n\n")
+    // Metal's wgpu does not expose SHADER_EARLY_DEPTH_TEST; the g-buffer pass relies on the depth prepass, and
+    // Metal keeps its early tests on a shader with `discard` unless the driver decides otherwise.
+    let force = if early_depth { "@early_depth_test(force)" } else { "" };
+    format!("@fragment {force}\nfn fg_{id}({ARGS}) -> GOut {{\n    let s = fragment_surface(in, front, prim);\n    return gbuffer_write(mat_{id}(s), s, in);\n}}\n\n")
 }
 
 /// A hashed caster in a shadow map (shadows.rs): `fz_` keeps its opaque fragments (alpha 1, as an opaque caster's,
@@ -325,7 +328,7 @@ fn entry_forward(m: &Material) -> String {
 }
 
 /// The module of material `i` alone: its passes' entry points (and the light code when it lights closures itself).
-pub fn material_module(mats: &MaterialSet, i: usize, mode: ShadowMode) -> String {
+pub fn material_module(mats: &MaterialSet, i: usize, mode: ShadowMode, early_depth: bool) -> String {
     let m = &mats.list[i];
     let lit = m.blended || m.uses_shader_to_rgb;
     let mut s = core(mats);
@@ -340,7 +343,7 @@ pub fn material_module(mats: &MaterialSet, i: usize, mode: ShadowMode) -> String
     } else {
         s.push_str(GBUFFER_WRITE_WGSL);
         s.push('\n');
-        s.push_str(&entry_gbuffer(m));
+        s.push_str(&entry_gbuffer(m, early_depth));
         if m.transparent {
             s.push_str(&entry_prepass(m));
         }
@@ -607,6 +610,7 @@ pub fn make(gpu: &Gpu, layouts: &Layouts, mats: &MaterialSet, used: &[bool], mod
     }
 
     // the materials: one module each, their pipelines spread over threads (the driver compiles inside the calls)
+    let early_depth = !gpu.metal;             // wgpu 30 lacks SHADER_EARLY_DEPTH_TEST on Metal
     let n = mats.list.len();
     let jobs: Vec<usize> = (0..n).filter(|&i| used[i]).collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -620,7 +624,7 @@ pub fn make(gpu: &Gpu, layouts: &Layouts, mats: &MaterialSet, used: &[bool], mod
                         let j = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(&i) = jobs.get(j) else { break };
                         let m = &mats.list[i];
-                        let module = module(device, &format!("material {} ({})", m.name, m.id), material_module(mats, i, mode))?;
+                        let module = module(device, &format!("material {} ({})", m.name, m.id), material_module(mats, i, mode, early_depth))?;
                         let mut passes = Vec::new();
                         if m.blended {
                             passes.push(Pass::Blend);
