@@ -433,6 +433,14 @@ def _box(m, pad=1):
     return max(x - pad, 0), max(y - pad, 0), min(x + w + pad, W), min(y + h + pad, H)
 
 
+def _centroid(m):
+    """(x, y) px: the coverage-weighted middle of what `m` covers; None for nothing (or no coverage)."""
+    if m is None:
+        return None
+    mm = cv2.moments(np.ascontiguousarray(m, np.float32))
+    return None if mm["m00"] <= 1e-6 else (mm["m10"] / mm["m00"], mm["m01"] / mm["m00"])
+
+
 def _shifted(x, dx, dy, border):
     """A picture or a coverage moved `dx`, `dy` px (sub-pixel), the frame's edge as `border` says."""
     h, w = x.shape[:2]
@@ -612,11 +620,14 @@ class MandalaFx:
 
     def _trails(self, fx, frame, img):
         """The copies laid oldest first, each in its ramp colour (mixed with its own picture by 1 - `tint`) at its
-        opacity times the strength, then the figure of this frame back over them as it is."""
+        opacity times the strength (with `still`, times how far the figure has moved since: a hover leaves none), then
+        the figure of this frame back over them as it is, and with a `mask` the figure kept clear of them."""
         s, copies = self.trails_at(fx, frame)
         if s <= 0.0:
             return img
         out = np.array(img, np.float32, copy=True)
+        still = fx.get("still", 0.0) * float(min(self.size))
+        now = _centroid(self._figure(fx, frame)) if still > 0 else None
         for g, opacity, colour, (dx, dy) in copies:
             mg = self._figure(fx, g)
             if mg is None:
@@ -632,7 +643,17 @@ class MandalaFx:
             if pg is not None:
                 colour = pg[y0:y1, x0:x1] + (colour - pg[y0:y1, x0:x1]) * np.float32(fx["tint"])
             a = (np.float32(opacity) * mg[y0:y1, x0:x1])[..., None]
+            if now is not None:                        # gone where the figure has barely moved since (a hover)
+                was = _centroid(mg)
+                moved = 0.0 if was is None else math.hypot(was[0] - now[0], was[1] - now[1])
+                a = a * np.float32(min(max(moved / still - 1.0, 0.0), 1.0))
             out[y0:y1, x0:x1] = blend(out[y0:y1, x0:x1], colour, a, fx["blend"])
+        mf = MD.mask_figure(fx)                       # a mask: the copies only outside her (ground) or only on her
+        if mf is not None:
+            hm = self._figure({**mf, "index": fx["index"], "kind": fx["kind"]}, frame)
+            if hm is not None:
+                k = (hm if fx["mask"]["mode"] == "ground" else 1.0 - hm)[..., None]
+                out = out * (1.0 - k) + img * k
         m = self._figure(fx, frame)
         box = None if m is None else _box(m)
         if box is not None:

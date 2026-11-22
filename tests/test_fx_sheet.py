@@ -161,6 +161,29 @@ def test_fling_grows_toward_the_lens_and_leaves_the_frame():
         assert math.hypot(dx, dy) > 0.5 + end["scale"] / 2                  # out past any frame's edge by the end
 
 
+def test_fling_thrown_away_comes_in_large_and_falls_into_the_point():
+    base = {"kind": "fling", "from": 0.0, "to": 3.0, "center": [0.5, 0.6], "times": [1.0], "grow": 10.0, "life": 1.2}
+    near, fx = FX.normalize(base, DAWN), FX.normalize({**base, "away": True}, DAWN)
+    assert near["away"] is False
+    items = ST.fling_items(fx, [1.0])
+    assert items == ST.fling_items(near, [1.0])                   # the same stickers, their flight played backwards
+    for it in items:
+        start = ST.fling_at(fx, it, it["t0"])
+        assert start["scale"] == pytest.approx(fx["size"] * it["size"] * fx["grow"]) and start["depth"] < 0.11
+        assert math.hypot(*start["off"]) > 0.5 + start["scale"] / 2          # in from past any frame's edge
+        ages = [fx["life"] * k / 20 for k in range(1, 20)]
+        for a in ages:
+            s, m = ST.fling_at(fx, it, it["t0"] + a), ST.fling_at(near, it, it["t0"] + fx["life"] - a)
+            assert s["off"] == pytest.approx(m["off"]) and s["depth"] == pytest.approx(m["depth"])
+        sizes = [ST.fling_at(fx, it, it["t0"] + a)["scale"] for a in ages]
+        assert all(b < a for a, b in zip(sizes, sizes[1:]))                  # shrinking all the way in
+        end = ST.fling_at(fx, it, it["t0"] + fx["life"] * (1 - 1e-9))
+        assert end["scale"] < 1e-6 and math.hypot(*end["off"]) < 1e-6          # gone at the point
+        assert ST.fling_at(fx, it, it["t0"] + fx["life"] + 0.01) is None
+    with pytest.raises(FX.FxError, match="away"):
+        FX.normalize({**base, "away": "yes"}, DAWN)
+
+
 def test_sheet_reads_its_first_frame_and_the_frames_it_freezes():
     fx = plan([sheet(hollows=[{"t": 0.5, "at": [0.75, 0.6]}], peel={"t": 2.5})])["fx"][0]
     f = FX.frame_of(2.0, FPS, F0)

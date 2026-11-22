@@ -4,10 +4,13 @@ picture work.
 
     mandala  concentric rings of copies about a `center` on a `back`: copies of the figure (cut out as a collage cuts
              it), of sprites (pictures with alpha: registry slugs, tags, files, globs) or of stickers drawn here (flat
-             ones: a clover, a flower, a heart, a star, a butterfly; and two kits drawn with a pen's ink line: a moon, a
-             rabbit, a carrot and dango; a daisy, a cassette, a pedal and cherries). Each ring turns its own way, steps
-             on the hits and blooms outward on them; with `grow` its copies pop in one by one; every copy may wear a
-             die-cut `edge` and cast a `shadow`, and the figure itself may stay in the middle (`center_figure`)
+             ones: a clover, a flower, a heart, a star, a butterfly; and kits drawn with a pen's ink line: a moon, a
+             rabbit, a carrot and dango; a daisy, a cassette, a pedal and cherries; a book, a teacup and a potion; a
+             pick, a note, a sparkle, a cloud and a strawberry; a pond's lily, lily pad, bud, reed, dragonfly and drop
+             and a café's croissant, cup, sugar cube, orange slice and coffee bean, drawn in mkmmd.core.pondkit). Each
+             ring turns its own way, steps on the hits and blooms outward on them; with `grow` its copies pop in one by
+             one; every copy may wear a die-cut `edge` and cast a `shadow`, and the figure itself may stay in the
+             middle (`center_figure`)
     trails   rainbow after-images of the figure: its coverage `delay` frames apart back to `count` copies, each in a
              colour of a ramp that cycles (`cycle` steps a second, and one on each hit), fading with age, behind it
 
@@ -21,11 +24,13 @@ import numpy as np
 
 from . import eyes as EY
 from . import picturefx as PC
+from . import pondkit as PK
 from . import tween as TW
 
 KINDS = ("mandala", "trails")
 SHAPES = ("clover", "flower", "heart", "star", "butterfly", "moon", "rabbit", "carrot", "dango", "daisy", "cassette",
-          "pedal", "cherry", "book", "teacup", "potion", "pick", "note", "sparkle", "cloud", "strawberry")
+          "pedal", "cherry", "book", "teacup", "potion", "pick", "note", "sparkle", "cloud", "strawberry",
+          "lily", "lilypad", "bud", "reed", "dragonfly", "drop", "croissant", "cup", "sugar", "orange", "bean")
 ROLES = ("main", "dark", "light", "accent", "accent_dark", "ink", "paper")   # what a shape's part is painted in
 ORIENTS = ("radial", "upright")               # a copy's top: away from the centre, or up the frame
 ORDERS = ("rings", "inward", "around", "random")   # the order a grow pops the copies in
@@ -38,14 +43,21 @@ SHAPE_COLORS = {"clover": ("pine", "foam"), "flower": ("love", "rose", "iris"), 
                 "pedal": ("love", "pine", "iris", "gold"), "cherry": ("love", "rose"),
                 "book": ("iris", "love", "pine"), "teacup": ("rose", "iris", "foam"),
                 "potion": ("iris", "foam", "love"), "pick": ("gold", "love", "iris"), "note": ("iris", "pine", "love"),
-                "sparkle": ("gold", "rose", "foam"), "cloud": ("foam", "iris"), "strawberry": ("love", "rose")}
+                "sparkle": ("gold", "rose", "foam"), "cloud": ("foam", "iris"), "strawberry": ("love", "rose"),
+                "lily": ("rose", "love", "iris"), "lilypad": ("pine", "foam"), "bud": ("rose", "love", "iris"),
+                "reed": ("love", "gold"), "dragonfly": ("iris", "foam", "pine"), "drop": ("foam", "iris"),
+                "croissant": ("gold", "rose"), "cup": ("rose", "iris", "foam"), "sugar": ("rose", "iris", "foam"),
+                "orange": ("gold", "love", "rose"), "bean": ("love", "rose")}
 SHAPE_ACCENT = {"clover": "gold", "flower": "gold", "heart": "rose", "star": "love", "butterfly": "gold",
                 "moon": "rose", "rabbit": "love", "carrot": "pine", "dango": "foam", "daisy": "gold", "cassette": "gold",
                 "pedal": "gold", "cherry": "pine", "book": "gold", "teacup": "gold", "potion": "gold", "pick": "rose",
-                "note": "gold", "sparkle": "rose", "cloud": "rose", "strawberry": "pine"}
+                "note": "gold", "sparkle": "rose", "cloud": "rose", "strawberry": "pine", "lily": "gold",
+                "lilypad": "gold", "bud": "pine", "reed": "pine", "dragonfly": "pine", "drop": "pine",
+                "croissant": "gold", "cup": "gold", "sugar": "gold", "orange": "pine", "bean": "gold"}
 PEN = 0.022                                  # the ink line round a drawn sticker's parts, of its box before scaling
 PENNED = ("moon", "rabbit", "carrot", "dango", "daisy", "cassette", "pedal", "cherry", "book", "teacup",
-          "potion", "pick", "note", "sparkle", "cloud", "strawberry")   # drawn with it: the four kits
+          "potion", "pick", "note", "sparkle", "cloud", "strawberry", "lily", "lilypad", "bud", "reed", "dragonfly",
+          "drop", "croissant", "cup", "sugar", "orange", "bean")   # drawn with it: the six kits
 SCALE = {"figure": 0.25, "sticker": 0.12}    # a ring's `scale` by default: a copy's height (the figure's) or longer side
 RING = {"count": None, "radius": None, "scale": None, "turn": 12.0, "step": 0.0, "phase": 0.0, "mirror": False,
         "spin": 0.0, "orient": "radial", "angle": 0.0, "source": "figure", "fill": None}
@@ -55,12 +67,13 @@ MAX_RINGS, MAX_COPIES = 12, 64                # rings in a mandala, copies on a 
 KEYS = {"mandala": {"objects", "back", "fill", "edge", "shadow", "keys", "pivot", "inks", "offset", "times", "lane",
                     "min_db", "every", "center", "rings", "bloom", "grow", "center_figure", "alternate", "seed", "snap"},
         "trails": {"objects", "count", "delay", "colors", "cycle", "spread", "fade", "blend", "step", "tint", "snap",
-                   "times", "lane", "min_db", "every"}}
+                   "times", "lane", "min_db", "every", "mask", "still"}}
 DEFAULTS = {"mandala": {"back": "base", "fill": "picture", "edge": None, "shadow": None, "keys": None, "pivot": "base",
                         "inks": None, "offset": [4.0, -3.0], "min_db": None, "every": 1, "center": [0.5, 0.5],
                         "bloom": None, "grow": None, "center_figure": False, "alternate": True, "seed": 1, "snap": 0.2},
             "trails": {"count": 6, "delay": 2, "colors": list(RAINBOW), "cycle": 1.0, "spread": 1.0, "fade": 0.85,
-                       "blend": "over", "step": [0.0, 0.0], "tint": 1.0, "snap": 0.12, "min_db": None, "every": 1}}
+                       "blend": "over", "step": [0.0, 0.0], "tint": 1.0, "snap": 0.12, "min_db": None, "every": 1,
+                       "mask": None, "still": 0.0}}
 
 
 # ================================================================================================= the entries
@@ -256,12 +269,25 @@ def _trails(FX, spec, out, palette, what):
     out["delay"] = FX._num(out["delay"], f"{what} delay", 1, 60, integer=True)
     out["colors"] = FX._colours(out["colors"], palette, f"{what} colors")
     for k, lo, hi in (("cycle", None, None), ("spread", None, None), ("fade", 0.0, 1.0), ("tint", 0.0, 1.0),
-                      ("snap", 0.0, None)):
+                      ("snap", 0.0, None), ("still", 0.0, 1.0)):
         out[k] = FX._num(out[k], f"{what} {k}", lo, hi)
     if out["blend"] not in TRAIL_BLENDS:
         raise FX.FxError(f"{what}: blend {out['blend']!r} is none of {', '.join(TRAIL_BLENDS)}")
     out["step"] = FX._pair(out["step"], f"{what} step")
     FX._hits(spec, out, what, required=False)
+    m = out["mask"]
+    if m is not None:
+        if not isinstance(m, dict) or len(m) != 1 or next(iter(m)) not in ("ground", "figure"):
+            raise FX.FxError(f"{what}: mask = {m!r}: expected {{ground = <object patterns>}} (the copies only outside "
+                             f"that figure: her) or {{figure = <object patterns>}}")
+        mode = next(iter(m))
+        out["mask"] = {"mode": mode, "objects": _objects(FX, {"objects": m[mode]}, f"{what} mask")}
+
+
+def mask_figure(fx):
+    """The figure a trail's `mask` reads (her: {objects}, as a collage's figure is named for its layer), or None."""
+    m = fx.get("mask") if fx["kind"] == "trails" else None
+    return None if m is None else {"objects": m["objects"]}
 
 
 # ================================================================================================= what they read
@@ -846,7 +872,9 @@ _SHAPE_PARTS = {"clover": _clover, "flower": _flower, "heart": _heart_parts, "st
                 "moon": _moon, "rabbit": _rabbit, "carrot": _carrot, "dango": _dango, "daisy": _daisy,
                 "cassette": _cassette, "pedal": _pedal, "cherry": _cherry, "book": _book, "teacup": _teacup,
                 "potion": _potion, "pick": _pick, "note": _note, "sparkle": _sparkle, "cloud": _cloud,
-                "strawberry": _strawberry}
+                "strawberry": _strawberry, "lily": PK.lily, "lilypad": PK.lilypad, "bud": PK.bud, "reed": PK.reed,
+                "dragonfly": PK.dragonfly, "drop": PK.drop, "croissant": PK.croissant, "cup": PK.cup,
+                "sugar": PK.sugar, "orange": PK.orange, "bean": PK.bean}
 
 
 def shape_parts(name):

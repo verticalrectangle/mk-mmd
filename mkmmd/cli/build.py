@@ -11,8 +11,8 @@ from .. import bridge
 from .. import memory as MEM
 from .common import add_project_arg, emit, get_project, UsageError
 
-STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
-          "keys", "breathe", "sim", "folds", "cloth", "stepped", "marionette", "clip", "save", "bake"]
+STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "flight", "perform", "ribbons", "shots", "lights",
+          "text", "keys", "breathe", "sim", "folds", "cloth", "stepped", "marionette", "wire", "clip", "save", "bake"]
 BUILDING = STAGES[:-3]                     # what --until names; clip, save and bake follow
 PEAK_FILE = "build_memory.json"            # in the project's cache: the last build's peak (one Blender's resident memory)
 MARGIN = 2e9                               # bytes to spare beyond two Blenders at that peak
@@ -27,6 +27,8 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   cast      [[cast]]                  models imported (no Bullet), named, placed; group/material morphs bound
   pose      [pose.<cast>], [[move.<cast>]]   sitting or standing, feet, arm IK, grips, worn props, named moves
   motion    [[motion.<cast>]]         VMD motions on NLA strips
+  flight    [[flight]]                props flown relative to a target (a bone, a point): hung on it, its moves keyed
+                                      as offsets, so perform's gaze finds them
   perform   [perform.<cast>]          gaze, blinks, breathing, sway, lip sync, strumming
   ribbons   [[ribbon]]                3D paint strokes (crayon, toothpaste, neon) drawn on in the scene, kept clear of
                                       the cast's bodies
@@ -42,6 +44,8 @@ Stages, in order: """ + " ".join(STAGES) + """. Each reads its own sections of m
   folds     [folds.<cast>]            fold shapes a joint angle drives (rig.json folds), keyed from the final pose
   cloth     [cloth.<cast>]            garments' cloth copies (rig.json cloth) simulated with Blender's cloth, cached
   stepped   [[stepped]]               the cast on twos: poses held 1 / fps s at a time, the cameras on every frame
+  wire      [[flight]]                the flown props baked where their targets ended up (lag, heading, bank, perches)
+                                      and their wires drawn from the hand, kept out of the target
   clip                                every shot camera starts at half the depth of the nearest geometry it sees, on
                                       every frame (fine depth: what a model hides behind the skin stays hidden)
   save                                the .blend

@@ -142,6 +142,13 @@ def twists(rest, side, S, E, W, d, p, P=None):
     return SIGN["L"] * twist(Re.T @ Rh, a0), SIGN["L"] * twist(Ru, u0)
 
 
+def palm_down(n, up):
+    """A rest palm normal `n` (from the index and little fingers' roots about the wrist) facing away from `up`, the
+    armature's own up as it stands in the world: MMD rests the palms down in the armature's frame, whatever way the body
+    lies (decided by the world's z, a body on its back gets its palms turned up)."""
+    return -n if float(np.dot(n, up)) > 0.0 else n
+
+
 def excess(value, limits, margin=0.0):
     """How far (degrees, >= 0) `value` lies outside `limits` (lo, hi) narrowed by `margin` on each side; 0 inside."""
     return max(limits[0] + margin - value, value - limits[1] + margin, 0.0)

@@ -54,7 +54,7 @@ PERFORM = {
 }
 
 SIM = {k: None for k in ("families", "params", "colliders", "props", "fingers", "floor", "wind", "use_masks", "anchor_free",
-                         "substeps", "settle_s", "engine", "gravity")}
+                         "substeps", "settle_s", "engine", "gravity", "loop")}
 
 FOLDS = {"enabled": None, "depth": None}
 

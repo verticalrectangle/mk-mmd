@@ -1,6 +1,6 @@
 """Sticker sheets on the finished pictures (docs/design.md: Frame effects, Sticker sheets): the picture work of the `[[fx]]`
-kinds `sheet` and `fling` that mkmmd.core.sheet checks, times and lays out. SheetFx is the part of mkmmd.framefx.FrameFx
-that runs them.
+kinds `sheet`, `fling` and `thread` (mkmmd.thread) that mkmmd.core.sheet checks, times and lays out. SheetFx is the part
+of mkmmd.framefx.FrameFx that runs them.
 
 A sheet is drawn back to front: the paper (made once per output, a little larger than the frame, and carried by the
 desk's drift on every frame), the hollow outlines (each made once into a tile), the doodles (the pen kits' tiles,
@@ -15,10 +15,12 @@ import numpy as np
 
 from . import mandala as MDF
 from . import peel as PL
+from . import thread as THF
 from .core import framefx as FX
 from .core import mandala as MD
 from .core import peel as PE
 from .core import sheet as ST
+from .core import table as TB
 
 WHITE = (1.0, 1.0, 1.0)
 LIFT_OFFSET = 3.0        # a lifted sticker's shadow falls this many times farther at lift 1 ...
@@ -34,6 +36,7 @@ FLING_SAMPLES = 16       # at most this many samples over a frame's shutter for 
 SIZE_STEP = 1.25         # a thrown sticker's tile is cut at sizes this far apart and shrunk to the size it shows at
 FLING_SHUTTER = 0.5      # a thrown sticker's streak: the share of a frame's time it is smeared over
 FLING_RIM_AT = 0.1       # a thrown sticker's rim is its `edge` width where it is this many frame heights long
+TILES = 400              # doodle and thrown-sticker tiles kept (a table's are cut again as its view zooms)
 
 
 def _ff():
@@ -554,7 +557,7 @@ class SheetFx:
             ys = np.clip(np.rint(p[:, 1] * H - 0.5).astype(int), 0, H - 1)
             return far[ys, xs] / H
         centre = (0.5, 0.5) if st["centre"] is None else ((st["centre"][0] + 0.5) / W, (st["centre"][1] + 0.5) / H)
-        out = {"deal": [], "places": [], "wave": [], "hops": [], "origin": None, "peel": {}, "scribbles": [],
+        out = {"deal": [], "places": [], "wave": [], "hops": [], "origin": None, "peel": {}, "slaps": {}, "scribbles": [],
                "tapes": []}
         clear = list(dd["clear"]) if dd is not None else []
         if dd is not None and dd["count"] > 0:
@@ -577,7 +580,7 @@ class SheetFx:
             out.update(deal=deal, places=places, wave=ST.ripple(places, centre), hops=hops,
                        origin=None if dd["jump"] is None else
                        centre if dd["jump"]["from"] == "figure" else tuple(dd["jump"]["from"]),
-                       peel=ST.peel_order(dd, places, centre, fx["seed"]))
+                       peel=ST.peel_order(dd, places, centre, fx["seed"]), slaps=ST.slap_order(dd, places))
             clear += [(p[0] - r * H / W, p[1] - r, p[0] + r * H / W, p[1] + r)
                       for p, r in zip(places, radii) if p is not None]
         if sc is not None and sc["count"] > 0:
@@ -593,8 +596,8 @@ class SheetFx:
             out["tapes"] = ST.tape_places(tp, W / H, fx["seed"], away)
         return out
 
-    def _doodle_tile(self, fx, d, size_px):
-        dd = fx["doodles"]
+    def _doodle_tile(self, fx, d, size_px, dd=None):
+        dd = fx["doodles"] if dd is None else dd
         main = tuple(FX.pick(ST.colours(dd, d["shape"]), d["color"]))
         accent, alt, _ = dd["own"][d["shape"]]
         accent = alt if tuple(accent) == main else accent
@@ -606,10 +609,14 @@ class SheetFx:
             pen = 0.0 if d["shape"] in MD.PENNED else MD.PEN
             t = self._sheet_tiles[key] = MDF.shape_tile(d["shape"], main, tuple(accent), tuple(dd["ink"]),
                                                         int(round(size_px)), ew, pen)
+            while len(self._sheet_tiles) > TILES:
+                self._sheet_tiles.pop(next(iter(self._sheet_tiles)))
         return t
 
     # ---------------------------------------------------------------- the sheet
     def _sheet(self, fx, frame, img):
+        if fx.get("clip") is not None:                       # a table: the clip under it, seen through its view
+            return self._table(fx, frame, img)
         FF = _ff()
         W, H = self.size
         t = self._t(frame)
@@ -693,17 +700,25 @@ class SheetFx:
             scribble(out, lines, np.asarray(at), it["size"] * H, it["angle"] + _turn_of(D), it["ink"],
                      sc["width"] * self.px, jitter)
 
-    def _doodles(self, fx, t, out, D, st, shadow):
+    def _doodles(self, fx, t, out, D, st, shadow, dd=None, plan=None, space=None):
         """The doodles at clip second `t`, the highest lifted last; one moving fast (a jump) is drawn at samples over a
-        frame's shutter, so it streaks."""
-        dd, plan = fx["doodles"], st["doodles"]
-        W, H = self.size
+        frame's shutter, so it streaks. `dd` and `plan` are a doodle group and its layout (the sheet's doodles by
+        default; a plan's `origins`, one for each, stand for its one `origin`: a table's drops); `space` the (w, h) px
+        their places are fractions of (the frame's by default; a table's own, `D` zooming them into the frame: each is
+        cut at the size it shows at, in steps SIZE_STEP apart, so it stays sharp, and one wholly off the frame is not
+        drawn)."""
+        dd = fx["doodles"] if dd is None else dd
+        plan = st["doodles"] if plan is None else plan
+        W, H = self.size if space is None else space
+        z = 1.0 if space is None else TB.zoom_of(D)
         e = self._sheet_edge(fx)
         dt = 1.0 / self.fps
+        origins = plan.get("origins")
 
         def state(j, d, at, tau):
             return ST.doodle_at(tau, d, at, plan["wave"][j], dd["jump"], plan["hops"], dd["hop"], plan["peel"].get(j),
-                                dd["peel"]["dur"] if dd["peel"] else 0.0, plan["origin"])
+                                dd["peel"]["dur"] if dd["peel"] else 0.0, origins[j] if origins else plan["origin"],
+                                plan["slaps"].get(j))
         drawn = []
         for j, (d, at) in enumerate(zip(plan["deal"], plan["places"])):
             if at is not None:
@@ -711,19 +726,26 @@ class SheetFx:
                 if s["shown"]:
                     drawn.append((s["lift"], j, d, at, s))
         for lift, j, d, at, s in sorted(drawn, key=lambda x: (x[0], x[1])):
-            size = dd["size"] * d["size"] * H
-            tile = self._doodle_tile(fx, d, size)
+            size = dd["size"] * d["size"] * H * z
+            k = 1.0
+            if space is not None:                          # cut a size step up and shrunk to the size it shows at
+                if not _on_frame(_apply(D, (s["at"][0] * W - 0.5, s["at"][1] * H - 0.5)), size * (1.0 + s["scale"]),
+                                 self.size):
+                    continue
+                q = SIZE_STEP ** math.ceil(math.log(max(size, 2.0)) / math.log(SIZE_STEP))
+                size, k = q, size / q
+            tile = self._doodle_tile(fx, d, size, dd)
 
             def placed(s):
                 at_px = _apply(D, (s["at"][0] * W - 0.5, s["at"][1] * H - 0.5))
-                return _sticker_map(at_px, s["angle"] + _turn_of(D), s["scale"] * s["sx"], s["scale"] * s["sy"],
+                return _sticker_map(at_px, s["angle"] + _turn_of(D), k * s["scale"] * s["sx"], k * s["scale"] * s["sy"],
                                     tile.anchor)
             if s["peel"] is not None:
-                self._peel_doodle(fx, out, tile, placed(s), d, s["peel"], size, shadow)
+                self._peel_doodle(fx, out, tile, placed(s), d, s["peel"], size * k, shadow, dd["peel"])
                 continue
             a, b = state(j, d, at, t - 0.5 * dt), state(j, d, at, t + 0.5 * dt)
-            move = math.hypot((b["at"][0] - a["at"][0]) * W, (b["at"][1] - a["at"][1]) * H) + \
-                math.radians(abs(b["angle"] - a["angle"])) * size / 2.0
+            move = math.hypot((b["at"][0] - a["at"][0]) * W, (b["at"][1] - a["at"][1]) * H) * z + \
+                math.radians(abs(b["angle"] - a["angle"])) * size * k / 2.0
             n = int(min(max(math.ceil(move / (4.0 * self.px)), 1), FLING_SAMPLES))
             if n == 1 or not (a["shown"] and b["shown"]):
                 MDF.lay(out, tile, placed(s), None if e is None else e[0], lift_shadow(shadow, lift))
@@ -852,10 +874,10 @@ class SheetFx:
             return fx["peel"]["back"]
         return fx["paper"]["light"] if fx["paper"] is not None else WHITE
 
-    def _peel_doodle(self, fx, out, tile, M, d, u, size, shadow):
-        """A doodle peeled off, `u` of its time through: laid alone on a clear frame and rolled back as the figure's
-        sticker is, from the corner away from the nearest edge of the frame (it lifts toward that edge), clear of its
-        place and gone."""
+    def _peel_doodle(self, fx, out, tile, M, d, u, size, shadow, dp):
+        """A doodle peeled off by its group's peel `dp`, `u` of its time through: laid alone on a clear frame and rolled
+        back as the figure's sticker is, from the corner away from the nearest edge of the frame (it lifts toward that
+        edge), clear of its place and gone."""
         e = self._sheet_edge(fx)
         got = stamp(tile, M, self.size, None if e is None else e[0], None)
         if got is None:
@@ -864,7 +886,6 @@ class SheetFx:
         W, H = self.size
         face, ring = np.zeros((H, W, 3), np.float32), np.zeros((H, W), np.float32)
         face[y0:y1, x0:x1], ring[y0:y1, x0:x1] = rgb, a
-        dp = fx["doodles"]["peel"]
         corner = dp["corner"]
         if corner is None:                       # it slides toward -n: pinch the side away from the nearest edge
             cx, cy = (x0 + x1) / 2.0 / W, (y0 + y1) / 2.0 / H
@@ -875,8 +896,9 @@ class SheetFx:
 
     # ---------------------------------------------------------------- fling
     def _fling(self, fx, frame, img):
-        """Stickers thrown at the lens: the farthest first, each streaked over half a frame's shutter (short streaks in
-        its own colours), its rim in proportion to it, its white back for the frame or two it flips over."""
+        """Stickers thrown at the lens (or away from it, into the point): the farthest first, each streaked over half a
+        frame's shutter (short streaks in its own colours), its rim in proportion to it, its white back for the frame or
+        two it flips over."""
         t = self._t(frame)
         W, H = self.size
         c = self._at(fx, frame)[0]
@@ -943,11 +965,21 @@ class SheetFx:
                                                         int(round(size_px)), edge_px, pen)
         return t
 
+    # ---------------------------------------------------------------- thread
+    def _thread(self, fx, frame, img):
+        """A thread tied to a sheet's live sticker (mkmmd.thread)."""
+        return THF.draw(self, fx, frame, img)
+
 
 def _turn_of(M):
     """The turn (degrees counter-clockwise) of a 2 x 3 map."""
     M = _affine(M)
     return math.degrees(math.atan2(M[0, 1], M[0, 0]))
+
+
+def _on_frame(p, reach, size):
+    """Whether something at frame px `p` reaching `reach` px round it can show in a picture of `size`."""
+    return -reach < p[0] < size[0] + reach and -reach < p[1] < size[1] + reach
 
 
 def _accumulate(acc, box, rgb, a):

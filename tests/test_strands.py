@@ -332,6 +332,23 @@ def test_quaternions_from_matrices_are_unit_and_continuous_through_a_half_turn()
     assert np.allclose(q[:, 0, 0], np.cos(angle / 2)) and np.allclose(geom.quat_to_mat(q[:, 0]), Rs[:, 0])
 
 
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_a_looping_clip_starts_its_strands_where_its_end_left_them(engine):
+    F, k0 = 90, 30                                                  # clip time 0 at frame 30, after a second of pre-roll
+    f = np.arange(F)
+    pos = np.zeros((F, 3))
+    pos[:, 0] = 0.3 * np.clip((f - 55) / 5.0, 0, 1) * np.clip((66 - f) / 5.0, 0, 1)   # a shove; still on both sides
+    sc = scene(straight_rig(), F, poses={0: (pos, np.tile([1.0, 0, 0, 0], (F, 1)))})
+    plain, looped = run(sc, engine=engine), run(sc, engine=engine, loop=k0 - 1)
+    for r in (plain, looped):
+        r.step = np.linalg.norm(r.x[F - 1, 4] - r.x[F - 2, 4])     # the tip still swinging at the end
+        r.jump = np.linalg.norm(r.x[k0, 4] - r.x[F - 1, 4])        # the wrap, last frame -> frame 0
+    assert plain.jump > 10 * plain.step                             # rested in the pre-roll: frame 0 jumps
+    assert looped.jump < 2 * looped.step and looped.loop["switch_mm"] < 0.5   # goes on from the end
+    assert np.array_equal(looped.x[F - 1], plain.x[F - 1])          # and the end is the first run's
+    assert np.array_equal(looped.x[:k0 - 1], plain.x[:k0 - 1])      # the frames before the seed as they were
+
+
 # ---------------------------------------------------------------- numba kernels against the numpy engine
 def busy_scene(F=31):
     """Three strands swinging on a moving anchor among every kind of shape, in a gusty carrier's air."""

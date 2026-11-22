@@ -25,9 +25,11 @@ from . import paintapp as PAF
 from . import picturefx as PF
 from . import prints as PRF
 from . import remap as RMF
+from . import rewind as RWF
 from . import shapes as SHF
 from . import sheet as STF
 from . import stack as SKF
+from . import table as TBF
 from . import videosticker as VSF
 from .core import breathe as BR
 from .core import framefx as FX
@@ -925,7 +927,7 @@ def check_footage(fxs, footage_of):
 # ================================================================================================= over a cut
 class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
               SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx, CKF.KeyFx, SHF.ShapesFx,
-              HZF.HazeFx, MTF.MitosisFx, INF.InsetFx, STF.SheetFx):
+              HZF.HazeFx, MTF.MitosisFx, INF.InsetFx, STF.SheetFx, TBF.TableFx, RWF.RewindFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
@@ -993,6 +995,8 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         self._key_init()
         self._mitosis_init()
         self._sheet_init()
+        self._table_init()
+        self._rewind_init()
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))

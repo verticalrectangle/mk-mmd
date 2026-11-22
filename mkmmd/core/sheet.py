@@ -10,9 +10,14 @@ checked, timed and laid out; mkmmd/sheet.py draws them.
             line), or of one that is still there and is peeled off in the span (a hollow's own `peel`: a blank die cut
             of that shape in a flat colour lies in it, fades, and is rolled off as the figure's sticker is); and
             `doodles`, stickers of the pen-drawn kits scattered clear of the figure and of given boxes, jumping
-            out from under the slap, hopping on the hits and peeled off one by one
+            out from under the slap, slapped down one by one on their times, hopping on the hits and peeled off one by
+            one. With a `clip` the sheet is a table: the clip under everything instead of paper, seen through a `view`
+            of its own, a cup of coffee with pads, rings and drops on it, punched through into the next shot
+            (mkmmd.core.table)
     fling   stickers thrown from a point (a scene point: a guitar's body) at the lens on the hits, growing and turning as
-            they come, their white backs showing as they flip, and leaving by the frame's edges
+            they come, their white backs showing as they flip, and leaving by the frame's edges; or (`away`) thrown
+            away from the lens: coming in large past the frame's edges and falling away into the point, shrinking
+    thread  a thread tied to a sheet's live sticker, streaming out past the frame's edge (mkmmd.core.thread)
 
 Times are clip seconds, places frame fractions (0, 0 the top left), sizes frame heights. Every motion is a function of the
 clip second and the seed (the slap's spring, a jump's arc, a hop, a peel's pull: mkmmd.core.sheet3d.hand, as the peel
@@ -23,8 +28,10 @@ import numpy as np
 
 from . import peel as PE
 from . import sheet3d as S3
+from . import table as TB
+from . import thread as TH
 
-KINDS = ("sheet", "fling")
+KINDS = ("sheet", "fling") + TH.KINDS          # a thread is tied to a sheet's live sticker (mkmmd.core.thread)
 DOODLE_SHAPES = ("star", "heart", "pick", "note", "sparkle", "cloud", "strawberry", "moon", "rabbit", "carrot")
 POPS = ("love", "gold", "rose", "pine", "foam", "iris")          # the palette's pops, a doodle's colour in turn
 EDGE = {"color": "#ffffff", "width": 16.0}                      # a sticker's die-cut rim, px at 1080 on the short side
@@ -42,7 +49,8 @@ BLANK = {**PEEL, "color": "muted", "fade": None}   # a hollow's own peel: the bl
 BLANK_FADE = 0.8       # how far a blank sticker's colour has gone toward the paper's light by the end of its `fade`
 DOODLES = {"count": 10, "shapes": list(DOODLE_SHAPES), "colors": None, "size": 0.07, "vary": 0.25, "tilt": 25.0,
            "area": [0.03, 0.03, 0.97, 0.97], "clear": [], "gap": 0.015, "hop": None, "jump": None, "peel": None,
-           "seed": 1}
+           "slap": None, "seed": 1}
+DSLAP = {"size": 1.3, "drop": 0.08, "squash": 0.15, "settle": 0.25}     # a doodle slapped down: the figure's slap's
 HOP = {"height": 0.22, "dur": 0.2, "ripple": 0.03, "min_db": None, "every": 1}
 JUMP = {"from": "figure", "dur": 0.5, "stagger": 0.06, "height": 0.8, "spin": 120.0}
 DPEEL = {"dur": 0.35, "radius": 0.1, "order": "shuffle"}
@@ -54,17 +62,17 @@ SCRIBBLES = {"count": 8, "shapes": ["heart", "star", "spiral", "underline", "arr
              "size": 0.05, "width": 3.5, "fps": 8.0, "wobble": 1.2, "seed": 1}
 SCRIBBLE_SHAPES = ("heart", "star", "spiral", "underline", "arrow", "rabbit")
 FLING = {"count": 6, "shapes": list(DOODLE_SHAPES), "colors": None, "size": 0.035, "grow": 12.0, "life": 0.55,
-         "spread": 0.12, "spin": 160.0, "flip": 0.5, "aim": None, "aimed": 2,
+         "spread": 0.12, "spin": 160.0, "flip": 0.5, "aim": None, "aimed": 2, "away": False,
          "edge": {"color": "#ffffff", "width": 12.0}, "shadow": {"alpha": 0.25}, "seed": 1, "min_db": None,
          "every": 1}
 KEYS = {"sheet": {"objects", "shot", "at", "height", "pivot", "keys", "edge", "shadow", "paper", "drift", "slap", "peel",
-                  "hollows", "doodles", "tapes", "scribbles", "seed"},
+                  "hollows", "doodles", "tapes", "scribbles", "seed"} | set(TB.KEYS),
         "fling": {"center", "times", "lane", "min_db", "every", "count", "shapes", "colors", "size", "grow", "life",
-                  "spread", "spin", "flip", "aim", "aimed", "edge", "shadow", "seed"}}
+                  "spread", "spin", "flip", "aim", "aimed", "away", "edge", "shadow", "seed"}, **TH.KEYS}
 DEFAULTS = {"sheet": {"objects": None, "shot": None, "at": None, "height": None, "pivot": "base", "keys": None,
                       "edge": {}, "shadow": {}, "paper": {}, "drift": {}, "slap": None, "peel": None, "hollows": None,
-                      "doodles": None, "tapes": None, "scribbles": None, "seed": 1},
-            "fling": {k: v for k, v in FLING.items()}}
+                      "doodles": None, "tapes": None, "scribbles": None, "seed": 1, **{k: None for k in TB.KEYS}},
+            "fling": {k: v for k, v in FLING.items()}, **TH.DEFAULTS}
 REACH = 0.62           # a doodle's reach about its middle, a share of its longer side (a shape turned a little)
 TRIES = 96             # candidates a doodle's place is picked from (the one farthest from the rest)
 JUMP_LAND = 0.78       # the share of a jump that its arc takes; the rest is the little hop it lands with
@@ -91,8 +99,11 @@ def beat_times(beats, downbeats, every):
 
 # ================================================================================================= the entries
 def normalize(spec, out, palette, what):
-    """A sheet's or a fling's own keys checked and filled in, in place (`out` has its kind's defaults under `spec`)."""
+    """A sheet's, a fling's or a thread's own keys checked and filled in, in place (`out` has its kind's defaults under
+    `spec`)."""
     from . import framefx as FX          # framefx imports this module; its helpers are all there by the time this runs
+    if out["kind"] in TH.KINDS:
+        return TH.normalize(spec, out, palette, what)
     (_sheet if out["kind"] == "sheet" else _fling)(FX, spec, out, palette, what)
 
 
@@ -165,6 +176,8 @@ def _times(FX, v, what):
 
 
 def _sheet(FX, spec, out, palette, what):
+    TB.normalize(FX, spec, out, palette, what)          # first: a table (a `clip`) has no paper, hollows, peel, tapes
+    table = TB.table_of(spec)
     objs = out["objects"]
     if objs is not None:
         objs = [objs] if isinstance(objs, str) else objs
@@ -173,7 +186,8 @@ def _sheet(FX, spec, out, palette, what):
                              f"`prop:key`), a list or one")
         out["objects"] = list(objs)
     else:
-        lone = sorted(k for k in ("shot", "at", "height", "keys", "slap", "peel", "hollows") if spec.get(k) is not None)
+        lone = sorted(k for k in ("shot", "at", "height", "keys", "slap", "peel", "hollows", "track", "lift")
+                      if spec.get(k) is not None)
         if lone:
             raise FX.FxError(f"{what}: {', '.join(lone)} belong to the figure sticker: give its `objects`")
     sh = out["shot"]
@@ -189,22 +203,25 @@ def _sheet(FX, spec, out, palette, what):
     out["edge"] = _edge(FX, out["edge"], palette, what)
     out["shadow"] = _shadow(FX, out["shadow"], palette, what)
     out["seed"] = FX._num(out["seed"], f"{what} seed", lo=0, integer=True)
-    out["paper"] = _paper(FX, out["paper"], palette, what)
-    d = out["drift"]
+    out["paper"] = None if table else _paper(FX, out["paper"], palette, what)
+    d = out["drift"] if not table or spec.get("drift") is not None else None    # a table's camera holds still unless
+                                                                                  # it is given a drift
     if isinstance(d, (int, float)) and not isinstance(d, bool):
         d = {"amount": d}
     d = _table(FX, d, DRIFT, what, "drift")
     out["drift"] = None if d is None else {k: FX._num(d[k], f"{what} drift {k}", lo=0.0) for k in DRIFT}
     out["slap"] = [_slap(FX, s, what) for s in _list(out["slap"])]
-    p = _table(FX, out["peel"], {**PEEL, "t": None}, what, "peel")
-    if p is not None:
-        if p["t"] is None:
-            raise FX.FxError(f"{what}: peel needs `t`, the clip second the corner starts to lift")
-        out["peel"] = _peel(FX, p, palette, f"{what} peel")
-    out["hollows"] = [_hollow(FX, h, palette, what) for h in _list(out["hollows"])]
+    if not table:
+        p = _table(FX, out["peel"], {**PEEL, "t": None}, what, "peel")
+        if p is not None:
+            if p["t"] is None:
+                raise FX.FxError(f"{what}: peel needs `t`, the clip second the corner starts to lift")
+            out["peel"] = _peel(FX, p, palette, f"{what} peel")
+        out["hollows"] = [_hollow(FX, h, palette, what) for h in _list(out["hollows"])]
+        out["tapes"] = _tapes(FX, out["tapes"], palette, what)
+        out["scribbles"] = _scribbles(FX, out["scribbles"], palette, what)
     out["doodles"] = _doodles(FX, out["doodles"], palette, spec, what)
-    out["tapes"] = _tapes(FX, out["tapes"], palette, what)
-    out["scribbles"] = _scribbles(FX, out["scribbles"], palette, what)
+    out["drops"] = TB.drops(FX, spec.get("drops"), palette, spec, what, _doodles)
 
 
 def _tapes(FX, v, palette, what):
@@ -309,7 +326,7 @@ def _blank(FX, v, palette, what):
     return out
 
 
-def _doodles(FX, v, palette, spec, what):
+def _doodles(FX, v, palette, spec, what, least=0.005):
     d = _table(FX, v, DOODLES, what, "doodles")
     if d is None:
         return None
@@ -317,7 +334,7 @@ def _doodles(FX, v, palette, spec, what):
     out = {"count": FX._num(d["count"], f"{w} count", 0, 64, integer=True),
            "shapes": _shapes(FX, d["shapes"], w),
            "colors": None if d["colors"] is None else FX._colours(d["colors"], palette, f"{w} colors"),
-           "size": FX._num(d["size"], f"{w} size", 0.005, 1.0), "vary": FX._num(d["vary"], f"{w} vary", 0.0, 0.9),
+           "size": FX._num(d["size"], f"{w} size", least, 1.0), "vary": FX._num(d["vary"], f"{w} vary", 0.0, 0.9),
            "tilt": FX._num(d["tilt"], f"{w} tilt", 0.0, 180.0), "area": _box(FX, d["area"], f"{w} area"),
            "clear": [_box(FX, b, f"{w} clear") for b in (d["clear"] or [])],
            "gap": FX._num(d["gap"], f"{w} gap", lo=0.0), "seed": FX._num(d["seed"], f"{w} seed", lo=0, integer=True)}
@@ -335,6 +352,7 @@ def _doodles(FX, v, palette, spec, what):
         else:
             given = {k: x for k, x in hop.items() if k in ("times", "lane", "min_db", "every") and x is not None
                      and not (k == "every" and x == 1)}
+            h.update(min_db=None, every=1)                  # a lane's picks when the hop leaves them out
             FX._hits(given, h, f"{w} hop")
             h["beats"] = False
         out["hop"] = h
@@ -372,6 +390,18 @@ def _doodles(FX, v, palette, spec, what):
             raise FX.FxError(f"{w} peel: {len(out['peel']['times'])} times for {out['count']} doodles")
     else:
         out["peel"] = None
+    s = _table(FX, d["slap"], {**DSLAP, "times": None}, w, "slap")
+    out["slap"] = None
+    if s is not None:
+        if s["times"] is None:
+            raise FX.FxError(f"{w}: slap needs `times`, the clip seconds a doodle lands on, one each")
+        out["slap"] = {"times": _times(FX, s["times"], f"{w} slap times"),
+                       "size": FX._num(s["size"], f"{w} slap size", 1.0, 4.0),
+                       "drop": FX._num(s["drop"], f"{w} slap drop", 0.0, 2.0),
+                       "squash": FX._num(s["squash"], f"{w} slap squash", 0.0, 0.6),
+                       "settle": FX._num(s["settle"], f"{w} slap settle", 0.05, 2.0)}
+        if len(out["slap"]["times"]) > out["count"]:
+            raise FX.FxError(f"{w} slap: {len(out['slap']['times'])} times for {out['count']} doodles")
     return out
 
 
@@ -393,6 +423,8 @@ def _fling(FX, spec, out, palette, what):
     out["flip"] = FX._num(out["flip"], f"{what} flip", 0.0, 1.0)
     out["aim"] = None if out["aim"] is None else FX._pair(out["aim"], f"{what} aim")
     out["aimed"] = FX._num(out["aimed"], f"{what} aimed", 0, 32, integer=True)
+    if not isinstance(out["away"], bool):
+        raise FX.FxError(f"{what}: away = {out['away']!r}: true (thrown away from the lens, into the point) or false")
     out["edge"] = _edge(FX, out["edge"], palette, what, FLING["edge"])
     out["shadow"] = _shadow(FX, out["shadow"], palette, what)
     out["seed"] = FX._num(out["seed"], f"{what} seed", lo=0, integer=True)
@@ -608,6 +640,16 @@ def peel_order(doodles, places, centre, seed):
     return {j: t for j, t in zip(have, p["times"])}
 
 
+def slap_order(doodles, places):
+    """{doodle: its slap ({t, size, drop, squash, settle})}: the slap's times dealt to the doodles that found room, in
+    the order they were dealt; a doodle past the last time is on the sheet from the start."""
+    s = doodles.get("slap")
+    if s is None:
+        return {}
+    have = [j for j, at in enumerate(places) if at is not None]
+    return {j: {"t": t, **{k: s[k] for k in DSLAP}} for j, t in zip(have, s["times"])}
+
+
 def ripple(places, centre):
     """Each doodle's share (0..1) of a hop's ripple: by its distance from `centre`, the nearest 0 and the farthest 1."""
     d = [None if at is None else math.hypot(at[0] - centre[0], at[1] - centre[1]) for at in places]
@@ -689,14 +731,15 @@ def scribble_lines(shape):
             np.array([[0.1, 0.08], [0.1, 0.1]]), np.array([[-0.05, 0.2], [0.0, 0.23], [0.05, 0.2]])]
 
 
-def doodle_at(t, d, at, wave, jump, hops, hop, peel_t, peel_dur, origin):
+def doodle_at(t, d, at, wave, jump, hops, hop, peel_t, peel_dur, origin, slap=None):
     """Doodle `d` (deal()) placed `at` (frame fractions) at clip second `t`: {shown, at, angle, scale, sx, sy, lift,
     peel}. `wave` is its share of a ripple out from the figure (ripple(): 0 the nearest, 1 the farthest). A jump: hidden
     until `jump.t` + wave x stagger, then thrown from `origin` along an arc `height` high (lift 1 at the top: the sticker
     seen larger, its shadow farther), turning `spin` x its own share down to its angle, landing with a little hop and a
     squash. A hop on each of `hops` (clip seconds) lands on it, wave x ripple later (it leaves the paper `dur` before):
     up `height` and down, a twist, a squash and a few degrees of wobble as it settles. `peel`: None, or 0..1 of its
-    peel's time from `peel_t`; gone after it."""
+    peel's time from `peel_t`; gone after it. `slap` ({t, size, drop, squash, settle}: its own): hidden until `drop`
+    before its `t`, it falls from `size` times as large, lifted, and lands on `t` with the figure's slap (slap_at)."""
     out = {"shown": True, "at": tuple(at), "angle": d["angle"], "scale": 1.0, "sx": 1.0, "sy": 1.0, "lift": 0.0,
            "peel": None}
     if peel_t is not None and t >= peel_t:
@@ -705,6 +748,14 @@ def doodle_at(t, d, at, wave, jump, hops, hop, peel_t, peel_dur, origin):
             return out
         out["peel"] = (t - peel_t) / peel_dur
         return out
+    if slap is not None:
+        if t < slap["t"] - slap["drop"]:
+            out["shown"] = False
+            return out
+        if t < slap["t"] + slap["settle"]:
+            s = slap_at([slap], t)
+            out.update(scale=s["scale"], sx=s["sx"], sy=s["sy"], lift=s["lift"])
+            return out
     land = None
     if jump is not None:
         t0 = jump["t"] + wave * jump["stagger"]
@@ -763,7 +814,7 @@ def fling_items(fx, times, aim=None):
     depth), shape, color (index), size (share), angle, spin (degrees a second), flip (the age it turns over at, or
     None)}; seeded by the hit's place among them, so a lane's hits throw the same stickers whatever span asks. They fan
     round the clock, leaning up; with `aim` ((dx, dy) frame heights from the point they leave from: her face) the first
-    `aimed` of each hit are thrown to pass over it at FLING_AIM of their life."""
+    `aimed` of each hit are thrown to pass over it at FLING_AIM of their life (thrown `away`, at 1 - FLING_AIM)."""
     out = []
     for i, h in enumerate(times):
         rng = np.random.default_rng([int(fx["seed"]), i, 11])
@@ -789,13 +840,19 @@ def fling_at(fx, item, t):
     heights from the point it is thrown from, scale (frame heights: its longer side), angle (degrees), face (the cosine
     of its flip, 1 face up: under 0 its back shows, for a frame or two of a quick turn over), depth (1 at the point,
     1 / grow at the end: the nearer drawn last)}. It flies straight at the lens at a steady speed: seen at depth z it is
-    1 / z as large and its heading 1 / z as far out, so it grows ever faster and leaves by the frame's edges."""
+    1 / z as large and its heading 1 / z as far out, so it grows ever faster and leaves by the frame's edges. Thrown
+    `away` its flight is played backwards (its spin and flip still run forward): it comes in from its heading `grow`
+    times as far out and `grow` times its size, falls away from the lens slowing and shrinking into the point, and is
+    gone there in a pop (FLING_POP)."""
     age = t - item["t0"]
     if age < 0.0 or age > fx["life"]:
         return None
     u = age / fx["life"]
+    pop = age
+    if fx["away"]:
+        u, pop = 1.0 - u, fx["life"] - age
     z = 1.0 - (1.0 - 1.0 / fx["grow"]) * u
-    pop = min(age / FLING_POP, 1.0)
+    pop = min(pop / FLING_POP, 1.0)
     pop = 1.0 - (1.0 - pop) ** 3
     face = 1.0
     if item["flip"] is not None:

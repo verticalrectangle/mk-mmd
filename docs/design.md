@@ -714,6 +714,7 @@ member or the camera cannot be used by a stage that runs before them):
 | cast | `[[cast]]` | models imported without Bullet, named, placed; morph sliders bound when the model has group, bone or material morphs | [Cast](#cast) |
 | pose | `[pose.<cast>]`, `[[move.<cast>]]`, `[[prop]] wear / attach / anchor_to` | the base pose: sit on a seat or stand, feet, spine, head, arm IK, finger presets, grips, drape, worn props; named moves on the clock | [Posing](#posing), [Moves](#moves), [Grips](#grips), [Playing a worn guitar](#playing-a-worn-guitar) |
 | motion | `[[motion.<cast>]]` | VMD motions on NLA strips | [Motion](#motion) |
+| flight | `[[flight]]` | a flown prop hung on its target: an empty riding the target (a bone, a point) that the prop's root copies with an offset, the flight's moves keyed as those offsets, so a gaze in perform and a camera find it where it flies | [Flights](#flights) |
 | perform | `[perform.<cast>]` | gaze, blinks, breathing, sway, nods, beat bob, startles, expressions, lip sync, twitches, strumming | [Perform](#perform) |
 | ribbons | `[[ribbon]]` | 3D paint strokes in the scene (crayon, striped toothpaste, neon marker) round a bone, up a body, through points or out of a prop's nozzle, drawn on, retracted, pulsing on a lane, kept clear of the cast's bodies | [Ribbons](#ribbons) |
 | shots | `[[shot]]`, `[[transition]]`, `[[insert]]`, `[[glitch]]`, `[vector]`, `[[ring]]`, `[[freeze]]`, `[[medium]]` | the cut: a camera per shot and output, markers, render-time looks, cut effects, medium windows | [Shots](#shots) |
@@ -725,6 +726,7 @@ member or the camera cannot be used by a stage that runs before them):
 | cloth | `[cloth.<cast>]` | garments' cloth copies (rig.json `cloth`) simulated with Blender's cloth, the garment's faces following it | [Cloth](#cloth) |
 | stepped | `[[stepped]]` | the cast on twos: each member's whole motion held 1 / fps s at a time over a window, the cameras on every frame | [Stepped motion](#stepped-motion) |
 | marionette | `[perform.<cast>] marionette` | a marionette's threads drawn from where the cross's anchors and her bones are on every frame, after everything that moves her (so they step with her); the bars held on her steps | [Marionette](#marionette) |
+| wire | `[[flight]]` | the flown props baked where their targets ended up (the lag, heading, bank and perches keyed on the root, every frame or on the prop's step grid) and a dragonfly's wire drawn from the hand to its belly, kept out of the target | [Flights](#flights) |
 | clip | | every shot camera starts at half the depth of the nearest geometry it sees, keyed on every frame (follows `--until` as `save` and `bake` do) | [Clip ranges](#clip-ranges) |
 | save | | the `.blend` | |
 | bake | | `<blend>.bake/`: the clip for the site's scene viewer and mk's own renderers, every frame's bones, morphs, objects, visibility and shot cameras (with their clip ranges), the meshes, what the glb cannot carry as Blender evaluates it on each frame, what the vector look needs (each object's record, the materials' viewport alpha and textures, the rings' centres, the studio light), the [[medium]] windows, and the lit scene mkr draws from: the view transform, world, lights, material node graphs, images and every mesh as Blender renders it, checked against Blender's ([The bake](#the-bake); `mk build --bake` bakes a saved scene again) | [The bake](#the-bake), [The site](#the-site-mk-site-mkmmdsite), [Rendering](#rendering) |
@@ -864,7 +866,7 @@ Colours are palette slot names or `#hex` (and `"slot:slot:t"` mixes two); builde
 | `cafe_room` | the rainy corner café: a window with rain and fog, the street behind it, lightning rigs, a pendant lamp, the room lights; its animatable state is custom properties on the set root |
 | `bedroom_80s` | an 80s bedroom at night: striped wallpaper, parquet, trim, a door, a window with a half-raised venetian blind and a lit city behind it, a neon tube; a shell only, the furniture is props |
 | `sweep` | a photo studio's seamless paper: the floor from y = -`depth` to the curve, a cove of `radius` up into a wall at y = `radius` that stands to `height`, `width` along x (8, 6, 4 and 1.2 m), `color` ("base"), `rough` (0.8), `segments` of the cove (24); every face turned to the subject, who stands in front of the cove (toward -y, the camera further); `use.surface` `wall`, `use.look` `centre`. An unknown key is an error that lists the known ones |
-| `paper_theatre` | a toy theatre of construction paper and card, life-size round a figure 1.5 m tall who stands at the origin facing -Y on its floor (top z = 0): a proscenium with a scalloped crest, a scalloped valance and accordion-folded curtains tied back with tassels, a backdrop bent round the stage with a sun on a split pin, two rows of hills, grass and flowers, a corrugated-card floor, and three clouds, five stars and a crescent moon with a rabbit cut out of it hanging on threads; the proscenium and curtains drop in and wobble at `arrive`, the hanging pieces fall in like yo-yos and swing as pendulums, the sun turns, all held `step` times a second as stop-motion. An unknown key is an error that lists the known ones |
+| `paper_theatre` | a toy theatre of construction paper and card, life-size round a figure 1.5 m tall who stands at the origin facing -Y on its floor (top z = 0): a proscenium with a scalloped crest, a scalloped valance and accordion-folded curtains tied back with tassels, a backdrop bent round the stage with a sun on a split pin, two rows of hills, grass and flowers, a corrugated-card floor, and three clouds, five stars and a crescent moon with a rabbit cut out of it hanging on threads; the proscenium and curtains drop in and wobble at `arrive`, the hanging pieces fall in like yo-yos and swing as pendulums, the sun turns, all held `step` times a second as stop-motion. Opt-in, its pond and machinery: a wave machine round lily pads and lilies that pop open on a pulled tab, a moving panorama, ground that sinks away, a cranked day-and-night backdrop with constellations drawn on given times, a croissant moon, the hanging pieces cut loose, a sun that pops up (below). An unknown key is an error that lists the known ones |
 
 **`night_sky`** keys (all optional): `zenith` ("base"), `dome` ("surface"), `horizon` (the haze colour the other night sets fade
 distant things into), `band` (4 degrees); `stars` (`{density 4 per 100 square degrees, size 0.07, brightness 1.0, fade [3, 18],
@@ -987,6 +989,82 @@ her and a 3/4 view from 2 m out sees their curve, not what is beyond. Card:
 `object` the piece), a floor collider, no lights, and `theatre` (when the frame lands and settles, each piece's drop, thread
 length and period).
 
+**`paper_theatre`'s pond and machinery** (keys all optional and off by default: a theatre without them is built as above;
+the layout and the motion are `mkmmd/core/paper_theatre_pond.py`, tested, the flipbooks' shapes `paper_theatre_parts.py`).
+All of it is construction paper and card worked by hand, held on the set's `step` grid; whatever lands on a moment is
+there on the step held on that moment's frame (up to 1 / `step` s early, which is ON it in a picture that changes `step`
+times a second), and what travels sets off early. What changes shape (a day half sliding round the backdrop's bends, a
+lily opening, a stroke being drawn) is a flipbook: one exact shape per held pose, a shape key `f<k>` each, one at 1 at a
+time. `pond` (true or `{lilies, tab = 0.42, ripples, ride, ride_when}`): the floor's paper is the water (`water`), 8 mm
+under z = 0 with every static part as much lower, so the pads that float on it have their tops at z = 0: the main pad
+(an oval 1.2 by 1 m, its middle at x -0.48, its slit toward +x) carries her head, the roots of her ears and both shoulders
+as she lies along X, hips over the origin, her legs trailing into the water, and is `use.rest` `pad`; two low rows of
+scalloped waves stand in front of the pads' lane (|y| < 0.5) and three taller ones behind it up to the front hills, each
+sliding to and fro on its own period as a wave machine does (`wave1`..`wave5`, light and dark in turn); reeds and
+cattails, cut as separate blades, stand in the wings just in front of the lane and just behind it (`reed`, `reed2`,
+`cattail`), and the grass and its flowers are gone; paper water lilies (two rings of eight petals and a gold heart:
+`lily`, `lily2`, `lily_heart`) ride the lane, shut in pointed buds until they pop open together on `lilies` (clip
+seconds; absent: open all along), springing past open and settling, as a gold tab (`tab`, a finger hole and an arrow)
+tucked between the stage's base and its pelmet, `tab` of the half opening right of the middle, is pulled down 15 cm in
+0.22 s: its end is the object `<name>_tab`'s origin, the card's `use.look` `tab`, a hand's point `obj('<name>_tab').loc`.
+`panorama = {hops, toward = 1}`: the lane (the pads, the lilies, clumps of reeds) slides past her against her travel
+(`toward` 1: she travels toward +x) while she hops in place, a landing pad 1.06 to 1.2 m on still under her feet on each of
+`hops` for 0.05 s and eased off and into the next; the rows go by faster in front and slower behind ((5 / (5 + y))² of
+the lane), the hills at 0.06 and 0.035 of it and the backdrop at 0.05 (parallax); a lane piece is drawn while its inner
+edge is inside |x| < 1.1, behind a wing beyond; the main pad slides 0.4 s before her first landing to put its middle under
+her feet. `rise = {from, to, sink = 1.8, lower = 2.3}`: between `from` and `to` the
+ground (the floor, the rows, the lane, the wings, the hills, the sun on its rod) sinks `sink` m out of the bottom of the
+opening into the stage's cellar (the base becomes a box of its card 0.25 m deeper than the sink, its sides and back along
+the floor's edges; the floor's corrugated lip stays with it), hidden once down, and the clouds are let down `lower` m past
+her (swinging as far in metres as before), so she seems to climb as she hangs in place; the backdrop reaches down into the
+cellar, so the opening shows sky under her once the floor has gone and nothing shows under the stage. The backdrop is a
+roll when it moves (`panorama` or `night`), and stands 2.2 m over the opening (a
+low camera under the valance sees sky, not over its top): the day sky is two halves of paper (`sky`, with the pencil
+marks the backdrop had) meeting behind her, the right lapping over the left, each winding onto a card spool just inside
+its side wall behind the pillars, turned by a crank on the right pillar (`crank`: a gilt gear with four holes and a card
+arm on a split pin, a turn clockwise for every 1.8 m of paper wound; its knob, a red bead `knob`, is the object
+`<name>_crank_knob`, `use.look` `crank`, `obj('<name>_crank_knob').loc`). `night = {from, to, strokes, stars}`: behind
+the halves the backdrop card is plum night paper (`night`, never black) pricked with 120 pinholes over a card lit behind
+it (`starlight`), a milky way torn from `night2` across it; between `from` and `to` the halves part evenly from where
+their seam stands, fast off the mark as a hand yanks a crank and slowing to a stop, until both are wound past their
+spools; the constellations are pencilled in star to star (`chalk`, 2 cm lines, the stars five-pointed holes), a stroke
+drawn in 0.2 s and whole on each of `strokes` (at most 7: a W over her, then the rabbit on the left and the dragonfly on
+the right a stroke each in turn); the five hanging stars, up in the flies by day, drop in on their threads like yo-yos,
+the threads catching on `stars` (a time each, or `from` + 0.45 s and every 0.16 s). `moon = {shape = "crescent", drops}`:
+`"croissant"` hangs a paper croissant in the moon's place (seven puffed lobes along a crescent with creases, sheens and
+a sleepy face: `croissant`, `croissant2`, `croissant_hi`); with `drops` it is wound up until its thread catches on it.
+`loose` (clip seconds): every hanging piece's thread is cut at once; the pieces fall with their threads, tipping and
+turning, and are gone out of the bottom of the opening. `sun = {pops}`: the sun stands on a card rod behind the back
+hills (as it does whenever the backdrop rolls), riding them, sinking with the ground, down behind the hills from `day`,
+and pops up over them on `pops` (0.14 s, a bounce), its rays spinning a turn and a quarter and settling into `sun_rpm`.
+`day` (clip seconds): everything back as by day (the halves rolled back, the ground up, the lane home, the clouds
+hanging, the stars and the moon wound up, the strokes gone, the sun down until it pops). Objects added: `_wave1`..`_wave5`,
+`_wing_R1`, `_wing_R2`, `_wing_L1`, `_wing_L2`, `_lane` (an empty) with `_pad<i>`, `_leaf<i>`, `_reeds<i>` and the
+flipbooks `_lily<i>` under it, `_tab`, `_crank` (under `_frame`) with `_crank_knob`, the flipbooks `_day_L`, `_day_R` and
+`_stroke1`..`_stroke7`, `_spool_L`, `_spool_R`, `_starlight` (a flipbook's visibility keys `hide_render` alone: an object
+off in the viewport is not evaluated and the bake checks its shape). The card adds `use.look` `tab` and `crank`,
+`use.rest` `pad`, and under `theatre` the keys' times (`pond`, `panorama` with the landing pads' x, `rise`, `night` with
+how far each half winds, `sun` with its heights, `loose`, `day`). A figure lying 1.5 m across the opening wants
+`width = 2.6`. `pond.ripples = {touch, then = [], contrast = 0.3}`: three rings of cut paper run out from the main pad's
+rim on `touch` (0.22 s apart) and a smaller one on each of `then`, widening 0.9 m and thinning away in 2 s; round each ring
+its paper steps light, light middle, dark, dark middle (`ripple1`..`ripple4`, in the water's colours) in 18 repeats, so it
+seems to turn while it stands still, each ring the other way from the last (`_ripple<i>`, flipbooks riding the lane).
+`contrast` is how far apart the four tones stand: they are drawn together about their mean (in display space, as `a:b:t`
+mixes are), keeping that share of the roles' spread (`colors` included); at 0.3 a ring reads as paler water first and its
+turning on a second look, at 1 as the roles' own stripes, at 0 as one plain ring. In the vector look give the ripples'
+materials one `group` (`match = "<set>_ripple*"`, `group = "ripples"`, a rule before the set's own): a ring is one piece of
+paper, and a line drawn between every two wedges cuts it into a hoop of tiles.
+`pond.ride` (an object's name, `ride_when` [[from, to], ...] or always): the main pad bobs with that object on z (a
+marionette prop's `<name>_rest`, the surface she lies on) within 5 mm of its rest either way (`RIDE_GIVE`: deeper its top
+would go under the water's paper, 8 mm down, and the pad would vanish from above; she may dip into it or lift off it by
+the rest, which no camera sees); a set is built before the props, so the card's `ride` entry (object, target, axes, the
+influence keyed on the set's steps, `limit` {axis: [lo, hi]} in the object's parent's frame) is tied by the props stage
+once the target exists (a Copy Location offset, then a Limit Location; a missing target is a WARNING). `house` ([[from,
+to], ...] clip seconds): the house (everything but the
+water and what floats on it: pads, lilies, ripples) is there only inside these windows, switching on the cut frames
+themselves (frame0 + round(t x fps)); outside them the floor gives way to `_cover`, the water 2.6 m round her, so a camera
+straight over her sees water, pads, buds and ripples alone. The lilies are buds again from `day`, and the tab back up.
+
 ### Props
 
 `[[prop]]` puts a prop in the world. The `card` says what the prop is:
@@ -1029,6 +1107,8 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `heart` | one big puffy heart that pounds on the song's beat (a bump on the beat and a smaller one after it) and bursts into a ring of little hearts every few beats; options `size` (0.2), `bpm`, `start` (a clip second on a beat), `beat` (0.25: the swell), `burst` (8 hearts), `every` (4 beats), `reach` (0.45 m), `burst_size`, `turn`, colour `heart` ("love"), `glow`. Drivers on the frame and the scene's `mk_frame0`; objects `<name>_heart`, `<name>_burst<i>` tagged `mk_heart` (silhouette accents: `accent = ["prop:mk_heart"]`); with `attach` it rides a chest |
 | `butterfly` | one butterfly about 9 cm across, flapping (`mkmmd/core/butterfly.py`: outlines from landmarks read off photographs, the meshes, the flap maths; `butterfly_pattern.py`: the wing patterns): `style` ("monarch"; "swallowtail" with tails, "morpho", "blue": a small blue), `size` (the span, 0.09 m), `way` (a colourway of the style, 0..2), `sheen` (the iridescence at a glancing view: morpho 1, blue 0.6, else 0), `glow` (0.1: the wings' own light, an underside in shade never goes black), `tile` (pattern pixels per wing, 1024). Fore and hind wings are thin membranes with a rolled edge, the hindwing tucked under the forewing; the patterns (veins fanning from a discal cell, borders, edge dots, eyespots, stripes, the sheen) are masks in a packed atlas (cached in `~/.cache/mk/butterfly`) coloured by the roles `ground`, `under` (the underside), `ink`, `spot`, `accent`, `sheen`, `body`, `eye` (palette slots, hexes or blends `"gold:2,light:1"`; `dark` and `light` name the palette's darkest slot at 42 % and its lightest). Live root properties for `[[key]]`: `flap` (3 beats/s; the keys stage integrates it into `beats`, so a keyed rate never jumps the wings), `flap_amp` (100: the full stroke, degrees), `flap_mid` (20: its middle above flat), `phase` (cycles; with `flap = 0` the pose the wings rest in: 0 up, 0.25 mid going down, 0.5 down), `hit` and `hit_time` (0.3 s): `[[key]] prop = "hit", lane = "kick"` gives one wing beat on every kick (and with `flap = 0` none in between). Objects `<name>_body` (the span's scale; it bobs with the beat) and `<name>_wing_L` / `_R` (its children, turning about their hinges): drivers only, so a freeze holds it mid-beat. Front -Y, origin the middle of the thorax; card `use.look` `head`, `body`, `tip_L`, `tip_R`, `use.anchor` `perch` (under the feet: `attach` it to a finger with that offset), `rates` |
 | `butterflies` | a swarm of butterflies round the root (40 to a few hundred), each with its own wing-beat phase and rate, span, style and colourway, flapping (the `butterfly`'s parts and flap), in formations blended by keyable weights: `rings` (a mandala facing -Y), `orbit` (tilted orbits round `orbit_at`: her head with `attach`), `drift` (a wandering flock); `burst` flings them out and away, `bloom` grows the rings in from the centre. One geometry-nodes object `<name>_swarm` (see below) |
+| `dragonfly` | a paper dragonfly on a steel wire, a toy theatre's rod puppet 0.45 m across (`mkmmd/core/dragonfly.py`: modelled on a chaser's top view, then made a toy): a striped paper-straw abdomen with ring grooves, a thorax, two big googly eyes (white domes, big pupils, a glint) over a little smile, folded legs, four long wings of cellophane in a dark paper frame with two veins and the pterostigma; `<name>_body`, `<name>_wing_fore_L` .. `_hind_R` (each with its film variants `_1`, `_2`), the wire `<name>_wire` (a bevelled poly curve) and its far end `<name>_hand`. Fly it with a `[[flight]]` ([Flights](#flights)). Options in `slots`: `size` (the span, 0.45), `whirr` (cycles the wings advance a pose, 0.41: they stand somewhere else on every pose, at 12 a second or 60), `amp` (70), `mid` (10), `lag` (the hindwings behind, 0.5 of a cycle), `droop` (perched, 4), `step` / `step_from` (the set's grid, as the paper theatre's), `wire` (its radius, 0.002 m), `hand` (the wire's far end in its frame until a flight keys it), `film` (0.8: the share of ink in the film at the tips), `clear_wing` (0.42), `smile` (true), `inks` (the film's colours: foam, iris, rose, gold). Roles: `straw`, `stripe` ("love"), `thorax`, `face`, `eye`, `pupil`, `shine`, `legs`, `wing`, `vein` ("text"), `spot`, `wire`. The iridescence: lit, the cellophane is see-through (blended) and its colour turns through the inks with the angle it is seen at, as a thin film's does; a flat look draws its film picture (clear bands of the inks over the cellophane's tint with a pale glint across: a cel tone, `texture = true`, the material's opaque viewport colour), and every wing has three copies with the bands moved on, one shown a pose (hide_render keyed on the step grid), so the colours shift from pose to pose as the wings whirr, on cream day paper and on plum night paper alike; perched, a flight holds them. Root properties `phase` (keyed: whirr a pose), `rest` (0 flying, 1 perched), `amp`, `mid`, `lag`, `droop`. Card: `use.look` head, body, tail; `use.anchor` belly (where the wire goes in), perch (under the feet) and hand (riding `<name>_hand`: a cut-out hand's anchor); `wire`, `dragonfly` |
+| `paper_planet` | a paper planet on a skewer, 0.8 m across (`mkmmd/core/paper_planet.py`): twelve paper gores in two close tones puffed between seams that stand as creases, as a crafter's globe, the top pole flattened under a calotte into a landing spot (0.14 m across the flat at 0.8 m), cut-paper craters glued on in two layers (a light rim, a dark floor), a wooden skewer up from below, and a toothpick through the shoulder carrying a striped paper cocktail flag (no lettering). Origin the ball's middle in place, front -Y. Options in `slots`: `size` (0.8), `up` (the clip second it is in place: it comes up from `depth` 1.6 m below over `rise` 0.7 s and is there ON `up`, a small overshoot after; absent: in place all along), `turn` (0.03 turns a second about the skewer, from `up`), `land` (a clip second or a list: something lands on it; it sinks `sink` 0.08 m on its skewer from that frame, bobs, tips and settles `settle` 0.018 m lower, the flag whipping by `whip` 1.5), `step` / `step_from` (as the paper theatre's), `seed` and `craters` (3, 7), `stripes` (the flag's, top first: foam, paper, iris). Roles `gore`, `gore2`, `cap`, `crater`, `crater_in`, `skewer`, `pick`. Keyed at build: `<name>_lift` (the rise, bob and tip) carries `<name>_ball` (turning) with its craters, skewer and pick, the pick its `<name>_flag` (shape key `whip`, -1.5 .. 1.5, turning about the pick); `<name>_top` rides the bob on the landing spot. Card: `use.anchor` / `use.look` `top` and `flag` (riding `<name>_top` and `<name>_flag_tip`), `use.rest` and `use.feet` `top`, `planet` (its times; `mkmmd.core.paper_planet.top(options, t)` is where the spot is, for keying what stands on it) |
 | `traffic_car` | an 80s car or truck for night traffic: `body` "sedan", "wagon" or "semi" (a cab-over tractor and a box trailer whose sides are `use.surface` `left` / `right`), colours `paint`, `trailer`, `glass`, `lamp`, `tail`, `marker`, emissions `lamps` (30), `tails` (9), `markers` (3.5), `beams` (real headlight spots: `beam_power` 900 W, `beam_angle` 55, `beam_tilt` 5). Faces -Y, origin under the middle; the card lists the wheels and beams, so a `[[vehicle]]` drives it |
 | `semi_truck` | an American long-nose conventional tractor and a 53 ft dry van on its fifth wheel, built for close shots (`semi_truck_layout.py`: proportions of a long-hood tractor's body-builder drawing, generic and unbadged): hood with crowned fenders and a tall grille, cab and 63 in mid-roof sleeper, a steer axle and two drive axles with duals and the van's tandem (11R22.5 tyres on polished ten-stud wheels, every wheel on its hub, axle and suspension), the van's landing gear, doors, lamps and tape, and a cab inside (seats, a 20 in wheel, a dash with lit gauges, a CB radio and its mic, a shifter, a dome light). Faces -Y, origin on the ground midway between the drive axles, the driver on +X; the bumper at y -7.14, the van's rear at +14.94. Roles in `slots`: `body`, `accent`, `trim`, `chassis`, `rubber`, `glass`, `headlamp`, `marker`, `taillamp`, `van`, `van_trim`, `tape`, `interior`, `dash`, `gauges`, `glow`, `display`, `wood`, `curtain`, `hose_red`, `hose_blue` (slots, '#hex', `slot:w,slot:w` blends whose parts may be `a:b:t` mixes). Options `trailer` (true; false: the tractor alone), `beams` (true: headlamp spots driven by `lamps`, `beam_power` 1100 W, `beam_angle` 50, `beam_tilt` 4), `mural` (an image file, project-relative / absolute / `~`, or a registry slug whose path is an image, painted on both van sides; `mural_left`, `mural_right`, `mural_back` per panel; `mural_fit` "cover" (default) / "fill" / "contain"; the image's alpha shows the van's colour, the joint strips stay on top). Root properties for `[[key]]` (also starting values in `slots`): `lamps` (1), `markers` (1), `brake` (0), `dash_on` (1), `dome` (0). Card: `wheels` (ten wheel ends, a dual pair one object) and `steering` (`<name>_wheel`, `ratio` 20, `wheelbase` 6.35), so a `[[vehicle]]` drives it; `lights` (the beams, `<name>_dome`, `<name>_dash_glow`); `use.sit` `driver` / `passenger`, `feet`, `grip` `wheel` (a ring riding `<name>_wheel`), `rest` `sill_L` / `sill_R`, `look`, `surface` (`left`, `right`, `back`: the van's panels; `door_L` / `_R`, `sleeper_L` / `_R`), `anchor`; box colliders and a ring; `trailer` {`object`: `<name>_trailer`, the empty every van part rides, `pivot`: the kingpin}. `semi_truck_card.py` builds the card (tested without Blender) |
 | `rail_track` | an 1860s standard-gauge railroad track (1435 mm) that lays itself as `laid` moves (see below): hewn ties 8.5 ft long every 2 ft (six variants with wane and adze marks), 56 lb/yd iron T rails in 30 ft lengths joined by fish plates and bolts, cut spikes hooked over the rail foot, optional tie plates (`plates`), on a ballast bed with sloped shoulders; from the root along +X, straight or round a gentle curve. Options `length` (30 m, rounded to whole tie spacings), `radius` (0: straight; m, > 0 bends left toward +Y, < 0 right, at least 50), `plates` (false), `seed` (1: the ties' variety), `laid` (its starting value; default the card's `track.done`: all of it). Roles in `slots`: `ballast` ("subtle:gold:0.25") and `ballast_dark` ("muted:ink:0.45") the stones, `tie` ("gold:muted:0.6") and `grain` ("gold:ink:0.7") the wood, `rail` ("muted:ink:0.35"), `railhead` ("subtle:paper:0.35": the running surface), `rust` ("love:gold:0.45"), `spike` ("ink:muted:0.35"), `plate` ("muted:ink:0.5": fish plates, bolts, tie plates). Card: `use.anchor` `front` (the empty `<name>_front`, on the centre line where `laid` is, at the rails' top: a camera target that rides the laying) and `last_tie` (the last tie's top: stand a spike in it), `use.look` `start`, `end`, `front`; `params` {laid}; `track` {length, radius, gauge, spacing, rail, done, ties, rails, plates, tie_top, rail_top, objects} |
@@ -1071,7 +1151,7 @@ prop. Library props (`library:<key>`); colour options are palette slots, the non
 | `sandbox_piano` | a children's wooden sandbox (2.2 x 2.4 m, stacked boards 0.30 m tall with rounded edges, triangular corner seats, bumpy sand at 0.22 m) holding a toy grand piano (two octaves of chunky keys between cheek blocks, a rim on a grand's plan with a gold plate and strings inside, the lid propped open 38 degrees on a slanting stick, a music desk, three turned legs and the pedal lyre going into the sand) and its padded bench. Keys 0.70 m and seat 0.45 m above the sand. Origin floor_center, front -Y; the pianist sits facing -Y with the bass at her left (+X), the lid opening to her right. Roles in `slots`: `wood`, `seats`, `sand`, `piano` ("love"), `lid` (= piano), `inside`, `plate` ("gold"), `trim`, `keys_white`, `keys_black`, `bench` ("iris"), `bench_wood`. Card: `use.sit` `bench` and `use.feet` `bench` (as the café chair's: `sit = "<name>:bench"`), `use.rest` `keys` (an edge on the white keys) and `sand` (a plane), `use.look` `keys`. Static |
 | `chalkboard` | a school chalkboard on an A-frame easel (about 1.67 m tall): rounded wooden legs, the back leg hinged at the top under a turned knob, a crossbar, the ledge with a chalk tray (white and pink sticks, a stub, a felt eraser), and a green-black slate (0.90 x 0.65 m) in a rounded wooden frame leaning back 12 degrees, with faint chalk dust. Origin floor_center, front -Y. Option `drawing` ("none"; "noughts": a game of noughts and crosses in chalk, a graphic layer). Roles in `slots`: `slate` ("#26332d"), `wood`, `chalk` ("paper"), `chalk_pink`, `felt`, `eraser` ("pine"). Card: `use.surface` `board` (the slate's face: `[[text]] on = "<name>:board"` writes on it), `use.rest` `tray` (an edge on the tray's lip), `use.look` `board`. Static |
 | `parent_cutout` | a giant picture-book parent cut out of construction paper, standing on its foot line (origin floor_center, faces -Y, +X the figure's left): `figure` "father" (default: narrow-lapel suit, slim tie, side-parted hair, his left forearm raised with the scolding index finger up, 3.29 m) or "mother" (A-line shift, Peter Pan collar, hem band, bouffant with a flip and a bow, hands on hips, 3.16 m); scissor-cut paper with layered details on a thick white die-cut card with rolled edges and a slight bow, a soft drop shadow (`<name>_shadow`, a graphic layer about 6 mm behind: it shows against a backdrop), brass paper-fastener brads. Roles in `slots`: `paper` (pine / rose), `shade`, `hair`, `detail`, `trim`, `accent`, `rim`, `shadow`, `brad`. Father: `<name>_hand` turns in the card's plane about the elbow's brad by angle = wag + wagging sin(2 pi wag_hz t) (drivers); root properties `wag` (degrees, counter-clockwise seen from the front; key it), `wagging` (0), `wag_hz` (2.5). Card: `use.hand` `wag` {object, pivot, axis [0, -1, 0], tip (the index fingertip at angle 0), prop "wag"} (father), `use.look` `head` |
-| `marionette` | a string puppet's control and threads (`mkmmd/core/marionette.py`): a wooden aeroplane control, `<name>_cross` (a main bar along her facing with the head bar across it, the head thread's eye over her head and the back thread's at its rear end) with `<name>_handbar` (a dowel hung under its front end: the wrists' eyes), and `<name>_legbar` (held apart in the other hand, 1.15 m in front of her and 0.5 m lower, so the knee threads clear a worn guitar), screw eyes where the threads are tied; the threads `<name>_thread_<part>` and the piece a cut leaves on her `<name>_cut_<part>` (bevelled poly curves the `marionette` stage keys), the anchors `<name>_at_<part>`, the ends `<name>_end_<part>` (bone-parented to her by perform) and `<name>_snip_<part>` (on each thread at its cut point: effects follow it), parts `head`, `back`, `wrist_L`, `wrist_R`, `knee_L`, `knee_R`. It takes its cast member through `[perform.<cast>] marionette` ([Marionette](#marionette)); `at` does not matter. Roles in `slots`: `wood` ("gold:base:0.45"), `eye` ("text:base:0.45"), `thread` ("text"); `radius` (0.0015: 3 mm thick threads, readable at 1080 in a medium shot). Card: `use.look` `cross` and `legbar` (they ride the bars: a gaze up at the cross) |
+| `marionette` | a string puppet's control and threads (`mkmmd/core/marionette.py`): a wooden aeroplane control, `<name>_cross` (a main bar along her facing with the head bar across it, the head thread's eye over her head and the back thread's at its rear end) with `<name>_handbar` (a dowel hung under its front end: the wrists' eyes), and `<name>_legbar` (held apart in the other hand, 1.15 m in front of her and 0.5 m lower, so the knee threads clear a worn guitar), screw eyes where the threads are tied; or, `control = "stirrers"`, two coffee stirrers crossed and tied with thread (the main one, 1.0 m, with the head thread at its middle and the back thread at its rear; the one across it 0.3 m ahead of the head thread is the hand bar, the wrists' threads at its ends) and a third as long for the knees: flat birch sticks with round ends, 32 x 8 mm (a stirrer's 178 x 5.5 x 1.5 mm at the theatre's scale), each thread knotted round its stick in two turns; the threads `<name>_thread_<part>` and the piece a cut leaves on her `<name>_cut_<part>` (bevelled poly curves the `marionette` stage keys), the anchors `<name>_at_<part>`, the ends `<name>_end_<part>` (bone-parented to her by perform), `<name>_snip_<part>` (on each thread at its cut point: effects follow it), `<name>_rest` (a flat box 1.6 x 2.6 m, never rendered: the surface she lies on in the world, keyed under her, for the sim's colliders) and `<name>_grab` (where a `yank` holds her head thread), parts `head`, `back`, `wrist_L`, `wrist_R`, `knee_L`, `knee_R`. It takes its cast member through `[perform.<cast>] marionette` ([Marionette](#marionette)); `at` does not matter. Options in `slots`: `control` ("aeroplane", "stirrers"); roles `wood` ("gold:base:0.45"; the stirrers' "gold:base:0.66", birch), `eye` ("text:base:0.45"), `thread` ("text": the threads, the stirrers' knots and lashing); `radius` (0.0015: 3 mm thick threads, readable at 1080 in a medium shot; the marionette's `width` keys it over time). Card: `use.look` `cross`, `legbar` and `grab` (they ride the bars and the grab point: a gaze up at the cross, a hand on the yank) |
 | `colorbar_card` | a rounded 4:3 TV-screen card printed with colour bars (`mkmmd.core.colorbars`: the face `texture` at 1024 x 768 as an sRGB byte image, the back `back()`), edges rolled, its cut edge cream paper (role `edge`); origin center, the bars face -Y; options `size` ([0.60, 0.45]), `thick` (0.012), `style` ("both", "dawn", "true"); the bars take the palette's slots (rose-pine-dawn without one). No drivers: key the root (the `cards` frame effect tumbles its own). Card: `use.surface` `face` (the printed rectangle), `use.look` `centre` |
 | `practice_amp` | a 10-15 W guitar practice combo of the Frontman 15G / Crush 12 kind, unbranded, 330 x 300 x 180 mm on four rubber feet (origin floor_center, front -Y; 0.33 m to the handle's arch): ONE tolex cabinet shell (pebbled grain, rolled edges, a 19 mm frame round a front field recessed 14 mm), the grille cloth (a basket weave that fades to its mean colour past about 2 m) framed by a piping welt, a control panel across the field's top with an input jack, `knob_count` skirted knurled knobs over printed scales, a rocker switch and a faceted jewel lamp, a strap handle between chrome end caps, and eight corner protectors. Options `knob_count` (4: 3 .. 5), `glow` (0.8: the lamp's light, 0 off). Roles in `slots`: `tolex` ("rose"), `grille` ("text"), `piping` and `panel` ("surface"), `print`, `knobs`, `handle`, `rubber` ("text"), `corners` ("text"; false: no protectors), `metal` ("hl_high"), `lamp` ("love"). Card: `use.anchor` `jack` (the jack's mouth, `dir` -Y), `use.look` `front` and `panel`, a box collider `<name>_col`, `form_max` 0.7 (a box by nature: its cabinet) |
 | `paper_bunting` | craft-paper bunting on a wall (origin wall_center: the root on the wall midway between its ends, the room at -Y): a twine cord pinned (or taped) at both ends hangs in a catenary `sag` (0.14 m) under the line between them, its loose ends hanging past the pins, and paper pennants (`size` [0.14, 0.18] m) are folded over it, each hanging in the cord's frame a little off the wall with a swing, twist and curl of its own; colours cycle through `colors` (love, gold, rose, pine, foam, iris) with a little `tone` (0.07) between flags. Options `span` (1.6 m between ends at (±span / 2, 0)) or `ends` ([[x, z], [x, z]] in the prop's frame), `sag`, `shape` ("triangle", "swallowtail", "round"), `spacing` (the width + 0.035) or `count`, `seed`, `colors`, `tone`, `mount` ("pins" or "tape"). Roles `cord` ("gold:subtle:0.35"), `pin` ("love"), `tape` ("overlay:gold:0.25"). Objects `<name>_flags` (form-exempt), `_cord`, `_mounts`. Card: `use.anchor` `end_L` / `end_R`, `use.look` `middle` (the cord's low point) and `flags` |
@@ -1892,6 +1972,53 @@ the hands let go to the strips (per member and side: the `spans` as played, the 
 keyed); `retime` raises when no beat can be found in the motion (a very short or motionless VMD) or the timeline has fewer
 than two beats, and `bpm` or `per_beat` without `retime` is an error.
 
+### Flights
+
+`[[flight]]` flies a prop relative to a target, as a hand flies a rod puppet: hovering with small darts, darting ahead
+to a new place on a word, circling her head, perching on it (`mkmmd/core/flight.py`, numpy, tested;
+`mkmmd/blender/build/flight.py`). Two stages do it. `flight` (after motion, before perform) hangs the prop on its target:
+an empty `<prop>_pivot` rides it (bone-parented at the target's point, or on her root, a prop, a world point) and the
+prop's root copies its place with an offset (the constraint `mk_flight`), keyed the moves as offsets in the target's
+frame; so whatever moves her later carries the prop, and a `gaze` at `"<prop>:head"` in perform finds it where it flies
+(her eyes and the prop are read before perform moves her: the direction between them is right). `wire` (after the
+marionette stage) bakes it where her bones ended up: the target followed `lag` late (a critically damped follow: the
+hand on the wire follows her, not every hop of her head), the moves on it, a perch on the raw target (the card's
+`perch` anchor on the point), the heading (where it flies; slow, toward the target; perched, where she faces), its back
+tipped `show` degrees toward the audience and banked into its turns; keyed on the root every frame, or on the prop's
+step grid (`step`, `step_from` in its slots, CONSTANT half a frame before each pose as the paper theatre's), with the
+wings' `rest`. A prop whose card has a `wire` (the dragonfly) gets it drawn on the same frames: a cubic from the hand
+(aimed where the belly was half a second ago) to the belly (leaving it downward, toward the hand), each of its points a
+damped spring toward that shape (`wire.freq` Hz, `wire.damp`; the ends held), so its middle lags behind a dart and
+wobbles past as spring steel does, then pushed out of the target's sphere (`clear`) and the `avoid` spheres and smoothed
+(lifted over rather than round): it never passes through her.
+
+| Key | Meaning |
+|---|---|
+| `prop` | the [[prop]] it flies (required; its root has no parent) |
+| `target` | a [target](#targets) (`{cast, bone, point}` puts the point at her head's middle); default: the prop's own place. A cast member's target gives the moves her frame (x her left, y behind her, z up), anything else the world's axes |
+| `moves` | `[{t, do, ...}]` in time order of their windows, one at a time (a move that starts before the last ends is refused, naming both): `in` `{from, to, dur = 0.7}` (waits at `from`, is at `to` ON t), `dart` `{to, dur = 0.22}` (ON t, a damped spring's arrival: 9.5 % past, back within a few frames), `glide` `{to, dur = 1.0}` (eased, ON t), `circle` `{dur = 1.6, turns = 1, radius = 0.4, height = 0, tilt = 20, dir = 1, to}` (from t round the target, its plane tipped so the side toward the audience is lower, ending at `to` or where it began; a radius inside `clear` is refused), `perch` `{on = [0, 0, 0], dur = 0.5}` (lands ON t and rides the target, wings at rest, until the next move), `hover` `{darts = 0.05, every = 0.5, bob = 0.012}` (from t: its small darts about the spot and its bob between moves) |
+| `hand` | the wire's far end: a world point or keys `[[t, x, y, z], ...]` (eased): put it off the frame's edge; `<prop>_hand` is keyed there (a cut-out hand anchors on `{point = "obj('<prop>_hand').loc"}`) |
+| `lag`, `clear`, `show` | 0.3 s, 0.15 m (the prop and the wire keep that far from the target), 30 degrees |
+| `avoid` | `[{at = <target>, radius}]`: spheres the wire keeps out of too |
+| `face` | `{from, margin = 0.25}`: keep the prop (and, at 0.6 of the margin, its wire) that far off the line between `from` (a camera's object name, read on every frame, or a world point) and the target: it goes round under her chin rather than in front of her face |
+| `start`, `seed`, `wire` | where it is before the first move (default its `from` or `to`); the hover's darts; `{freq = 2.4, damp = 0.2}` |
+
+The report has per flight its `legs`, `clear_m` (the least gap to the target flying), `perched_frames` and, with a wire,
+`wire` {`clear_m` (0 where it lies on the sphere), `at_frame`, `lag_m` (how far its middle trails its rest shape),
+`length_m`}.
+
+```toml
+[[flight]]                    # into the close-up, round her head, darting ahead of her on the guitar's notes, climbing
+prop = "dfly"
+target = { cast = "reisen", bone = "head", point = [0.0, -0.02, 1.43] }
+hand = [[5.0, 1.35, -0.75, 2.05], [12.0, 1.2, -0.8, 3.3]]
+moves = [{ t = 6.0, do = "in", from = [1.05, -0.5, 0.45], to = [0.34, -0.32, 0.04], dur = 0.75 },
+         { t = 6.12, do = "circle", dur = 0.8, radius = 0.38, tilt = 22 },
+         { t = 7.181, do = "dart", to = [-0.42, -0.34, 0.06] },
+         { t = 9.829, do = "glide", to = [-0.5, -0.32, 0.5], dur = 0.6 },
+         { t = 11.2, do = "perch", on = [0.0, 0.0, 0.14] }]
+```
+
 ### Perform
 
 `[perform.<cast>]` is a character's life on top of its pose: gaze, breathing, sway, nods, beat bob, startles, keyed lean / turn /
@@ -2083,13 +2210,59 @@ The channels add to the table's own (`lean`, `tilt`, `head_nod`, `crouch`, a `gr
 | `rock`, `tilt`, `turn` | the cross pitched front end down, rolled left end down, turned toward her left: keys `[[t, deg], ...]` (eased as `lean` is) or a beat table `{deg, from, to, every = 1, lead = 0.15, first = 1, beats}`: +deg, -deg, ... on every `every`-th beat in the window, reached `lead` s before it (the hand gets there first, the puppet lands on the beat after it), from 0 a swing before the first and back to 0 after the last |
 | `sway` | the cross moved sideways toward her left: keys `[[t, m], ...]` or the same beat table with `m` |
 | `raise` | `[[t, m], ...]`: the cross lifted (she is lifted while it is over her rest height) |
-| `hops` | `[{t, height = 0.07}]`: a quick lift of the cross, at its top on `t`: she leaves the floor late, legs hanging, and lands into her knees |
+| `hops` | `[{t, height = 0.07, land = false}]`: a quick lift of the cross, at its top on `t`: she leaves the floor late, legs hanging, and lands into her knees. With `land = true` (or `{land = [t, ...], height}`: every hop so) she comes down ON `t`: a parabola `height` high from 0.06 s after the landing before it (0.36 s before `t` from a stand, a brace in her knees first) into her knees (a third of its height, back up in 0.14 s), the bars jerked up ahead of it |
 | `knees` | `[{t, side, height = 0.12}]` or a beat table `{from, to, every = 2, first = "L", height}` (the sides in turn): the leg bar lifts that knee's end (half by rising, half by rolling) from 0.18 s before `t`, so the knee is up on `t`, the foot dangling |
 | `cuts` | `[{t, threads, at = 0.5, own, back, hang, give = 0.08, catch = 0.3}]`: on `t` (the scissors close then) the threads named are cut `at` along them (0 at the cross, 1 at her). The piece on the cross is yanked up through its eye and out above it in 0.25 s; the piece on her swings down over her toward its side (the head's and the back's behind her), slides off 0.4 s later and lies on the floor in curls. A wrist: the hand drops off what it played and swings on its arm into `hang` (`[x, y, z]` m in her frame from where it was: lower and in front of it, -0.03, -0.08, -0.2), back to its own keys over `back` ([t0, t1]); a hand on a guitar's neck holds on and the neck sinks a little. The head: it drops chin to chest (38 degrees, a bounce: the ears flop if the sim has them) until she lifts it herself over `own` (end it where she looks up). The knees: they give `give` m and she catches her weight, keeping `catch` of it until `own`. The back: she lands on her own feet. A cut part is no longer held |
 | `throw` | `{t, v = [-3, 0.4, 2.6], spin = 540}`: the cross (and the leg bar) thrown aside: a ballistic arc at `v` m/s (her frame), spinning `spin` deg/s, out of the picture |
 | `guitar` | the worn guitar the hand bar turns (default the `strum`'s `prop`) |
 | `lag` | scales every spring's period (1: slower, looser above 1) |
 | `timeline` | the beats of the beat tables (`audio/timeline.json`) |
+| `over` | metres the control is held on past her head's end while she lies (0.4), or keys `[[t, m], ...]` (eased as `lean` is: two keys a frame apart step it at a cut): seen from above the bars are beyond her head and, on her back, the leg bar 0.15 m on past her heels, her face clear and the knee threads rising away from her body; held 1.7 m on, the bars are out of a plate camera's 27 mm lens 2.3 m over her face |
+| `width` | `[[t, m], ...]`: every thread's radius over time (eased; without it the card's `radius`): thread in a close plate (0.0005 under a long lens a couple of metres off), a line in a wide shot (0.0015) |
+| `lie` | `[[t, deg], ...]`: her attitude, set by the control (eased as `lean` is): her body turned about her left axis through her hips, 0 upright, -90 on her back face up, 90 on her front face down; she follows late and swings past it (0.5 s, about a fifth) |
+| `float` | `{from, to, bob = 0.02, period = 3.2, dips = [t, ...], dip = 0.012, ease = 0.8}`: the water under her bobs `bob` m either way over `period` s (eased in and out over `ease` s) and dips `dip` m on each of `dips`, back up with a small bounce |
+| `kicks` | `{from, to, period = 2.4, height = 0.07, first = "L", wander = 0.25, seed = 0}`: her own lazy kicks lying on her back: a knee comes up `height` and down in about half a period, the foot sliding up on the surface, the legs in turn, each kick its own size and pace |
+| `arms` | where her threads hold her wrists while she lies on her back: `"shoulders"` (held up by their threads a hand's length in front of her shoulders, the elbows out on the surface, the palms open to her front: seen from above, her hands by her shoulders) or `"chest"` |
+| `reach` | `[{from, to, at, ease = 0.3}]`: the hand bar carries her hands after a [target](#targets), read on every frame (a dragonfly on its wire), late (0.5 s), the right hand 0.12 s behind the left. A target flown on her (a `[[flight]]` hung on her head) is read where it hangs on her and goes where her body takes her head |
+| `swim` | `{from, to, period = 0.8, stroke = 0.2, kick = 0.08, first = "L"}`: held flat face down she swims: her hands paddle in turn (forward high, down, back, up), her legs flutter at twice the pace |
+| `release` | `{t, tumble = 0, spin = 240, terminal = 4}`: the control let go (cut the back thread on the same `t`): she falls with air's drag toward `terminal` m/s, turning heels over head `tumble` degrees on the way (a multiple of 360 lands her upright) and coming upright before she lands; the control falls after her on her head thread, slower (0.6 of her speed: it streams above her), tumbling `spin` deg/s; the leg bar drops out of the picture. Give her `air` over the fall: her legs tuck and tread, her hands tread on their own |
+| `land` | `{t, at, give = 0.1, radius = 0.4, clatter = 0.35, speed = 2.5, approach = 0.6}` (after `release`): she lands on `at` (a target, read on every frame: a ball that bobs carries her) on `t`, coming down `speed` m/s onto it over the last `approach` s (before that her place in the air is free: shoot the fall in plates); her knees give `give` m and push back, her chest goes forward with them, her arms go out for her balance and come down; `clatter` s later the control lands on the ground beside her (a ball `radius` m round under `at`), bounces twice and lies flat, its head thread paid out round the stick, slack to her |
+| `yank` | `{t, v = [0.6, 0, 7], at = 0.6}` (after `land`): a hand takes her head thread `at` along it (0 the control, 1 her) and pulls it away at `v` m/s (her frame) for half a second, slowing: the slack is taken up, she hangs from her crown and is snatched up after it, her chin up, her arms and legs hanging; the control dangles under the hand. `<prop>_grab` is where the hand holds it |
+| `knot` | `{t, swing = 8, loop}`: every thread whole and on her again from `t` (the cut ones knotted back), the control back in hand over her place: she hangs upright at the `raise` of then, swinging `swing` degrees as she settles (gone in about four seconds). After a `yank` she is carried back unseen from 0.75 s after it: keep that span out of the cut. `loop` (the clip's length, when it loops): the swing starts `loop` s earlier too, so the pre-roll and the clip's first seconds swing as its end does |
+
+With any of `lie`, `float`, `kicks`, `arms`, `reach`, `swim`, `release`, `land`, `yank` or `knot` she is moved in the
+world (`mkmmd/core/marionette_world.py`, numpy, tested): her root is keyed on every frame (a turn about her hips and a
+move), and so are her hands' IK goals and elbow poles, so she can lie, be flown, fall and land. She hangs from where her
+back thread meets her, and that point follows the control late (0.34 s, the standing puppet's weight): `raise` lifts her
+lowest point that far over her place's surface at the control's attitude (`lie`), and while her attitude lags the
+control's (a jerk up onto her feet, a body tipped onto its back) she turns about that point, held by her shoulders. The
+surface stops her: her back lying, her soles standing, her heels as she is pulled up; the water gives a little under her
+(0.6 of how far she would come down past it) and her knees take a landing. Lying on her back she rests on the outline of
+her body seen from her side (her skin's, not her arms' nor the sim's hair, ears and skirt; the back of her head on a
+hair's thickness), once her body stops on the pad her head gives into it, chin up a little (at most 3 degrees: a give,
+not a nod; her ears do the bouncing), her wrists
+where `arms` says; standing she is the standing puppet (the channels above, her knees under the leg bar); lifted off her
+surface she swings under the control as a pendulum of her length (2 π √(L/g), the control's `sway` its push), tilting
+with her swing. Held flat, when her knee threads are cut her hips sink until she hangs from her shoulders (to a third of
+the angle); a cut leg hangs and swings from her hip under gravity, a cut hand from her shoulder. Her hands go after where
+their threads hold them about her shoulders (0.42 s), so a hand swings on its arm, never through her (a box from her hips
+to her shoulders keeps them out), the hand going on along its forearm, turned from the arm's own neutral
+(`mkmmd.core.armtwist`) as each pose asks: neither forearm nor upper arm turns past a human one. The control is held
+over her as she stands (the standing puppet's layout), over her head's end as she lies (`over` on past her head) with
+the leg bar on past her heels on her back, over her legs face down. Her hands need an arm IK: give each
+`[pose.<cast>.hands.<side>]` an `at` (anywhere: the threads take it from there) and leave `sit`, `feet` and `hips` out of
+her pose; `walk`, `tumble`, `step_turn` and `spin` move the same root and are refused beside these keys.
+
+The sim lays her hair, ears and skirt on what she lies on: `<prop>_rest`, a flat box never rendered, is keyed under her
+while she is at her place (bobbing with `float`) and parked 60 m below otherwise: give `[sim.<cast>] colliders = [{type
+= "box", object = "<prop>_rest"}]` and `floor = false` (she falls through z 0). A loop whose first frame is a touch: the
+keys before 0 are the ones after the last word less the clip's length, and the pre-roll is long enough to replay the
+clip's end from before her last tip onto her back (with `[scene] start` 1, a `frame0` six seconds in), with `knot.loop`
+for the knot's swing: her body moves through the pre-roll as through the end, and `[sim.<cast>] loop = true` starts
+frame 0's hair, ears and skirt from the last frame's (hair that lies on the pad stays where it landed: the pre-roll alone
+does not bring it there), so the last frame is the frame before the first. She touches on frame 0 when
+the control's last drop meets the water a few hundredths of a second before it (`raise` `[-0.17, 0.08], [-0.03,
+-0.06]`: frame -1 a centimetre over the water, frame 0 on it, the pad giving 9 mm after).
 
 The build's `marionette` stage (after `stepped`) draws each thread from where its anchor on a bar and its end on her
 are on that frame: its own length is its span at `from`, so it is straight while it pulls and sags in a parabola as deep
@@ -2098,6 +2271,15 @@ her steps there, and her bones carry the ends, so the threads step with her. The
 `threads` (`length_m`, `cut`) and `bar_curves_stepped`; perform's has `marionette` (`rise_mm`, `sway_mm`, `knee_mm`,
 `home`, `guitar`, `hand_bar`, `hang_<side>`, `cuts`). Look at each arrival and each cut frame by frame at full size: a
 thread through the guitar or her face, a hand through the guitar's body after its cut.
+
+In the world (the keys above) each thread's own length is the shortest span it has while it pulls her (she is at her
+place and the control is not let down below her rest): it is straight whenever it pulls and sags only when the control
+comes down to her. It twangs when it snaps taut, as hard as its slack was taken up fast; the back thread runs round
+under her nape, behind her head and over her crown while she lies on her back (it never goes through her); a cut piece
+stays tied to her and hangs from her; falling, her head thread streams between her and the control; landed, it lies
+slack over the ground; yanked, it runs from the control up to the hand (`<prop>_grab`) and down to her; knotted on,
+every thread is whole again. The report's `threads` adds `snaps`; perform's `marionette` adds `lie_deg`, `aloft_s`,
+`height_mm`, `times` and per hand `reach_mm`.
 
 ```toml
 [perform.rin.marionette]
@@ -2110,6 +2292,30 @@ hops = [{ t = 16.68 }]
 cuts = [{ t = 18.69, threads = ["wrist_R"], back = [20.19, 20.5] }, { t = 19.19, threads = ["head"], own = [19.45, 20.25] },
         { t = 19.69, threads = ["knee_L", "knee_R"] }, { t = 20.19, threads = ["back", "wrist_L"] }]
 throw = { t = 20.24 }
+```
+
+```toml
+[perform.reisen.marionette]   # lowered onto the water on her back, floated, jerked up, hopped, flown, cut free, fallen
+prop = "strings"
+from = -6.0                   # frame0 six seconds in: the pre-roll replays the end from 19.7 (the clip is 25.7 s)
+over = [[-3.03, 0.4], [-3.02, 1.7], [3.02, 1.7], [3.03, 0.4], [22.67, 0.4], [22.68, 1.7]]   # out of the plates
+width = [[-3.03, 0.0015], [-3.02, 0.0005], [3.02, 0.0005], [3.03, 0.0015], [22.67, 0.0015], [22.68, 0.0005]]
+lie = [[-5.7, 0], [-4.51, 0], [-3.75, -90], [6.68, -90], [6.98, 0], [9.18, 0], [9.9, 85], [12.08, 85], [20.0, 0],
+       [21.19, 0], [21.95, -90]]
+raise = [[-5.8, 0.3], [-4.51, 0.3], [-3.02, 0.10], [-0.17, 0.08], [-0.03, -0.06], [0.5, -0.10], [6.62, -0.10],
+         [6.78, 0.14], [7.0, 0.0], [9.12, 0.0], [9.75, 1.2], [12.08, 1.25], [19.9, 0.3], [21.19, 0.3], [22.68, 0.10],
+         [25.53, 0.08], [25.67, -0.06], [26.2, -0.10]]     # the keys before 0 are the ones after 19.9 less 25.7
+float = { from = 0.0, to = 6.7, dips = [1.53, 4.54] }
+kicks = { from = 3.1, to = 6.0 }
+hops = { land = [7.19, 7.58, 7.95, 8.35, 8.71, 9.12], height = 0.1 }
+reach = [{ from = 6.9, to = 10.4, at = "dfly:body" }]
+swim = { from = 9.6, to = 12.1, period = 0.74 }
+cuts = [{ t = 10.61, threads = ["knee_L"] }, { t = 10.99, threads = ["knee_R"] }, { t = 11.34, threads = ["wrist_L"] },
+        { t = 11.73, threads = ["wrist_R"] }, { t = 12.08, threads = ["back"] }]
+release = { t = 12.08, tumble = 360 }
+land = { t = 17.26, at = "mars:top" }
+yank = { t = 18.18 }
+knot = { t = 20.1, loop = 25.7 }
 ```
 
 ### Ribbons
@@ -2403,6 +2609,7 @@ it out for a quick look at poses and performance.
 | `substeps` | solver steps per frame (default 10) |
 | `settle_s` | seconds the first frame is settled under gravity before the run (default 1.5) |
 | `engine` | `"auto"` (default: numba when installed, `pip install 'mk-mmd[fast]'`), `"numpy"` or `"numba"` (an error without numba); the same dynamics and the same results to rounding |
+| `loop` | `true` for a clip that loops (default false): after the run, the frame before clip time 0 takes the state the last frame left (every particle's place, speed and target) and the clip is simulated again from it, so frame 0's hair, ears and skirt go on from the last frame's instead of from what the pre-roll left (hair lying on a surface stays where it landed, so no pre-roll arrives at the end's state by itself). That second run need not end where the first did, so where the two runs lie nearest (after clip time 0) the first run's frames take over again, crossfaded over half a second: the clip ends as the first run did and frame 0 goes on from that end. Give the body the pose of the clip's end on the frame before 0 (the keys before 0 the end's). Needs a pre-roll; the sim takes about twice as long; the report's `passes` add `loop` {`frame`, `residual_mm` (how far the second run's end lies from the first's), `switch` (the frames of the crossfade), `switch_mm` (the most the runs differ there)} |
 
 The `penetration` check takes the same `use_masks` and `anchor_free` and measures like the solver; the model's own bodies collide
 too, except those of the simulated bones (they move with the hair), and a chain skips a body it already overlaps at rest
@@ -4233,12 +4440,12 @@ early pass with it. With `--gpu` a frame with an `under` entry inside a window i
 
 | Key | Meaning |
 |---|---|
-| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)) or `cutout` ([Cutouts](#cutouts-real-hands)), or `inset` ([Insets](#insets-the-picture-on-a-screen-in-a-recording)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)), or the haze: `mist`, `fog` or `bokeh` ([Haze](#haze-mist-fog-bokeh)), or `mitosis` ([Cell division](#cell-division-mitosis)), or a sticker sheet: `sheet` or `fling` ([Sticker sheets](#sticker-sheets-paper-live-stickers-hollows-doodles)) (required) |
+| `kind` | `lens`, `echo`, `slitscan`, `push`, `scope`, `zoom`, `shock`, `slab`, `tint`, `halftone`, `split` or `mosh`, or a collage: `grid`, `orbit`, `mirror`, `panels`, `stack` or `footage` ([Footage, stickers and figure moves](#footage-stickers-and-figure-moves)), or a video sticker `clip` ([Video stickers](#video-stickers-clip)) or `cutout` ([Cutouts](#cutouts-real-hands)), or `rewind` ([Rewinds](#rewinds-a-finger-scrubbing-the-video-back)), or `inset` ([Insets](#insets-the-picture-on-a-screen-in-a-recording)), or a picture effect: `pixelsort`, `film`, `camcorder`, `doodle` or `booth` ([Picture effects](#picture-effects-pixel-sort-film-camcorder-doodles-photo-booth)), or `mandala` or `trails` ([Mandalas and trails](#mandalas-and-trails)), or a colour field: `liquid`, `spiral` or `flood` ([Colour fields](#colour-fields-liquid-light-op-art-floods)), or a remap: `kaleido`, `tunnel` or `melt` ([Remaps](#remaps-kaleidoscope-tunnel-melt)), or the paper world's `activity` or `label` ([Activity book and labels](#activity-book-and-labels)), or the toy paint app `paintapp` ([Toy paint app](#toy-paint-app)), or an era look: `digicam`, `chrome`, `gradmap`, `invert`, `testcard` or `cards` ([Era looks](#era-looks-digicam-chrome-gradmap-invert-test-card-cards)), or `lasers` ([Lasers](#lasers)), or `prints` ([Prints](#prints-photographs-laid-over-the-picture)), or `key` ([Keys pushed too far](#keys-pushed-too-far)), or `shapes` ([Shapes](#shapes)), or the haze: `mist`, `fog` or `bokeh` ([Haze](#haze-mist-fog-bokeh)), or `mitosis` ([Cell division](#cell-division-mitosis)), or a sticker sheet: `sheet`, `fling` or `thread` ([Sticker sheets](#sticker-sheets-paper-live-stickers-hollows-doodles)) (required) |
 | `from`, `to` | clip seconds (required, `to` after `from`): the span, `from` .. `to` - 1 in frames, inside the clip |
 | `aspect` | any entry: `[fx.aspect.<output>]`, its own keys for one output ([Each output its own: aspect](#each-output-its-own-aspect)) |
 | `name` | any entry: a name of its own, unique, for a craft text's `under = "<name>"` ([Craft type](#craft-type)) |
 | `under` | any entry: `true` draws it on the cut's own picture before the transitions, inserts and glitches inside their windows, so they carry it off with the shot (default `false`: over what they composed; above) |
-| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears, the lasers' light, the prints' mix. A push and an inset have none |
+| `strength` | a number, or `[[t, v], ...]` keys over clip seconds, linear between them and held outside (default 1): the lens's mass (its Einstein radius goes as the square root), an echo's opacity, a slitscan's depth, a scope's opacity, a zoom's and a shock's size, a slab's opacity, a tint's, a halftone's, a mosh's and a collage's mix, how far a split tears, the lasers' light, the prints' mix. A push, an inset and a rewind have none |
 | `center` | lens and push (required), zoom, shock, orbit, mirror and stack (default the middle): `[x, y]` fractions of the frame (0, 0 the top left), or `{point = "<expression>"}`, a point of the scene ([Expressions](#expressions)) that `mk render` projects through the camera of the shot in the cut on every frame of the span (`point/x<i>/<frame>.json`) |
 | `radius`, `radius_m` | lens and push: the lens's Einstein radius, or the push's disc at the start; `radius` a share of the frame height (default 0.1 for a lens, 0.02 for a push), `radius_m` metres at the depth of a scene point (a hole of a known size, a pupil), one of the two |
 | `shadow` | lens: the share of the Einstein radius painted black about the centre (default 0: the scene draws its own). The lens bends the whole picture, what passes in front of its centre too (a figure there wraps into a ring, as if it were behind): key `strength` down while something passes in front that should stay whole |
@@ -4595,7 +4802,7 @@ height at a natural size.
 | `in`, `rate` | its second on the span's first frame (0) and its speed (1; -16..16: below 0 it plays backwards, a lift turned into a press) |
 | `sync` | `[video second, clip second]`: that moment of the video shows on that clip second's frame, the steps counted from there (instead of `in`, which it sets) |
 | `fps` | poses a second, each held (12; 0 every frame), steps counted from `sync` or the span's start |
-| `anchor`, `at` | `anchor` `[x, y]` fractions of the clip's frame (or crop) as the file has it (the middle) stands at `at`: `[x, y]` frame fractions (the middle), `{point = "<expression>"}`, a scene point seen through the camera of the shot in the cut on each frame, so a hand rides what it holds, or a grab point on each frame: a transition's, `{peel = <the peel's at second>}`, the lifted corner of that `peel` (`mkmmd.core.peel.corner`), or `{tear = <the tear's at second>, grip = 0 or 1}`, one of the two grips on the halves of that `tear` (`mkmmd.core.tear.grips`), a transition of that kind at that second (half a frame either way) being in the table; or `{sticker = <second>}`, the grip of the sticker a [sheet](#sticker-sheets-paper-live-stickers-hollows-doodles) peels off from that second (its figure's `peel` or a hollow's): the hand's pinch lies on the sticker where it first lifts and is carried off with it, in every output. A hand that moves in its own frame (it rocks, it reaches) carries its fingertip away from a fixed `anchor`, and slides off what it holds: give `anchor` that point's track then, `[[video second, x, y], ...]` (two rows or more, their seconds rising; straight between rows, the end rows' beyond them), read at each held pose's video second, so the fingertip stays on `at` and the arm moves. Each output its own through `[fx.aspect.<output>]` |
+| `anchor`, `at` | `anchor` `[x, y]` fractions of the clip's frame (or crop) as the file has it (the middle) stands at `at`: `[x, y]` frame fractions (the middle), `{point = "<expression>"}`, a scene point seen through the camera of the shot in the cut on each frame, so a hand rides what it holds, or a grab point on each frame: a transition's, `{peel = <the peel's at second>}`, the lifted corner of that `peel` (`mkmmd.core.peel.corner`), or `{tear = <the tear's at second>, grip = 0 or 1}`, one of the two grips on the halves of that `tear` (`mkmmd.core.tear.grips`), a transition of that kind at that second (half a frame either way) being in the table; or `{sticker = <second>}`, the grip of the sticker a [sheet](#sticker-sheets-paper-live-stickers-hollows-doodles) peels off from that second (its figure's `peel` or a hollow's): the hand's pinch lies on the sticker where it first lifts and is carried off with it, in every output; or `{table = [x, y]}`, a point of a [table](#tables-a-sheet-over-a-clip-seen-through-a-view) (fractions of its clip's frame; the last table whose span holds the hand's): its view carries the hand there and zooms and turns it with the table, its `size` and its keys' moves then in table heights, so a hand holding her threads at the top of the wide table leaves the frame as the view closes in on her; or `{rewind = <the rewind's from second>}`, the playhead of that [rewind](#rewinds-a-finger-scrubbing-the-video-back) (`mkmmd.core.rewind.grip`), which must come before the cutout in the table: a fingertip on it drags the picture back. A hand that moves in its own frame (it rocks, it reaches) carries its fingertip away from a fixed `anchor`, and slides off what it holds: give `anchor` that point's track then, `[[video second, x, y], ...]` (two rows or more, their seconds rising; straight between rows, the end rows' beyond them), read at each held pose's video second, so the fingertip stays on `at` and the arm moves. Each output its own through `[fx.aspect.<output>]` |
 | `extend` | where the matte meets the clip frame's border, that border's line repeated out past the picture's edge (true); false: the cut-out ends at the clip's frame, rimmed there too |
 | `size`, `turn`, `keys` | the clip's frame height in frame heights (1.0, 0.01..10), a turn in degrees counter-clockwise about the anchor (0: the hand entering the way the file has it), and moves `[{t, turn, dx, dy, scale, ease}]` as a collage's, about the anchor, at the held pose's second |
 | `edge`, `shadow` | a die cut `{color, width}` grown round the matte (12-18 px at 1080 white for paper) and a drop shadow, as a clip sticker's |
@@ -4619,6 +4826,92 @@ grade = {}
 
 [fx.aspect.9x16]              # the tall frame: the hand from the top, larger
 size = 1.1
+```
+
+#### Rewinds: a finger scrubbing the video back
+
+`kind = "rewind"` winds the clip back as a finger scrubs a video player's bar: a paper scrub bar is slapped onto the
+picture, a cut-out fingertip presses its playhead and drags it left, and the picture runs backwards as far and as fast as
+the finger drags, in a few legible moments with hard jumps between them, not a blur of reversed cuts. `mkmmd/core/rewind.py`
+checks it, times its time map and lays the bar out (bpy-free, tested in `tests/test_fx_rewind.py`); `mkmmd/rewind.py`
+draws it.
+
+The picture is the cut's own until the first segment of the time `map`. A segment `{t, from, to}` shows, from clip second
+`t` until the next segment starts (the last until the span's `to`), the clip's own picture at the source seconds `from`
+down to `to`: its poses are held `fps` a second (12: on twos, as the cast and the hands move) counted from `t`, the first
+showing `from` and the last `to`, evenly between, and from one segment to the next the scrub jumps. A rewind shows what
+came before (a segment's seconds are at most its own `t`), and the picture of a source second is the cut's frame there
+with the effects before the rewind in the table applied as they are at that second, the way a push finishes its frame
+inside: the table, the stickers and the hands that were on screen then are on it. The cut effects are not, so a source
+second inside a transition's, an insert's or a glitch's window is refused. Nor is any type: `mk post` lays the craft type
+and the screen type on after the frame effects, on the frame it finishes, so the lines sung before never run backwards
+through a rewind and the line sung during it, laid over the effects (the default), stays on top and readable. Type laid
+`under` the effects lies under the rewind and is replaced with the picture there: lay a line that must stay over it, or
+`under = "<the name of an effect after the rewind>"`. Put the rewind after every effect whose picture it should show
+(last in the table, as a push), and give it a few moments on the words, each slower than a blur: three to five times
+the clip's speed reads, a moment that has to be read can run at its own speed or slower.
+
+The bar is a strip of masking tape that is the clip from end to end (its left end, clip second 0, at `at`; `length`
+frame widths long), pen ticks a second apart along it (`ticks`; every fifth longer), the part before the playhead
+painted (`played`), its long edges a shade darker so it reads on a light picture too. The playhead is a round die-cut
+sticker (`head`) that stands where the second shown is (the clip's own second before the first segment), so it moves
+left exactly as the picture runs back, in the same steps, and squashes flat under the finger from `press`. Above the
+bar's left end a piece of label tape carries a raised double arrow, the rewind mark (`mark`), and beside it a paper tag
+the second shown, minutes, seconds and tenths, digits only (`counter`, in a font of the registry: a 7-segment one reads
+as a tape counter). All of them are slapped down together on `land` as craft type's slap comes down and wear its soft
+drop shadow (`shadow`). Each segment's start tears the picture as a tape shuttling does: `split`'s torn bands, the red
+and blue planes apart, over a ghost of the pose before, strongest on the jump and dying away over `decay` s, with `base`
+of it left while the scrub runs; the jumps come three a second at most (nothing strobes), and a map with more is
+refused. In a 9:16 output the defaults keep the bar above the bottom fifth and clear of the right edge, where a feed
+lays its own buttons.
+
+A cutout rides the playhead with `at = {rewind = <the rewind's from second>}`, after the rewind in the table (over its
+bar): its `anchor` stands on the playhead's middle on every frame, so a finger pressing there (its fingertip's pad as
+the anchor, tracked while the hand rocks) drags the picture. Sync its touch to `press` and bring it in before with
+`keys`; on a frame before the bar lands it meets the playhead where the bar lands. Every frame is a function of the
+files and the frame alone (`FrameFx.safe` lets a chunk of mk post's workers start anywhere); a pose is kept while it is
+held. About 0.3 to 1.5 s a 540 x 960 frame where the picture is another second's (the effects before the rewind worked
+out again there), on the CPU (`--gpu` leaves the rewind's frames to the workers).
+
+| Key | Meaning |
+|---|---|
+| `map` | the time map (required): `[{t, from, to}, ...]`, clip seconds: from `t` (rising from segment to segment, inside the span) the picture at `from` running down to `to` (at most `t`; inside the clip) |
+| `fps` | poses a second of the picture scrubbed back to, each held (12; 0 every frame) |
+| `snap` | how the playhead (and a finger riding it) moves once the scrub starts: steadily from the second shown just before it to the last segment's `to`, pose by pose with the picture, and `snap` (0.25) of the way from that steady line to the second shown, so it snaps a little on each jump; 1: it stands on the second shown, every jump taken whole. The counter always shows the second shown |
+| `land`, `press` | clip seconds: the bar lands (default the span's start plus the slap's fall) and the finger presses the playhead (default the first segment's `t`); `from` <= `land` <= `press` <= the first `t` |
+| `bar` | `{at, length, height, tilt, color, played, ink, ticks}`: its left end's middle (`[0.07, 0.775]` frame fractions), its length (0.71 frame widths) and width (0.03 frame heights), turned `tilt` degrees (-1.2), the tape (`surface:gold:0.38`), the played part's paint (`love`; false none), the ticks' ink (`text`) and their spacing in seconds (1; 0 none) |
+| `head` | `{size, color, rim}`: the playhead's sticker, 0.056 frame heights across, `love`, a white die-cut rim 14 px at 1080 |
+| `mark` | `{at, size, color, ink, tilt}` or false: the label tape's middle (default above the bar's left end), its width (0.042 frame heights), the tape (`iris`) and the raised arrows (`base`), turned -4 degrees |
+| `counter` | `{at, size, color, ink, font, tilt}` or false: the tag's middle (default right of the mark), the digits' height (0.026 frame heights), the paper (`surface`), the ink (`text`), the font (a registry slug or a file; none: the registry's first font tagged `mono`), turned 2.5 degrees |
+| `tear` | `{base, decay, ghost, linger, bands, shift, share, rgb, hold}` or false: the tear left while the scrub runs (0.15), how fast a jump's dies away (0.12 s), the ghost of the picture before a jump (opacity 0.25 on the jump's frame, gone over `linger`, 0.033 s: the new pose is clean two frames after its jump), and the torn bands as a `split`'s: `bands` (14), `share` of them (0.35) torn up to `shift` frame widths (0.06), the planes `rgb` px at 1080 apart (8), breaking another way every `hold` s (0.05), all of them times the tear |
+| `shadow` | the pieces' drop shadow `{color, offset, blur, alpha}` (craft type's: `text`, `[0.004, 0.007]`, 6, 0.3) or false |
+| `seed` | the tears' randomness and the tape's (1) |
+
+```toml
+[[fx]]                        # a finger scrubs the clip back over four moments on the words, a hard jump and a tear at each
+kind = "rewind"
+from = 18.28
+to = 20.47                    # the cut after it is the next shot's own frame: the bar and the finger gone
+land = 18.357                 # the bar slapped down on a pick
+press = 18.501                # the finger's touch
+map = [{ t = 18.55, from = 17.55, to = 17.0 },     # the landing undone
+       { t = 18.924, from = 15.1, to = 14.34 },    # the pour drawn back into the jug, at the clip's own speed
+       { t = 19.67, from = 11.85, to = 10.56 },    # the threads un-cut
+       { t = 20.13, from = 9.75, to = 9.15 }]      # the night rolled back off the backdrop
+counter = { font = "dseg7_classic_bold" }
+
+[[fx]]                        # the fingertip that drags it, a hand pressing with its index finger, the pad tracked
+kind = "cutout"
+from = 18.28
+to = 20.47
+clip = "footage/hands/press.mp4"
+sync = [6.25, 18.501]         # the press in the clip on the rewind's `press`
+anchor = [[5.9, 0.367, 0.169], [6.5, 0.374, 0.154], [7.0, 0.458, 0.152], [7.5, 0.354, 0.147], [8.0, 0.436, 0.146]]
+at = { rewind = 18.28 }
+size = 0.36
+keys = [{ t = 18.28, dx = 0.3, dy = 0.32 }, { t = 18.501, dx = 0.0, dy = 0.0, ease = "out" }]   # in from the bottom right
+edge = { color = "#ffffff", width = 16 }
+shadow = { color = "text", offset = [0.004, 0.007], blur = 6, alpha = 0.3 }
 ```
 
 #### Insets: the picture on a screen in a recording
@@ -4766,22 +5059,24 @@ it and the plate's guitarist and her mirror image echo in eras and veggies on ei
 `kind = "mandala"` lays concentric rings of copies about a `center` on its `back`: copies of the figure (`objects`, cut out of
 the picture as a collage cuts it and drawn as its `fill`), of sprites (pictures with alpha: photos of real butterflies, clovers
 and flowers from the asset registry) or of stickers drawn in palette colours (flat ones: a clover, a flower, a heart, a star,
-a butterfly; and four kits drawn with a pen's ink line: a moon, a rabbit, a carrot and dango; a daisy, a cassette, a
+a butterfly; and six kits drawn with a pen's ink line: a moon, a rabbit, a carrot and dango; a daisy, a cassette, a
 guitar pedal and cherries; a book, a teacup and a potion; a desk's guitar pick (`pick`), beamed quavers (`note`), a
-`sparkle`, a `cloud` with a face and a `strawberry`).
+`sparkle`, a `cloud` with a face and a `strawberry`; a pond's water `lily`, `lilypad`, lily `bud`, `reed` (a cattail),
+`dragonfly` and water `drop`; a café's `croissant`, latte `cup`, `sugar` cube, `orange` slice and coffee `bean`).
 Every copy is a sticker: with a thick white `edge` (grown round it and rounded where it bends in, as a die cut is) and a drop
 `shadow` it is cut out and laid on the page. Each ring turns its own way (every other ring the other way), steps on the hits
 (`times` or a `lane`, as a collage steps; a list of `back`, `fill` or shape `colors` is read at the step plus the copy), with a
 `bloom` jumps out on each hit and settles, and with a `grow` its copies pop in one by one; its `strength` mixes it over the
 picture, as a collage's does. `kind = "trails"` leaves rainbow after-images behind a moving figure. `mkmmd/core/mandala.py`
-checks, times and lays them out and draws the stickers' shapes as polygons (numpy, tested), `mkmmd/mandala.py` draws them
-(numpy, OpenCV, Pillow): each copy is a tile cut once at its ring's size and laid by an affine map, its shadow cast where it
-lands (about 0.15 s for a 1080p frame of 30 stickers and her copies).
+checks, times and lays them out and draws the stickers' shapes as polygons (numpy, tested; the pond and café kits in
+`mkmmd/core/pondkit.py`), `mkmmd/mandala.py` draws them (numpy, OpenCV, Pillow): each copy is a tile cut once at its
+ring's size and laid by an affine map, its shadow cast where it lands (about 0.15 s for a 1080p frame of 30 stickers and
+her copies).
 
 | Key | Meaning |
 |---|---|
 | `rings` | mandala (required): up to 12 tables, ring i `{count, radius, scale, turn, step, phase, mirror, spin, orient, angle, source, fill}`: `count` copies (6 + 4 i, at most 64) on a circle `radius` short sides of the frame (0.15 (i + 1)) round the centre, the first `phase` degrees counter-clockwise from straight up (0), the rest evenly after it, each `scale` short sides large (the figure's height as it stands on the span's first frame, 0.25, so its copies keep their size against the rings in every output; a sprite's or a shape's longer side, 0.12). A ring turns `turn` degrees a second counter-clockwise (12) and `step` more on each hit (0), eased over `snap`; its copies stand `radial` (`orient`, default: each one's top away from the centre) or `upright`, turned `angle` degrees more (0) and spinning `spin` degrees a second about themselves (0); `mirror = true` flips every other copy left to right (a kaleidoscope's reflections). The outer rings are drawn first |
-| `source` | ring: `"figure"` (default: the figure in `fill`, the ring's own `fill` list over the entry's, `inks` as a collage's), `{sprites = [...]}` or `{shape = ...}`. Sprites: registry slugs, files or globs (project-relative, absolute or `~/...`; `.png`, `.webp`, `.tif`, `.jpg`) or `{tag = "butterfly"}` (one tag or a list: every picture of the registry that has them all), one or a list; trimmed to their alpha and dealt round the ring shuffled by `seed`, every one before any comes again, each ring its own deal. A slug, tag, file or glob that finds nothing is an error before anything is drawn. Shapes: `shape` one of the flat ones (`clover` (four heart leaves with their pale chevrons, a stem), `flower`, `heart`, `star`, `butterfly`) or of two kits drawn with a pen's ink line round their parts: a moon rabbit's (`moon` (a crescent asleep), `rabbit` (a white one's head: its colour is the inside of its ears, its `accent` its eyes), `carrot`, `dango` (three on a stick: the colour, white and the `accent`)) and a zine's (`daisy` (white petals round the colour), `cassette`, `pedal` (a guitar pedal) and `cherry`), or a list of them round the ring, in `colors` (default the shape's own: the clover `pine` and `foam`, the flower `love`, `rose` and `iris`, the heart `love` and `rose`, the star `gold` and `rose`, the butterfly `iris`, `love`, `foam` and `gold`, the moon and the carrot `gold` and `rose`, the rabbit and the dango `rose`, `love` and `iris`, the daisy `gold`, `rose` and `love`, the cassette `iris`, `foam`, `love` and `gold`, the pedal `love`, `pine`, `iris` and `gold`, the cherries `love` and `rose`), shaded toward `ink` (`text`: the pen's line too) and white, with an `accent` (the flower's middle, the butterfly's spots, the rabbit's eyes, the carrot's leaves; default the shape's own: `gold`, but `rose` for the heart and the moon, `love` for the star and the rabbit, `pine` for the carrot and the cherries, `foam` for the dango). `pen = true` draws the pen's line round the flat ones too (round the whole shape, in `ink`): a star or a heart beside a kit's stickers is drawn as they are |
+| `source` | ring: `"figure"` (default: the figure in `fill`, the ring's own `fill` list over the entry's, `inks` as a collage's), `{sprites = [...]}` or `{shape = ...}`. Sprites: registry slugs, files or globs (project-relative, absolute or `~/...`; `.png`, `.webp`, `.tif`, `.jpg`) or `{tag = "butterfly"}` (one tag or a list: every picture of the registry that has them all), one or a list; trimmed to their alpha and dealt round the ring shuffled by `seed`, every one before any comes again, each ring its own deal. A slug, tag, file or glob that finds nothing is an error before anything is drawn. Shapes: `shape` one of the flat ones (`clover` (four heart leaves with their pale chevrons, a stem), `flower`, `heart`, `star`, `butterfly`) or of kits drawn with a pen's ink line round their parts: a moon rabbit's (`moon` (a crescent asleep), `rabbit` (a white one's head: its colour is the inside of its ears, its `accent` its eyes), `carrot`, `dango` (three on a stick: the colour, white and the `accent`)), a zine's (`daisy` (white petals round the colour), `cassette`, `pedal` (a guitar pedal) and `cherry`), a pond's (`lily` (a water lily in bloom round its `accent` heart), `lilypad`, `bud` (a lily's, closed), `reed` (a cattail), `dragonfly`, `drop`) and a café's (`croissant`, `cup` (a latte on its saucer from above, the coffee the `accent` darkened), `sugar` (a white cube, a side in the colour's tint), `orange` (a slice), `bean` (a coffee bean)), or a list of them round the ring, in `colors` (default the shape's own: the clover `pine` and `foam`, the flower `love`, `rose` and `iris`, the heart `love` and `rose`, the star `gold` and `rose`, the butterfly `iris`, `love`, `foam` and `gold`, the moon and the carrot `gold` and `rose`, the rabbit and the dango `rose`, `love` and `iris`, the daisy `gold`, `rose` and `love`, the cassette `iris`, `foam`, `love` and `gold`, the pedal `love`, `pine`, `iris` and `gold`, the cherries `love` and `rose`, the lily and the bud `rose`, `love` and `iris`, the lily pad `pine` and `foam`, the reed `love` and `gold`, the dragonfly `iris`, `foam` and `pine`, the drop `foam` and `iris`, the croissant `gold` and `rose`, the cup and the sugar `rose`, `iris` and `foam`, the orange `gold`, `love` and `rose`, the bean `love` and `rose`), shaded toward `ink` (`text`: the pen's line too) and white, with an `accent` (the flower's middle, the butterfly's spots, the rabbit's eyes, the carrot's leaves, the dragonfly's eyes; default the shape's own: `gold`, but `rose` for the heart and the moon, `love` for the star and the rabbit, `pine` for the carrot, the cherries, the bud, the reed, the dragonfly, the drop and the orange (its mint leaf), `foam` for the dango). `pen = true` draws the pen's line round the flat ones too (round the whole shape, in `ink`): a star or a heart beside a kit's stickers is drawn as they are |
 | `eyes`, `mouth` | a ring's sprite source, `{sprites = [...], eyes = true, mouth = true}`: googly eyes on every sprite's face and a doodled smile under them (see Googly eyes below) |
 | `center`, `back` | mandala: the rings' centre (`[x, y]` frame fractions or `{point}`, default the middle); the ground, a colour, a pattern (as a collage's) or `"picture"` (the frame as it reached the effect: the rings over her world), or a list of them read at the step (default `base`) |
 | `objects`, `center_figure` | mandala: the figure, required with a ring of it or `center_figure = true` and only then; `center_figure` lays the figure itself over the rings where the frame shows it, drawn `fill` entry step, with its edge and shadow. `fill`, `inks`, `offset`, `keys` and `pivot` are a collage's |
@@ -4792,6 +5087,7 @@ lands (about 0.15 s for a 1080p frame of 30 stickers and her copies).
 | `objects`, `count`, `delay`, `fade` | trails: the figure (required) on `count` (6) earlier frames `delay` (2) frames apart, copy j (1 the newest) at opacity `fade` ** j (0.85), laid oldest first behind the figure, which stays over them as the frame shows it. `mk render` draws its figure on those frames, and `mk look` renders them beside the frames asked for |
 | `colors`, `spread`, `cycle`, `times`, `lane`, `snap` | trails: a ramp of colours (default a Rosé Pine rainbow: `love`, `rose`, `gold`, `foam`, `pine`, `iris`), copy j its colour `spread` x (j - 1) entries along it (1), blended between entries; the colours run out along the trail `cycle` entries a second (1), and one more on each hit (`times` or a `lane`) over `snap` s (0.12) |
 | `blend`, `tint`, `step` | trails: `over` (default: for light grounds), `screen` or `add` (light trails on a dark ground); `tint` 1 copies flat in their colour (default), less mixes in the figure's own picture; `step` `[dx, dy]` short sides (`[0, 0]`): copy j moved j x `step` further, a fan of rainbow even while she stands still. `strength` scales the copies' opacity |
+| `mask`, `still` | trails: `mask = {ground = <object patterns>}` draws the copies only where that figure is not (her: an after-image never crosses her, wherever the figure it follows flies), `{figure = ...}` only on it; the figure's layer is drawn beside the frames as a collage's (default none). `still` (short sides, default 0: every copy) leaves out a copy of a figure that has moved less than that since (its middle's), fading it in over as much again: a hover leaves no trail, a dart does. `--gpu` leaves a masked or gated trail to the CPU |
 
 A mandala's sprites count for `mk assets credits` and `mk export web` as a footage clip does: a slug or a tag names registry
 entries, and a file or a glob's match counts when the registry has an entry with its path; credit any other in `[credits]
@@ -4890,11 +5186,12 @@ Each takes about 0.1 to 0.2 s for a 1080p frame (a drift about 0.25 s).
 | Key | Meaning |
 |---|---|
 | `inks`, `light` | liquid: the inks (1 to 6 colours; default `love`, `gold`, `foam`, `iris`) and the lamp's `light` through the clear glass (`base`). Each ink is in the dish twice: clouds of dye swirled through the water (marbled, each place mostly one ink's) and oil, balls of it (metaballs: they merge and part) wandering, breathing and turning with the ink's own dish, the dishes turning alternate ways and the water's swirl (a curl-noise warp) bending everything. An ink's oil pushes the dyed water aside and shows its own dye, deeper in its middle; clear oil lets the light through. Along an oil edge runs a dark meniscus line with the light it bends lit just inside it, and each blob is lit like a drop from the top left |
-| `scale`, `speed`, `seed` | liquid: the blobs' size (1; 0.2 .. 5, fewer balls when larger), how fast everything flows, turns and morphs (1; 0 holds it), and which light show (1). The inks are a function of the clip second: two entries with one seed are one show going on |
+| `scale`, `speed`, `seed`, `soft` | liquid: the blobs' size (1; 0.2 .. 5, fewer balls when larger), how fast everything flows, turns and morphs (1; 0 holds it), and which light show (1). The inks are a function of the clip second: two entries with one seed are one show going on. `soft` (0 .. 1, default 0: the edge as ever) softens the oil's edge into a ramp up to 0.06 of the short side wide and fades its dark meniscus and lit rim with it, gone at 1: pools with no outline (`--gpu` leaves a soft liquid to the CPU) |
 | `cells`, `bubbles` | liquid: how much of the oil shows oil cells, a foam of droplets each a lens (0.35; 0 none), and bubbles to a square of the frame's short side (6), each a lit rim with a glint, riding the first dish, growing in and shrinking away |
 | `times`, `lane`, `min_db`, `every`, `pulse`, `decay` | liquid (optional): on each hit the inks swell out from `center` by `pulse` (0.15) and their oil grows, the edges flaring, rising over 0.05 s and dying away as exp(-t / `decay`) (0.45 s) |
-| `blend`, `opacity` | liquid and spiral: how the field is laid on the picture, `over` (default: the field itself), `screen`, `multiply` (the scene lit through it) or `soft-light`, mixed in by `opacity` (1) times `strength` (and the mask) |
+| `blend`, `opacity` | liquid and spiral: how the field is laid on the picture, `over` (default: the field itself), `screen`, `multiply` (the scene lit through it), `soft-light` or `color` (the field's hue and chroma at the picture's own luminance: pools that tint a paper without lightening or darkening it; the CPU's), mixed in by `opacity` (1) times `strength` (and the mask) |
 | `mask`, `objects` | every colour field: `ground` paints only outside the figure's coverage (her outline as antialiased as the figure layer), `figure` only inside it (a light show projected on her); both or neither. A figure the mask keeps is left exactly as it was |
+| `key` | every colour field: `{color, tolerance, soft}`: laid only where the picture as it reached the field is that colour, whole within `tolerance` of it (0.1: RGB distance over the square root of 3, display space) and not at all past `tolerance` + `soft` (0.08), with a `mask` too where both are given: a night backdrop's paper in a cut-out look (`key = {color = "text", tolerance = 0.035, soft = 0.05}`), whatever stands in front of it keeping its own colours, where a figure layer of the backdrop (its coverage alone) would run under her. `--gpu` leaves a keyed field to the CPU |
 | `center` | every colour field: `[x, y]` frame fractions (default the middle) or `{point = "<expression>"}`, a scene point projected on every frame of the span as a doodle's marks are: where the liquid's dishes turn about and its hits push from, a pattern's centre, where a flood falls |
 | `pattern`, `colors` | spiral: `spiral` (default), `rings`, `moire`, `sunburst`, `checker` or `drift`, in 2 to 4 `colors` (`["rose", "base"]`, a drift's `["base", "pine", "gold", "text"]`; pastels mix as `"gold:base:0.5"`). Every edge is antialiased, and where the stripes run finer than a pixel (a spiral's or a sunburst's middle) it shows their colours' mean |
 | `arms`, `twist` | spiral: a spiral of `arms` (5) arms of each colour, each turning `twist` (1; negative the other way) times from the centre out to half the short side; a sunburst's rays, `arms` (12) of each colour |
@@ -5419,16 +5716,18 @@ every = 3
 
 `kind = "sheet"` turns the picture into a sheet of paper seen from above, a craft desk with a camera hung over it: a live
 figure sticker on it, the hollow outlines of stickers peeled off before, and doodle stickers that jump, hop and peel.
-`kind = "fling"` throws stickers from a point at the lens. `mkmmd/core/sheet.py` checks them, lays the doodles out and
-times every motion (numpy, tested: a function of the clip second and the seed, so any frame comes out the same in any
-order); `mkmmd/sheet.py` draws them (numpy, OpenCV). A sheet is drawn back to front: the paper (made once per output a
-little larger than the frame and carried by the desk's `drift`: everything on the sheet drifts with it), the hollows,
-the doodles and a slap's paper dust, then the live sticker over its white die-cut rim and soft shadow; while it is
-peeled, its sheet is rolled back by the peel transition's roll (`mkmmd.peel.sheet`: the same lamp, curl and shadow, so
-everything peeled in a video peels alike) over the hollow it leaves. A hollow is part of the picture: the effects after
-the sheet in the table (a mosh, a pixel sort) drag it away with the paper. The live sticker is the figure of the cut's
-frame (`objects`, as a collage cuts it out: put the sheet first, before what moves the picture), or of a plate `shot`,
-set in by `at` and `height` about its `pivot` and moved by `keys`, exactly as a collage's ([Footage, stickers and figure
+`kind = "fling"` throws stickers from a point at the lens (or, `away`, from past the frame's edges into the point), and
+`kind = "thread"` ties a streaming thread to a sheet's live sticker. `mkmmd/core/sheet.py` checks them, lays the doodles
+out and times every motion (numpy, tested: a function of the clip second and the seed, so any frame comes out the same in
+any order; a thread's shape is `mkmmd/core/thread.py`'s); `mkmmd/sheet.py` draws them (numpy, OpenCV; a thread
+`mkmmd/thread.py`). A sheet is drawn back to front: the paper (made once per output a little larger than the frame and
+carried by the desk's `drift`: everything on the sheet drifts with it), the hollows, the doodles and a slap's paper dust,
+then the live sticker over its white die-cut rim and soft shadow; while it is peeled, its sheet is rolled back by the
+peel transition's roll (`mkmmd.peel.sheet`: the same lamp, curl and shadow, so everything peeled in a video peels alike)
+over the hollow it leaves. A hollow is part of the picture: the effects after the sheet in the table (a mosh, a pixel
+sort) drag it away with the paper. The live sticker is the figure of the cut's frame (`objects`, as a collage cuts it
+out: put the sheet first, before what moves the picture), or of a plate `shot`, set in by `at` and `height` about its
+`pivot` and moved by `keys`, exactly as a collage's ([Footage, stickers and figure
 moves](#footage-stickers-and-figure-moves)). About 0.15 s a 1080 x 1920 frame; the first frame of an output makes its
 paper (about a second).
 
@@ -5441,16 +5740,21 @@ paper (about a second).
 | `slap` | the figure sticker slapped down, one table or a list: `{t, size, drop, squash, settle, dust}`. Held `size` times as large (1.3, lifted in a hand) until `drop` s (0.08) before `t`, it falls (an ease-in) and lands on `t`, squashes by `squash` of its height (0.15, its width growing as much: its area kept) about its middle, a few hundredths of a second later at its deepest, stretches back past rest and settles by `settle` s (0.25); `dust` paper specks (80) fly out from its outline and settle over 0.45 s. `t` may be before the span: `t = -0.035` puts frame 0 at the deepest squash. In a list the first is held large from the span's start; a later one is at rest until its `drop`, then pops up and lands on its `t`: a bounce on a beat (put the first just before the span for a sticker that only bounces) |
 | `peel` | the figure sticker peeled off: `{t, dur, corner, radius, back}`: from `t` it lifts at its `corner` (`top-left`, `top-right` (default), `bottom-left`, `bottom-right`), it rolls back over itself on a roll `radius` short sides of the frame across (0.05), its paper `back` (`surface`) up once it lies over itself, and over `dur` s (0.8: a slow pinch, then a pull into a flick, `mkmmd.core.sheet3d.hand`) leaves by the frame's far side; its hollow is left where it lay at `t`. The fold starts at the sticker's own point nearest that corner (its grip, `mkmmd.core.sheet.grip_of`: a figure's box has empty paper in its corners), so the sticker is seen to lift on `t` itself |
 | `hollows` | outlines of stickers peeled off before, a table or a list: `{t, at, height, turn, mirror, sheen, dash, peel}`: the figure's die-cut rim as it was at clip second `t` (its frame: through the shot in the cut there, or the sheet's `shot`) with nothing inside but the paper, the rim's soft shadow round it and inside it, a faint gloss where the glue was (`sheen`, 0.35) and a dashed cut line just inside (`dash`, true); set by `at` and `height` about the figure's pivot as the live sticker is (either left out: where the sticker lay at `t`), turned `turn` degrees and `mirror`ed about that point. With its own `peel` the sticker is still there and leaves in the span, so the hollow means something when it shows: `{t, dur, corner, radius, back}` as the figure's `peel`, and `color` (`muted`), `fade` `[from, to]`: a blank die cut of that shape in the flat `color`, in the sheet's rim and shadow, lies in the hollow (no doodle is laid on it), goes four fifths of the way to the paper's light over the clip seconds of `fade` (default: it keeps its colour) and is rolled off from `t` as the figure's sticker is |
-| `doodles` | stickers of the pen-drawn kits: `{count, shapes, colors, size, vary, tilt, area, clear, gap, seed, jump, hop, peel}`. `count` (10) of `shapes` (dealt shuffled: `star`, `heart`, `pick`, `note`, `sparkle`, `cloud`, `strawberry`, `moon`, `rabbit`, `carrot`; any mandala shape), each in a colour dealt from `colors` (default the shape's own: a strawberry `love` or `rose`, a cloud `foam` or `iris`), `size` frame heights long (0.07), each up to `vary` larger or smaller (0.25) and turned up to `tilt` degrees (25). Their places are seeded best-candidate places inside `area` (`[x0, y0, x1, y1]` frame fractions, `[0.03, 0.03, 0.97, 0.97]`; it may reach past the frame's edges: stickers cut off by them), `gap` frame heights (0.015) clear of each other, of the figure sticker's own shape (its rim in) as it lies on the span's first frame, of the hollows and of every `clear` box (type zones; the 9:16 safe area through `area` in `[fx.aspect.9x16]`); one that finds no room is left out. Each output lays its own out, the same every time |
+| `doodles` | stickers of the pen-drawn kits: `{count, shapes, colors, size, vary, tilt, area, clear, gap, seed, jump, hop, peel}`. `count` (10) of `shapes` (dealt shuffled: `star`, `heart`, `pick`, `note`, `sparkle`, `cloud`, `strawberry`, `moon`, `rabbit`, `carrot`; any mandala shape, such as the pond kit's `lily`, `lilypad`, `bud`, `reed`, `dragonfly` and `drop` or the café kit's `croissant`, `cup`, `sugar`, `orange` and `bean` with a `star`), each in a colour dealt from `colors` (default the shape's own: a strawberry `love` or `rose`, a cloud `foam` or `iris`), `size` frame heights long (0.07), each up to `vary` larger or smaller (0.25) and turned up to `tilt` degrees (25). Their places are seeded best-candidate places inside `area` (`[x0, y0, x1, y1]` frame fractions, `[0.03, 0.03, 0.97, 0.97]`; it may reach past the frame's edges: stickers cut off by them), `gap` frame heights (0.015) clear of each other, of the figure sticker's own shape (its rim in) as it lies on the span's first frame, of the hollows and of every `clear` box (type zones; the 9:16 safe area through `area` in `[fx.aspect.9x16]`); one that finds no room is left out. Each output lays its own out, the same every time |
 | `doodles.jump` | `{t, from, dur, stagger, height, spin}`: hidden until `t`, they are thrown from `from` (`"figure"`, the sticker's middle, under it; or `[x, y]`) out to their places along an arc `height` high (0.8: seen that much larger at the top, the shadow far off), the nearest first and the farthest `stagger` s later (0.06), turning `spin` degrees (120) down to rest, and land over `dur` s (0.5) with a little hop and a squash; a fast one streaks (up to sixteen samples over a frame's shutter). `t = -0.22` has them at the top of their arcs, all round her, on frame 0 |
 | `doodles.hop` | `{times or lane (min_db, every), height, dur, ripple}`: on each hit every doodle hops `height` (0.22) and lands with a squash over `dur` s (0.2), twisting a little, the hop rippling out from the figure (the farthest `ripple` s late, 0.03) |
 | `doodles.peel` | `{times, dur, radius, order, corner}`: on each of `times` a doodle is peeled off as the figure is (its corner lifts, it rolls back and flips away over `dur` s, 0.35, on a roll `radius` of its size, 0.1), in `order` `"shuffle"` (by the seed), `"given"`, `"near"` (the figure's nearest first) or `"far"`; `corner` one for all (default each its own, seeded) |
+| `doodles.slap` | `{times, size, drop, squash, settle}`: a doodle slapped down on each of `times`, one each in the order they were dealt (a doodle past the last time is there from the start): hidden until `drop` s (0.08) before its time, it falls from `size` times as large (1.3, lifted) and lands on it with the figure's squash (`squash` 0.15, settled by `settle`, 0.25 s), so a slap hand's cutout lands with it |
 | `doodles.hop.beats` | `hop = {beats = true, every}`: the hops land on the timeline's beats (`[audio] timeline`, default `audio/timeline.json`, which `mk post` reads as the lanes `beats` and `downbeats`), every `every`-th counted from the first downbeat (4: the downbeats); each leaves the paper `dur` (0.2) before its beat and lands on it, neighbours `ripple` (0.03) apart, with a squash and a few degrees of wobble |
 | `tapes` | `{count, colors, patterns, width, length, alpha, seed}`: strips of washi tape across the sheet's corners and straddling its edges, `count` (6), in `colors` (the pops) lightened and patterned in the colour (`patterns`: `stripes`, `dots`, `gingham`), `width` and `length` frame heights (0.035, 0.17), torn ends, `alpha` (0.82) translucent, a soft shadow; clear of the figure and the hollows |
 | `scribbles` | `{count, shapes, inks, size, width, fps, wobble, seed}`: pen marks drawn on the paper (`heart`, `star`, `spiral`, `underline`, `arrow`, `rabbit`), `count` (8), in `inks` (`text`, `love`), `size` frame heights (0.05), `width` px at 1080 (3.5), redrawn `fps` times a second (8) by a hand that wobbles `wobble` px (1.2): they boil. Placed clear of the figure, the hollows and the doodles |
 | `aim`, `aimed` | fling: `[x, y]` frame fractions (her face): the first `aimed` (2) stickers of each hit fly past it, large, at 0.8 of their life. A fling's stickers keep their colours and rims; one in two (`flip`, 0.5) turns over once in 0.07 s, its white back showing for a frame or two; streaks are half a frame long |
 | `center`, `times`, `lane`, `min_db`, `every` | fling: where the stickers leave from (`[x, y]` or `{point}`: a guitar's body, projected through the shot in the cut) and the hits they are thrown on (required) |
 | `count`, `shapes`, `colors`, `size`, `grow`, `life`, `spread`, `spin`, `flip`, `seed` | fling: `count` stickers a hit (6), dealt round the clock from `shapes` and `colors` (the doodles' defaults), `size` frame heights as they leave (0.035), flying straight at the lens at a steady speed: seen `grow` (12) times larger at the end of their `life` (0.55 s) and their heading (`spread`, 0.12 frame heights, leaning up) as many times farther out, so they grow ever faster and leave by the frame's edges, turning up to `spin` degrees a second (160); a share `flip` of them (0.5) turns over once on the way. A fast one is drawn at up to eight samples over a frame's shutter: it streaks. `edge` (white, 12 px at the size it leaves at) and `shadow` (alpha 0.25) grow with it |
+| `away` | fling: `true` plays each throw backwards, its spin and flip still running forward: the sticker comes in from its heading `grow` times as far out and `grow` times its `size` (past the frame's edges), falls away from the lens slowing and shrinking into `center`, and is gone there in a pop at the end of its `life`; an aimed one passes its `aim` at 0.2 of its life. Stars falling with her into a cup (`false`, the default: at the lens) |
+| `sheet`, `at` | thread (both required): the `name` of the sheet whose live sticker it is tied to (one with `objects` and no `clip`) and the point it is tied at: a point of that figure's own frame (`[x, y]` fractions: her crown in her plate), or `{point = "<expression>"}`, a world point (an `mk q` expression: `"bone('head').tail"`, her crown) seen through the camera the figure is read through, the sheet's plate `shot` or the shot in the cut (`point/x<i>a/`, read on the thread's frames and on those its `lag` looks back over), so the tie rides her head wherever she moves in her plate (a crouch, a tumble). Either is carried by the sheet's placement, keys and slap and the desk's drift on every frame |
+| `end`, `lag`, `wave` | thread: where it runs out to (`[x, y]` frame fractions, `[0.5, -0.2]`: past the frame's top), how late its far part follows the tie's moves (`lag`, 0.25 s: the point u of the way out lies u of the way from where the tie was `lag` x u seconds before to the end), and the wave running out along it from the tie, `{amp, length, speed}`: `amp` frame heights (0.02; a number or `[[t, v], ...]` keys, 0 taut), `length` frame heights from crest to crest (0.32), `speed` crests a second (1.4), growing from nothing at the tie over half a wavelength |
+| `color`, `width`, `shadow` | thread: cotton in `color` (`surface`), `width` px at 1080 (2.5; drawn antialiased at twice the size, so a thread under a pixel wide still shows), over a soft `shadow` `{color, offset, blur, alpha}` (`text`, `[0.002, 0.004]` frame heights, 1.5 px, 0.3; false: none). Put the thread before its sheet in the table: tied behind her head |
 
 A hand takes a peeled sticker by its grip: a cutout's `at = {sticker = <the peel's t>}` stands its `anchor` (the pinch) there before the peel and carries it off with the sticker (`mkmmd.core.sheet.peel_grip(peel, t, grip, size)`: `{p, z, scale}`, as the peel transition's `corner`). Sync the hand's pinch to the peel's `t`.
 
@@ -5484,6 +5788,132 @@ to = 10.6
 center = { point = "obj('guitar_body').loc" }
 times = [8.62, 9.13, 9.63, 10.13]
 count = 5
+
+[[fx]]                        # punched paper stars falling away with her into the cup's middle, on the guitar's picks
+kind = "fling"
+from = 12.9
+to = 15.12
+center = [0.5, 0.5]
+times = [12.1, 12.46, 12.7, 12.86, 13.04, 13.23]
+away = true
+count = 2
+shapes = ["star"]
+colors = ["gold", "surface"]
+size = 0.012
+grow = 16
+life = 1.35
+edge = false
+
+[[fx]]                        # her one thread streaming out of the frame behind her, under her sticker
+kind = "thread"
+from = 15.12
+to = 17.0
+sheet = "her_fall"            # the `name` of the sheet after it that lays her sticker
+at = { point = "bone('head').tail" }   # her crown, where her plate's camera sees it on every frame
+end = [0.64, -0.25]
+wave = { amp = 0.03, length = 0.36, speed = 1.5 }
+```
+
+#### Tables: a sheet over a clip, seen through a view
+
+A sheet with a `clip` is a table: a café table seen from above, the clip under everything instead of paper, everything
+on it placed in the table's own coordinates (fractions of the clip's frame, sizes in its heights) and seen through a
+camera of its own, its `view`, so the same table is seen close (inside the cup) and wide (the whole cup on the table),
+every part of it drawn at the output's own size. `mkmmd/core/table.py` checks the table's keys and times its view,
+touches, rings and punches (numpy, tested); `mkmmd/table.py` draws it. A table is drawn back to front on every frame: the
+clip (its luma carried into the frame through the view, shrunk by area first where it is seen small, softened by the
+grade's `soften` and where it is seen many times larger, then through the `grade`'s gradient map, a grain under a code
+value over it; past the clip's edges it is reflected), inside the cup's rim (an ellipse worked out on the frame's own
+pixels) the coffee (the clip through the cup's own `map`, or with `inside` the cut's own frame) with the drift rings and
+the pads on it, a thin line of light along the rim, the `drops`, the live figure sticker (its die-cut rim and shadow in
+the frame's px, its shadow farther and softer as `lift` rises) and the doodles. A pad, a drop and a doodle are cut at the
+size they show at, in 1.25 steps, and kept a while. The live sticker is a plate's figure (`objects`, `shot`): set in by
+`at` and `height` (table fractions and heights) about its pivot as a sheet's, or followed by `track`, so the plate's
+camera may zoom and move with the view and the sticker stays where she lies, always drawn from a plate at about the
+output's own size: key the plate shot's lens at the view's seconds, in proportion to its zoom and a little wider (a
+quarter wider is plenty), with the same ease (a step: on the step's frame and the frame before it, as the view shows a
+step on the frame of its second), and it covers the view on every frame between them; a plate camera that stays wide
+shows her blown up in a close view. She lies on the first pad and dips with it. A table's camera holds still: the desk's
+`drift` is paper's, and a table drifts only when given one (a loop's seam then differs by nothing but what moves on the
+table). Through a punch the picture under the table (the cut's own frame as it reached the table) shows in the cup: cut
+the next shot in under the table at the punch's start, so the cup shows it moving. A table refuses paper's furniture
+(`paper`, `hollows`, `peel`, `tapes`, `scribbles`) and the figure's `slap`: she lands by a `touch`. With an
+`aspect.<output>` table an output takes its own view and its doodles' `area`: a tall output of a wide clip turns its view
+(`turn = -90` on its first key: the clip's long side down the frame), a sticker lying on it is turned back by its `keys`
+(`turn = 90`) and its shadow's `offset` follows the clip's light. About 0.5 s a 1080 x 1920 frame (a second while a pad
+or a sticker is cut at a new size); the first frame of an output measures the grade and lays the table out (a few
+seconds).
+
+With `inside` the cup holds the cut's own frame, a shot looking straight down on a scene (a paper pond), as a punch shows
+it but on every frame outside the punches: its world `point`, seen through the cut's camera on every frame
+(`point/x<i>i/`, with its size there), lies on the table's `at` and a metre at its depth is `metre` table heights, the
+picture upright whatever the view's turn. Key the shot's lens and shift with the view and it is one picture with the
+full frame, laid on whole pixels at its own size: a camera straight down `h` metres over the point's plane needs lens =
+36 x h x metre / (the view's frame height in table heights; its width for a 16:9 camera, whose 36 mm spans the width)
+and a `shift` that puts the point where the view shows it (its offset from the frame's middle in the larger side, x
+negated), keyed at the view's seconds with the same ease (a step on the step's frame and the frame before it). Where the
+coffee then covers the frame (a view inside the cup) the frame is the cut's frame exactly: nothing of the table is drawn
+but what lies on it (the drops). A lens that does not follow is resampled (shrunk by area where it is seen smaller). The
+cup's wall casts a soft shadow on it, on the lamp's side.
+
+| Key | Meaning |
+|---|---|
+| `clip`, `in`, `rate`, `loop` | the table's video (a file or an asset slug, read by mkmmd.footage), its second on the span's first frame (0), its speed (1; 0 a still) and `loop` (false). It counts for the credits as a footage clip does |
+| `grade` | `{map, lumas, stretch, at, soften}`: the clip's luma (OpenCV's) through a gradient `map` of 2 to 8 colours, dark to light (`["text", "iris", "rose", "overlay", "surface"]`: Dawn's plum night), each at its luma of `lumas` (0..1, rising; below the first the first colour, above the last the last: a light day's cream table is a calm band of two creams over all the lumas its granite takes, so the speckle shows as a faint tooth), or spread evenly after a `stretch`: the luma at the `[low, high]` percentiles (1, 99) of the clip's frame at `at` (clip second; its `in`) goes to the map's ends, one stretch for the whole span (a `stretch` or `at` that no map is spread over is refused). `soften` (table heights, 0; at most 0.05) blurs the luma by a Gaussian that wide before the map: the table's speckle smoothed, its edges a little soft. Her sticker and everything laid on are never graded |
+| `view` | the camera, one key or a list `[{t, at, height, width, turn, ease}]`: `at` the table point in the frame's middle (`[0.5, 0.5]`), `height` the table heights the frame is tall (1), or `width` those it is wide at least (the frame as tall as either needs: a tall frame keeps a wide subject), `turn` degrees counter-clockwise (0); what a key leaves out is the key before's. Held before the first key and after the last; between two keys by the `ease` of the one arrived at, `inout` (default), `in`, `out`, `linear` or `step` (held until its second, then there on it: a crash back in stepped jumps). It moves as a zoom lens with a shift: the zoom (frame px per table px) and the turn go straight by the ease and the middle of the closer view slides straight across the frame, so a push in carries its target to the middle as it closes |
+| `cup` | `{center, radius, line, map, lumas}`: the coffee's surface, an ellipse of the table (`radius` table heights, one or `[across, down]`; measure it on a frame of the clip), what floats on it is cut by its rim; `map` and `lumas`, the coffee's own gradient map inside the rim (placed as the grade's: its `lumas`, else spread over the grade's stretch), for a coffee whose lumas overlap the table's (a milky coffee as dark as the cup's shadow on a light table); `line` `{color, width, alpha}`, a line of light along the rim at the output's size (`surface`, 2 px at 1080, 0.55; false: none) |
+| `inside` | `{point, at, metre, shadow}`: the cut's own frame in the cup (above): its world `point` (an `mk q` expression that stays still), the table point `at` it lies on, `metre` table heights a metre at its depth; `shadow` `{color, alpha, width, offset}`, the cup wall's soft shadow on it: `color` (`text`) at `alpha` (0.35) beyond the rim's ellipse moved `offset` (table heights, `[0.008, 0.012]`: toward the clip's own shadows), fading over `width` (0.012); false: none. Needs the `cup` |
+| `touch` | one or a list of `{t, at, dip, settle}`: something landing on the coffee at clip second `t` (it may be before the span: `t = -0.04` puts frame 0 just after it) on `at` (default the first pad's middle): the pad there dips `dip` of its size (0.05) with a landing's spring (deepest a tenth of a second on, a bob back up past rest, settled by `settle`, 1.3 s), her sticker with it if it is the first pad; rings run out from it, drops jump from it |
+| `pads` | `[{at, size, turn, notch, color, light, veins, edge, seed}]`: cut-paper lily pads floating on the coffee, `size` table heights across (0.1), turned `turn` degrees (where the notch points), a `notch` (36 degrees) cut to the middle, the paper `color` (`pine`) mottled toward `light` (`foam`) at the size it shows at, faint `veins`, a pale cut `edge` (2 px at 1080), a soft shadow on the coffee; each bobs as a ring passes under its middle. The first is hers |
+| `rings` | `{colors, size, speed, count, gap, life, band, opacity, motif, seed}` (or `true`): drift rings (the `spiral` kind's `pattern = "drift"`: still rings of rail ties or wheels, `motif`, that seem to turn by themselves, every other ring the other way) in `colors` (2 to 4, their tones by luma: `text`, `iris`, `rose`, `surface`), `size` table heights wide (0.012), shown in `count` (3) fronts from each touch `gap` s (0.24) apart, running out from the rim of the pad it lands on at `speed` table heights a second (0.09), each front a band `band` rings deep (3) fading back toward the touch, coming up over a tenth of a second and gone after `life` s (2, as (1 - age / life)²), laid over the coffee at `opacity` (0.45) |
+| `drops` | the doodles' keys (`count` 8, `shapes` `["drop"]`, `size` 0.014 table heights, down to 0.0005: small when the view is wide, `vary` 0.3) and `reach`: a doodle group of their own that lands on the coffee, clear of the pads, her sticker and their own `clear` boxes, within `reach` table heights of the first touch (0.07; or in their own `area`), thrown out on the touch's second (or their own `jump`'s `t`) from the rim of the pad it lands on toward where each lands, unless the jump gives a `from`. A jump landed before frame 0 (`jump = {t = -0.5, dur = 0.4}`) has them sharp and still on it |
+| `track` | `{point, at, metre}`: the figure's plate camera followed by a world `point` that stays still (an `mk q` expression, `"(0.0, -0.06, 1.33)"` beside her face), seen through the plate on every frame it is read (`point/x<i>t/`, with its size there): the point lies on the table's `at`, a metre at its depth is `metre` table heights, whatever the plate's lens and aim do. Needs the figure's `shot`; `at` and `height` are then the track's |
+| `punch` | one or a list of `{t, dur, out, fade}`: the view falls into the cup over `dur` s (0.3) before `t`, eased in, the coffee's ellipse centred in the frame and covering it on `t`, where the table gives way to the cut's own frame; the picture under the table shows in the cup, filling the coffee and never larger than its own size, which it reaches on `t`, dissolving in over the first `fade` of the window (0.35). `out = true`: from `t` the cup covers the frame and the view pulls back out of it over `dur`, eased out, the picture dissolving out over the last `fade`; before an out punch's `t` the table is not there yet. The desk's `drift` fades to nothing at a punch's `t` |
+| `lift` | `[[t, v], ...]` keys over clip seconds (or a number): how far the figure is lifted off the table (0 lying on it; 1 a sticker's height: its shadow three times farther, softer and fainter), a puppet lowered onto her pad |
+
+Each frame's view is `mkmmd.table.TableFx.table_view`, and a cutout's `at = {table = [x, y]}` rides it
+([Cutouts](#cutouts-real-hands)): a hand at the top of the wide table, holding her threads, leaves the frame as the view
+closes in.
+
+A table is the ground of what comes after it in the table: a `kaleido` or `tunnel` after it remaps all of it (the clip
+and what was drawn on it before, a `fling`'s stars), without a `mask` (a remap's mask is the figure layer of the shot in
+the cut, never a table's sticker). To keep her clean through it, lay her after the remap as a sheet of her own
+(`paper = false`, `drift = false`, her plate `shot`, set in by `at` and `height` about `pivot = "center"` and moved by
+`keys`: falling away into the cup, shrinking to nothing at its middle) with a `thread` before it.
+
+```toml
+[[shot]]                      # the cut's frame in the cup: straight down 3 m over the point, its lens and shift keyed with
+name = "pond_top"             # the view (lens = 36 x 3 x 0.24 / the view's height), a step on its frame and the one before
+from = 0.0
+to = 2.73
+at = [0.0, 0.11, 3.0]
+look = [0.0, 0.1, 0.0]
+style = "vector"
+keys = [{ t = 0.0, lens = 157.89 }, { t = 1.5167, lens = 157.89 }, { t = 1.5333, lens = 31.02, shift = [0.0, -0.1379] },
+        { t = 1.8667, lens = 31.02, shift = [0.0, -0.1379] }, { t = 1.8833, lens = 19.7, shift = [0.0, -0.1456] },
+        { t = 2.2167, lens = 19.7, shift = [0.0, -0.1456] }, { t = 2.2333, lens = 14.58, shift = [0.0028, -0.0565] }]
+
+[[fx]]                        # inside the cup on frame 0, the crash back on the notes in three steps (the rim round the
+kind = "sheet"                # pond, the white cup, the cream table), two stickers slapped down, the punch into the cup
+from = 0.0
+to = 3.03
+clip = "footage/cup.mp4"
+in = 30.0
+rate = 0.5
+grade = { map = ["overlay:rose:0.22", "overlay:rose:0.08", "overlay", "base", "surface"], lumas = [0.12, 0.32, 0.47, 0.6, 0.78], soften = 0.0015 }
+cup = { center = [0.5083, 0.505], radius = [0.282, 0.255] }
+inside = { point = "(0.0, 0.1, 0.0)", at = [0.4435, 0.505], metre = 0.24 }
+touch = { t = -0.04, at = [0.4435, 0.505] }
+drops = { count = 7, size = 0.0035, reach = 0.09, jump = { t = -0.5, dur = 0.4, height = 0.3, from = [0.4435, 0.505] } }
+doodles = { count = 2, shapes = ["lily", "lilypad"], size = 0.09, area = [0.72, 0.1, 0.97, 0.9], slap = { times = [2.12, 2.31] }, hop = { lane = "notes" } }
+view = [{ t = 0.0, at = [0.4435, 0.505], height = 0.1642, turn = -90 }, { t = 1.53, at = [0.5083, 0.505], height = 0.8356, ease = "step" },
+        { t = 1.89, at = [0.55125, 0.505], height = 1.3156, ease = "step" }, { t = 2.24, at = [0.5, 0.5], height = 1.7778, ease = "step" }]
+punch = { t = 3.03, dur = 0.3, fade = 0.0 }   # the next shot whole in the cup from the window's start
+
+[fx.aspect.16x9]              # the wide frame is not turned: her head up the table
+inside = { point = "(0.0, 0.1, 0.0)", at = [0.5083, 0.3898], metre = 0.24 }
+view = [{ t = 0.0, at = [0.5083, 0.3898], height = 0.1642 }, { t = 1.53, at = [0.5083, 0.505], height = 0.56, ease = "step" },
+        { t = 1.89, at = [0.55125, 0.505], height = 0.75, ease = "step" }, { t = 2.24, at = [0.5, 0.5], height = 1.0, ease = "step" }]
 ```
 
 #### Keys pushed too far

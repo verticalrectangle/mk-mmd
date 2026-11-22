@@ -22,6 +22,7 @@ RENDER = 720                     # px: a liquid is drawn at most this on its sho
 BOX = 0.95                       # units: a liquid's balls and bubbles are seeded over a square twice this across
 BALLS = 6.0                      # balls of oil to a unit square, over all the dishes of a liquid (at scale 1)
 LEVEL = 0.42                     # a liquid's edge: where its balls' sum crosses this (a ball alone: at 0.93 x its radius)
+SOFT = 0.06                      # a liquid's `soft` 1: its oil's edge a ramp this share of the short side wide, no rim
 ROUGH = 0.3                      # how much noise roughens a liquid's balls
 SWIRL = 0.12                     # the water's swirl: its curl warp's reach, in its own size
 CLOUD = 0.7                      # the deepest an ink's clouds of dye colour the water (an oil blob of it: 1)
@@ -400,14 +401,16 @@ def plate(clip, t, size, fx, back):
 
 # ================================================================================================= laying a field on
 def blend(img, pic, alpha, mode):
-    """`img` with `pic` laid on it by `mode` (over, screen, multiply or soft-light) and mixed in by `alpha`, a number or
-    (h, w) 0..1."""
+    """`img` with `pic` laid on it by `mode` (over, screen, multiply, soft-light or color: `pic`'s hue and chroma on
+    `img`'s luminance) and mixed in by `alpha`, a number or (h, w) 0..1."""
     if mode == "over":
         top = pic
     elif mode == "screen":
         top = 1.0 - (1.0 - img) * (1.0 - pic)
     elif mode == "multiply":
         top = img * pic
+    elif mode == "color":                                                    # the field's colour at the picture's luma
+        top = np.clip(pic + ((img - pic) @ LUMA)[..., None], 0.0, 1.0)
     else:                                                                    # soft light (Pegtop's): no hard seam at grey
         top = (1.0 - 2.0 * pic) * img * img + 2.0 * pic * img
     a = alpha[..., None] if isinstance(alpha, np.ndarray) else np.float32(alpha)
@@ -547,7 +550,7 @@ def liquid(fx, size, t, centre, swell, memo):
         P[ch] *= one - dens * (one - _up(np.ascontiguousarray(tint[ch]), f, rs))
     level = np.float32(LEVEL - SWELL * swell)
     flare = np.float32(0.55 * (1.0 + 0.7 * swell))
-    aa = np.float32(max(1.1 * rpx, 0.7))
+    aa = np.float32(max(1.1 * rpx, 0.7) + fx.get("soft", 0.0) * SOFT * runit)   # `soft`: a wide ramp for an edge
     oil = np.zeros((rs[1], rs[0]), np.float32)
     for i, (ink, om, th0, pivot, balls) in enumerate([dishes[-1]] + dishes[:-1]):   # clear oil first, then the inks'
         turn = om * sp * t + th0
@@ -570,6 +573,10 @@ def liquid(fx, size, t, centre, swell, memo):
             np.clip(one - d / np.float32(0.06 * runit), 0.0, 1.0) ** 2   # a drop lit from the top left
         dark = dark * (one - np.float32(0.22) * np.maximum(-lens, 0.0))
         lit = lit + np.float32(0.3) * np.maximum(lens, 0.0)
+        if fx.get("soft", 0.0) > 0:                                          # a soft edge: the meniscus and the lit
+            keep = np.float32(1.0 - fx["soft"])                              # rim fade with it, gone at 1
+            dark = one - (one - dark) * keep
+            lit = lit * keep
         if ink is None:                                                      # clear oil: the light through
             a = np.float32(0.85) * c
             for ch in range(3):
@@ -732,7 +739,8 @@ class FieldFx:
 
     def _lay(self, fx, frame, img, pic, cover=None):
         """`pic` laid on `img` by the entry's blend (`over` with a coverage `cover`), mixed in by its opacity, its
-        strength and, with a `mask`, the figure's coverage or what it leaves."""
+        strength and, with a `mask`, the figure's coverage or what it leaves, and with a `key`, how near `img` is to the
+        key's colour (whole within `tolerance`, nothing past `tolerance` + `soft`)."""
         s = float(np.clip(FX.strength(fx, self._t(frame)), 0.0, 1.0)) * fx.get("opacity", 1.0)
         if s <= 0.0:
             return img
@@ -740,6 +748,10 @@ class FieldFx:
         a = s if cover is None else cover * np.float32(s)
         if region is not None:
             a = region * a
+        k = fx.get("key")
+        if k is not None:
+            d = np.sqrt(np.sum((img - np.asarray(k["color"], np.float32)) ** 2, axis=-1) / 3.0)
+            a = np.clip((k["tolerance"] + k["soft"] - d) / k["soft"], 0.0, 1.0).astype(np.float32) * a
         return blend(img, pic, a, fx.get("blend", "over"))
 
     def _liquid(self, fx, frame, img):

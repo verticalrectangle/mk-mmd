@@ -266,5 +266,31 @@ def run(ctx):
         out[spec["name"]] = _prop(ctx, coll, placer, spec)
     for spec in ctx.data.get("scatter", []):
         out.update(_scatter(ctx, coll, placer, spec))
+    for st in getattr(ctx, "sets", {}).values():          # a set's object riding a prop's: its card's `ride`, tied here,
+        for r in st.card.get("ride", []):                 # once the prop exists (a set is built before the props)
+            _ride(ctx, r)
     bpy.context.view_layer.update()
     return out
+
+
+def _ride(ctx, r):
+    """A set's `ride` entry ({object, target, axes, frames, influence, limit}): `object` follows `target`'s world location
+    on `axes` as an offset (a Copy Location constraint), its influence keyed CONSTANT on `frames`; `limit` ({axis: [lo,
+    hi]}, optional) then keeps its location within those in its parent's frame (a Limit Location after it)."""
+    from .. import keys as K
+    ob, tg = bpy.data.objects.get(r["object"]), bpy.data.objects.get(r["target"])
+    if ob is None or tg is None:
+        ctx.log(f"WARNING props: {r['object']} cannot ride {r['target']!r}: no such object")
+        return
+    c = ob.constraints.new("COPY_LOCATION")
+    c.name, c.target, c.use_offset = "mk_ride", tg, True
+    c.use_x, c.use_y, c.use_z = ("x" in r["axes"]), ("y" in r["axes"]), ("z" in r["axes"])
+    K.set_fcurve(ob, 'constraints["mk_ride"].influence', 0, r["frames"], r["influence"], interp="CONSTANT")
+    if r.get("limit"):
+        lim = ob.constraints.new("LIMIT_LOCATION")
+        lim.name, lim.owner_space = "mk_ride_limit", "LOCAL"
+        for ax, (lo, hi) in r["limit"].items():
+            setattr(lim, f"use_min_{ax}", True)
+            setattr(lim, f"use_max_{ax}", True)
+            setattr(lim, f"min_{ax}", float(lo))
+            setattr(lim, f"max_{ax}", float(hi))

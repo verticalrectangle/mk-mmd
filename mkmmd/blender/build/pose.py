@@ -495,11 +495,12 @@ def _prebend(arm, fore):
 
 
 def palm_normal(arm, smap, side):
-    """The hand's palm normal in world at rest (MMD rest pose: palms face down)."""
+    """The hand's palm normal in world at rest (MMD rest pose: palms face down in the armature's own frame, so a body
+    turned on its back or side keeps them so: mkmmd.core.armtwist.palm_down)."""
     hw = _world_head(arm, smap[f"wrist.{side}"])
     n = (_world_head(arm, smap[f"index1.{side}"]) - hw).cross(_world_head(arm, smap[f"little1.{side}"]) - hw)
     n.normalize()
-    return -n if n.z > 0 else n
+    return AT.palm_down(n, arm.matrix_world.to_3x3() @ Vector((0.0, 0.0, 1.0)))
 
 
 def _hand_matrix(arm, smap, side, at, direction, palm=None):

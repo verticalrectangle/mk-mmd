@@ -30,7 +30,7 @@ from . import tween as TW
 KINDS = ("liquid", "spiral", "flood")
 PATTERNS = ("spiral", "rings", "moire", "sunburst", "checker", "drift")
 MOIRES = ("rings", "lines")                      # a moire's two sets: rings about two centres, or lines at an angle
-BLENDS = ("over", "screen", "multiply", "soft-light")
+BLENDS = ("over", "screen", "multiply", "soft-light", "color")   # color: the field's hue on the picture's luminance
 HITS = {"times", "lane", "min_db", "every"}
 STEP = 0.12                                      # seconds: a pattern's step on a hit, eased out (a snap)
 DRIFT_LAYOUTS = ("rings", "rows")                # a drift's motifs: on rings about its centre, or in straight rows
@@ -48,18 +48,22 @@ PATTERN_OWN = {"spiral": {"arms": 5, "twist": 1.0},                  # each patt
 # a pattern's own defaults of the shared keys: a drift stands still, steps a quarter of a motif, in four tones
 PATTERN_SHARED = {"drift": {"speed": 0.0, "step": 0.25, "colors": ["base", "pine", "gold", "text"]}}
 _OWN = sorted({k for own in PATTERN_OWN.values() for k in own})      # every pattern's own keys
-_LAY = {"blend", "opacity", "mask", "objects"}   # how a field is laid on the picture: blended, and kept to a part of it
+_LAY = {"blend", "opacity", "mask", "objects", "key"}   # how a field is laid on the picture: blended, and kept to a part
+#                                                        of it (a figure's coverage or what it leaves, a colour of it)
+KEY = {"tolerance": 0.1, "soft": 0.08}   # a field's colour key: the picture within `tolerance` of the colour (RGB
+#                                          distance over sqrt 3, display space) takes it whole, past `tolerance` + `soft` not
 KEYS = {"liquid": _LAY | HITS | {"inks", "light", "scale", "speed", "pulse", "decay", "cells", "bubbles", "center",
-                                 "seed"},
+                                 "seed", "soft"},
         "spiral": _LAY | HITS | set(PATTERN) | set(_OWN),
-        "flood": {"mask", "objects", "color", "center", "grow", "hold", "recede", "fade", "soft", "wobble", "seed"} | HITS}
+        "flood": {"mask", "objects", "key", "color", "center", "grow", "hold", "recede", "fade", "soft", "wobble",
+                  "seed"} | HITS}
 DEFAULTS = {"liquid": {"inks": ["love", "gold", "foam", "iris"], "light": "base", "blend": "over", "opacity": 1.0,
-                       "scale": 1.0, "speed": 1.0, "pulse": 0.15, "decay": 0.45, "cells": 0.35, "bubbles": 6,
-                       "center": [0.5, 0.5], "seed": 1, "mask": None, "min_db": None, "every": 1},
+                       "scale": 1.0, "speed": 1.0, "pulse": 0.15, "decay": 0.45, "cells": 0.35, "bubbles": 6, "soft": 0.0,
+                       "center": [0.5, 0.5], "seed": 1, "mask": None, "key": None, "min_db": None, "every": 1},
             "spiral": {**PATTERN, **{k: None for k in _OWN}, "blend": "over", "opacity": 1.0, "mask": None,
-                       "min_db": None, "every": 1},
+                       "key": None, "min_db": None, "every": 1},
             "flood": {"color": "love", "center": [0.5, 0.5], "grow": 0.8, "hold": 0.4, "recede": 0.6, "fade": 0.0,
-                      "soft": 24.0, "wobble": 0.5, "seed": 1, "mask": None, "min_db": None, "every": 1}}
+                      "soft": 24.0, "wobble": 0.5, "seed": 1, "mask": None, "key": None, "min_db": None, "every": 1}}
 
 
 def normalize(spec, out, palette, what):
@@ -68,11 +72,26 @@ def normalize(spec, out, palette, what):
     {"liquid": _liquid, "spiral": _spiral, "flood": _flood}[out["kind"]](FX, spec, out, palette, what)
 
 
-def _lay(FX, spec, out, what):
+def _lay(FX, spec, out, what, palette):
     if out["blend"] not in BLENDS:
         raise FX.FxError(f"{what}: blend {out['blend']!r} is none of {', '.join(BLENDS)}")
     out["opacity"] = FX._num(out["opacity"], f"{what} opacity", 0.0, 1.0)
     FX._mask(spec, out, what)
+    _key(FX, out, palette, what)
+
+
+def _key(FX, out, palette, what):
+    """A field's `key`: None, or {color, tolerance, soft} with KEY's defaults: the field is laid only where the picture as
+    it reached it is that colour (a night backdrop's paper, whatever stands in front of it keeping its own colour)."""
+    k = out.get("key")
+    if k is None:
+        return
+    if not isinstance(k, dict) or "color" not in k or set(k) - {"color"} - set(KEY):
+        raise FX.FxError(f"{what}: key = {k!r}: expected {{color, tolerance, soft}} (the picture's colour it is laid on)")
+    k = {**KEY, **k}
+    out["key"] = {"color": FX._colour(k["color"], palette, f"{what} key color"),
+                  "tolerance": FX._num(k["tolerance"], f"{what} key tolerance", 0.0, 1.0),
+                  "soft": FX._num(k["soft"], f"{what} key soft", 1e-3, 1.0)}
 
 
 def _liquid(FX, spec, out, palette, what):
@@ -81,13 +100,14 @@ def _liquid(FX, spec, out, palette, what):
         raise FX.FxError(f"{what}: inks = {inks!r}: expected a list of 1 to 6 colours (palette slots, #hex)")
     out["inks"] = [FX._colour(c, palette, f"{what} inks") for c in inks]
     out["light"] = FX._colour(out["light"], palette, f"{what} light")
-    _lay(FX, spec, out, what)
+    _lay(FX, spec, out, what, palette)
     out["scale"] = FX._num(out["scale"], f"{what} scale", 0.2, 5.0)
     out["speed"] = FX._num(out["speed"], f"{what} speed", 0.0, 20.0)
     out["pulse"] = FX._num(out["pulse"], f"{what} pulse", 0.0, 1.0)
     out["decay"] = FX._num(out["decay"], f"{what} decay", lo=1e-3)
     out["cells"] = FX._num(out["cells"], f"{what} cells", 0.0, 1.0)
     out["bubbles"] = FX._num(out["bubbles"], f"{what} bubbles", 0, 40, integer=True)
+    out["soft"] = FX._num(out["soft"], f"{what} soft", 0.0, 1.0)
     out["center"] = FX._center(out["center"], f"{what} center")
     out["seed"] = FX._num(out["seed"], f"{what} seed", lo=0, integer=True)
     FX._hits(spec, out, what, required=False)
@@ -100,7 +120,7 @@ def _spiral(FX, spec, out, palette, what):
         if k not in PATTERN_OWN[out["pattern"]]:
             out.pop(k, None)
     out["center"] = FX._center(out["center"], f"{what} center")
-    _lay(FX, spec, out, what)
+    _lay(FX, spec, out, what, palette)
     FX._hits(spec, out, what, required=False)
 
 
@@ -190,6 +210,7 @@ def _flood(FX, spec, out, palette, what):
     out["wobble"] = FX._num(out["wobble"], f"{what} wobble", 0.0, 1.0)
     out["seed"] = FX._num(out["seed"], f"{what} seed", lo=0, integer=True)
     FX._mask(spec, out, what)
+    _key(FX, out, palette, what)
 
 
 # ================================================================================================= timing

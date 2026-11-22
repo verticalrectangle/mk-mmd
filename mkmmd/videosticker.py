@@ -260,8 +260,11 @@ class StickerFx:
         held, video = VS.clock(fx, self._t(frame), self.fps)
         c = fx["crop"] or (0.0, 0.0, 1.0, 1.0)
         cw, ch = (c[2] - c[0]) * clip.size[0], (c[3] - c[1]) * clip.size[1]
-        at = self._cutout_at(fx, frame)
-        M, box, scale = VS.place_cutout(fx, held, self.size, cw / ch, at, video)
+        at, view = self._cutout_at(fx, frame), None
+        if fx["at"]["mode"] == "table":                      # it rides a table: zoomed and turned by its view
+            at, zoom, turn = self.table_point(fx["at"]["tr"]["sheet"], fx["at"]["at"], frame)
+            view = (zoom, turn)
+        M, box, scale = VS.place_cutout(fx, held, self.size, cw / ch, at, video, view)
         k = min(scale * box[1], ch) / box[1]                 # px of the tile per px of the box: no larger than the clip
         size = (max(int(round(box[0] * k)), 1), max(int(round(box[1] * k)), 1))
         args = (video, size, 0.0, 1.0, fx["loop"], "cover", (0.5, 0.5), fx["mirror"])
@@ -294,13 +297,18 @@ class StickerFx:
 
     def _cutout_at(self, fx, frame):
         """The frame pixel a cutout's anchor stands on at `frame`: its `at`, a frame point, a scene point projected
-        there, a peel's lifted corner (mkmmd.core.peel.corner), one of a tear's grips (mkmmd.core.tear.grips) or the
-        grip of a sticker peeled off a sheet (mkmmd.sheet.SheetFx.sticker_grip)."""
+        there, a peel's lifted corner (mkmmd.core.peel.corner), one of a tear's grips (mkmmd.core.tear.grips), the
+        grip of a sticker peeled off a sheet (mkmmd.sheet.SheetFx.sticker_grip), a table's point carried by its view
+        (mkmmd.table.TableFx.table_point) or a rewind's playhead (mkmmd.rewind.RewindFx.rewind_grip)."""
         a, (W, H) = fx["at"], self.size
         if a["mode"] == "frame":
             p = a["at"]
         elif a["mode"] == "point":
             return self._point_of(FX.point_key(fx), frame)[0]
+        elif a["mode"] == "table":
+            return self.table_point(a["tr"]["sheet"], a["at"], frame)[0]
+        elif a["mode"] == "rewind":
+            return self.rewind_grip(a["tr"]["rewind"], frame)
         elif a["mode"] == "peel":
             from .core import peel as PL
             p = PL.corner(a["tr"], frame, self.size)["p"]

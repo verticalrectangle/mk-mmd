@@ -110,11 +110,15 @@ Command line (the build pipeline runs it as a subprocess):  python -m mkmmd.solv
                     "model_bodies": true (the rig's other bodies collide), "colliders": [resolved items of the `sample`
                         op's reply], "params": {family: {...}}, "wind": {...Wind spec...} | null,
                     "use_masks": false, "anchor_free": 0.25, "window": [a, b] frames the report covers (default all),
-                    "engine": "auto" | "numpy" | "numba", "threads": null }
+                    "engine": "auto" | "numpy" | "numba", "threads": null,
+                    "loop": a frame (a clip that loops: its frame before clip time 0) or null: the frames after it are
+                        simulated again from the state the last frame left (positions, velocities, targets), so they
+                        go on from the clip's end; pose the body there as on the last frame }
   OUT.npz         quats (F,N,4) bone-local rotations w x y z to key (sign-continuous), x (F,N,3) particle positions,
                   pen (F,3) per frame [deepest, median, bones deeper than 2 mm] penetration in metres, report (JSON
-                  text: {"bones", "frames", "engine", "seconds", "report"}). Exit codes: 0 ok, 2 bad input, 3 the
-                  simulation went non-finite."""
+                  text: {"bones", "frames", "engine", "seconds", "report", "loop": {"frame", "residual_mm"} with a
+                  loop: how far the second run's last frame lies from the first's}). Exit codes: 0 ok, 2 bad input, 3
+                  the simulation went non-finite."""
 import json
 import os
 import sys
@@ -700,10 +704,12 @@ class _Model:
 # ---------------------------------------------------------------- numpy engine: whole chains at once, level by level
 class _NumpyEngine:
     name = "numpy"
+    STATE = ("x", "v", "tgt", "tgt_prev", "D", "prev")  # what carries from one substep to the next (a loop's seed)
 
     def __init__(self, M, out):
         self.M, self.out = M, out
         self.xs, self.Ds, self.order = out.xs, out.Ds, np.arange(M.N)            # recorded frames, in this bone order
+        self.dep, self.who = out.dep, out.who
         self.D, self.x = M.initial_state()
         self.v = np.zeros((M.N, 3))
         self.tgt, self.tgt_prev = self.x.copy(), self.x.copy()
@@ -1574,6 +1580,7 @@ if HAVE_NUMBA:
 class _NumbaEngine:
     """The same dynamics as _NumpyEngine, chain by chain in compiled loops, chains spread over threads."""
     name = "numba"
+    STATE = ("x", "v", "tgt", "tgt_prev", "Dst", "H0p", "Dap")
 
     def __init__(self, M, out, threads):
         self.M, self.out = M, out
@@ -1737,9 +1744,49 @@ def _nonfinite(M, eng, a, b):
         raise FloatingPointError(f"strands: non-finite state at frame {M.f0 + k}: {names}")
 
 
+def _copy_state(st):
+    return {k: tuple(a.copy() for a in v) if isinstance(v, tuple) else v.copy() for k, v in st.items()}
+
+
+LOOP_FADE_S = 0.5             # a loop's second run hands the clip back to the first over this long
+
+
+def _hand_back(eng, first, k, M):
+    """A loop's second run (from frame k, seeded with the first run's end) ends where it ends, not where the first did
+    (hair lying on a surface keeps where it landed): from the frames on which the two runs lie nearest, the first run's
+    take over again, crossfaded over LOOP_FADE_S, so the clip ends as the first run did and frame 0 goes on from that
+    end. Rewrites eng's recorded frames; returns {"switch": [frame, frame], "switch_mm"}."""
+    xs1, Ds1, dep1, who1 = first
+    F, W = len(xs1), max(2, int(round(LOOP_FADE_S * M.fps)))
+    a = k + 2                                           # after frame 0
+    if F - a <= W:
+        return {"switch": None, "switch_mm": None}
+    d = np.linalg.norm(eng.xs[a:] - xs1[a:], axis=2).max(axis=1)
+    win = np.lib.stride_tricks.sliding_window_view(d, W).max(axis=1)
+    s = a + int(np.argmin(win))
+    w = _smoothstep(np.arange(W) / (W - 1.0))[:, None]  # 0 -> 1: the first run takes over
+    q2 = geom.mat_to_quat(eng.Ds[s:s + W].reshape(-1, 3, 3)).reshape(W, -1, 4)
+    q1 = geom.mat_to_quat(Ds1[s:s + W].reshape(-1, 3, 3)).reshape(W, -1, 4)
+    q1 = q1 * np.where(np.einsum("fnj,fnj->fn", q1, q2) < 0, -1.0, 1.0)[..., None]
+    q = q2 * (1.0 - w[..., None]) + q1 * w[..., None]
+    q /= np.linalg.norm(q, axis=2, keepdims=True)
+    eng.xs[s:s + W] = eng.xs[s:s + W] * (1.0 - w[..., None]) + xs1[s:s + W] * w[..., None]
+    eng.Ds[s:s + W] = geom.quat_to_mat(q.reshape(-1, 4)).reshape(W, -1, 3, 3)
+    h = s + W // 2
+    eng.dep[h:], eng.who[h:] = dep1[h:], who1[h:]
+    eng.xs[s + W:], eng.Ds[s + W:] = xs1[s + W:], Ds1[s + W:]
+    return {"switch": [M.f0 + s, M.f0 + s + W - 1], "switch_mm": round(float(win.min()) * 1000, 2)}
+
+
+def _smoothstep(x):
+    """Smoothstep on [0, 1]."""
+    x = np.clip(x, 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
 def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, params, frames, rig, fps=30.0, substeps=10,
              settle_s=1.5, wind=None, log=None, *, use_masks=False, anchor_free=geom.ANCHOR_FREE, engine="auto",
-             threads=None, gravity=None):
+             threads=None, gravity=None, loop=None):
     """Simulate the chains over frames (f0, f1) inclusive.
 
     chains: geom.Chains whose head / end are already in world space (the armature's world matrix at the first frame
@@ -1751,7 +1798,13 @@ def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, para
     fps and substeps set the time step 1 / (fps * substeps); the first frame is settled for settle_s seconds.
     use_masks / anchor_free: geom.enable_matrix's options (use the same in the `penetration` check). engine: "auto"
     (numba when installed), "numpy" or "numba"; threads: numba threads (default: the CPU count, at most one per chain).
+    loop: an index into the frames (a clip that loops: its frame before clip time 0, the body posed there as on the
+    last frame) or None: after the run, that frame takes the state the last frame left (positions, velocities,
+    targets) and the frames after it are simulated again from it, so they go on from the clip's end. Result.loop is
+    then {"frame", "residual_mm"}: how far the second run's last frame lies from the first's (what is left of a jump).
     Returns a Result."""
+    if loop is not None and not 0 <= int(loop) < frames[1] - frames[0]:
+        raise ValueError(f"strands: loop = {loop}: the frame before clip time 0, inside the frames and before the last")
     t0 = time.perf_counter()
     if engine not in ("auto", "numpy", "numba"):
         raise ValueError(f"strands: engine must be auto, numpy or numba, not {engine!r}")
@@ -1783,6 +1836,23 @@ def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, para
             _nonfinite(M, eng, kb + 1, ke + 1)
             if log:
                 log(f"strands: simulated frame {M.f0 + ke}")
+        res_loop = None
+        if loop is not None:                            # the clip loops: its start goes on from its end
+            k = int(loop)
+            first = [eng.xs.copy(), eng.Ds.copy(), eng.dep.copy(), eng.who.copy()]
+            end = _copy_state({a: getattr(eng, a) for a in eng.STATE})
+            for a, v in _copy_state(end).items():
+                setattr(eng, a, v)
+            eng.record(k, M.block([k], [0.0], [k / M.fps]), 0)
+            for kb in range(k, F - 1, nfb):
+                ke = min(kb + nfb, F - 1)
+                ks = np.repeat(np.arange(kb, ke), M.substeps)
+                taus = np.tile(np.arange(1, M.substeps + 1) / M.substeps, ke - kb)
+                eng.run(M.block(ks, taus, (ks + taus) / M.fps), kb + 1)
+                _nonfinite(M, eng, kb + 1, ke + 1)
+            res_loop = {"frame": M.f0 + k,
+                        "residual_mm": round(float(np.linalg.norm(eng.x - end["x"], axis=1).max()) * 1000, 2)}
+            res_loop.update(_hand_back(eng, first, k, M))
         eng.finish()
     finally:
         eng.close()
@@ -1800,6 +1870,7 @@ def simulate(chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, para
     res.links, res.link_rest = np.stack([M.link_a, M.link_b], 1), M.link_d0
     res.engine = eng.name
     res.timings = {"setup": round(t1 - t0, 3), "settle": round(t2 - t1, 3), "run": round(t3 - t2, 3)}
+    res.loop = res_loop
     return res
 
 
@@ -1912,7 +1983,8 @@ def main(argv=None):
                        spec.get("params"), frames, rig, fps, int(spec.get("substeps", 10)),
                        float(spec.get("settle_s", 1.5)), wind, log, use_masks=bool(spec.get("use_masks", False)),
                        anchor_free=float(spec.get("anchor_free", geom.ANCHOR_FREE)), engine=spec.get("engine", "auto"),
-                       threads=spec.get("threads"), gravity=a.get("gravity"))
+                       threads=spec.get("threads"), gravity=a.get("gravity"),
+                       loop=None if spec.get("loop") is None else int(spec["loop"]) - frames[0])
         quats = local_quats(chains, res, bone_rest_R)
         rep = report(chains, res, window)
     except (ValueError, RuntimeError) as e:                                    # bad input, or numba asked for but absent
@@ -1923,6 +1995,8 @@ def main(argv=None):
         return 3
     info = {"bones": chains.bones, "frames": list(res.frames), "engine": res.engine, "report": rep,
             "seconds": dict(res.timings, total=round(time.perf_counter() - t0, 3))}
+    if res.loop is not None:
+        info["loop"] = res.loop
     np.savez(argv[1], quats=quats, x=res.x, pen=res.pen, report=np.array(json.dumps(info, ensure_ascii=False)))
     return 0
 

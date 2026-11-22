@@ -36,10 +36,24 @@ SIDES = ("L", "R")
 SWING_KEYS = ("deg", "m", "from", "to", "every", "lead", "beats", "first")
 KNEE_KEYS = ("t", "side", "height", "from", "to", "every", "first", "beats", "lead")
 CUT_KEYS = ("t", "threads", "at", "own", "back", "hang", "give", "catch")
+HOP_KEYS = ("t", "height", "land")
+# the keys that move her in the world (mkmmd.core.marionette_world): she lies, floats, is flown, falls, lands
+FLOAT_KEYS = ("from", "to", "bob", "period", "dips", "dip", "ease")
+KICKS_KEYS = ("from", "to", "period", "height", "first", "wander", "seed")
+SWIM_KEYS = ("from", "to", "period", "stroke", "kick", "first")
+REACH_KEYS = ("from", "to", "at", "ease")
+RELEASE_KEYS = ("t", "tumble", "spin", "terminal")
+LAND_KEYS = ("t", "at", "give", "radius", "clatter", "speed", "approach")
+YANK_KEYS = ("t", "v", "at")
+KNOT_KEYS = ("t", "swing", "loop")
+WORLD_KEYS = ("lie", "float", "kicks", "arms", "reach", "swim", "release", "land", "yank", "knot")
 KEYS = {"prop": None, "from": None, "drop": None, "height": None, "lift": None, "hang": None, "lag": None,
         "timeline": None, "rock": SWING_KEYS, "tilt": SWING_KEYS, "turn": SWING_KEYS, "sway": SWING_KEYS, "raise": None,
-        "hops": ("t", "height"), "knees": KNEE_KEYS, "cuts": CUT_KEYS, "throw": ("t", "v", "spin"), "guitar": None}
-DEFAULTS = {"drop": 0.35, "height": 0.9, "lift": 0.03, "hang": 0.012, "lag": 1.0}
+        "hops": HOP_KEYS, "knees": KNEE_KEYS, "cuts": CUT_KEYS, "throw": ("t", "v", "spin"), "guitar": None,
+        "over": None, "width": None, "lie": None, "float": FLOAT_KEYS, "kicks": KICKS_KEYS, "arms": None, "reach": REACH_KEYS,
+        "swim": SWIM_KEYS, "release": RELEASE_KEYS, "land": LAND_KEYS, "yank": YANK_KEYS, "knot": KNOT_KEYS}
+DEFAULTS = {"drop": 0.35, "height": 0.9, "lift": 0.03, "hang": 0.012, "lag": 1.0, "over": 0.4}
+ARMS = ("shoulders", "chest")     # where the threads hold her wrists while she lies on her back
 
 DROP_HEIGHT = 2.6           # m the cross falls from before it is caught over her
 ATTACH = 0.08               # s: the falling threads' ends land on her parts over this before `from`
@@ -120,6 +134,32 @@ def follow(ts, target, spring, lag=1.0, h=1.0 / 240.0):
 def delayed(ts, x, dt):
     """`x` sampled at ts heard `dt` s late (held at its first value before)."""
     return np.interp(np.asarray(ts, float) - dt, ts, x)
+
+
+HOP_FLIGHT = 0.36          # s: a hop from a stand is in the air this long; one after a landing takes off RECOVER after it
+HOP_RECOVER = 0.06
+
+
+def landing_hops(ts, landings):
+    """(rise, dip, lead) (n,) m of hops that land on their times [(t, height)]: each a parabola `height` high that
+    leaves the floor HOP_RECOVER after the landing before it (or HOP_FLIGHT before its own, from a stand: a brace in
+    the knees first) and comes down on t into the knees (dip, a third of its height, back up in 0.14 s), the bars
+    jerked up ahead of it (`lead`: the cross's lift, the hand moving first)."""
+    ts = np.asarray(ts, float)
+    rise, dip, lead = np.zeros(len(ts)), np.zeros(len(ts)), np.zeros(len(ts))
+    prev = -math.inf
+    for t, h in landings or ():
+        stand = t - prev > HOP_FLIGHT + HOP_RECOVER + 0.25
+        t0 = t - HOP_FLIGHT if stand else prev + HOP_RECOVER
+        span = max(t - t0, 0.1)
+        u = (ts - t0) / span
+        rise = np.maximum(rise, np.where((u > 0.0) & (u < 1.0), 4.0 * h * u * (1.0 - u), 0.0))
+        dip = dip + h / 3.0 * pulse(ts, t, 0.05, 0.0, 0.14)
+        if stand:
+            dip = dip + 0.2 * h * pulse(ts, t0 - 0.14, 0.1, 0.0, 0.04)
+        lead = lead + 1.2 * h * pulse(ts, t0 - 0.07, 0.07, 0.03, max(span - 0.1, 0.08))
+        prev = t
+    return rise, dip, lead
 
 
 def _num(v, what, lo=None, hi=None):
@@ -209,7 +249,12 @@ def normalize(spec, beats):
     if "prop" not in spec or "from" not in spec:
         raise MarionetteError("marionette: needs `prop` (a library:marionette prop) and `from` (the clip second the threads "
                               "land on her and pull taut)")
-    P = {k: _num(spec.get(k, d), k, 0.0) for k, d in DEFAULTS.items()}
+    P = {k: _num(spec.get(k, d), k, 0.0) for k, d in DEFAULTS.items() if k != "over"}
+    over = spec.get("over", DEFAULTS["over"])
+    try:
+        P["over"] = [[float(t), float(x)] for t, x in over] if isinstance(over, list) else _num(over, "over", 0.0)
+    except (TypeError, ValueError):
+        raise MarionetteError("marionette.over: metres, or keys [[t, metres], ...]") from None
     P["lag"] = max(P["lag"], 0.2)
     P["prop"] = str(spec["prop"])
     P["guitar"] = str(spec["guitar"]) if spec.get("guitar") else None
@@ -222,8 +267,13 @@ def normalize(spec, beats):
         P["raise"] = [[float(t), float(x)] for t, x in (spec.get("raise") or [])]
     except (TypeError, ValueError):
         raise MarionetteError("marionette.raise: keys [[t, metres], ...]") from None
-    P["hops"] = [(_num(h.get("t"), f"hops[{i}].t"), _num(h.get("height", 0.07), f"hops[{i}].height", 0.0, 0.5))
-                 for i, h in enumerate(spec.get("hops") or [])]
+    try:
+        P["width"] = [[float(t), float(x)] for t, x in (spec.get("width") or [])]
+    except (TypeError, ValueError):
+        raise MarionetteError("marionette.width: keys [[t, metres], ...] (the threads' radius)") from None
+    if any(not 0.0002 <= x <= 0.01 for _t, x in P["width"]):
+        raise MarionetteError("marionette.width: a thread's radius is 0.0002 .. 0.01 m")
+    P["hops"], P["landings"] = _hops(spec.get("hops"))
     P["knees"] = knee_events(spec.get("knees"), beats)
     cuts, seen = [], {}
     for i, c in enumerate(spec.get("cuts") or []):
@@ -263,7 +313,155 @@ def normalize(spec, beats):
                       "spin": _num(th.get("spin", 540.0), "throw.spin")}
     else:
         P["throw"] = None
+    P["world"] = _world(spec, P)
+    if P["throw"] and P["world"]["release"]:
+        raise MarionetteError("marionette: `throw` throws the cross aside and `release` lets it fall after her on her "
+                              "head thread: give one of them")
     return P
+
+
+def _hops(v):
+    """(hops at their top on t, hops that land on t) of `hops`: a list [{t, height = 0.07, land = false}] or a table
+    {land = [t, ...], height} (every hop lands on its time)."""
+    if not v:
+        return [], []
+    if isinstance(v, dict):
+        unknown = sorted(set(v) - {"land", "height"})
+        if unknown or not isinstance(v.get("land"), list):
+            raise MarionetteError("marionette.hops: a list [{t, height, land}] or a table {land = [t, ...], height}")
+        h = _num(v.get("height", 0.07), "hops.height", 0.0, 0.5)
+        return [], sorted((_num(t, "hops.land"), h) for t in v["land"])
+    if not isinstance(v, list):
+        raise MarionetteError("marionette.hops: a list [{t, height, land}] or a table {land = [t, ...], height}")
+    top, land = [], []
+    for i, h in enumerate(v):
+        if not isinstance(h, dict) or "t" not in h:
+            raise MarionetteError(f"marionette.hops[{i}]: a table {{t, height, land}}")
+        e = (_num(h["t"], f"hops[{i}].t"), _num(h.get("height", 0.07), f"hops[{i}].height", 0.0, 0.5))
+        (land if h.get("land") else top).append(e)
+    return top, sorted(land)
+
+
+def _table(v, what, keys, need=()):
+    if not isinstance(v, dict):
+        raise MarionetteError(f"marionette.{what}: a table {{{', '.join(keys)}}}")
+    unknown = sorted(set(v) - set(keys))
+    if unknown:
+        raise MarionetteError(f"marionette.{what}: unknown keys {unknown} (known: {list(keys)})")
+    missing = [k for k in need if k not in v]
+    if missing:
+        raise MarionetteError(f"marionette.{what}: needs {', '.join(missing)}")
+    return v
+
+
+def _window(v, what, lo=-1e9, hi=1e9):
+    a, b = _num(v.get("from", lo), f"{what}.from"), _num(v.get("to", hi), f"{what}.to")
+    if b <= a:
+        raise MarionetteError(f"marionette.{what}: from ({a}) before to ({b})")
+    return a, b
+
+
+def _side(v, what):
+    if v not in SIDES:
+        raise MarionetteError(f"marionette.{what} = {v!r}: \"L\" or \"R\"")
+    return v
+
+
+def _world(spec, P):
+    """The keys that move her in the world (WORLD_KEYS; mkmmd.core.marionette_world plays them), checked, defaults
+    filled; `on` whether any is given (then her root is keyed: she can lie, be flown, fall and land)."""
+    W = {"on": any(spec.get(k) is not None for k in WORLD_KEYS)}
+    try:
+        W["lie"] = [[float(t), float(x)] for t, x in (spec.get("lie") or [])]
+    except (TypeError, ValueError):
+        raise MarionetteError("marionette.lie: keys [[t, deg], ...] (-90 on her back, face up; 90 on her front)") from None
+    W["float"] = None
+    if spec.get("float"):
+        f = _table(spec["float"], "float", FLOAT_KEYS)
+        a, b = _window(f, "float")
+        W["float"] = {"from": a, "to": b, "bob": _num(f.get("bob", 0.02), "float.bob", 0.0, 0.2),
+                      "period": _num(f.get("period", 3.2), "float.period", 0.5, 30.0),
+                      "dips": sorted(_num(t, "float.dips") for t in (f.get("dips") or [])),
+                      "dip": _num(f.get("dip", 0.012), "float.dip", 0.0, 0.2),
+                      "ease": _num(f.get("ease", 0.8), "float.ease", 0.05, 5.0)}
+    W["kicks"] = None
+    if spec.get("kicks"):
+        k = _table(spec["kicks"], "kicks", KICKS_KEYS)
+        a, b = _window(k, "kicks")
+        W["kicks"] = {"from": a, "to": b, "period": _num(k.get("period", 2.4), "kicks.period", 0.6, 20.0),
+                      "height": _num(k.get("height", 0.07), "kicks.height", 0.0, 0.3),
+                      "first": _side(k.get("first", "L"), "kicks.first"),
+                      "wander": _num(k.get("wander", 0.25), "kicks.wander", 0.0, 0.6),
+                      "seed": int(_num(k.get("seed", 0), "kicks.seed"))}
+    arms = spec.get("arms", "shoulders")
+    if arms not in ARMS:
+        raise MarionetteError(f"marionette.arms = {arms!r}: one of {list(ARMS)} (where her wrists are held while she "
+                              f"lies on her back)")
+    W["arms"] = arms
+    reach = spec.get("reach") or []
+    reach = [reach] if isinstance(reach, dict) else reach
+    if not isinstance(reach, list):
+        raise MarionetteError("marionette.reach: a list [{from, to, at}]")
+    W["reach"] = []
+    for i, r in enumerate(reach):
+        r = _table(r, f"reach[{i}]", REACH_KEYS, ("from", "to", "at"))
+        a, b = _window(r, f"reach[{i}]")
+        W["reach"].append({"from": a, "to": b, "at": r["at"], "ease": _num(r.get("ease", 0.3), f"reach[{i}].ease",
+                                                                           0.05, 3.0)})
+    W["swim"] = None
+    if spec.get("swim"):
+        s = _table(spec["swim"], "swim", SWIM_KEYS)
+        a, b = _window(s, "swim")
+        W["swim"] = {"from": a, "to": b, "period": _num(s.get("period", 0.8), "swim.period", 0.3, 5.0),
+                     "stroke": _num(s.get("stroke", 0.2), "swim.stroke", 0.0, 0.5),
+                     "kick": _num(s.get("kick", 0.08), "swim.kick", 0.0, 0.3),
+                     "first": _side(s.get("first", "L"), "swim.first")}
+    W["release"] = W["land"] = W["yank"] = W["knot"] = None
+    if spec.get("release"):
+        r = _table(spec["release"], "release", RELEASE_KEYS, ("t",))
+        t = _num(r["t"], "release.t")
+        if t <= P["from"]:
+            raise MarionetteError(f"marionette.release.t = {t}: the control is let go after the threads are on her")
+        W["release"] = {"t": t, "tumble": _num(r.get("tumble", 0.0), "release.tumble"),
+                        "spin": _num(r.get("spin", 240.0), "release.spin"),
+                        "terminal": _num(r.get("terminal", 4.0), "release.terminal", 0.5, 60.0)}
+    if spec.get("land"):
+        g = _table(spec["land"], "land", LAND_KEYS, ("t", "at"))
+        t = _num(g["t"], "land.t")
+        if not W["release"] or t < W["release"]["t"] + 0.6:
+            raise MarionetteError(f"marionette.land.t = {t}: she lands from a fall, at least 0.6 s after `release`")
+        W["land"] = {"t": t, "at": g["at"], "give": _num(g.get("give", 0.1), "land.give", 0.0, 0.4),
+                     "radius": _num(g.get("radius", 0.4), "land.radius", 0.0, 50.0),
+                     "clatter": _num(g.get("clatter", 0.35), "land.clatter", 0.1, 2.0),
+                     "speed": _num(g.get("speed", 2.5), "land.speed", 0.2, 20.0),
+                     "approach": _num(g.get("approach", 0.6), "land.approach", 0.1, 3.0)}
+    if spec.get("yank"):
+        y = _table(spec["yank"], "yank", YANK_KEYS, ("t",))
+        t = _num(y["t"], "yank.t")
+        if not W["land"] or t <= W["land"]["t"] + 0.1:
+            raise MarionetteError(f"marionette.yank.t = {t}: she is yanked by her head thread from where she landed: "
+                                  f"after `land`")
+        v = y.get("v", (0.6, 0.0, 7.0))
+        if not isinstance(v, (list, tuple)) or len(v) != 3:
+            raise MarionetteError("marionette.yank.v: [x, y, z] m/s (her frame)")
+        W["yank"] = {"t": t, "v": [float(x) for x in v], "at": _num(y.get("at", 0.6), "yank.at", 0.05, 0.95)}
+    if spec.get("knot"):
+        k = _table(spec["knot"], "knot", KNOT_KEYS, ("t",))
+        t = _num(k["t"], "knot.t")
+        last = max([P["from"]] + [c["t"] for c in P["cuts"]] + [W[e]["t"] for e in ("release", "land") if W[e]]
+                   + ([W["yank"]["t"] + 1.2] if W["yank"] else []))
+        if t <= last:
+            raise MarionetteError(f"marionette.knot.t = {t}: her threads are knotted on again after the last cut, the "
+                                  f"fall and the yank (after {last})")
+        loop = _num(k["loop"], "knot.loop", t) if k.get("loop") is not None else None
+        W["knot"] = {"t": t, "swing": _num(k.get("swing", 8.0), "knot.swing", 0.0, 45.0), "loop": loop}
+    return W
+
+
+def knot_time(P):
+    """The clip second her threads are whole and on her again (inf: never)."""
+    k = (P.get("world") or {}).get("knot")
+    return k["t"] if k else math.inf
 
 
 def cut_time(P, part):
@@ -272,9 +470,9 @@ def cut_time(P, part):
 
 
 def held(ts, P, part):
-    """(n,) 1 while the part's thread holds it (from `from` to its cut), else 0."""
+    """(n,) 1 while the part's thread holds it (from `from` to its cut, and again once it is knotted on), else 0."""
     ts = np.asarray(ts, float)
-    return ((ts >= P["from"]) & (ts < cut_time(P, part))).astype(float)
+    return (((ts >= P["from"]) & (ts < cut_time(P, part))) | (ts >= knot_time(P))).astype(float)
 
 
 # ---- the cross
@@ -304,7 +502,8 @@ def cross_plan(ts, P, half_leg=0.12):
     turn = np.radians(PF.eased_keys(ts, P["turn"]))
     pos = np.zeros((n, 3))
     pos[:, 0] = sway
-    pos[:, 2] = fall + lift
+    lead = landing_hops(ts, P.get("landings"))[2]                 # the hand jerks the bars up ahead of each hop
+    pos[:, 2] = fall + lift + lead
     knee = {s: np.zeros(n) for s in SIDES}
     leg_z, leg_roll = np.zeros(n), np.zeros(n)
     for t, side, h in P["knees"]:
@@ -315,7 +514,7 @@ def cross_plan(ts, P, half_leg=0.12):
     leg_z = 0.5 * (knee["L"] + knee["R"])
     leg_pos = np.zeros((n, 3))
     leg_pos[:, 0] = 0.6 * sway
-    leg_pos[:, 2] = fall + lift + leg_z
+    leg_pos[:, 2] = fall + lift + leg_z + lead
     th = P.get("throw")
     if th:
         tau = np.maximum(ts - th["t"], 0.0)
@@ -334,14 +533,17 @@ def cross_plan(ts, P, half_leg=0.12):
 # ---- her body
 
 
-def body_plan(ts, P, cross, legs):
+def body_plan(ts, P, cross, legs, stand=None):
     """Her channels (see the module's docstring) over `ts` from the cross's plan. `legs` {side: {thigh, shin, foot}}
-    m: the thigh and shin lengths and the ankle to the toes' tip. Returns {lean, tilt, turn, head_tilt, head_nod,
-    head_turn, rise, side, behind, dip, feet {side: (n, 3)}, point {side: (n,)}, guitar, report}."""
+    m: the thigh and shin lengths and the ankle to the toes' tip. `stand` (n,) 0..1: how much she stands on her feet
+    on the floor (default all the time: the knees give at a cut only so; mkmmd.core.marionette_world passes its own).
+    Returns {lean, tilt, turn, head_tilt, head_nod, head_turn, rise, side, behind, dip, feet {side: (n, 3)}, point
+    {side: (n,)}, knee {side: (n,) m the leg bar lifts it}, guitar, report}."""
     ts = np.asarray(ts, float)
     n = len(ts)
     lag = P["lag"]
     t0 = P["from"]
+    stand = np.ones(n) if stand is None else np.asarray(stand, float)
     hd, bk = held(ts, P, "head"), held(ts, P, "back")
     body = np.maximum(hd, bk)
     knees_on = np.minimum(held(ts, P, "knee_L") + (ts < t0), held(ts, P, "knee_R") + (ts < t0))
@@ -349,8 +551,9 @@ def body_plan(ts, P, cross, legs):
     # the weight: lifted by the cross (a thread pulls, it cannot push), late, with a little bounce
     zt = body * (hang + np.maximum(cross["lift"], 0.0))
     z = follow(ts, zt, BODY, lag)
-    rise = np.maximum(z, 0.0)
-    dip = 0.8 * np.maximum(-z, 0.0)                                # a landing goes into the knees
+    hop, hop_dip, _ = landing_hops(ts, P.get("landings"))
+    rise = np.maximum(z, 0.0) + hop
+    dip = 0.8 * np.maximum(-z, 0.0) + hop_dip                     # a landing goes into the knees
     # the shoulders under the cross, the hips under the shoulders
     sh = follow(ts, np.stack([cross["sway"] * body, np.zeros(n)], 1), SHOULDER, lag)
     hp = follow(ts, sh, HIPS, lag)
@@ -367,7 +570,7 @@ def body_plan(ts, P, cross, legs):
     head_nod = follow(ts, head_in_n + snap_nod, HEAD, lag) - lean + HEAD_HELD * follow(ts, hd, BODY, lag)
     head_turn = 0.4 * follow(ts, delayed(ts, turn, HEAD_DELAY * lag), HEAD, lag) - 0.4 * turn
     # the knees: each under its end of the leg bar, the shin swinging under it
-    feet, point = {}, {}
+    feet, point, knee = {}, {}, {}
     knee_peak = {}
     for s in SIDES:
         k = held(ts, P, f"knee_{s}")
@@ -380,6 +583,7 @@ def body_plan(ts, P, cross, legs):
         f[:, 1] = -fwd                                             # forward is -y
         f[:, 2] = h
         feet[s] = f
+        knee[s] = h
         toe = np.arcsin(np.clip(rise / max(float(legs[s].get("foot", 0.14)), 0.05), 0.0, 0.6))
         point[s] = 0.55 * th + toe
         knee_peak[s] = round(float(h.max()) * 1000, 1)
@@ -390,6 +594,7 @@ def body_plan(ts, P, cross, legs):
     report = {"rise_mm": round(float(rise.max()) * 1000, 1), "sway_mm": round(float(np.abs(hp[:, 0]).max()) * 1000, 1),
               "knee_mm": knee_peak}
     # the cuts
+    cut_dip = np.zeros(n)
     for c in P["cuts"]:
         tc = c["t"]
         fade = np.ones(n)
@@ -400,17 +605,18 @@ def body_plan(ts, P, cross, legs):
             head_nod = head_nod + HEAD_DROP * fall
             head_tilt = head_tilt + math.radians(7.0) * fall
             lean = lean + math.radians(5.0) * fall
-        if "knee_L" in c["threads"] or "knee_R" in c["threads"]:
+        if "knee_L" in c["threads"] or "knee_R" in c["threads"]:   # standing: the knees give, she catches her weight
             give = follow(ts, step(ts, tc) - (1.0 - c["catch"]) * step(ts, tc + 0.18), GIVE, lag) * fade
-            dip = dip + c["give"] * give
+            cut_dip = cut_dip + c["give"] * give * stand
         if "wrist_L" in c["threads"]:                              # the neck sinks with the hand, and she lifts it
             guitar = guitar - math.radians(5.0) * follow(ts, pulse(ts, tc, 0.08, 0.15, 0.4), GUITAR, lag)
         if "back" in c["threads"]:                                 # she lands on her own feet
-            dip = dip + 0.015 * follow(ts, pulse(ts, tc, 0.06, 0.05, 0.3), GIVE, lag)
+            cut_dip = cut_dip + 0.015 * follow(ts, pulse(ts, tc, 0.06, 0.05, 0.3), GIVE, lag) * stand
+    dip = dip + cut_dip
     report["cuts"] = [[c["t"], c["threads"]] for c in P["cuts"]]
     return {"lean": lean, "tilt": tilt, "turn": turn, "head_tilt": head_tilt, "head_nod": head_nod,
-            "head_turn": head_turn, "rise": rise, "side": side, "behind": behind, "dip": dip, "feet": feet,
-            "point": point, "guitar": guitar, "report": report}
+            "head_turn": head_turn, "rise": rise, "side": side, "behind": behind, "dip": dip, "cut_dip": cut_dip,
+            "feet": feet, "point": point, "knee": knee, "guitar": guitar, "report": report}
 
 
 def _unit(v, fallback=(0.0, 0.0, 1.0)):
@@ -550,8 +756,9 @@ def twang(n, tau, amp=0.012, freq=11.0, decay=0.12):
     return amp * math.exp(-tau / decay) * math.sin(2.0 * math.pi * freq * tau) * np.sin(math.pi * np.linspace(0, 1, n))
 
 
-# ---- the prop (library:marionette): an aeroplane control and its threads
+# ---- the prop (library:marionette): a control and its threads
 
+CONTROLS = ("aeroplane", "stirrers")
 MAIN = (-0.20, 0.28)        # m: the main bar along y (front end, back end), at z = 0 of the cross's frame
 SLAT = (0.034, 0.014)       # m: a slat's width and thickness
 HEAD_BAR = 0.16             # m: half the head bar (the wings), across x at y = 0, on top of the main bar
@@ -562,9 +769,33 @@ EYE = (0.0055, 0.0012)      # m: a screw eye's ring and wire radius
 ANCHORS = {"head": ("cross", (0.0, 0.0, -0.007 - EYE[0])), "back": ("cross", (0.0, 0.265, -0.007 - EYE[0])),
            "wrist_L": ("hand", (0.235, 0.0, -0.0085 - EYE[0])), "wrist_R": ("hand", (-0.235, 0.0, -0.0085 - EYE[0])),
            "knee_L": ("leg", (0.265, 0.0, -0.007 - EYE[0])), "knee_R": ("leg", (-0.265, 0.0, -0.007 - EYE[0]))}
+# two coffee stirrers crossed and tied with thread (the main one along her facing, the other across it in front: the
+# hand bar), the leg bar a third: flat birch sticks with round ends, the threads knotted round them
+STIRRER = {"length": 1.0, "width": 0.032, "thick": 0.008, "cross_at": -0.30, "leg": 1.0, "knot": 0.005,
+           "wrap": 0.0014}             # a coffee stirrer (178 x 5.5 x 1.5 mm) at the theatre's scale: flat, round ends
 THREAD = {"radius": 0.0015, "points": 24}
 ROLES = {"wood": "gold:base:0.45", "eye": "text:base:0.45", "thread": "text"}
-MATS = ("wood", "eye")
+STIRRER_WOOD = "gold:base:0.66"    # birch, paler than the aeroplane's stained wood
+MATS = ("wood", "eye", "thread")
+
+
+def layout(control="aeroplane"):
+    """{anchors, hand_bar, leg_bar, main}: where each thread is tied (its bar and the point in that bar's frame), the
+    hand bar (its place on the cross, half its length), the leg bar (its home from the cross, half its length) and the
+    main bar's ends, for a control `control` (CONTROLS)."""
+    if control == "aeroplane":
+        return {"anchors": ANCHORS, "hand_bar": HAND_BAR, "leg_bar": LEG_BAR, "main": MAIN}
+    if control != "stirrers":
+        raise MarionetteError(f"marionette: control = {control!r}: one of {list(CONTROLS)}")
+    st = STIRRER
+    half, t, k = st["length"] / 2.0, st["thick"], st["knot"]
+    under = -t / 2.0 - k
+    anchors = {"head": ("cross", (0.0, 0.0, under)), "back": ("cross", (0.0, half - 0.025, under)),
+               "wrist_L": ("hand", (half - 0.03, 0.0, under)), "wrist_R": ("hand", (-(half - 0.03), 0.0, under)),
+               "knee_L": ("leg", (st["leg"] / 2.0 - 0.03, 0.0, under)),
+               "knee_R": ("leg", (-(st["leg"] / 2.0 - 0.03), 0.0, under))}
+    return {"anchors": anchors, "hand_bar": {"at": (0.0, st["cross_at"], 0.95 * t), "half": half, "radius": t / 2.0},
+            "leg_bar": {"home": LEG_BAR["home"], "half": st["leg"] / 2.0}, "main": (-half, half)}
 
 
 def _slat(y0, y1, w, t, axis="y", mat=0):
@@ -591,11 +822,62 @@ def _eye(p, axis="y", mat=1):
     return S.merge([ring, shank])
 
 
-def cross_meshes():
-    """{"cross": the main bar, the head bar on top of it, the hand bar's peg and their eyes (the cross's frame), "hand":
-    the hand bar, a dowel, and its eyes (its own frame, at HAND_BAR's `at`), "leg": the leg bar and its eyes (its own
-    frame)}: shell Meshes, material indices of MATS (0 wood, 1 the eyes' metal)."""
+def _ring(center, axis, a, b, r, mat=2, n=14):
+    """A loop of thread round a stick: an ellipse of semi-axes a (across) and b (up) round `center`, square to the
+    stick's `axis` ("x" or "y"), wound of a thread r thick."""
     from . import shell as S
+    phi = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
+    across = np.array([1.0, 0.0, 0.0]) if axis == "y" else np.array([0.0, 1.0, 0.0])
+    pts = np.asarray(center, float) + np.outer(a * np.cos(phi), across) + np.outer(b * np.sin(phi), (0.0, 0.0, 1.0))
+    return S.tube(pts, r, sides=5, closed=True, mat=mat)
+
+
+def _knot(p, axis, mat=2):
+    """A thread tied round a stirrer at p (the point it hangs from, under the stick): two turns round the stick and the
+    knot under it."""
+    from . import shell as S
+    st = STIRRER
+    w, t, r = st["width"], st["thick"], st["wrap"]
+    c = (p[0], p[1], 0.0)
+    step = np.array([0.0, 2.2 * r, 0.0]) if axis == "y" else np.array([2.2 * r, 0.0, 0.0])
+    turns = [_ring(np.asarray(c) + k * step, axis, w / 2.0 + r, t / 2.0 + r, r, mat) for k in (-0.5, 0.5)]
+    knot = S.tube(np.array([[p[0], p[1], -t / 2.0 - r], [p[0], p[1], p[2] + r]]), 1.8 * r, sides=6, mat=mat)
+    return S.merge(turns + [knot])
+
+
+def _lashing(center, mat=2):
+    """The thread that ties the two stirrers where they cross: two loops round both sticks, along the diagonals."""
+    from . import shell as S
+    st = STIRRER
+    w, t, r = st["width"], st["thick"], st["wrap"]
+    loops = []
+    for d in (np.array([1.0, 1.0, 0.0]), np.array([1.0, -1.0, 0.0])):
+        d = d / np.linalg.norm(d)
+        phi = np.linspace(0.0, 2.0 * math.pi, 16, endpoint=False)
+        pts = (np.asarray(center, float) + np.outer(0.78 * w * np.cos(phi), d)
+               + np.outer((1.05 * t + r) * np.sin(phi), (0.0, 0.0, 1.0)))
+        loops.append(S.tube(pts, r, sides=5, closed=True, mat=mat))
+    return S.merge(loops)
+
+
+def cross_meshes(control="aeroplane"):
+    """{"cross": the main bar, the head bar on top of it, the hand bar's peg and their eyes (the cross's frame), "hand":
+    the hand bar, a dowel, and its eyes (its own frame, at the hand bar's `at`), "leg": the leg bar and its eyes (its
+    own frame)}: shell Meshes, material indices of MATS (0 wood, 1 the eyes' metal, 2 thread). `control` "stirrers":
+    the main stirrer with the head and back threads knotted round it and the lashing where the other crosses it, that
+    other one (the hand bar) with the wrists' threads, a third with the knees'."""
+    from . import shell as S
+    if control == "stirrers":
+        st, lay = STIRRER, layout("stirrers")
+        w, t = st["width"], st["thick"]
+        A = lay["anchors"]
+        half, at = st["length"] / 2.0, lay["hand_bar"]["at"]
+        cross = S.merge([_slat(-half, half, w, t), _lashing((0.0, at[1], 0.5 * at[2]))]
+                        + [_knot(A[p][1], "y") for p in ("head", "back")])
+        hand = S.merge([_slat(-half, half, w, t, axis="x")] + [_knot(A[s][1], "x") for s in ("wrist_L", "wrist_R")])
+        leg = S.merge([_slat(-st["leg"] / 2.0, st["leg"] / 2.0, w, t, axis="x")]
+                      + [_knot(A[s][1], "x") for s in ("knee_L", "knee_R")])
+        return {"cross": cross, "hand": hand, "leg": leg}
     w, t = SLAT
     hb = HAND_BAR
     cross = S.merge([_slat(MAIN[0], MAIN[1], w, t), _slat(-HEAD_BAR, HEAD_BAR, w * 0.9, t, axis="x").moved((0.0, 0.0, t * 0.95)),
@@ -609,16 +891,26 @@ def cross_meshes():
     return {"cross": cross, "hand": hand, "leg": leg}
 
 
-def card(name, roles):
+REST = (1.6, 2.6, 0.04)     # m: the surface she lies on (a collider for the sim): across her, along her, thick; top at 0
+
+
+def card(name, roles, control="aeroplane"):
     """The prop card (docs/design.md: Prop card): the look points that ride the bars (`cross`, `legbar`), the thread
-    anchors and the objects (docs/design.md: Marionettes)."""
+    anchors, the surface she rests on in the world (`<name>_rest`) and where a yank takes her thread (`<name>_grab`),
+    and the objects (docs/design.md: Marionette)."""
+    lay = layout(control)
     bars = {"cross": f"{name}_cross", "hand": f"{name}_handbar", "leg": f"{name}_legbar"}
-    return {"size": [round(2 * HAND_BAR["half"], 3), round(MAIN[1] - MAIN[0], 3), SLAT[1] * 2], "origin": "center",
-            "front": "-Y", "slots": dict(roles), "form_max": 0.5,
+    hb, lb, main = lay["hand_bar"], lay["leg_bar"], lay["main"]
+    thick = STIRRER["thick"] if control == "stirrers" else SLAT[1]
+    return {"size": [round(2 * hb["half"], 3), round(main[1] - main[0], 3), thick * 2], "origin": "center",
+            "front": "-Y", "slots": dict(roles), "form_max": 0.5, "form_exempt": [f"{name}_rest"],
             "use": {"look": [{"name": "cross", "object": bars["cross"], "point": [0.0, 0.0, 0.0]},
-                             {"name": "legbar", "object": bars["leg"], "point": list(LEG_BAR["home"])}]},
+                             {"name": "legbar", "object": bars["leg"], "point": list(lb["home"])},
+                             {"name": "grab", "object": f"{name}_grab", "point": [0.0, 0.0, 0.0]}]},
             "marionette": {"anchors": {p: {"bar": b, "object": f"{name}_at_{p}", "point": list(pt)}
-                                       for p, (b, pt) in ANCHORS.items()},
-                           "bars": bars, "hand_bar": dict(HAND_BAR, at=list(HAND_BAR["at"])),
-                           "leg_bar": dict(LEG_BAR, home=list(LEG_BAR["home"])), "thread": dict(THREAD)},
-            "objects": list(bars.values()) + [f"{name}_{k}_{p}" for p in PARTS for k in ("thread", "cut")]}
+                                       for p, (b, pt) in lay["anchors"].items()},
+                           "bars": bars, "hand_bar": dict(hb, at=list(hb["at"])),
+                           "leg_bar": dict(lb, home=list(lb["home"])), "thread": dict(THREAD), "control": control,
+                           "rest": f"{name}_rest", "grab": f"{name}_grab"},
+            "objects": list(bars.values()) + [f"{name}_{k}_{p}" for p in PARTS for k in ("thread", "cut")]
+            + [f"{name}_rest", f"{name}_grab"]}

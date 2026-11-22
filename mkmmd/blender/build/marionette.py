@@ -17,16 +17,18 @@ import math
 
 import bpy
 import numpy as np
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
+from ...core import armtwist as AT
 from ...core import marionette as MR
+from ...core import marionette_world as MW
 from ...core import perform as PF
 from ...core import stepped as STP
 from ...core import timeline as TL
 from .. import keys as K
 from .. import scope as SCOPE
 from .. import scene as S
-from . import BuildError
+from . import BuildError, targets
 from . import stepped as STEPPED
 
 ENDS = {"head": ("head", (0.0, 0.0, 0.175)), "back": ("upper_body2", None), "wrist_L": ("wrist.L", (0.0, 0.0, 0.02)),
@@ -111,6 +113,14 @@ def prepare(ctx, name, m, ts, frames):
         foot = (arm.matrix_world @ arm.data.bones[toe].tail_local - ankle).length if toe else 0.14
         legs[s] = {"thigh": (knee - hip).length, "shin": (ankle - knee).length, "foot": max(foot, 0.08)}
     cross = MR.cross_plan(ts, P, float(card["leg_bar"]["half"]))
+    if P["world"]["on"]:                                        # she lies, flies, falls: her root moves (world_plan)
+        _tie(prop, arm, ends, F)
+        world = _prepare_world(ctx, name, m, P, prop, card, ts, frames, cross, legs, ends, F, Frot, smap, where)
+        sc.frame_set(keep)
+        body = world
+        body["report"]["home"] = [round(float(v), 3) for v in world["cross"]["pos"][0]]
+        return {"P": P, "prop": prop, "card": card, "body": body, "cross": cross, "F": F, "Frot": Frot,
+                "shoulders": {s: her(f"arm.{s}") for s in ("L", "R")}, "world": world}
     body = MR.body_plan(ts, P, cross, legs)
     # the bars, keyed in the prop root's frame
     bars = {k: bpy.data.objects[v] for k, v in card["bars"].items()}
@@ -131,7 +141,15 @@ def prepare(ctx, name, m, ts, frames):
         K.key_vec(ob, "rotation_quaternion", frames, K.continuous(Q), interp="LINEAR")
     for ob in bars.values():
         _key_hidden(ob, frames, ~cross["shown"])
-    # the threads' ends, tied to her bones where they meet her at the settled pose
+    _tie(prop, arm, ends, F)
+    sc.frame_set(keep)
+    body["report"]["home"] = [round(v, 3) for v in home]
+    return {"P": P, "prop": prop, "card": card, "body": body, "cross": cross, "F": F, "Frot": Frot,
+            "shoulders": {s: her(f"arm.{s}") for s in ("L", "R")}}
+
+
+def _tie(prop, arm, ends, F):
+    """The threads' ends, tied to her bones where they meet her at the settled pose."""
     for part, (bone, p) in ends.items():
         e = bpy.data.objects[f"{prop.name}_end_{part}"]
         e.parent = arm
@@ -140,10 +158,190 @@ def prepare(ctx, name, m, ts, frames):
         e.matrix_parent_inverse = Matrix.Identity(4)
         bpy.context.view_layer.update()
         e.matrix_world = Matrix.Translation(F @ p)
+
+
+# ---- in the world: she lies, floats, is flown, falls, lands (mkmmd.core.marionette_world)
+
+
+def _rest_frame(m):
+    """Her rest frame (the cast's `at` and `yaw`, under its parent), no scale: what `_frame` reads before her root is
+    keyed."""
+    root = m.root
+    Pw = root.parent.matrix_world @ root.matrix_parent_inverse if root.parent else Matrix.Identity(4)
+    loc, rot, _ = (Pw @ Matrix.Translation(Vector(m.spec.get("at", (0.0, 0.0, 0.0))))
+                   @ Euler((0.0, 0.0, math.radians(float(m.spec.get("yaw", 0.0))))).to_matrix().to_4x4()).decompose()
+    return Matrix.Translation(loc) @ rot.to_matrix().to_4x4(), rot
+
+
+def _outline(m, smap, Fi):
+    """(k, 2) her outline seen from her side at the settled pose, y and z of her frame (mkmmd.core.marionette_world.
+    lowest): the skin her head, torso and legs carry (not her arms, nor the sim's chains: hair, ears, skirt), the back
+    of her head a hair's thickness further out (she lies on her hair)."""
+    arm = m.arm
+    skip = {b for c in (m.rig or {}).get("chains", []) for b in c["bones"]}
+    for s in ("L", "R"):
+        b = arm.data.bones.get(smap.get(f"arm.{s}", ""))
+        if b is not None:
+            skip |= {b.name} | {c.name for c in b.children_recursive}
+    head = smap.get("head")
+    head_set = {head} | ({c.name for c in arm.data.bones[head].children_recursive} - skip) if head else set()
+    dg = bpy.context.evaluated_depsgraph_get()
+    pts = []
+    for ob in m.meshes:
+        names = {g.index: g.name for g in ob.vertex_groups if g.name in arm.data.bones}   # mmd_tools adds groups that
+        verts = ob.data.vertices                                                           # are no bone, weighted 1
+        best = np.full(len(verts), -1)
+        for v in verts:
+            gs = [g for g in v.groups if g.group in names]
+            if gs:
+                best[v.index] = max(gs, key=lambda g: g.weight).group
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        co = np.empty(3 * len(me.vertices))
+        me.vertices.foreach_get("co", co)
+        ev.to_mesh_clear()
+        if len(co) != 3 * len(verts):
+            continue
+        M = np.array(Fi @ ob.matrix_world)
+        X = co.reshape(-1, 3) @ M[:3, :3].T + M[:3, 3]
+        bone = np.array([names.get(int(g), "") for g in best])
+        keep = np.array([b != "" and b not in skip and b in arm.data.bones for b in bone])
+        hair = np.array([b in head_set for b in bone]) * MW_SKULL_HAIR
+        X[:, 1] += hair
+        pts.append(X[keep][:, 1:3])
+    if not pts or not sum(len(p) for p in pts):
+        raise BuildError(f"perform.{m.name}.marionette: no skin of her head, body and legs to lie on (meshes: "
+                         f"{[o.name for o in m.meshes]})")
+    return MW.hull2d(np.concatenate(pts))
+
+
+MW_SKULL_HAIR = 0.012       # m of hair under the back of her head when she lies on it
+
+
+def _rides(m, ref_objs):
+    """The empty a flown prop rides on her (its `[[flight]]` pivot, parented to her bones or her root), or None."""
+    for ob in ref_objs:
+        for c in ob.constraints:
+            pv = getattr(c, "target", None)
+            if pv is not None and pv.parent in (m.arm, m.root):
+                return pv
+    return None
+
+
+def _aims(ctx, m, P, frames, Fi):
+    """{"reach": [(n, 3) or {"on", "rel"}], "land": (n, 3)}: the targets of `reach` and `land` in her rest frame on every
+    frame (a world point once). A target flown on her (a `[[flight]]` hung on her head) goes where she goes, so it is
+    given as where it hangs on her (`on`, her rest frame) and its offset from there (`rel`)."""
+    W = P["world"]
+    refs = [("reach", r["at"]) for r in W["reach"]] + ([("land", W["land"]["at"])] if W["land"] else [])
+    out = {"reach": []}
+    sc = bpy.context.scene
+    keep = sc.frame_current
+    for kind, ref in refs:
+        if isinstance(ref, (list, tuple)) and len(ref) == 3:
+            pts = np.tile(np.asarray(Fi @ Vector(ref)), (len(frames), 1))
+        else:
+            objs = targets.objects(ctx, ref)
+            pv = _rides(m, objs) if kind == "reach" else None
+            pts, on = np.empty((len(frames), 3)), np.empty((len(frames), 3))
+            with SCOPE.only(objs + ([pv] if pv is not None else [])):
+                for i, f in enumerate(frames):
+                    sc.frame_set(int(f))
+                    pts[i] = np.asarray(Fi @ targets.point(ctx, ref))
+                    if pv is not None:
+                        on[i] = np.asarray(Fi @ pv.matrix_world.translation)
+            if pv is not None:
+                pts = {"on": on, "rel": pts - on}
+        if kind == "reach":
+            out["reach"].append(pts)
+        else:
+            out["land"] = pts
     sc.frame_set(keep)
-    body["report"]["home"] = [round(v, 3) for v in home]
-    return {"P": P, "prop": prop, "card": card, "body": body, "cross": cross, "F": F, "Frot": Frot,
-            "shoulders": {s: her(f"arm.{s}") for s in ("L", "R")}}
+    return out
+
+
+def _prepare_world(ctx, name, m, P, prop, card, ts, frames, cross, legs, ends, F, Frot, smap, where):
+    """The world plan (mkmmd.core.marionette_world.world_plan): her measures, her root keyed (a turn about her hips and
+    a move), the bars, the surface she rests on and where a yank takes her thread. Returns the plan."""
+    root, arm = m.root, m.arm
+    if root is None or root == arm:
+        raise BuildError(f"{where}: she lies, flies and falls by her root, and the member has none to move")
+    if root.rotation_mode not in ("XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"):
+        raise BuildError(f"{where}: the root {root.name!r} turns in {root.rotation_mode}, not Euler angles")
+    spec = ctx.section("perform", name)
+    if spec.get("walk") or spec.get("tumble") or spec.get("step_turn") or spec.get("spin"):
+        raise BuildError(f"{where}: lie, float, release, land, yank and knot move her root, as walk, tumble, step_turn "
+                         f"and spin do: give her one of them (a fall's tumble is `release.tumble`)")
+    pose = ctx.section("pose", name)
+    if pose.get("sit") or pose.get("feet") or pose.get("hips"):
+        raise BuildError(f"{where}: a marionette that lies or flies stands where her threads put her: drop `sit`, "
+                         f"`feet` and `hips` from [pose.{name}]")
+    for k in ctx.data.get("key", []):
+        if k.get("target") == root.name and k.get("prop") in ("location", "rotation_euler") and not k.get("relative"):
+            raise BuildError(f"{where}: a [[key]] keys {root.name!r} {k['prop']} outright, which the marionette keys: "
+                             f"give it `relative = true`")
+    Fi = F.inverted()
+
+    def her(b, tail=False):
+        pb = arm.pose.bones[smap[b]]
+        return np.asarray(Fi @ (arm.matrix_world @ (pb.tail if tail else pb.head)))
+
+    def rest(b):
+        return np.asarray(Fi.to_3x3() @ (arm.matrix_world.to_3x3() @ arm.data.bones[smap[b]].head_local))
+
+    for b in ("center", "elbow.L", "elbow.R", "wrist.L", "wrist.R", "index1.L", "little1.L", "middle1.L"):
+        if b not in smap:
+            raise BuildError(f"{where}: the model has no {b} bone (her body and her hands move on it)")
+    rig = {"pivot": her("center"), "crown": np.asarray(ends["head"][1]), "hang": np.asarray(ends["back"][1]),
+           "hull": _outline(m, smap, Fi),
+           "shoulders": {s: her(f"arm.{s}") for s in ("L", "R")}, "hips": {s: her(f"leg.{s}") for s in ("L", "R")},
+           "ankles": {s: her(f"leg_ik.{s}") if f"leg_ik.{s}" in smap else her(f"ankle.{s}") for s in ("L", "R")},
+           "arms": {s: {"upper": float(np.linalg.norm(rest(f"elbow.{s}") - rest(f"arm.{s}"))),
+                        "fore": float(np.linalg.norm(rest(f"wrist.{s}") - rest(f"elbow.{s}")))} for s in ("L", "R")},
+           "legs": legs, "anchors": {p: card["anchors"][p]["point"] for p in MR.PARTS},
+           "leg_home": card["leg_bar"]["home"]}
+    palm = np.cross(rest("index1.L") - rest("wrist.L"), rest("little1.L") - rest("wrist.L"))
+    palm = AT.palm_down(palm, np.array([0.0, 0.0, 1.0]))           # MMD rests the palms down (her own frame)
+    rig["rest"] = {"upper": rest("elbow.L") - rest("arm.L"), "fore": rest("wrist.L") - rest("elbow.L"),
+                   "dir": rest("middle1.L") - rest("wrist.L"), "palm": palm / np.linalg.norm(palm)}
+    world = MW.world_plan(ts, P, cross, rig, _aims(ctx, m, P, frames, Fi))
+    # her root: a body point q goes to F (pos + R q), so the root's world matrix is F T(pos) R F^-1 M0
+    M0 = root.matrix_world.copy()
+    base = Fi @ M0
+    Pw = root.parent.matrix_world @ root.matrix_parent_inverse if root.parent else Matrix.Identity(4)
+    Pwi = Pw.inverted()
+    locs, eul, prev = [], [], root.rotation_euler.copy()
+    for i in range(len(ts)):
+        X = Matrix([list(r) for r in world["root"]["rot"][i]]).to_4x4()
+        X.translation = Vector(world["root"]["pos"][i])
+        loc, rot, _ = (Pwi @ F @ X @ base).decompose()
+        e = rot.to_euler(root.rotation_mode, prev)
+        locs.append(tuple(loc))
+        eul.append(tuple(e))
+        prev = e
+    K.key_vec(root, "location", frames, locs, interp="LINEAR")
+    K.key_vec(root, "rotation_euler", frames, eul, interp="LINEAR")
+    # the bars, the surface under her, where a yank takes the head thread: keyed in the prop root's frame
+    Ri = prop.root.matrix_world.inverted()
+    Rrot_i = prop.root.matrix_world.to_quaternion().inverted()
+    bars = {k: bpy.data.objects[v] for k, v in card["bars"].items()}
+    for key, ob in (("cross", bars["cross"]), ("leg", bars["leg"])):
+        pl = world[key]
+        ob.rotation_mode = "QUATERNION"
+        K.key_vec(ob, "location", frames, [tuple(Ri @ (F @ Vector(p))) for p in pl["pos"]], interp="LINEAR")
+        K.key_vec(ob, "rotation_quaternion", frames, K.continuous(
+            [tuple(Rrot_i @ Frot @ Matrix([list(r) for r in R3]).to_quaternion()) for R3 in pl["rot"]]), interp="LINEAR")
+        _key_hidden(ob, frames, ~pl["shown"])
+    _key_hidden(bars["hand"], frames, ~world["cross"]["shown"])
+    for kind, pts in (("rest", world["rest"]), ("grab", world["grab"])):
+        ob = bpy.data.objects.get(f"{prop.name}_{kind}")
+        if ob is None:
+            ctx.log(f"perform {name}: the prop {prop.name!r} has no {kind} object (an older build of it)")
+            continue
+        ob.rotation_mode = "QUATERNION"
+        K.key_vec(ob, "location", frames, [tuple(Ri @ (F @ Vector(p))) for p in pts], interp="LINEAR")
+        K.key_vec(ob, "rotation_quaternion", frames, [tuple(Rrot_i @ Frot)] * len(frames), interp="LINEAR")
+    return world
 
 
 def _grip(m, side):
@@ -273,7 +471,10 @@ def _hand_bar(ctx, m, mp, ts, frames, gname):
 
 def hands(ctx, name, m, mp, ts, frames):
     """After the strum: the guitar turned with the hand bar, the hands whose threads are cut swung on their arms, the
-    hand bar following the picking hand. Returns report numbers."""
+    hand bar following the picking hand; in the world (`world_hands`) her hands where the plan has them. Returns
+    report numbers."""
+    if mp.get("world") is not None:
+        return _world_hands(ctx, name, m, mp, frames)
     spec = ctx.section("perform", name)
     st = spec.get("strum")
     st = st[0] if isinstance(st, list) and st else st
@@ -289,6 +490,61 @@ def hands(ctx, name, m, mp, ts, frames):
                 grip = _grip(m, side)
                 if side in m.ik and not grip.endswith(":neck"):      # a hand on a neck holds on to it
                     out[f"hang_{side}"] = _hang(ctx, m, mp, ts, frames, side, c)
+    return out
+
+
+def _world_hands(ctx, name, m, mp, frames):
+    """Her hands where the world plan has them (mkmmd.core.marionette_world: held by their threads, lying on the water
+    up by her face, reaching, swimming, cut free and swinging, treading the air, out for her balance): each arm IK's
+    goal keyed on every frame from the wrist, the hand's direction and its palm, and its elbow's pole. A hand needs a
+    pose table to have an arm IK (`at` anywhere: the threads take it from there)."""
+    smap = S.semantic_map(m.arm)
+    F, Frot = mp["F"], mp["Frot"].to_matrix()
+    out = {}
+    for side in ("L", "R"):
+        if side not in m.ik:
+            ctx.log("WARNING", f"perform.{name}.marionette: her {side} hand has no arm IK, so its thread cannot move "
+                               f"it: give [pose.{name}.hands.{side}] an `at` (anywhere)")
+            continue
+        rig = m.hands[side]
+        if rig.get("ride_bone") or (_grip(m, side) and _grip(m, side) != "rest"):
+            raise BuildError(f"perform.{name}.marionette: her {side} hand rides or grips something, and her threads "
+                             f"move it: give it an `at` alone")
+        goal, pole = m.ik[side]
+        H = mp["world"]["hands"][side]
+        arm = m.arm
+        wb = arm.data.bones[smap[f"wrist.{side}"]]
+        Bl = wb.matrix_local.to_3x3().normalized()                # the wrist's rest turn, armature space
+        head = {k: arm.data.bones[smap[f"{k}.{side}"]].head_local for k in ("wrist", "index1", "little1")}
+        n_arm = (head["index1"] - head["wrist"]).cross(head["little1"] - head["wrist"]).normalized()
+        n_arm = AT.palm_down(n_arm, Vector((0.0, 0.0, 1.0)))      # palms down at rest, in her own frame (the world's
+        n_loc = Bl.inverted() @ n_arm                             # z is no guide once she lies on her back)
+        y_loc = Vector((0.0, 1.0, 0.0))
+        rest_basis = Matrix(np.array(AT.basis(np.array(y_loc), np.array(n_loc))).tolist())
+        locs, rots, poles = [], [], []
+        for i in range(len(frames)):
+            d, p = Frot @ Vector(H["dir"][i]), Frot @ Vector(H["palm"][i])
+            Rw = Matrix(np.array(AT.basis(np.array(d), np.array(p))).tolist()) @ rest_basis.transposed()
+            M = Rw.to_4x4()
+            M.translation = F @ Vector(H["wrist"][i])
+            Ml = rig["par_inv"] @ (M @ Matrix.Translation((0.0, wb.length, 0.0)))
+            locs.append(tuple(Ml.translation))
+            rots.append(tuple(Ml.to_quaternion()))
+            poles.append(tuple(rig["pole_inv"] @ (F @ Vector(H["pole"][i]))))
+        goal.rotation_mode = "QUATERNION"
+        K.key_vec(goal, "location", frames, locs, interp="LINEAR")
+        K.key_vec(goal, "rotation_quaternion", frames, K.continuous(rots), interp="LINEAR")
+        K.key_vec(pole, "location", frames, poles, interp="LINEAR")
+        rest = mp["world"]["rig"]["rest"]
+        R = mp["world"]["root"]["rot"]
+        d, p = np.einsum("nji,nj->ni", R, H["dir"]), np.einsum("nji,nj->ni", R, H["palm"])
+        S0 = np.asarray(mp["world"]["rig"]["shoulders"][side])
+        reach = np.linalg.norm(H["body"] - S0, axis=1)
+        tw = np.array([AT.twists(rest, side, S0, H["elbow"][i], H["body"][i], d[i], p[i])
+                       for i in range(0, len(frames), 3)])
+        out[f"hand_{side}"] = {"reach_mm": [round(float(reach.min()) * 1000, 1), round(float(reach.max()) * 1000, 1)],
+                               "forearm_twist": [round(float(tw[:, 0].min()), 1), round(float(tw[:, 0].max()), 1)],
+                               "arm_twist": [round(float(tw[:, 1].min()), 1), round(float(tw[:, 1].max()), 1)]}
     return out
 
 
@@ -312,6 +568,145 @@ def _last(ctx, m):
     return ctx.end
 
 
+WRAP = (("neck", 0.07, 0.0), ("head", 0.13, 0.06), ("crown", 0.06, -0.03), ("crown", 0.0, 0.015))
+#   the back thread's way round her when she lies on her back: m behind and up from her neck's base, the base of her
+#   skull and her crown (where the head thread is tied): under her nape, behind her skull, over the top of her head
+
+
+def _resample(pts, n):
+    """n points evenly along the polyline pts (m, 3)."""
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    u = np.linspace(0.0, cum[-1], n)
+    return np.stack([np.interp(u, cum, pts[:, j]) for j in range(3)], 1)
+
+
+def _wrapped(a, b, L, n, side, axes, at, w):
+    """A thread from b (on her back) to a that wraps round under her nape, the back of her head and over her crown when
+    she lies on her back (`w` 0..1 how far the straight line would go through her): b, the wrap points (`at` {neck,
+    head, crown} world points, her axes: x left, y back, z up), then free to a, sagging as a thread of length L does
+    over what is left of it."""
+    back, up = axes[:, 1], axes[:, 2]
+    way = [at[k] + back * dy + up * dz for k, dy, dz in WRAP]
+    t = np.linspace(0.0, 1.0, len(way) + 2)[1:-1]
+    way = [(1.0 - w) * (b + (a - b) * u) + w * p for u, p in zip(t, way)]
+    held = np.array([b] + way)
+    used = float(np.linalg.norm(np.diff(held, axis=0), axis=1).sum())
+    free = MR.sag_points(held[-1], a, max(L - used, 1e-3), n, side)
+    return _resample(np.concatenate([held, free]), n)
+
+
+def _threads_world(ctx, m, P, prop, card, frames, ts, A, B, body):
+    """The threads of a marionette in the world (mkmmd.core.marionette_world): each one's length the shortest span it
+    has while it pulls her (so it is straight whenever it pulls and sags only when the control comes down to her), a
+    twang when it snaps taut, the back thread round under her nape and her head while she lies on her back, a cut piece
+    hanging from her (she is tied to it), the head thread streaming between her and the falling control and lying
+    slack over the ground she lands on, taken by a hand at the grab point and pulled, every thread whole again from the
+    knot. Keys the threads, the pieces and the snips; returns the report's `threads`."""
+    n, npts = len(frames), int(card["thread"]["points"])
+    F, Frot = _rest_frame(m)
+    Fr = np.array(Frot.to_matrix())
+    Ri = np.array(prop.root.matrix_world.inverted())
+    radius = float(card["thread"]["radius"])
+    cross = MR.cross_plan(ts, P, float(card["leg_bar"]["half"]))
+    Rg, Tm = MW.regimes(ts, P)
+    taut = MW.taut(ts, P, cross)
+    ball = None
+    if P["world"]["land"]:
+        at = _aims(ctx, m, P, frames, F.inverted())["land"]
+        c = np.array([tuple(F @ Vector(p)) for p in at]) - np.array([0.0, 0.0, P["world"]["land"]["radius"]])
+        ball = (c, P["world"]["land"]["radius"] + radius + 0.002)
+    rep = {}
+    for j, part in enumerate(MR.PARTS):
+        a_, b_ = A[:, j], B[:, j]
+        span = np.linalg.norm(a_ - b_, axis=1)
+        hold = MW.held(ts, P, part) > 0.5
+        on = taut & hold
+        i_on = int(np.clip(np.searchsorted(ts, P["from"]), 0, n - 1))
+        L = float(span[on].min()) if on.any() else float(span[i_on])
+        tc = MR.cut_time(P, part)
+        cut = next((c for c in P["cuts"] if part in c["threads"]), None)
+        side = Fr @ np.array([SIDE[part], 0.0, 0.0])
+        # it snaps taut: a twang (how hard: how fast the slack was taken up)
+        rate = np.gradient(span, ts) if n > 1 else np.zeros(n)
+        slack = span < L - 0.015
+        snaps = [(ts[i], min(abs(float(rate[i])) * 0.012, 0.02)) for i in range(1, n)
+                 if slack[i - 1] and not slack[i] and hold[i]]
+        main, low = np.empty((n, npts, 3)), np.empty((n, npts, 3))
+        show_main, show_low = np.zeros(n, bool), np.zeros(n, bool)
+        snip = np.empty((n, 3))
+        C = None
+        vel = np.gradient(b_, ts, axis=0) if n > 1 else np.zeros_like(b_)
+        for i, t in enumerate(ts):
+            a, b = a_[i], b_[i]
+            low[i] = b
+            if hold[i]:
+                C = None
+                if part == "head" and Rg["yanked"][i] and not Rg["carry"][i]:     # a hand pulls it at the grab
+                    g = body["grab"][i]
+                    main[i] = _resample(np.array([a, g, b]), npts)
+                elif part == "back" and body["axes"][i][:, 1] @ (a - b) < 0.0:
+                    w = float(np.clip(-(body["axes"][i][:, 1] @ _unitv(a - b)) / 0.25, 0.0, 1.0))
+                    main[i] = _wrapped(a, b, L, npts, side, body["axes"][i],
+                                       {"neck": body["neck"][i], "head": body["head"][i], "crown": B[i, 0]}, w)
+                else:                                           # landed, it has paid out round the stirrer: slack
+                    paid = max(L, 1.12 * span[i]) if Rg["landed"][i] and part == "head" else L
+                    main[i] = MR.sag_points(a, b, paid, npts, side)
+                if Rg["fall"][i] and part == "head":            # streaming in the air between her and the control
+                    tau = t - Tm["rel"]
+                    sweep = np.sin(np.pi * np.linspace(0.0, 1.0, npts))
+                    main[i] += np.outer(0.04 * L * sweep * math.sin(9.0 * tau + 0.7), side)
+                    main[i] += np.outer(0.02 * L * sweep ** 2 * math.sin(14.0 * tau), Fr @ np.array([0.0, 1.0, 0.0]))
+                if ball is not None and Rg["landed"][i]:        # slack on the ground she landed on, not through it
+                    d = main[i] - ball[0][i]
+                    r = np.linalg.norm(d, axis=1)
+                    inside = r < ball[1]
+                    main[i][inside] = ball[0][i] + d[inside] / r[inside, None] * ball[1]
+                for ts_, amp in snaps:
+                    main[i] += np.outer(MR.twang(npts, t - ts_, amp), side)
+                show_main[i] = True
+            else:
+                if C is None:
+                    C = MR.point_at(main[i - 1] if i else MR.sag_points(a, b, L, npts, side), cut["at"] if cut else 0.5)
+                    t_cut = t
+                tau = t - t_cut
+                main[i] = MR.cut_upper(a, C, tau, npts, side)
+                show_main[i] = tau < MR.YANK + 0.08
+                v = vel[i]
+                hang = np.array([0.0, 0.0, -1.0]) - 0.12 * v / max(float(np.linalg.norm(v)), 1.0)
+                low[i] = MR.cut_lower(b, C, tau, hang, -1e9, None, radius, npts)     # tied to her: it hangs from her
+                show_low[i] = True
+            snip[i] = body["grab"][i] if (part == "head" and Rg["yanked"][i]) else (
+                MR.point_at(main[i], cut["at"] if cut else 0.5) if C is None else C)
+        for kind, pts, shown in (("thread", main, show_main), ("cut", low, show_low)):
+            ob = bpy.data.objects[f"{prop.name}_{kind}_{part}"]
+            local = pts @ Ri[:3, :3].T + Ri[:3, 3]
+            for q in range(npts):
+                for c in range(3):
+                    K.set_fcurve(ob.data, f"splines[0].points[{q}].co", c, frames, local[:, q, c], interp="LINEAR")
+            _key_hidden(ob, frames, ~shown)
+        sn = bpy.data.objects[f"{prop.name}_snip_{part}"]
+        K.key_vec(sn, "location", frames, [tuple(v) for v in snip @ Ri[:3, :3].T + Ri[:3, 3]], interp="LINEAR")
+        rep[part] = {"length_m": round(L, 3), "cut": None if tc == math.inf else round(tc, 3), "snaps": len(snaps)}
+    return rep
+
+
+def _key_width(P, prop, frames, ts):
+    """`width`: every thread's and cut piece's radius over time (eased keys): a thread reads as thread in a close plate
+    (a thin one while she lies under a lens a metre or two away) and as a line in a wide shot."""
+    if not P.get("width"):
+        return
+    r = PF.eased_keys(ts, P["width"])
+    for part in MR.PARTS:
+        for kind in ("thread", "cut"):
+            K.set_fcurve(bpy.data.objects[f"{prop.name}_{kind}_{part}"].data, "bevel_depth", 0, frames, r, interp="LINEAR")
+
+
+def _unitv(v):
+    v = np.asarray(v, float)
+    return v / max(float(np.linalg.norm(v)), 1e-9)
+
+
 def run(ctx):
     out = {}
     for name, m in ctx.cast.items():
@@ -320,6 +715,8 @@ def run(ctx):
             continue
         P, prop, card = got
         bars = [bpy.data.objects[v] for v in card["bars"].values()]
+        if P["world"]["on"]:                                      # the surface and the grab step with her too
+            bars += [o for o in (bpy.data.objects.get(f"{prop.name}_{k}") for k in ("rest", "grab")) if o is not None]
         held = 0
         for w in _windows(ctx, name):                             # the bars step with her
             for ob in bars:
@@ -336,6 +733,9 @@ def run(ctx):
         ends = [bpy.data.objects[f"{prop.name}_end_{p}"] for p in MR.PARTS]
         n, k = len(frames), len(MR.PARTS)
         A, B = np.empty((n, k, 3)), np.empty((n, k, 3))
+        body = {"neck": np.empty((n, 3)), "head": np.empty((n, 3)), "axes": np.empty((n, 3, 3)), "grab": np.empty((n, 3))}
+        smap = S.semantic_map(m.arm)
+        grab = bpy.data.objects.get(f"{prop.name}_grab")
         sc = bpy.context.scene
         keep = sc.frame_current
         bpy.context.view_layer.update()                          # objects the sim removed leave stale entries
@@ -346,7 +746,20 @@ def run(ctx):
                 for j in range(k):
                     A[i, j] = anchors[j].evaluated_get(dg).matrix_world.translation
                     B[i, j] = ends[j].evaluated_get(dg).matrix_world.translation
+                if P["world"]["on"]:                              # what the back thread wraps round, and the yank
+                    ae = m.arm.evaluated_get(dg)
+                    body["axes"][i] = np.array(ae.matrix_world.to_3x3().normalized())
+                    for key, b in (("neck", "neck"), ("head", "head")):
+                        body[key][i] = ae.matrix_world @ ae.pose.bones[smap[b]].head
+                    body["grab"][i] = grab.evaluated_get(dg).matrix_world.translation if grab else B[i, 0]
         sc.frame_set(keep)
+        if P["world"]["on"]:
+            rep = _threads_world(ctx, m, P, prop, card, frames, ts, A, B, body)
+            _key_width(P, prop, frames, ts)
+            out[name] = {"prop": prop.name, "frames": [int(frames[0]), int(frames[-1])], "threads": rep,
+                         "bar_curves_stepped": held}
+            ctx.log("marionette", name, json.dumps(out[name]))
+            continue
         F, Frot = _frame(m)
         Fr = np.array(Frot.to_matrix())
         floor = float(F.translation.z)
@@ -406,6 +819,7 @@ def run(ctx):
             sn = bpy.data.objects[f"{prop.name}_snip_{part}"]
             K.key_vec(sn, "location", frames, [tuple(v) for v in snip @ Ri[:3, :3].T + Ri[:3, 3]], interp="LINEAR")
             rep[part] = {"length_m": round(L, 3), "cut": None if tc == math.inf else round(tc, 3)}
+        _key_width(P, prop, frames, ts)
         out[name] = {"prop": prop.name, "frames": [int(frames[0]), int(frames[-1])], "threads": rep,
                      "bar_curves_stepped": held}
         ctx.log("marionette", name, json.dumps(out[name]))

@@ -35,8 +35,11 @@ def backs_drawable(fx):
 
 def region(ffx, fx, frame):
     """The part of the picture a masked entry works on (FrameFx._masked), as mkr-post's Region {layer, ground}; None
-    without a mask; False when mkr-post cannot read its figure as the CPU does (no paths, a layer of another size). A
-    FileNotFoundError when the layer is missing, as the CPU path raises."""
+    without a mask; False when mkr-post cannot read its figure as the CPU does (no paths, a layer of another size) or the
+    entry is kept to a colour of the picture (`key`: the CPU's). A FileNotFoundError when the layer is missing, as the
+    CPU path raises."""
+    if fx.get("key") is not None or fx.get("blend", "over") not in BLENDS:
+        return False
     if fx.get("mask") is None:
         return None
     paths = ffx.paths

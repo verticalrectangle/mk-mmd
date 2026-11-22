@@ -63,8 +63,9 @@ mkmmd.core.prints'. `key` (a colour of the picture keyed out and
 pushed too far: a video, a colour or the frame before burning through in colour fringes and crushed steps) is
 mkmmd.core.colorkey's, and `shapes` (the picture as flat circles, squares, triangles and diamonds, a cell each,
 refining on the hits) is mkmmd.core.shapes'. The haze (`mist`: a bloom and a diffusion filter, `fog`: haze drifting
-across the picture, `bokeh`: out-of-focus lights drifting through it) is mkmmd.core.haze's, and `mitosis` (a figure
-dividing as a cell does, on the hits) mkmmd.core.mitosis's.
+across the picture, `bokeh`: out-of-focus lights drifting through it) is mkmmd.core.haze's, `mitosis` (a figure
+dividing as a cell does, on the hits) mkmmd.core.mitosis's, and `rewind` (a finger scrubbing the video back along a paper
+scrub bar, the picture the cut's own at other seconds) mkmmd.core.rewind's.
 
 Any entry may give `aspect.<output>` tables: its own keys for one output (the span, the figure and the frames it reads
 stay the entry's).
@@ -89,6 +90,7 @@ from . import paintapp as PA
 from . import picturefx as PF
 from . import prints as PR
 from . import remap as RM
+from . import rewind as RW
 from . import shapes as SH
 from . import sheet as ST
 from . import shotstyle as SS
@@ -99,8 +101,9 @@ from . import videosticker as VS
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
          "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS + \
-    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS + IN.KINDS + ST.KINDS
-CLIPS = ("footage",) + VS.KINDS + CK.KINDS + IN.KINDS   # the kinds that show a video `clip` (mkmmd.footage reads it)
+    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS + IN.KINDS + ST.KINDS + RW.KINDS
+CLIPS = ("footage",) + VS.KINDS + CK.KINDS + IN.KINDS + ("sheet",)   # the kinds that show a video `clip` (mkmmd.footage
+#                                                                       reads it; a sheet's when it is a table)
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
 SILK = "silkscreen"                                     # a collage's fill: the figure printed in flat inks, Warhol's
 BLENDS = ("lighten", "darken")
@@ -211,6 +214,8 @@ KEYS.update({k: _COMMON | own for k, own in {**CK.KEYS, **SH.KEYS}.items()})
 DEFAULTS.update({**CK.DEFAULTS, **SH.DEFAULTS})
 KEYS.update({k: _COMMON | own for k, own in ST.KEYS.items()})
 DEFAULTS.update(ST.DEFAULTS)
+KEYS.update({k: (_COMMON - {"strength"}) | own for k, own in RW.KEYS.items()})      # a rewind has no strength
+DEFAULTS.update(RW.DEFAULTS)
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
 AXES = ("x", "y", "xy")                                 # a mirror's fold: about a vertical line, a horizontal one, both
 FITS = ("cover", "contain")                             # how footage meets the frame: filled and cropped, or whole
@@ -461,6 +466,8 @@ def normalize(spec, palette, what="fx"):
         SH.normalize(spec, out, palette, what)
     elif kind in ST.KINDS:
         ST.normalize(spec, out, palette, what)
+    elif kind in RW.KINDS:
+        RW.normalize(spec, out, palette, what)
     out["aspect"] = _aspects(spec, palette, label, what)
     return out
 
@@ -801,6 +808,8 @@ def plan(data, fps, frame0, palette, last_frame=None):
                 ER.timed(e, data, fps, frame0)
             if e["kind"] in PA.KINDS:
                 PA.timed(e, fps, frame0)
+            if e["kind"] in RW.KINDS:
+                RW.timed(e, fps, frame0, last_frame)
         if fx["kind"] == "push":
             last_inside = fx["inside_frame"] + (f1 - 1 - f0 if fx["play"] else 0)
             if last_frame is not None and last_inside > last_frame:
@@ -821,9 +830,10 @@ def _same_reads(fx, over, name, frame0):
         if extra:
             raise FxError(f"fx {fx['index']} ({fx['kind']}): aspect.{name} reads frames the entry does not ({extra[:4]} "
                           f"on frame {f}): give the keys that choose them to the entry itself")
-    if set(points(over)) - set(points(fx)) or (uses_figure(over) and not uses_figure(fx)):
+    if set(points(over)) - set(points(fx)) or (uses_figure(over) and not uses_figure(fx)) or \
+            set(own_points(over)) - set(own_points(fx)):
         raise FxError(f"fx {fx['index']} ({fx['kind']}): aspect.{name} reads scene points or a figure the entry does not: "
-                      f"give the `center`, the marks' {{point}} and the `mask` to the entry itself")
+                      f"give the `center`, the marks' {{point}}, the `mask` and a table's `track` to the entry itself")
 
 
 def point_key(fx):
@@ -834,7 +844,7 @@ def points(fx):
     """[(key, expression)]: the scene points an effect needs projected through the camera of the shot in the cut on
     the frames of its span (point/<key>/): its `center` (key x<i>), a doodle's marks at a {point} (x<i>m<j>), the
     points a label's leaders run to (x<i>l<j>), a paint app's bucket fills' {point} seeds (x<i>b<j>) and the {point}
-    origins of a lasers entry's fans (x<i>o<j>), and a cutout's {point} `at` (x<i>)."""
+    origins of a lasers entry's fans (x<i>o<j>), a cutout's {point} `at` (x<i>) and a table's `inside` point (x<i>i)."""
     out = []
     c = fx.get("center")
     if isinstance(c, dict) and c["mode"] == "point":
@@ -850,7 +860,19 @@ def points(fx):
         out += LZ.points(fx)
     if fx["kind"] in VS.KINDS:
         out += VS.points(fx)
+    if fx["kind"] == "sheet":
+        out += ST.TB.points(fx)
     return out
+
+
+def own_points(fx):
+    """[(key, expression, shot)]: the world points an effect needs seen through a shot of its own (not the shot in the
+    cut) on the frames it reads its figure from that shot: a table's `track` through the figure's plate
+    (mkmmd.core.table.own_points); and a thread's tie at a world point, through the camera its sheet's figure is read
+    through, on the frames of its `at.reads` (mkmmd.core.thread.own_points: shot None, the shot in the cut there)."""
+    if fx["kind"] in ST.TH.KINDS:
+        return ST.TH.own_points(fx)
+    return ST.TB.own_points(fx) if fx["kind"] == "sheet" else []
 
 
 def uses_figure(fx):
@@ -863,9 +885,10 @@ def uses_figure(fx):
 
 def holds(fx):
     """Whether an effect shows frames of the cut from before as they reached it (a film's held frame, a booth's
-    captures, the frame a mosh holds, the frame a paint app's eraser rubs out, the frame inside a push): the effects
-    before it in the table are applied to such a frame again when it was not kept."""
-    return fx["kind"] in PF.HOLDS or fx["kind"] in ("push", "mosh") or (fx["kind"] in PA.KINDS and PA.holds(fx))
+    captures, the frame a mosh holds, the frame a paint app's eraser rubs out, the frame inside a push, the seconds a
+    rewind scrubs back to): the effects before it in the table are applied to such a frame again when it was not kept."""
+    return fx["kind"] in PF.HOLDS or fx["kind"] in ("push", "mosh") or (fx["kind"] in PA.KINDS and PA.holds(fx)) or \
+        fx["kind"] in RW.KINDS
 
 
 def held(fx, frame):
@@ -877,10 +900,11 @@ def held(fx, frame):
 
 def points_before(fx):
     """Whether an effect reads its own scene points on the frames before that it reads, besides its own frame: a
-    holder works on the frame it holds (a paint app paints that frame's fills on it; a push only shows the frame
-    inside, its centre is of the frame it is drawn on), and a key whose `spread` opens from a point keys each frame of
-    its `burn` trail about that point there."""
-    return (holds(fx) and fx["kind"] != "push") or (fx["kind"] in CK.KINDS and fx["spread"] > 0 and fx["burn"] > 0)
+    holder works on the frame it holds (a paint app paints that frame's fills on it; a push and a rewind only show the
+    frames they read, their own places are of the frame they are drawn on), and a key whose `spread` opens from a point
+    keys each frame of its `burn` trail about that point there."""
+    return (holds(fx) and fx["kind"] not in ("push",) + RW.KINDS) or \
+        (fx["kind"] in CK.KINDS and fx["spread"] > 0 and fx["burn"] > 0)
 
 
 def at(fxs, frame):
@@ -938,6 +962,8 @@ def sources(fx, frame, frame0, hits=None):
         out = MT.sources(fx, frame)
     elif k in ST.KINDS:
         out = ST.sources(fx, frame, frame0)
+    elif k in RW.KINDS:
+        out = RW.sources(fx, frame, frame0)
     else:
         out = []
     if k in FIGURES and _found_pivot(fx) and frame != fx["f0"] and fx["f0"] not in out:

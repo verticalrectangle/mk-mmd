@@ -55,8 +55,9 @@ GRADE = {"gain": 1.0, "lift": 0.08, "warm": 1.0, "saturation": 0.9, "toward": "b
 #                                   {}`: lifted 8 % toward the paper, warmed (WARM at 1), a touch less saturated
 WARM = (1.06, 1.015, 0.92)          # a cutout's warm grade at 1: its red, green and blue gains (0: none)
 PAPER = (0.78, 0.10)                # near-white paper a grade leaves as shot: luma from this up, chroma under this
-RIDES = ("peel", "tear", "sticker")  # what a cutout's `at` may ride: a peel transition's lifted corner, a tear's grips,
-#                                     the grip of a sticker peeled off a sheet
+RIDES = ("peel", "tear", "sticker", "table", "rewind")  # what a cutout's `at` may ride: a peel transition's lifted
+#                                     corner, a tear's grips, the grip of a sticker peeled off a sheet, a point of a table
+#                                     (a sheet with a clip, mkmmd.core.table) carried by its view, a rewind's playhead
 FPS_MAX = 120.0
 
 
@@ -168,8 +169,11 @@ def anchor_at(fx, video):
 
 def _at(v, what):
     """A cutout's `at`: [x, y] or {point = expr} (mkmmd.core.framefx._center), or a grab point it rides: a transition's,
-    {peel = <its `at` second>} (the lifted corner) or {tear = <its `at` second>, grip = 0 or 1} (a grip on a half), or
-    {sticker = <second>}, the grip of the sticker a sheet peels off from that second (mkmmd.core.sheet.grip_of)."""
+    {peel = <its `at` second>} (the lifted corner) or {tear = <its `at` second>, grip = 0 or 1} (a grip on a half),
+    {sticker = <second>}, the grip of the sticker a sheet peels off from that second (mkmmd.core.sheet.grip_of), or
+    {table = [x, y]}, a point of the table (fractions of its clip's frame) under the cutout's span: the table's view
+    carries it, and zooms and turns the cutout with the table (its `size` and its keys' moves are then table heights),
+    or {rewind = <its `from` second>}, the playhead of that rewind (mkmmd.core.rewind.grip): a finger dragging it."""
     FX = _fx()
     ride = [k for k in RIDES if isinstance(v, dict) and k in v]
     if not ride:
@@ -178,7 +182,10 @@ def _at(v, what):
     extra = sorted(set(v) - {kind} - ({"grip"} if kind == "tear" else set()))
     if len(ride) > 1 or extra:
         raise FX.FxError(f"{what} = {v!r}: expected {{peel = <second>}}, {{tear = <second>, grip = 0 or 1}} or "
-                         f"{{sticker = <second>}}")
+                         f"{{sticker = <second>}} (or {{table = [x, y]}}: a point of a table, or {{rewind = <second>}}: "
+                         f"a rewind's playhead)")
+    if kind == "table":
+        return {"mode": kind, "at": FX._pair(v[kind], f"{what} table"), "tr": None}
     grip = v.get("grip", 0)
     if grip not in (0, 1) or isinstance(grip, bool):
         raise FX.FxError(f"{what}: grip = {grip!r}: 0 or 1, the tear's two hands")
@@ -187,8 +194,11 @@ def _at(v, what):
 
 def ride(fxs, transitions, fps):
     """Each cutout (and its aspect.<output> entries) whose `at` rides something gets it in `at["tr"]`: the transition of
-    its kind at that second (within half a frame), or for a `sticker` the sheet whose own peel or whose hollow's peel
-    starts then ({"sheet": its index, "hollow": the hollow's place or None}); a TransitionError-worthy FxError else."""
+    its kind at that second (within half a frame), for a `sticker` the sheet whose own peel or whose hollow's peel
+    starts then ({"sheet": its index, "hollow": the hollow's place or None}), for a `table` the last table in the table
+    whose span holds the cutout's ({"sheet": its index}), for a `rewind` the rewind whose span starts then, earlier in
+    the table than the cutout so that the finger lies over its bar ({"rewind": its index}); a TransitionError-worthy
+    FxError else."""
     FX = _fx()
     peels = [(s["index"], i, p["t"]) for s in fxs if s["kind"] == "sheet"
              for i, p in [(None, s["peel"])] + [(i, h["peel"]) for i, h in enumerate(s["hollows"])] if p is not None]
@@ -196,6 +206,24 @@ def ride(fxs, transitions, fps):
         for e in [fx, *(fx.get("aspect") or {}).values()]:
             a = e.get("at") if e["kind"] == "cutout" else None
             if not isinstance(a, dict) or a["mode"] not in RIDES:
+                continue
+            if a["mode"] == "table":
+                got = [s["index"] for s in fxs if s["kind"] == "sheet" and s.get("clip") is not None
+                       and s["f0"] <= e["f0"] and e["f1"] <= s["f1"]]
+                if not got:
+                    raise FX.FxError(f"fx {e['index']} (cutout): at rides a table, and no table (a sheet with a `clip`) "
+                                     f"spans its {e['from']:g}..{e['to']:g} s")
+                a["tr"] = {"sheet": got[-1]}
+                continue
+            if a["mode"] == "rewind":
+                got = [r["index"] for r in fxs if r["kind"] == "rewind" and abs(r["from"] - a["t"]) <= 0.5 / fps]
+                if not got:
+                    raise FX.FxError(f"fx {e['index']} (cutout): at rides the rewind from {a['t']:g} s; the rewinds "
+                                     f"start at {[r['from'] for r in fxs if r['kind'] == 'rewind'] or 'none'}")
+                if got[0] > e["index"]:
+                    raise FX.FxError(f"fx {e['index']} (cutout): it rides the playhead of fx {got[0]} (rewind), which "
+                                     f"comes after it in the table: put the cutout after the rewind, over its bar")
+                a["tr"] = {"rewind": got[0]}
                 continue
             if a["mode"] == "sticker":
                 got = [{"sheet": s, "hollow": i} for s, i, t in peels if abs(t - a["t"]) <= 0.5 / fps]
@@ -241,14 +269,15 @@ def clock(fx, t, frame_rate=None):
     return held, (sync[0] if sync is not None else fx["in"]) + fx["rate"] * (held - t0)
 
 
-def place_cutout(fx, t, size, ratio, at, video):
+def place_cutout(fx, t, size, ratio, at, video, view=None):
     """Where a cutout stands at clip second `t` (its held pose's, `clock`) in a frame of `size` (w, h), its anchor at the
     frame pixel `at`: (M, box, scale) as `place` gives them. Its box (its clip's frame or crop, `ratio` its width over its
     height) is `size` frame heights tall; M carries the box's own px (about its middle) so that its `anchor` (fractions of
     the clip's frame as the file has it, mirrored with it; a track's point at the pose's video second `video`, `clock`'s)
-    lands on `at`, turned `turn` and moved by its `keys` about it."""
+    lands on `at`, turned `turn` and moved by its `keys` about it. `view` (frame heights per table height, turn degrees):
+    a cutout riding a table, its size and its keys' moves in table heights, turned with the table."""
     FX = _fx()
-    H = float(size[1])
+    H = float(size[1]) * (1.0 if view is None else view[0])
     bh = fx["size"] * H
     bw = float(ratio) * bh
     ax, ay = anchor_at(fx, video)
@@ -256,7 +285,7 @@ def place_cutout(fx, t, size, ratio, at, video):
         ax = 1.0 - ax
     a = ((ax - 0.5) * bw, (ay - 0.5) * bh)
     mv = dict(FX.move_at(fx["keys"], t))
-    mv["turn"] += fx["turn"]
+    mv["turn"] += fx["turn"] + (0.0 if view is None else view[1])
     M = FX.compose(FX.move_matrix(mv, at, H), [[1.0, 0.0, at[0] - a[0]], [0.0, 1.0, at[1] - a[1]]])
     return M, (bw, bh), float(mv["scale"])
 

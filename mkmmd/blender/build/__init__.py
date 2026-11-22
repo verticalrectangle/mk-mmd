@@ -8,6 +8,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   cast     models imported (no Bullet), named, placed
   pose     sitting / standing base pose, feet and hands on targets (leg IK, arm IK), fingers
   motion   VMD motions on NLA strips, retimed to the song's beats
+  flight   [[flight]] props hung on their targets, their moves keyed relative to them (a gaze in perform finds them)
   perform  gaze, blinks, breathing, sway, beat bob, startles, expressions, lip sync, twitches
   ribbons  [[ribbon]] 3D paint strokes in the scene (crayon, toothpaste, neon), drawn on, kept clear of the cast
   shots    the cut: baked cameras per shot and output aspect (mounts, aim, lag, shake, framing, focus), markers
@@ -19,6 +20,7 @@ Stages run in order; each reads its own section of mk.toml and records what late
   folds    fold shapes a joint angle drives (rig.json folds), keyed from the final pose on every frame
   cloth    garments' cloth copies (rig.json cloth) simulated with Blender's cloth, their faces following it
   marionette  a marionette's threads from the cross's anchors to her bones on every frame (after stepped)
+  wire     [[flight]] props baked where their targets ended up (lag, heading, bank, perches), their wires drawn
   save     the .blend
 Solvers run as `python -m <module> IN.npz OUT.npz` on the CLI's Python, cached by a hash of their inputs."""
 import hashlib
@@ -34,8 +36,8 @@ from ...core import tables as TB
 from ..runtime import CTX, op
 
 TIMELINE = "audio/timeline.json"            # where a table's `timeline` defaults to (`mk timeline analyze` writes it)
-STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "perform", "ribbons", "shots", "lights", "text",
-          "keys", "breathe", "sim", "folds", "cloth", "stepped", "marionette", "clip", "save", "bake"]
+STAGES = ["scene", "sets", "props", "vehicles", "cast", "pose", "motion", "flight", "perform", "ribbons", "shots", "lights",
+          "text", "keys", "breathe", "sim", "folds", "cloth", "stepped", "marionette", "wire", "clip", "save", "bake"]
 
 
 class BuildError(RuntimeError):

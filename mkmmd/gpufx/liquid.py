@@ -17,7 +17,7 @@ def ops(ffx, fx, frame):
     if s <= 0.0:
         return []
     reg = region(ffx, fx, frame)
-    if reg is False:
+    if reg is False or fx.get("soft", 0.0) > 0:      # a soft edge: the CPU's (mkr-post draws today's edge)
         return None
     swell = CF.swell(t, ffx._on(fx), fx["decay"])
     centre = ffx._at(fx, frame)[0]

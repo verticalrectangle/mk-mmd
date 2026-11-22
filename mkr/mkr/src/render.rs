@@ -491,7 +491,11 @@ impl<'b> Renderer<'b> {
 
         // geometry: rigid shapes keep their own-space vertices in every posed buffer
         let rest = storage(device, "rest", bytemuck::cast_slice(&geo.rest), wgpu::BufferUsages::BLAS_INPUT);
-        let skin = storage(device, "skin", bytemuck::cast_slice(&geo.skin), wgpu::BufferUsages::empty());
+        // skin.wgsl binds `array<Skin>` (48 bytes an element): with nothing skinned (shape keys alone, no armature)
+        // `storage`'s 16 bytes are not one element and validation stops the frame; a zeroed Skin is never read
+        let skin_bytes: &[u8] = bytemuck::cast_slice(&geo.skin);
+        let skin = storage(device, "skin", if skin_bytes.is_empty() { &[0u8; 48] } else { skin_bytes },
+                           wgpu::BufferUsages::empty());
         let deltas = storage(device, "deltas", bytemuck::cast_slice(&geo.deltas), wgpu::BufferUsages::empty());
         let attrs = storage(device, "attrs", bytemuck::cast_slice(&geo.attrs), wgpu::BufferUsages::empty());
         let indices = storage(device, "indices", bytemuck::cast_slice(&geo.indices),

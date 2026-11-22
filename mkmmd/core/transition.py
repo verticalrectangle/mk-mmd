@@ -60,6 +60,7 @@ from . import pageturn as PG
 from . import peel as PL
 from . import shatter as SH
 from . import tear as TE
+from . import thread as TH
 from . import shotstyle as SS
 from . import tween as TW
 
@@ -619,6 +620,8 @@ def plan(data, fps, frame0, palette):
     try:
         out["fx"] = FX.plan(data, fps, frame0, palette, last)
         FX.VS.ride(out["fx"], out["transitions"], fps)            # cutouts riding a peel's corner or a tear's grips
+        TH.link(out["fx"], fps, frame0)                           # threads tied to a world point: their sheet's camera
+        FX.RW.check_windows(out["fx"], windows)                   # a rewind shows rendered frames, no cut effect's
     except FX.FxError as e:
         raise TransitionError(str(e)) from None
     for fx in out["fx"]:
@@ -749,6 +752,20 @@ def demands(pl, frames=None):
                         add(g, item)
                     if fx.get("shot"):                       # a figure from another shot: its picture is that shot's
                         plate(g, fx["shot"])
+                    for key, expr, shot in FX.own_points(fx):   # and the points it reads through that shot (a track)
+                        add(g, {"kind": "point", "key": key, "expr": expr, "shot": shot})
+        mf = FX.MD.mask_figure(fx) if fx["kind"] in FX.MD.KINDS else None   # a trail kept off her: her layer too
+        if mf is not None:
+            for f in range(fx["f0"], fx["f1"]):
+                item = figure_item(pl, mf, f)
+                if item is not None:
+                    add(f, item)
+        if fx["kind"] in TH.KINDS:                   # a thread tied to a world point: on its frames and its lag's before
+            for key, expr, shot in FX.own_points(fx):
+                for f in range(fx["at"]["first"], fx["f1"]):
+                    s = shot or cut_shot(pl["cuts"], f)
+                    if s is not None:
+                        add(f, {"kind": "point", "key": key, "expr": expr, "shot": s})
     return dict(sorted(out.items()))
 
 
@@ -772,6 +789,10 @@ def _figure_reads(pl, fx, frame):
             out.append(item)
     if fx.get("shot"):
         out.append({"kind": "plate", "shot": fx["shot"]})
+    for key, expr, shot in FX.own_points(fx):        # through its own shot (a thread's sheet may see the cut's)
+        s = shot or cut_shot(pl["cuts"], frame)
+        if s is not None:
+            out.append({"kind": "point", "key": key, "expr": expr, "shot": s})
     return out
 
 
@@ -781,7 +802,8 @@ def fx_frames(pl, frames, hits=None, before=None):
     `hits`, the [audio] hits file), as plates of the shot in the cut there, with a collage's figure on them, and on a held
     frame or a capture the points and figures the effects before it in the table read there (they are applied to it
     again) and the holder's own points (a paint app paints that frame's fills on the frame its eraser holds). A collage
-    whose figure comes from its own `shot` reads that shot's plates and its figure through it instead.
+    whose figure comes from its own `shot` reads that shot's plates and its figure through it instead; a thread tied to
+    a world point reads that point on the frames its lag looks back over (mkmmd.core.thread.looks_back).
     `mk post` has them all already; `mk look`, which draws only the frames asked for, renders these beside them. A held
     frame is finished again by the effects before its holder, so what those read from other frames (a stack's poses
     before, an echo's copies) is read too (`before`: only the effects ahead of that table index)."""
@@ -791,6 +813,13 @@ def fx_frames(pl, frames, hits=None, before=None):
         for fx in FX.at(fxs, f):
             if before is not None and fx["index"] >= before:
                 continue
+            for key, expr, shot in FX.own_points(fx) if fx["kind"] in TH.KINDS else ():
+                for g in TH.looks_back(fx, f):           # a thread's tie at a world point, where it was over its lag
+                    s = shot or cut_shot(pl["cuts"], g)
+                    item = {"kind": "point", "key": key, "expr": expr, "shot": s}
+                    bucket = out.setdefault(g, [])
+                    if s is not None and item not in bucket:
+                        bucket.append(item)
             for g in FX.sources(fx, f, pl["frame0"], hits):
                 shot = cut_shot(pl["cuts"], g)
                 if g == f or (shot is None and not fx.get("shot")):

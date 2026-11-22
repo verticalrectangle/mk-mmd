@@ -103,6 +103,12 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
    look at the room with `mk look` (an orbit camera clips at 100 m: look through a shot camera to see a far skyline). A toy paper theatre
    round a marionette is `kind = "paper_theatre"`: give it `arrive` (its proscenium drops in, its clouds, stars and moon fall in on their
    threads) and `step = 12` with `step_from` your `[[stepped]]` window's `from`, so the set and the cast change pose on the same frames.
+   Its pond and machinery (`pond`, `panorama`, `rise`, `night`, `moon`, `loose`, `sun`, `day`, `house`) give it a wave machine,
+   lily pads and lilies that pop open on a pulled tab, drift-paper ripples off the pad she lies on (which bobs with the
+   marionette's rest box under `pond.ride`), scenery that rolls past a hopping puppet, ground that sinks away into the stage's
+   cellar as she is flown, a cranked day-to-night backdrop with constellations drawn on the notes, a croissant moon and a sun
+   that pops up, and `house` takes everything but the water away for a camera straight above her; key them on the words and
+   notes they land on, and give the hands `obj('<set>_tab').loc` and `obj('<set>_crank_knob').loc`.
 5. **Model what is missing** with the loop under [Modelling props](#modelling-props), and measure it with `form`.
 6. **Measure real people (optional, for performances).** `mk ref search "woman singing in car"`, `mk ref add ID...`, `mk ref track`, `mk ref measure`
    give blink, gaze, nod, sway and mouth numbers shaped like `[perform.<cast>]`, each with a confidence; `mk ref sheet` shows what was
@@ -212,7 +218,27 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   from, ...}` hang her on threads from a wooden cross over her head: key the cross (`tilt`, `sway`, `rock` on the beats, `knees`
   in turn, `hops`) and she follows late and loose, then `cuts` let her go a thread at a time and she takes over with a
   `groove` of her own. Step through each arrival and each cut at full size in the shot's camera, and through a beat of
-  the dance from the front: a thread through the guitar or her face, a hand through the guitar after its cut.
+  the dance from the front: a thread through the guitar or her face, a hand through the guitar after its cut. She can
+  lie and fly too (design.md: Marionette, the world's keys): `lie = [[t, -90]]` hangs her flat on her back and `raise`
+  lowers her onto her surface (she touches it when the control's last drop meets it, a few hundredths before), `float`
+  bobs the water under her, `kicks` are her own, a jerk of `lie` and `raise` pulls her up onto her feet, `hops = {land
+  = [...]}` land ON their times, `swim` while flown flat, `cuts` in the air let a limb drop and swing, `release` lets the
+  control go after her as she falls (give her `air`), `land` sets her on a point (a ball's top), `yank` snatches her up by
+  her head thread, `knot` hangs her back on every thread; `slots = { control = "stirrers" }` makes the control two coffee
+  stirrers. Give her hands an `at` (the threads move them), the sim the prop's `<prop>_rest` box with `floor = false`,
+  and for a loop the keys before 0 that are the clip's last ones less its length, over a pre-roll long enough to replay
+  her last tip back (`knot.loop` replays the knot's swing), so her hair comes to frame 0 as it is on the last frame;
+  `over` keys hold the control out of a plate camera's short lens, `width` keys the threads thin for a close plate.
+  Watch the touch, the jerk, a hop, each cut and the landing frame by frame in the shot's camera, and the portrait from
+  above: her face clear of the bars and the threads.
+- **Flights** ([Flights](design.md#flights)): `[[flight]]` flies a prop relative to a target, a bone of hers or a point,
+  as a hand flies a rod puppet: `in`, `dart` and `glide` land ON their time (put darts on the words and the notes),
+  `circle` goes round her head, `perch` lands on it, and between moves it hovers with small darts. `library:dragonfly`
+  is the paper one on a steel wire: give `hand` (its far end) a point off the frame's edge, its slots the set's `step`
+  and `step_from` so it changes pose with the theatre, and a `gaze` at `"<prop>:head"` makes her follow it. Watch a
+  dart and a circle frame by frame: the wire bends round her head and must never cross her face. `library:paper_planet`
+  is a paper ball on a skewer with a toothpick flag: `up` brings it into place on its time, `land` makes it sink, bob and
+  settle (key what lands on it to `mkmmd.core.paper_planet.top`).
 - **Gag props** (their rows in [Props](design.md#props)): `library:pillow_cloud` (key `puff` 0 -> 1: the pillow puffs into a cloud; `hug`
   anchor, `hold_L` / `hold_R` palms), `giant_carrot` (key `bite1`..`bite4` CONSTANT at the chomps, in order; `use.grip` `hold`, `use.bite`
   points; the chunks fly and fall on their own), `record_treadmill` (stand the cast at [-0.45, 0, 0.16] with `feet = "<name>:run"`, key
@@ -303,6 +329,11 @@ fingertip bone's `.tail` and the prop.
   Its arm must leave the picture inside the clip's own frame (turn it, size it, bring it in from the side the arm comes
   from): past the clip's border the arm is only that border's line drawn on. A `keys` row keeps what it leaves out, so an
   arrival names its zeros (`{t, dx = 0, dy = 0}`).
+  A `rewind` winds the clip back as a finger scrubs a video: a paper scrub bar is slapped on, a cutout riding its
+  playhead (`at = {rewind = <its from>}`, after it in the table) drags it left, and the picture is the clip's own at
+  the seconds of its time `map` (a few `{t, from, to}` moments on the words, each slow enough to read, hard jumps and a
+  tape's tear between; no type on them, as type is laid after the frame effects): step through every jump at full size
+  (design.md: Rewinds).
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
   transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round
@@ -311,8 +342,9 @@ fingertip bone's `.tail` and the prop.
   flapping at `flap` beats a second, or one beat on every hit with `flap = 0` and `[[key]] prop = "hit", lane = "kick"`) and
   `library:butterflies` (a swarm of them in rings, an orbit, a drift or a burst; see their rows in design.md). A `mandala`
   ([Mandalas and trails](design.md#mandalas-and-trails)) rings her with sticker copies of herself, of registry sprites (`{tag =
-  "butterfly"}`) or of drawn clovers, flowers, hearts, stars and butterflies, and of two kits drawn with a pen's line (a moon, a rabbit,
-  a carrot, dango; a daisy, a cassette, a pedal, cherries: `pen = true` draws the flat ones as they are), the rings turning both ways, blooming on the hits and
+  "butterfly"}`) or of drawn clovers, flowers, hearts, stars and butterflies, and of kits drawn with a pen's line (a moon, a rabbit,
+  a carrot, dango; a daisy, a cassette, a pedal, cherries; a pond's lily, lily pad, bud, reed, dragonfly, drop; a café's croissant,
+  cup, sugar cube, orange slice, coffee bean: `pen = true` draws the flat ones as they are), the rings turning both ways, blooming on the hits and
   popping in one by one (`grow`); any sprite source takes `eyes = true` (googly eyes whose pupils jiggle on the hits and when
   the sprite moves, `{size, wobble, look, seed}`) and `mouth = true` (a doodled smile; design.md: Googly eyes), and the
   registry's cut-out vegetables are `{tag = "veggie"}`, one colour family with `{tag = ["veggie", "veg_green"]}` (`veg_red`,
@@ -337,7 +369,18 @@ fingertip bone's `.tail` and the prop.
   on drifting paper (`slap` it down with a squash on frame 0, `peel` it off at the end), with `hollows` (the outline a peeled
   sticker leaves: her own rim frozen at a second, paper inside; with its own `peel` the blank sticker is still there, fades
   and is taken in the span, so the hollow means something when it shows) and pen-kit `doodles` that `jump` out from under the slap, `hop`
-  on the beats and peel off; `fling` throws such stickers from a `{point}` (a guitar's body) at the lens on the hits. The toy paint app
+  on the beats, are `slap`ped down one by one on their times and peel off; `fling` throws such stickers from a `{point}` (a guitar's
+  body) at the lens on the hits, or `away` from it into the point (stars falling with her into a cup), and a `thread` ties a
+  streaming thread to her live sticker (`at = {point = "bone('head').tail"}` keeps it on her crown as she moves in her plate).
+  With a `clip` the sheet is a table ([Tables](design.md#tables-a-sheet-over-a-clip-seen-through-a-view)):
+  a café table from above, the video regraded through a gradient map (`grade`: its colours at chosen `lumas`, the luma
+  `soften`ed first; the coffee through a `cup` map of its own), a `cup` of coffee with paper `pads`, drift `rings` and `drops`
+  from a `touch`, or holding the cut's own frame (`inside`: a shot straight down on a scene, its lens and shift keyed with the
+  view, one picture with the full frame), her sticker from a plate whose camera zooms with the table's own camera (`view`, keyed
+  close and wide, stepped jumps with `ease = "step"`; `track` keeps her where she lies), and a `punch` into the cup onto the shot
+  cut in under the table; a hand cutout rides it with `at = {table = [x, y]}` and leaves the frame as the view closes in. A `kaleido` or
+  `tunnel` after a table remaps all of it, without a mask: to keep her clean, lay her after it as a sheet of her own (`paper = false`,
+  her plate `shot`, moved by `keys`). The toy paint app
   ([Toy paint app](design.md#toy-paint-app)): `paintapp` lays a kids' paint program's chrome over the frames (its toolbar on the left,
   at the bottom of a 9:16 frame) and a cursor that picks its tools: `stamps` pop googly-eyed sprites on the hits, `bucket` floods a
   colour region round a point (pin it with `{point}` on the set when the camera moves), `undo` takes the last one back, and an `eraser`

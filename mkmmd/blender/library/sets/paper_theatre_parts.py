@@ -101,6 +101,8 @@ def plate_mesh(p, seed):
     spacing = float(np.clip(0.22 * size.min(), max(1.6 * step, 0.004), 0.12))
     if holes:                                             # a lattice finer than the holes' features keeps their edges
         spacing = float(np.clip(0.08 * min((h.max(0) - h.min(0)).min() for h in holes), 0.004, spacing))
+    if p.spacing is not None:                             # a big sheet with small holes: their rings keep them
+        spacing = float(p.spacing)
 
     def front(x, z):
         return p.y + PT.bow_y(p.bow, x)
@@ -219,9 +221,10 @@ def part_mesh(part, seed):
     """One object's mesh (mkmmd.core.paper_theatre.Part) in its own frame."""
     meshes = []
     bend = part.special.get("bend")
+    bend_all = part.special.get("bend_all", False)        # every plate without a frame of its own, not the first alone
     for k, p in enumerate(part.plates):
         m = plate_mesh(p, seed_of(seed, part.name, k))
-        if bend is not None and k == 0:
+        if bend is not None and (k == 0 or (bend_all and p.frame is None)):
             m = S.Mesh(PT.sky_bend(m.V, bend), m.Q, m.T, m.Qm, m.Tm)
             m = m if m.volume() > 0 else m.flip()
         meshes.append(m)
@@ -295,3 +298,111 @@ def proscenium_mesh(part, seed, height):
     flex = np.zeros_like(m.V)
     flex[:, 1] = -PT.proscenium_flex(m.V[:, 2], height)
     return m, flex
+
+
+# ---------------------------------------------------------------------------------------------- the pond's flipbooks
+CHALK_W = 0.02                                        # a constellation's line: bold enough to read on a phone
+
+
+def half_mesh(half, seed):
+    """A day half (mkmmd.core.paper_theatre_pond.Half) unrolled: its sheet and its pencil marks, x along the backdrop's
+    plan, y behind the card's face, z up (paper_theatre_pond.wind lays it on the backdrop, slid as far as it is)."""
+    meshes = [plate_mesh(p, seed_of(seed, half.name, k)) for k, p in enumerate(half.plates)]
+    pen = half.pencil
+    rng = np.random.default_rng(seed_of(seed, half.name, "pencil"))
+    paths = []
+    for a, b in pen["lines"]:
+        p = _line(a, b)
+        p[:, 1] += 0.004 * np.sin(np.linspace(0.0, rng.uniform(2, 4) * math.pi, len(p)))     # not quite ruled
+        paths.append((p, False))
+    for (cx, cz), r in pen["circles"]:
+        t = np.linspace(0.0, 2.0 * math.pi, int(2 * math.pi * r / 0.015), endpoint=False)
+        paths.append((np.stack([cx + r * np.cos(t), cz + r * np.sin(t)], 1), True))
+    for (cx, cz), r in pen["crosses"]:
+        paths += [(_line((cx - r, cz), (cx + r, cz), 0.01), False), (_line((cx, cz - r), (cx, cz + r), 0.01), False)]
+    for p, closed in paths:
+        meshes.append(_strip(np.stack([p[:, 0], np.full(len(p), pen["y"]), p[:, 1]], 1), (0.0, -1.0, 0.0),
+                             closed=closed))
+    return S.merge(meshes)
+
+
+def lily_mesh(lily, seed):
+    """A water lily (paper_theatre_pond.Lily) in its own frame, and how it opens: (its mesh shut, positions(o): every
+    vertex at the openness o, 0 shut .. 1 open, past 1 an overshoot). Each petal turns on its base as a hinge, outward
+    and down from upright, the inner ring less far; the heart stays."""
+    meshes = [plate_mesh(pt.plate, seed_of(seed, lily.name, k)) for k, pt in enumerate(lily.petals)]
+    heart = plate_mesh(lily.heart, seed_of(seed, lily.name, "heart"))
+    up = np.array([0.0, 0.0, 1.0])
+
+    def positions(o):
+        out = []
+        for pt, m in zip(lily.petals, meshes):
+            a = math.radians(pt.tilt[0] + float(o) * (pt.tilt[1] - pt.tilt[0]))
+            c, s = math.cos(pt.phi), math.sin(pt.phi)
+            t, r = np.array([-s, c, 0.0]), np.array([c, s, 0.0])
+            d, n = math.cos(a) * up + math.sin(a) * r, -math.sin(a) * up + math.cos(a) * r    # along it, its back
+            B = np.array([pt.r0 * c, pt.r0 * s, pt.zb])
+            out.append(B + np.outer(-m.V[:, 0], t) + np.outer(m.V[:, 1], n) + np.outer(m.V[:, 2], d))
+        out.append(heart.V)
+        return np.concatenate(out)
+    shut = S.merge(meshes + [heart])
+    return S.Mesh(positions(0.0), shut.Q, shut.T, shut.Qm, shut.Tm), positions
+
+
+def stroke_mesh(stroke, sky, y=-0.0022):
+    """A constellation's stroke (paper_theatre_pond.Stroke) on the night card, bent with it: (its mesh drawn whole,
+    positions(p): every vertex with the share p of its length drawn, star to star in order, the rest gathered at the
+    pencil's point)."""
+    segs = [(np.asarray(a, float), np.asarray(b, float)) for a, b in stroke.segments]
+    lens = [float(np.linalg.norm(b - a)) for a, b in segs]
+    starts = np.concatenate([[0.0], np.cumsum(lens)[:-1]])
+    fr = [np.linspace(0.0, 1.0, max(int(n / 0.02), 1) + 1) for n in lens]
+
+    def drawn(p):
+        meshes = []
+        for (a, b), n, c, f in zip(segs, lens, starts, fr):
+            d = min(max(float(p) * sum(lens) - c, 0.0), n)
+            pts = a + np.minimum(f * n, d)[:, None] * (b - a) / n
+            meshes.append(band(np.stack([pts[:, 0], np.full(len(pts), y), pts[:, 1]], 1), (0.0, -1.0, 0.0), CHALK_W,
+                               0.0004, "chalk"))
+        return S.merge(meshes)
+    whole = drawn(1.0)
+
+    def positions(p):
+        return PT.sky_bend(drawn(p).V, sky)
+    return S.Mesh(PT.sky_bend(whole.V, sky), whole.Q, whole.T, whole.Qm, whole.Tm), positions
+
+
+def ripple_mesh(rp, repeats):
+    """A ripple (paper_theatre_pond.Ripple): a flat ring of paper wedges on the water round the main pad, light, light
+    middle, dark, dark middle again and again round it (the other way round for `reverse`), so it seems to turn as it
+    stands still; (its mesh at the rim, positions(u): every vertex at the share u of its life, run out `reach` past the
+    rim, eased, its paper thinning to nothing)."""
+    roles = ["ripple1", "ripple2", "ripple3", "ripple4"]
+    if rp.reverse:
+        roles = roles[::-1]
+    n = 4 * repeats
+    a = np.linspace(0.0, 2.0 * math.pi, n + 1)
+    Q, Qm = [], []
+    for k in range(n):                                     # a thin box a wedge: 8 corners (in, out at a0, a1; under, top)
+        b = 8 * k
+        Q += [[b + 4, b + 5, b + 6, b + 7], [b + 3, b + 2, b + 1, b + 0], [b + 0, b + 1, b + 5, b + 4],
+              [b + 1, b + 2, b + 6, b + 5], [b + 2, b + 3, b + 7, b + 6], [b + 3, b + 0, b + 4, b + 7]]
+        Qm += [MAT[roles[k % 4]]] * 6
+
+    def positions(u):
+        u = float(u)
+        grow = rp.reach * (1.0 - (1.0 - u) ** 2)
+        w = rp.width * max(1.0 - u, 0.0) ** 0.8 + 1e-4
+        rx, ry = rp.rx + grow + 0.5 * w, rp.ry + grow + 0.5 * w
+        V = []
+        for k in range(n):
+            ring = []
+            for z in (0.0, 0.001):
+                for (aa, d) in ((a[k], -0.5), (a[k], 0.5), (a[k + 1], 0.5), (a[k + 1], -0.5)):
+                    ring.append((math.cos(aa) * (rx + d * w), math.sin(aa) * (ry + d * w), z))
+            V += ring
+        return np.array(V)
+    m = S.Mesh(positions(0.0), np.array(Q), np.zeros((0, 3), int), np.array(Qm), np.zeros(0, int))
+    m = m if m.volume() > 0 else m.flip()
+    return m, positions

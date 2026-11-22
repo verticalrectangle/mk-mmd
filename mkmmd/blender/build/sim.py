@@ -13,6 +13,9 @@
   use_masks = false, anchor_free = 0.25, substeps = 10, settle_s = 1.5, engine = "auto"
   gravity = [[t, scale], ...] the world's gravity over time (1 as it is, 0 none: the hair floats; linear between keys,
                               held outside them; the first frame settles under the first key's)
+  loop = false                a clip that loops: after the run, the frame before clip time 0 takes the state the last
+                              frame left (positions, velocities) and the clip is simulated again from it, so frame 0's
+                              hair goes on from the last frame's (pose the body before 0 as at the clip's end)
 A member whose [[cast]] says physics = "none" is left out; a table with no keys simulates nothing (the log says so); a table
 named after no cast member or holding a key this stage does not read is refused (mkmmd.core.tables).
 The whole frame range is simulated (the pre-roll lets the hair settle while the character eases into its pose).
@@ -173,6 +176,9 @@ def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
                    "anchor_free": float(spec.get("anchor_free", geom.ANCHOR_FREE)),
                    "window": [min(ctx.frame0, int(frames[-1]) - 2), int(frames[-1])],   # a still's frame and two before
                    "engine": spec.get("engine", "auto")}
+    loop = _loop_frame(ctx, m, spec)
+    if loop is not None:
+        solver_spec["loop"] = loop
     res, rep = ctx.solve("mkmmd.solvers.strands", arrays, solver_spec, tag=tag)
     for i, b in enumerate(chains.bones):
         q = res["quats"][:, i]
@@ -180,6 +186,19 @@ def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
             q = _over(q, _keyed_quats(arm, b, frames))
         K.key_bone_quats(arm, b, frames, q, interp="LINEAR")
     return chains.bones, res["pen"], rep
+
+
+def _loop_frame(ctx, m, spec):
+    """`loop`: the frame before clip time 0, where the second run starts from the clip's end; None without it."""
+    loop = spec.get("loop", False)
+    if not isinstance(loop, bool):
+        raise BuildError(f"sim.{m.name}.loop: true or false (true: the clip loops, frame 0 goes on from the last frame)")
+    if not loop:
+        return None
+    if ctx.frame0 - 1 < int(ctx.frames[0]):
+        raise BuildError(f"sim.{m.name}.loop: the clip needs a pre-roll (a frame before clip time 0 to start the "
+                         f"second run on): give [scene] start a frame before [project] frame0")
+    return int(ctx.frame0) - 1
 
 
 def families(ctx, name, m):
@@ -232,7 +251,7 @@ def run(ctx):
             pen_max = max(pen_max, float(pen[k0:, 0].max()))
             info["passes"].append({"level": lv, "chains": len(levels[lv]), "bones": len(bones),
                                    "engine": rep.get("engine"), "seconds": (rep.get("seconds") or {}).get("total"),
-                                   "report": rep.get("report")})
+                                   "report": rep.get("report"), **({"loop": rep["loop"]} if rep.get("loop") else {})})
             info["bones"] += len(bones)
         info["penetration_mm_max"] = round(pen_max * 1000, 2)
         out[name] = info

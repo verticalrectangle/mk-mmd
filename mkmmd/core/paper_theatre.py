@@ -36,7 +36,9 @@ from . import shotstyle as SS
 G = 9.81
 PLACE = ("name", "kind", "at", "yaw")
 DEFAULTS = {"arrive": None, "stagger": 0.08, "step": 0.0, "step_from": 0.0, "sun_rpm": 1.0, "swing": 3.0, "twist": 8.0,
-            "seed": 1, "colors": None, "width": 2.2, "height": 3.2, "depth": 2.35}
+            "seed": 1, "colors": None, "width": 2.2, "height": 3.2, "depth": 2.35,
+            "pond": None, "panorama": None, "rise": None, "night": None, "moon": None, "loose": None, "sun": None,
+            "day": None, "house": None}   # the pond and its machinery: mkmmd/core/paper_theatre_pond.py
 RANGES = {"stagger": (0.0, 1.0), "step": (0.0, 240.0), "sun_rpm": (-30.0, 30.0), "swing": (0.0, 12.0),
           "twist": (0.0, 40.0), "width": (1.8, 3.2), "height": (2.8, 3.8), "depth": (2.0, 4.0)}
 
@@ -73,7 +75,37 @@ ROLES = {
     "tape": ("overlay:gold:0.3", "masking tape"),
     "brad": ("gold", "the brass split pins"),
 }
-MATS = tuple(ROLES)                     # material index -> role
+# the pond's roles (paper_theatre_pond), used only by a theatre with any of its keys
+POND_ROLES = {
+    "water": ("pine", "the pond: the floor's paper"),
+    "wave1": ("foam:surface:0.2", "the front row of waves"),
+    "wave2": ("pine:foam:0.45", "the second row"),
+    "wave3": ("foam", "the first row behind the pads"),
+    "wave4": ("pine:foam:0.3", "the next"),
+    "wave5": ("foam:surface:0.35", "the back row"),
+    "pad": ("foam", "the lily pads"),
+    "pad_vein": ("pine", "the pads' cut veins"),
+    "lily": ("rose", "the water lilies' outer petals"),
+    "lily2": ("surface:rose:0.25", "their inner petals"),
+    "lily_heart": ("gold", "their hearts"),
+    "reed": ("pine", "the reeds in the front wings"),
+    "reed2": ("foam:pine:0.35", "the reeds in the back wings and on the water"),
+    "cattail": ("gold:text:0.5", "the cattails' heads"),
+    "tab": ("gold", "the pull tab"),
+    "knob": ("love", "the crank's knob"),
+    "croissant": ("gold:surface:0.12", "the croissant moon's light lobes"),
+    "croissant2": ("gold:love:0.3", "its baked lobes"),
+    "croissant_hi": ("surface:gold:0.35", "its sheen"),
+    "night": ("text", "the night backdrop's plum paper"),
+    "night2": ("iris", "the milky way torn across it"),
+    "starlight": ("gold:surface:0.55", "the card lit behind the pinholes"),
+    "chalk": ("surface:iris:0.12", "the constellations pencilled on the night"),
+    "ripple1": ("foam:surface:0.3", "the ripples' light wedges"),
+    "ripple2": ("foam", "their light middle wedges"),
+    "ripple3": ("pine:text:0.3", "their dark wedges"),
+    "ripple4": ("pine:foam:0.45", "their dark middle wedges"),
+}
+MATS = tuple(ROLES) + tuple(POND_ROLES)     # material index -> role
 
 # --- the frame (fixed parts of the layout; the opening's size, the depth and the seed are options)
 YP = -0.95                              # the proscenium's face
@@ -139,6 +171,7 @@ def options(spec):
     unknown = sorted(set(spec) - set(DEFAULTS) - set(PLACE))
     if unknown:
         raise TheatreError(f"paper_theatre {name!r}: unknown keys {unknown} (known: {sorted(DEFAULTS)})")
+    from . import paper_theatre_pond as PP
     o = {}
     for k, d in DEFAULTS.items():
         v = spec.get(k, d)
@@ -152,27 +185,51 @@ def options(spec):
             v = {} if v is None else v
             if not isinstance(v, dict):
                 raise TheatreError(f"paper_theatre: colors = {v!r}: a table of role = colour")
-            bad = sorted(set(v) - set(ROLES))
+            bad = sorted(set(v) - set(ROLES) - set(POND_ROLES))
             if bad:
-                raise TheatreError(f"paper_theatre: colors: unknown roles {bad} (roles: {', '.join(ROLES)})")
+                raise TheatreError(f"paper_theatre: colors: unknown roles {bad} (roles: {', '.join(MATS)})")
             o[k] = dict(v)
         elif k == "step_from":
             o[k] = _number(v, k)
+        elif k in PP.KEYS:
+            o[k] = PP.check(k, v)
         else:
             o[k] = _number(v, k, *RANGES[k])
     return o
 
 
+def roles(opts):
+    """The colour roles a theatre uses: ROLES, and POND_ROLES with any of the pond's keys."""
+    from . import paper_theatre_pond as PP
+    return dict(ROLES, **POND_ROLES) if PP.on(opts) else ROLES
+
+
 def colours(opts, palette):
-    """{role: (r, g, b)} display-space sRGB floats of every role: ROLES' defaults with `colors` over them."""
+    """{role: (r, g, b)} display-space sRGB floats of every role it uses: the defaults with `colors` over them, then the
+    ripples' four tones drawn together about their mean, `pond.ripples.contrast` of their spread kept."""
     out = {}
-    for role, (default, _what) in ROLES.items():
+    for role, (default, _what) in roles(opts).items():
         spec = opts["colors"].get(role, default)
         try:
             out[role] = tuple(float(c) for c in SS.resolve_colour(spec, palette))
         except SS.StyleError as e:
             raise TheatreError(f"paper_theatre: colors.{role} = {spec!r}: {e}") from None
+    rp = opts["pond"] and opts["pond"]["ripples"]
+    if rp:                                                 # mixed in display space, as "a:b:t" mixes are
+        tones = ("ripple1", "ripple2", "ripple3", "ripple4")
+        mid = np.mean([out[r] for r in tones], axis=0)
+        for r in tones:
+            out[r] = tuple(float(m + rp["contrast"] * (c - m)) for m, c in zip(mid, out[r]))
     return out
+
+
+def scene(opts):
+    """(Layout, Pond or None): `layout` for these options; with any of the pond's keys paper_theatre_pond's scene (the
+    layout as they change it, and the Pond)."""
+    from . import paper_theatre_pond as PP
+    if PP.on(opts):
+        return PP.scene(opts)
+    return layout(opts["width"], opts["height"], opts["depth"], opts["seed"]), None
 
 
 # ===================================================================================================================
@@ -493,8 +550,9 @@ def tape_outline(w, h, rng):
 # a paper plate: role (material), outline (n, 2) CCW (x, z) as drawn, holes, y of its front face (its back at y + thick),
 # bow (the face bulges toward -y by `amount` across x0..x1, 0 at the sides) or None, cut: scissor (snip, wobble, step)
 # or None (an uncut edge), frame: None or (R (3, 3), t (3,)) taking the plate's own (x, y, z) to the object's, edge: the
-# role of its rim and back when they are another material (paper glued on card) or None
-Plate = namedtuple("Plate", "role outline holes y thick bow cut frame edge", defaults=(None,))
+# role of its rim and back when they are another material (paper glued on card) or None, spacing: its fill's lattice
+# (None: from its size and its holes)
+Plate = namedtuple("Plate", "role outline holes y thick bow cut frame edge spacing", defaults=(None, None))
 Part = namedtuple("Part", "name plates tubes brads special at", defaults=((0.0, 0.0, 0.0),))   # one object (origin `at`)
 Hang = namedtuple("Hang", "name kind row anchor length size part period phase twist_period twist_phase swing order")
 Curtain = namedtuple("Curtain", "name side hinge outer inner_z inner_x tie_z pleats paper part")
@@ -1096,10 +1154,10 @@ def objects(name, lay):
     return out
 
 
-def card(name, opts, lay):
+def card(name, opts, lay, pond=None):
     """The set's card (docs/design.md: Sets): use.look `stage` (her spot, at mid height), `sun`, `moon`, `cloud<i>`,
     `star<i>` (where they hang at rest; `object` the piece), a floor collider, no lights, and `theatre`: the drop's and
-    each piece's times, lengths and periods."""
+    each piece's times, lengths and periods; with the `pond` (paper_theatre_pond) what it adds."""
     look = [{"name": "stage", "point": [0.0, 0.0, 0.85]},
             {"name": "sun", "point": [round(v, 4) for v in lay.sun]}]
     pieces = []
@@ -1115,8 +1173,17 @@ def card(name, opts, lay):
             "lands": None if arrive is None else round(arrive + DROP_FALL, 3),
             "settled": None if arrive is None else round(max(landing(arrive, lay.height) + ROCK[2],
                                                              max(release(opts, h) for h in lay.hangs) + 1.6), 3),
-            "step": opts["step"], "pieces": pieces, "roles": list(ROLES)}
-    return {"kind": "paper_theatre", "paths": {},
-            "use": {"look": look, "surface": []},
+            "step": opts["step"], "pieces": pieces, "roles": list(roles(opts))}
+    use = {"look": look, "surface": []}
+    objs = objects(name, lay)
+    if pond is not None:
+        from . import paper_theatre_pond as PP
+        more, rest, extra = PP.card_extra(name, opts, lay, pond)
+        look += more
+        if rest:
+            use["rest"] = rest
+        info.update(extra)
+        objs = PP.objects(name, lay, pond)
+    return {"kind": "paper_theatre", "paths": {}, "use": use,
             "colliders": [{"type": "floor", "z": 0.0, "tag": name}], "lights": [],
-            "objects": objects(name, lay), "materials": [f"{name}_{r}" for r in ROLES], "theatre": info}
+            "objects": objs, "materials": [f"{name}_{r}" for r in roles(opts)], "theatre": info}
