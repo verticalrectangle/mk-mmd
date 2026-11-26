@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 FILENAME = "mk.toml"
+LOOK = "look:"                                              # an include by name: a look of the library
+LOOKS = Path(__file__).resolve().parent / "looks"           # mkmmd/looks/<name>.toml
 
 
 class ProjectError(ValueError):
@@ -108,8 +110,8 @@ class Project:
             path = path / FILENAME
         if not path.exists():
             raise ProjectError(f"{path} not found")
-        with open(path, "rb") as fh:
-            data = tomllib.load(fh)
+        data = _read(path)
+        _clip_grades(data)
         root = path.parent
         p = data.get("project") or {}
         missing = [k for k in ("fps", "frame0", "duration") if k not in p]
@@ -132,3 +134,82 @@ class Project:
             if (d / FILENAME).exists():
                 return cls.load(d / FILENAME)
         return None
+
+
+def _read(path, seen=()):
+    """The tables of the project file `path` laid over those of the files its `[project] include` names, each read the
+    same way and a later one laid over an earlier one (`_over`)."""
+    if path in seen:
+        raise ProjectError(f"include loops: {' -> '.join(str(p) for p in (*seen, path))}")
+    try:
+        with open(path, "rb") as fh:
+            own = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as e:
+        raise ProjectError(f"{path}: {e}") from None
+    table = own.get("project")
+    names = table.get("include") if isinstance(table, dict) else None
+    if names is None:
+        return own
+    names = [names] if isinstance(names, str) else names
+    if not isinstance(names, list) or not all(isinstance(n, str) and n.strip() for n in names):
+        raise ProjectError(f"{path}: [project] include = {names!r}: expected a file or a look (\"{LOOK}<name>\"), or a "
+                           f"list of them")
+    data = {}
+    for name in names:
+        data = _over(data, _read(_included(name, path), (*seen, path)))
+    return _over(data, own)
+
+
+def _over(under, own):
+    """The tables `own` laid over the tables `under` (those of an included file): tables merge key by key; a list of
+    tables (`[[fx]]`, `[[vector.materials]]`) is joined, `own`'s entries first, so where the first entry that fits
+    counts (a material's rule) the nearer file's does; anything else of `own` replaces what was under it."""
+    out = dict(under)
+    for k, v in own.items():
+        was = out.get(k)
+        if isinstance(v, dict) and isinstance(was, dict):
+            out[k] = _over(was, v)
+        elif _tables(v) and _tables(was):
+            out[k] = v + was
+        else:
+            out[k] = v
+    return out
+
+
+def _tables(v):
+    return isinstance(v, list) and all(isinstance(x, dict) for x in v)
+
+
+def _included(name, by):
+    """The file an include of the project file `by` names: `look:<name>`, a look of the library, or a path (relative to
+    that file's folder; `~` works)."""
+    if name.startswith(LOOK):
+        p = LOOKS / f"{name[len(LOOK):]}.toml"
+        if not p.is_file():
+            raise ProjectError(f"{by}: include {name!r}: no such look (have {sorted(q.stem for q in LOOKS.glob('*.toml'))})")
+        return p
+    p = Path(name).expanduser()
+    p = (p if p.is_absolute() else by.parent / p).resolve()
+    if not p.is_file():
+        raise ProjectError(f"{by}: include {name!r}: {p} not found")
+    return p
+
+
+def _clip_grades(data):
+    """A cut-out (`[[fx]] kind = "cutout"`) that names its clip by a registry slug and gives no `grade` takes the grade
+    stored with that clip (its entry's `extra.grade`), in place: a hand's skin is corrected once, where the clip is
+    registered, and every project shows the same skin. An entry's own `grade` stands as written (`false`: as shot)."""
+    fxs = data.get("fx")
+    todo = [fx for fx in (fxs if isinstance(fxs, list) else [])
+            if isinstance(fx, dict) and fx.get("kind") == "cutout" and "grade" not in fx and isinstance(fx.get("clip"), str)]
+    if not todo:
+        return
+    from . import footage as FT                               # only a project with such a cut-out reads the registry
+    from .assets import Registry
+    todo = [fx for fx in todo if not FT.is_file(fx["clip"])]
+    if not todo:
+        return
+    stored = {e["slug"]: (e.get("extra") or {}).get("grade") for e in Registry().entries}
+    for fx in todo:
+        if stored.get(fx["clip"]) is not None:
+            fx["grade"] = dict(stored[fx["clip"]])

@@ -23,8 +23,10 @@ something that moves), turned `turn` degrees and moved by `keys` about that poin
 rocks, it reaches) takes its fingertip with it: `anchor` is then that point's track over the video's seconds
 (`anchor_at`), and the fingertip stays on `at` while the arm moves. It plays stepped: `fps` poses a second,
 each held (`clock`), and `sync` = [video second, clip second] puts a moment of the video (a contact, a snip) on a beat,
-a step starting exactly there. A light `grade` sits its colours in the palette: lifted toward a paper colour, warmed,
-a little less saturated.
+a step starting exactly there. It is a sticker like a sheet's: it wears the sheet's white `edge` and casts the sheet's
+`shadow` unless its own keys say otherwise (`false`: none). A light `grade` sits its colours in the palette: lifted
+toward a paper colour, warmed, a little less saturated; a clip named by a registry slug brings the grade stored with it
+(mkmmd.project), so one clip shows one skin in every project.
 
 Outlines are polygons in the box's own pixels about its middle, x right and y down, touching its four sides."""
 import math
@@ -138,9 +140,20 @@ def _cutout(spec, out, palette, what):
     out["size"] = FX._num(out["size"], f"{what} size", 0.01, 10.0)
     out["turn"] = FX._num(out["turn"], f"{what} turn")
     out["keys"] = FX._moves(out["keys"], what)
-    out["edge"] = MD._edge(FX, out["edge"], palette, what)
-    out["shadow"] = FX._shadow(out["shadow"], palette, what)
+    out["edge"] = MD._edge(FX, _sheets(out["edge"], {k: FX.ST.EDGE[k] for k in ("color", "width")}), palette, what)
+    out["shadow"] = FX._shadow(_sheets(out["shadow"], FX.ST.SHADOW), palette, what)
     out["grade"] = _grade(out["grade"], palette, what)
+
+
+def _sheets(v, own):
+    """A cutout's `edge` or `shadow`: a cut-out is a sticker, so the sticker sheet's `own` (mkmmd.core.sheet EDGE,
+    SHADOW) with the entry's keys over it, all of it when the entry gives none; false: none. Anything else is left for
+    the key's own check to refuse."""
+    if v is False:
+        return None
+    if v is None:
+        return dict(own)
+    return {**own, **v} if isinstance(v, dict) else v
 
 
 def _anchor(v, what):
@@ -241,10 +254,10 @@ def ride(fxs, transitions, fps):
 
 
 def _grade(v, palette, what):
-    """A cutout's `grade`: None (as shot) or {gain, lift, warm, saturation, toward} with GRADE's defaults (`{}` all of
-    them)."""
+    """A cutout's `grade`: None or false (as shot) or {gain, lift, warm, saturation, toward} with GRADE's defaults (`{}`
+    all of them)."""
     FX = _fx()
-    if v is None:
+    if v is None or v is False:
         return None
     if not isinstance(v, dict) or set(v) - set(GRADE):
         raise FX.FxError(f"{what}: grade = {v!r}: expected {{gain, lift, warm, saturation, toward}} ({{}}: the defaults)")

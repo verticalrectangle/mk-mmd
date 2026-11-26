@@ -2,7 +2,9 @@
 
 - Read [docs/design.md](docs/design.md) first: layers, the Blender bridge, conventions, the data contracts and every `mk.toml` key.
   [docs/AGENTS.md](docs/AGENTS.md) is the playbook for making a video, [docs/modelling.md](docs/modelling.md) the rules for modelling props,
-  [docs/model_base.md](docs/model_base.md) how to make a character from a model base (`mk model new`).
+  [docs/model_base.md](docs/model_base.md) how to make a character from a model base (`mk model new`),
+  [docs/look_paper_dawn.md](docs/look_paper_dawn.md) the rules of the paper-dawn look (a video in it starts there; its
+  settings are `mkmmd/looks/paper-dawn.toml`, a character's own colours are not the library's).
 - `mkmmd/core` and `mkmmd/blender` run inside Blender 4.2 (Python 3.11, numpy 1.24): no 3.12-only syntax, no
   numpy-2-only API, no scipy there. scipy and numba belong in `mkmmd/solvers`.
 - No model, prop or project names in library code; use semantic bone names and prop cards. Characters live as spec files in

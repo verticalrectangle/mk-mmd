@@ -9,8 +9,8 @@ back to MikuMikuDance.
 This document is the reference: the contract between the parts, every `mk.toml` section and key, the build stages, the checks,
 the shot looks and effects, text, post, the timeline, the cache and the character builder. Change it together with the code.
 [../README.md](../README.md) is the short tour and the command table, [AGENTS.md](AGENTS.md) the playbook for making a video,
-[modelling.md](modelling.md) how props are modelled as forms. Times in this document are clip seconds, lengths metres, angles
-degrees (see [Conventions](#conventions)).
+[modelling.md](modelling.md) how props are modelled as forms, [look_paper_dawn.md](look_paper_dawn.md) the style guide of the
+paper-dawn look. Times in this document are clip seconds, lengths metres, angles degrees (see [Conventions](#conventions)).
 
 ## Contents
 
@@ -194,7 +194,7 @@ Paths are relative to the project folder (`~` works). Every section is optional 
 
 | Section | Read by | Keys |
 |---|---|---|
-| `[project]` | everything | `name` (default: the folder's name), `fps`, `frame0`, `duration`, `blend` (where `mk build` saves the scene) |
+| `[project]` | everything | `name` (default: the folder's name), `fps`, `frame0`, `duration`, `blend` (where `mk build` saves the scene), `include` (files and looks whose tables lie under this file's: [Includes and looks](#includes-and-looks)) |
 | `[[output]]` | build, look, render, post, framing | `name` (`"16x9"`), `size = [width, height]`; one per delivered aspect: every shot gets a camera per output, the first sets the scene's default render size |
 | `[audio]` | post, timeline, the site | `file`, `start` (song seconds at clip time 0), `hits` (a JSON file of named lists of hit times, clip seconds, each a number or `{t, db}`, a gap lane's with its `dur`, a note lane's with its `midi`: `mk timeline hits` writes one; the site's timeline shows them as lanes), `lanes` (which of those lists, in order; default all but `beats` and `downbeats`), `fade_in` and `fade_out` (seconds the clip's sound fades in over at its start, 0, and out over at its end, 0.06: a fade-in is for a clip cut where a voice is still dying away), `master` (mastering for small speakers: see [Post](#post)) |
 | `[scene]` | scene stage | `start`, `end` (frame range; default: 3 s of pre-roll before `frame0` to the last frame of the clip), `settle_frames` (24: the frames the rest pose takes to ease into the base pose) |
@@ -269,6 +269,34 @@ Project-specific reference data that only the project can compute (where a nib s
 to `tracks/<name>.json`: `{"frames": [...], "<channel>": [one value per frame (number, vector or null)], ...}`.
 Checks refer to channels as `track:<name>.<channel>`. Dense geometry that a one-position-per-frame track cannot hold, such
 as the strokes of handwriting, has a shape of its own (`tracks/ink.json`, see [Ink](#ink)).
+
+### Includes and looks
+
+`[project] include` names files whose tables lie under the project's own: one string or a list, each a path (relative to
+the folder of the file that names it; `~` works) or `look:<name>`, a look of the library. The files are read in the order
+given and the project's own file last, each laid over what came before it (`mkmmd/project.py`):
+
+- tables merge key by key: `[post] grain = { size = 1.5 }` keeps an included `amount`;
+- a list of tables (`[[vector.materials]]`, `[[post.span]]`, `[[fx]]`) is joined, the nearer file's entries first: the
+  project's own, then the last include's, then the ones before it. Where the first entry that fits counts (a material's
+  rule) the project's is read first;
+- anything else (a number, a string, a list of numbers) is replaced.
+
+An included file may include others; a loop is an error, as is a file or a look that is not there. Every command reads
+the merged tables; `mk brief` rewrites lines of the project's own file.
+
+```toml
+[project]
+name = "night_drive"
+include = ["look:paper-dawn", "~/mk-assets/looks/my_model.paper-dawn.toml"]   # the look, then the character's colours in it
+```
+
+A look is `mkmmd/looks/<name>.toml`: the project-level settings of a house style, written once (its palette, the vector
+look's page, ink, light and shared tones, the grade). A look sets tables only. What belongs to one character (its own
+tones and the `[[vector.materials]]` rules that give them to its materials) goes in a file of its own, kept with the
+model's data and included after the look; what belongs to one video stays in its `mk.toml`. `paper-dawn` is the look
+there is: cut paper and die-cut stickers on a Rosé Pine Dawn page. [look_paper_dawn.md](look_paper_dawn.md) is its guide:
+the rules, their reasons, and which of them the look file sets and which are the library's defaults.
 
 ## Model description (rig.json)
 
@@ -435,7 +463,8 @@ root properties whose keyframes the keys stage deals out in turn: see there.
 mk never guesses a license. New entries are `unreviewed` and keep the paths of the readme files found next to the
 asset (`mk assets show SLUG --terms` prints the lines that talk about terms of use); someone who has read them fills in
 `license`, `restrictions` and `credit` with `mk assets set` (`source_url` is the field `--url` fills; `extra='{...}'` merges a
-JSON object over the entry's `extra`, a `null` removing its key: a sprite's googly-eye anchors, see Googly eyes). `mk assets credits`
+JSON object over the entry's `extra`, a `null` removing its key: a sprite's googly-eye anchors, see Googly eyes; a cut-out
+clip's `grade`, which a [cutout](#cutouts-real-hands) that gives none takes). `mk assets credits`
 builds the credits from the project's cast, the videos its footage frame effects and split and iris inserts show, the sprites
 its frame effects and inserts show (every `sprites` of an `[[fx]]` or `[[insert]]` entry, at any depth: a mandala ring's, a
 stack's band, a paint app's stamps), the photographs its `prints` show (every `photos` and `base` photo, aspect tables too) and
@@ -4958,8 +4987,8 @@ height at a natural size.
 | `anchor`, `at` | `anchor` `[x, y]` fractions of the clip's frame (or crop) as the file has it (the middle) stands at `at`: `[x, y]` frame fractions (the middle), `{point = "<expression>"}`, a scene point seen through the camera of the shot in the cut on each frame, so a hand rides what it holds, or a grab point on each frame: a transition's, `{peel = <the peel's at second>}`, the lifted corner of that `peel` (`mkmmd.core.peel.corner`), or `{tear = <the tear's at second>, grip = 0 or 1}`, one of the two grips on the halves of that `tear` (`mkmmd.core.tear.grips`), a transition of that kind at that second (half a frame either way) being in the table; or `{sticker = <second>}`, the grip of the sticker a [sheet](#sticker-sheets-paper-live-stickers-hollows-doodles) peels off from that second (its figure's `peel` or a hollow's): the hand's pinch lies on the sticker where it first lifts and is carried off with it, in every output; or `{table = [x, y]}`, a point of a [table](#tables-a-sheet-over-a-clip-seen-through-a-view) (fractions of its clip's frame; the last table whose span holds the hand's): its view carries the hand there and zooms and turns it with the table, its `size` and its keys' moves then in table heights, so a hand holding her threads at the top of the wide table leaves the frame as the view closes in on her; or `{rewind = <the rewind's from second>}`, the playhead of that [rewind](#rewinds-a-finger-scrubbing-the-video-back) (`mkmmd.core.rewind.grip`), which must come before the cutout in the table: a fingertip on it drags the picture back. A hand that moves in its own frame (it rocks, it reaches) carries its fingertip away from a fixed `anchor`, and slides off what it holds: give `anchor` that point's track then, `[[video second, x, y], ...]` (two rows or more, their seconds rising; straight between rows, the end rows' beyond them), read at each held pose's video second, so the fingertip stays on `at` and the arm moves. Each output its own through `[fx.aspect.<output>]` |
 | `extend` | where the matte meets the clip frame's border, that border's line repeated out past the picture's edge (true); false: the cut-out ends at the clip's frame, rimmed there too |
 | `size`, `turn`, `keys` | the clip's frame height in frame heights (1.0, 0.01..10), a turn in degrees counter-clockwise about the anchor (0: the hand entering the way the file has it), and moves `[{t, turn, dx, dy, scale, ease}]` as a collage's, about the anchor, at the held pose's second |
-| `edge`, `shadow` | a die cut `{color, width}` grown round the matte (12-18 px at 1080 white for paper) and a drop shadow, as a clip sticker's |
-| `grade` | `{gain, lift, warm, saturation, toward}` (`{}`: 1, 0.08, 1, 0.9, `base`): times `gain` (brightness), saturation scaled, warmed (red up, blue down: `warm` 1 is a light warm-up, 0 none, below 0 cooler) and lifted `lift` of the way toward the colour `toward` (a paper), so skin sits in a pale palette without turning grey; near-white paper the hand holds (luma 0.78 up, chroma under 0.1: a card) stays as shot. Different people's hands are brought to one skin with a preset per clip (a catalogue's `grade` column); default none, as shot |
+| `edge`, `shadow` | a cut-out is a sticker: by default it wears a [sticker sheet](#sticker-sheets-paper-live-stickers-hollows-doodles)'s die-cut rim grown round the matte (`{color, width}`: white, 16 px at 1080) and casts its drop shadow (`{color, offset, blur, alpha}`: `text`, `[0.004, 0.007]` frame heights, 6 px, 0.3). An entry's keys are laid over them (`edge = { width = 12 }` is still white); `false`: none |
+| `grade` | `{gain, lift, warm, saturation, toward}` (`{}`: 1, 0.08, 1, 0.9, `base`): times `gain` (brightness), saturation scaled, warmed (red up, blue down: `warm` 1 is a light warm-up, 0 none, below 0 cooler) and lifted `lift` of the way toward the colour `toward` (a paper), so skin sits in a pale palette without turning grey; near-white paper the hand holds (luma 0.78 up, chroma under 0.1: a card) stays as shot. Different people's hands are brought to one skin with a grade per clip, stored once with the clip: a `clip` named by its registry slug brings its entry's `extra.grade` (`mk assets set SLUG extra='{"grade": {...}}'`) to every cut-out that gives no `grade` of its own, when the project file is read. An entry's `grade` stands as written, keys it leaves out taking the defaults above, not the clip's; `false`: as shot, which is also what a clip with no stored grade gets |
 | `strength` | the whole sticker's mix over the picture |
 
 ```toml
@@ -4973,9 +5002,7 @@ rate = 2.0
 anchor = [0.45, 0.5]          # the middle of the palm
 at = [0.5, 0.55]
 size = 0.9
-edge = { color = "#ffffff", width = 16 }
-shadow = { color = "text", offset = [0.004, 0.007], blur = 6, alpha = 0.3 }
-grade = {}
+grade = {}                    # the rim and the shadow are a sticker sheet's, unasked
 
 [fx.aspect.9x16]              # the tall frame: the hand from the top, larger
 size = 1.1

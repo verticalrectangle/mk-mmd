@@ -1,0 +1,29 @@
+# The paper-dawn look (docs/look_paper_dawn.md): cut paper and die-cut stickers on a Rosé Pine Dawn page.
+# A project takes it with `[project] include = ["look:paper-dawn"]`; its own keys are laid over these.
+# What a sticker's rim and shadow are, the paper's cut and the footage ramps are the library's own defaults
+# (mkmmd/core/sheet.py, cutout.py, table.py): the guide names them. A character's own colours and the rules that
+# give them to its materials belong with the character, in a file of its own that the project includes after this one.
+
+[look]
+palette = "rose-pine-dawn"
+
+[vector]
+colors = { background = "surface", line = "text" }    # the page is the lightest paper, the ink the darkest colour
+light = [0.35, -0.55, 0.76]                            # one light: above, in front, from the figure's left
+
+[vector.tones]                                         # what any figure and any paper set share
+skin = { lit = "#fbe9e0", shade = "#f1cfc6" }          # skin: two papers, lit and in shade
+whites = "surface"                                     # the whites of the eyes, teeth, highlights
+ink = "text"                                           # lashes and drawn lines
+mouth = { lit = "love", shade = "love:text:0.3" }
+tongue = "rose"
+dark = "text"                                          # the darkest things are ink: nothing is black
+thread = "text"                                        # a puppet's threads
+set = { texture = true }                               # set pieces: each in the paper colour its maker gave it
+
+[post]                                                 # a flat grade: the page as it was laid, footage as it was graded
+saturation = 1.0
+contrast = 1.0
+vignette = 0.0
+floor = false
+grain = { amount = 0.0 }

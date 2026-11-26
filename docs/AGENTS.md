@@ -2,7 +2,9 @@
 
 For agents (and people) driving `mk`. Every command prints JSON; exit codes are 0 ok, 1 a check, gate or verification failed, 2 usage,
 3 Blender or runtime error. [design.md](design.md) is the reference for the contracts and every `mk.toml` key behind what follows;
-[modelling.md](modelling.md) is how props are modelled. Times in `mk.toml` are clip seconds, frames are Blender frame numbers.
+[modelling.md](modelling.md) is how props are modelled. A video in a house look starts from the look's guide
+([look_paper_dawn.md](look_paper_dawn.md): its rules and the checklist for every worker's brief) and takes the look's settings
+with `[project] include`. Times in `mk.toml` are clip seconds, frames are Blender frame numbers.
 
 ## Rules that never bend
 

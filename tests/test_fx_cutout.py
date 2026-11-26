@@ -197,6 +197,16 @@ def test_it_rides_a_peel_s_corner_and_a_tear_s_grips(tmp_path, monkeypatch):
     assert which(out[42:48, 36:44]) == 12 and out[45, 80].tolist() == pytest.approx(list(GREY))
 
 
+def test_it_is_a_sticker_with_the_sheet_s_rim_and_shadow_unless_it_says_otherwise():
+    ST, fx = FX.ST, FX.normalize(entry(), DAWN)
+    white = FX._colour(ST.EDGE["color"], DAWN, "")
+    assert fx["edge"] == {"color": white, "width": ST.EDGE["width"]}
+    assert fx["shadow"] == {**ST.SHADOW, "color": FX._colour(ST.SHADOW["color"], DAWN, "")}
+    assert FX.normalize(entry(edge={"width": 12}), DAWN)["edge"] == {"color": white, "width": 12.0}   # over the sheet's
+    bare = FX.normalize(entry(edge=False, shadow=False, grade=False), DAWN)
+    assert (bare["edge"], bare["shadow"], bare["grade"]) == (None, None, None)
+
+
 def test_its_grade_brings_skin_up_and_leaves_near_white_paper_as_shot():
     from mkmmd import videosticker as VSF
     g = FX.normalize(entry(grade={"gain": 1.2, "lift": 0.0, "warm": 0.0, "saturation": 1.0}), DAWN)["grade"]
