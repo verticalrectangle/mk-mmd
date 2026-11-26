@@ -246,6 +246,7 @@ Every command prints JSON; exit codes are 0 ok, 1 a check, gate or verification 
 - [docs/modelling.md](docs/modelling.md): how library props and sets are modelled (references first, forms from profiles, no blocky shapes)
 - [docs/model_base.md](docs/model_base.md): making your own character from a model base (`mk model new`), and what the base's parts taught
 - [docs/head_part.md](docs/head_part.md), [docs/hair_part.md](docs/hair_part.md): the head and hair parts of `mk model`
+- [docs/look_paper_dawn.md](docs/look_paper_dawn.md): the style guide of the paper-dawn look (cut paper and die-cut stickers on a Rosé Pine Dawn page): its rules, and the settings a project takes with one `include`
 
 ## What is not in this repository
 
