@@ -49,7 +49,7 @@ KNOT_KEYS = ("t", "swing", "loop")
 WORLD_KEYS = ("lie", "float", "kicks", "arms", "reach", "swim", "release", "land", "yank", "knot")
 # the keys of a marionette set free (mkmmd.core.marionette_free): seated on her threads, the bundle gathered in her fist
 # and snipped with her own scissors, the weightless rise, hauled down by her tails, the fall back into her seat
-SEAT_KEYS = ("at", "knees")
+SEAT_KEYS = ("at", "knees", "close", "part")
 GATHER_KEYS = ("t", "dur", "side", "at")
 SCISSORS_KEYS = ("prop", "t", "dur", "side")
 SNIP_KEYS = ("t", "let", "away", "drop")
@@ -539,7 +539,9 @@ def _free(spec, P, W):
     if seat is None:
         raise MarionetteError("marionette: a marionette set free has her place on a seat: give `seat = \"<prop>:<seat>\"`")
     seat = {"at": seat} if isinstance(seat, str) else _table(seat, "seat", SEAT_KEYS, ("at",))
-    W["seat"] = {"at": str(seat["at"]), "knees": _num(seat.get("knees", 0.0), "seat.knees", -40.0, 40.0)}
+    W["seat"] = {"at": str(seat["at"]), "knees": _num(seat.get("knees", 0.0), "seat.knees", -40.0, 40.0),
+                 "close": _num(seat.get("close", 0.0), "seat.close", 0.0, 0.08),
+                 "part": _num(seat.get("part", 1.0), "seat.part", 0.0, 10.0)}
     if spec.get("snip") is not None:
         s = _table(spec["snip"], "snip", SNIP_KEYS, ("t",))
         away = s.get("away", (0.0, 0.25, 9.0))

@@ -2,8 +2,9 @@
 pre-roll replays the end and the blades shut ON frame 0, the scissors hand's thread joins her fist only once that hand
 is up beside her head, the weightless rise reaches its height on its time still speeding up while the dropped control
 falls past her (behind her, never through her), the haul's tugs drop her as they land and the fall lands her in her seat
-ON the knot, a tail streams opposite to her motion at its own length and is settled on the first frame it is seen, and
-the tables the build cannot play are refused."""
+ON the knot, the seat's `close` draws her knees together from the let-go until they part after the knot (nothing else
+moving), a tail streams opposite to her motion at its own length and is settled on the first frame it is seen, and the
+tables the build cannot play are refused."""
 import math
 
 import numpy as np
@@ -87,6 +88,30 @@ def test_the_tugs_drop_her_as_they_land_and_the_fall_lands_her_in_her_seat_on_th
     assert W["hips"][k, 2] == pytest.approx(W["free"]["H_seat"][2], abs=0.004)
     assert W["hips"][k - 1, 2] > W["hips"][k, 2] + 0.05                           # coming down onto it, fast
     assert 5.0 < W["report"]["landings_mps"]["30.150"] < 10.0
+
+
+def test_the_seats_close_draws_her_knees_together_from_the_let_go_until_they_part_after_the_knot(free):
+    P0, W0 = free
+    P = MR.normalize(dict(SPEC, seat={"at": "chair:seat", "knees": 14, "close": 0.03, "part": 0.3}), [])
+    W = MW.world_plan(TS, P, MR.cross_plan(TS, P, MR.STIRRER["leg"] / 2.0), RIG,
+                      {"seat": SEAT, "scissors": {"grip": np.array([-0.4, -0.1, 0.63])}})
+    assert np.array_equal(W["hips"], W0["hips"])                                   # only her ankles' goals move, ...
+    for s in "LR":
+        assert np.array_equal(W["feet"][s][:, 1:], W0["feet"][s][:, 1:])
+    dL, dR = (W["feet"][s][:, 0] - W0["feet"][s][:, 0] for s in "LR")          # ... sideways, each toward the other
+    held = (TS >= 29.45 + 0.15) & (TS <= 30.15 + 0.3)
+    assert (dL[held] < -0.0299).all() and (dR[held] > 0.0299).all()
+    assert dL[_i(30.3)] == pytest.approx(-0.03) and dR[_i(30.3)] == pytest.approx(0.03)   # seated: the knee over it
+    assert dL[_i(29.6)] < -0.045 and dR[_i(29.6)] > 0.045                       # hanging: it turns about her hip
+    apart = ((TS > 30.15 + 0.3 + 0.4) & (TS < LOOP)) | ((TS > 30.15 + 0.7 - LOOP) & (TS < 29.45))
+    assert not dL[apart].any() and not dR[apart].any()                           # parted after the knot, as before
+    P = MR.normalize(dict(SPEC, seat={"at": "chair:seat", "knees": 14, "close": 0.03, "part": 0}), [])
+    W = MW.world_plan(TS, P, MR.cross_plan(TS, P, MR.STIRRER["leg"] / 2.0), RIG,
+                      {"seat": SEAT, "scissors": {"grip": np.array([-0.4, -0.1, 0.63])}})
+    dL = W["feet"]["L"][:, 0] - W0["feet"]["L"][:, 0]
+    assert dL[_i(30.15) - 1] < -0.0299 and not dL[_i(30.15):_i(LOOP)].any()      # `part` 0: apart on the knot's own frame
+    with pytest.raises(MR.MarionetteError, match="seat.close"):
+        MR.normalize(dict(SPEC, seat={"at": "chair:seat", "close": 0.2}), [])
 
 
 def test_a_tail_streams_opposite_to_her_motion_at_its_length_and_is_settled_on_its_first_frame():

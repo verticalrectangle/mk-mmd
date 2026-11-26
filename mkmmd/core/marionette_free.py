@@ -33,6 +33,7 @@ GRAVITY = MR.GRAVITY
 HANDS = (0.22, 0.55)        # her hands after their keys: a little late, a little past (nothing arrives at once)
 FEET = (0.42, 0.30)         # her legs trailing when nothing holds them
 FLING = (0.2, 0.4)          # her legs flung up at a jolt: quick, and quickly back
+CLOSE = (0.15, 0.4)         # s: her knees come together after a let-go (the seat's `close`), and part again
 HAUL_SPRING = (0.55, 0.28)  # her hips after the hand's pulls: late, a swing past and back
 SWAY = (1.6, 0.18)          # her sideways swing under a hauling hand (a long pendulum)
 SWING_IN = (0.09, 0.36)     # the control swinging in at a knot: its swing dies in this many s, with this period
@@ -343,9 +344,10 @@ def free_plan(ts, P, cross, rig, aims):
     for key in ("rise", "side", "behind", "dip", "cut_dip", "guitar"):
         body[key] = np.zeros(n)
     # ---- her legs: sitting, hanging free with soft knees, flung up for a moment at the jolt, reaching for the seat as
-    #      she falls into it
+    #      she falls into it; the seat's `close` draws her knees together from a let-go until they part after the knot
     sit_a = seated_ankles(rig, seat, H_seat, W["seat"]["knees"])
     seated_w = _seated_weight(ts, ph, since, M)
+    closed = W["seat"]["close"] * _closed_weight(ts, M, W["seat"]["part"])
     feet, point = {}, {}
     for s in MR.SIDES:
         J = np.asarray(rig["hips"][s], float)
@@ -358,6 +360,11 @@ def free_plan(ts, P, cross, rig, aims):
             fling = fling + np.outer(MR.pulse(ts, th, 0.04, 0.02, 0.16), [0.0, -0.08, 0.10])
         free_leg = MR.follow(ts, tgt, FEET, lag) + MR.follow(ts, fling, FLING, lag)
         feet[s] = np.tile(sit_a[s] - ank, (n, 1)) * seated_w[:, None] + free_leg * (1.0 - seated_w)[:, None]
+        if closed.any():
+            # each knee toward the other (x is her left): a seated knee goes as the ankle under it, a hanging leg
+            # turns about its hip, so its ankle goes the farther
+            reach = share * L / float(rig["legs"][s]["thigh"])
+            feet[s][:, 0] -= (1.0 if s == "L" else -1.0) * closed * (seated_w + (1.0 - seated_w) * reach)
         point[s] = 0.25 * seated_w + 0.65 * (1.0 - seated_w)
     body["feet"], body["point"] = feet, point
     body["knee"] = {s: np.zeros(n) for s in MR.SIDES}
@@ -415,6 +422,21 @@ def _seated_weight(ts, ph, since, M):
     for k in M["knot"]:
         near = (ts >= k - 0.35) & (ts < k) & (ph == FALL)
         w = np.where(near, PF.smooth((ts - (k - 0.35)) / 0.33), w)
+    return w
+
+
+def _closed_weight(ts, M, part):
+    """(n,) how far her knees are drawn together (the seat's `close`): from each let-go of a haul (in over CLOSE[0] s) as
+    she falls into her seat and lands ON the knot, until `part` s after the knot (out over CLOSE[1] s, or over `part`
+    when that is shorter: 0 parts them on the knot's own frame, a landing on a cut)."""
+    w = np.zeros(len(ts))
+    out = min(CLOSE[1], part)
+    for to in M["to"]:
+        knots = [k for k in M["knot"] if k > to]
+        if knots:
+            end = knots[0] + part
+            gone = PF.smooth((ts - end) / out) if out > 0.0 else (ts > end - 1e-6).astype(float)
+            w = np.maximum(w, PF.smooth((ts - to) / CLOSE[0]) * (1.0 - gone))
     return w
 
 

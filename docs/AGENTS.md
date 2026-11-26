@@ -244,8 +244,10 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   from the table to the bundle and `snip` shuts the blades ON its time (the control dropped past her, the pieces on her
   her tails), `ascend` floats her up out of the chair, `haul` has a hand catch her tails and haul her down in tugs ON
   their times and lets her fall into the chair ON the `knot`, `crossed` crosses her arms; `loop` replays the end in
-  the pre-roll. `tails` alone (no `from`) gives a member who is never on the control six free threads streaming in
-  her sim's wind (a flight's, a seat's take). Step through the gather, the snip and the landing at full size.
+  the pre-roll. A camera under the fall looks up her skirt unless `seat.close` (0.03) draws her knees together from the
+  let-go, parting `seat.part` s after the knot (once her legs are out of the picture). `tails` alone (no `from`) gives a
+  member who is never on the control six free threads streaming in her sim's wind (a flight's, a seat's take). Step
+  through the gather, the snip and the landing at full size.
 - **Flights** ([Flights](design.md#flights)): `[[flight]]` flies a prop relative to a target, a bone of hers or a point,
   as a hand flies a rod puppet: `in`, `dart` and `glide` land ON their time (put darts on the words and the notes),
   `circle` goes round her head, `perch` lands on it, and between moves it hovers with small darts. `library:dragonfly`
