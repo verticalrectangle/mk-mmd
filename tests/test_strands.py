@@ -85,7 +85,8 @@ def test_every_family_has_defaults_and_overrides_merge():
 @pytest.mark.parametrize("params", [{"back_hair": {"dragg": 1.0}}, {"backhair": {"drag": 1.0}},
                                     {"back_hair": {"zeta": -1.0}}, {"back_hair": {"radius": 0.0}},
                                     {"back_hair": {"inertia": 1.5}}, {"back_hair": {"bend_max": 0.0}},
-                                    {"back_hair": {"bend_max": 180.0}}])
+                                    {"back_hair": {"bend_max": 180.0}}, {"back_hair": {"shear": 1.5}},
+                                    {"back_hair": {"shear": -0.1}}])
 def test_misspelt_or_impossible_parameters_fail_loudly(params):
     with pytest.raises(ValueError):
         strands.resolve_params(["back_hair"], params)
@@ -786,7 +787,8 @@ def test_a_pair_whose_cloth_overlaps_a_body_at_rest_does_not_collide_with_it():
 
 
 @needs_numba
-def test_numba_engine_reproduces_the_numpy_engine_with_lateral_links(monkeypatch):
+@pytest.mark.parametrize("shear", [0.0, 0.6])
+def test_numba_engine_reproduces_the_numpy_engine_with_lateral_links(monkeypatch, shear):
     shapes = geom.Shapes()
     M = np.eye(4)
     M[:3, 3] = [0.1, 0.1, TOP - 0.2]
@@ -799,7 +801,7 @@ def test_numba_engine_reproduces_the_numpy_engine_with_lateral_links(monkeypatch
     hips = (np.stack([0.03 * np.sin(8 * t), 0 * t, 0 * t], 1), swing)
     sc = ring_scene(ring_rig(n=6, nb=4, shared=True), F, shapes, poses={"hips": hips})
     wind = strands.Wind({"direction": [1, 0.4, 0], "speed": 3.0, "gust": 1.5, "turbulence": 1.0, "seed": 2})
-    loose = {"skirt": {"inertia": 1.0, "bend_max": None}}                     # the links alone, not the skirt's cone
+    loose = {"skirt": {"inertia": 1.0, "bend_max": None, "shear": shear}}    # the ties alone, not the skirt's cone
     a = run(sc, loose, wind=wind, engine="numpy")
     b = run(sc, loose, wind=wind, engine="numba", threads=1)
     c = run(sc, loose, wind=wind, engine="numba", threads=4)
@@ -835,6 +837,33 @@ def test_a_spinning_skirt_feels_only_its_inertia_share_of_the_turn(engine):
         flare[inertia] = max(np.linalg.norm(in_anchor_frame(res, k) - rest, axis=1).max() for k in range(F))
     assert flare[0.0] < 1e-6
     assert 0.01 < flare[0.5] < 0.75 * flare[1.0]
+
+
+@pytest.mark.parametrize("engine", ["numpy", pytest.param("numba", marks=needs_numba)])
+def test_shear_ties_keep_a_skirt_from_turning_round_its_hips(engine):
+    """The lateral ties keep each row of a skirt as wide as it was but let every quad of cloth between two chains shear,
+    so the ring may turn round the hips as a whole: through a 150 deg whip of the hips in four frames its hems trail
+    the turn by 17 deg. Shear ties (each particle to the one a row up in each neighbour, the first row to the
+    neighbour's root) keep the quads square: they trail it by under a degree, every length exact. Shear 0 ties nothing."""
+    F = 16
+    sc = ring_scene(ring_rig(n=8, nb=3), F, poses={"hips": (np.zeros((F, 3)), spin(F))})
+
+    def trail(res):                                     # most the hems turn round the hips, together, from their rest
+        rest = in_anchor_frame(res, 0)[2::3]
+        turn = [np.degrees(np.arctan2(h[:, 1], h[:, 0]) - np.arctan2(rest[:, 1], rest[:, 0]))
+                for h in (in_anchor_frame(res, k)[2::3] for k in range(F))]
+        return max(abs(((a + 180.0) % 360.0 - 180.0).mean()) for a in turn)
+
+    held = run(sc, {"skirt": {"shear": 0.5}}, engine=engine)
+    assert trail(run(sc, engine=engine)) > 10.0 and trail(held) < 1.0
+    seg = np.linalg.norm(np.diff(held.x.reshape(F, 8, 3, 3), axis=2), axis=3)
+    assert np.abs(seg / 0.08 - 1.0).max() < 1e-9
+    model = lambda p: strands._Model(sc["chains"], sc["shapes"], sc["src_pos"], sc["src_quat"], sc["rest_R"],
+                                     sc["rest_p"], sc["anchor_src"], p, (0, F - 1), sc["rig"], 30.0, 5, None, False,
+                                     geom.ANCHOR_FREE)
+    tied = model({"skirt": {"shear": 0.5}})
+    assert (len(tied.shear_a), len(tied.shear_ha)) == (8 * 2 * 2, 8 * 2) and model(None).nshear == 0
+    assert np.allclose(tied.shear_hd0, np.hypot(2 * 0.12 * np.sin(np.pi / 8), 0.08))   # a first particle to the next root
 
 
 def turn_on_parent(res, parent):

@@ -47,6 +47,12 @@ Model (position-based strands)
              midpoint skips what either chain skips and what it overlaps at rest. Linked chains advance together (one
              thread per ring); with lateral 0 chains stay independent and results are those of the uncoupled solver.
              Penetration (pen, worst) includes the cloth midpoints.
+  shear      `shear` (0..1, default 0: none) holds a tied sheet against shearing: each particle of two linked chains
+             is held at its rest distance from the particle one row up in the other chain (the first row from the other
+             chain's root head, which rides the anchor), in the pass of the lateral ties, removing `shear` of the error.
+             The lateral ties alone keep each row's width but let every quad of cloth between two chains shear, so a
+             ring of chains may turn round its anchor as a whole: a seated figure's thighs rising level into a short
+             skirt push its chains sideways and it turns round her waist and folds up there. Shear 0 adds nothing.
   inertia    `inertia` (0..1, default 1) is the share of its anchor's motion a strand feels. Each substep first carries
              the particles, their velocities and their rest-shape targets along by the rest of the anchor's move since
              the last substep (1 - inertia of its turn about the chain's root, and of the root's shift), so the strand
@@ -82,6 +88,7 @@ Model (position-based strands)
     lateral     0..1 (skirt 0.5)     tie stiffness of neighbouring chains (above; TIE_LATERAL for chains the rig
                                      ties); 0 = independent chains
     lateral_collide  0 | 1           push the cloth between tied chains out of the shapes (default 1)
+    shear       0..1 (default 0)     tie stiffness of a tied sheet against shearing (above); 0 = none
     anchor_free m (default global)   zone near the roots where the anchor's body is skipped; 0 for tied sheets
     inertia     0..1 (default 1)     the share of the anchor's motion the strand feels (above); 1 = all of it
     bend_max    deg (default none)   most a segment turns from its rest shape on its parent (above)
@@ -155,7 +162,7 @@ TIE_LATERAL = 0.5                                    # `lateral` of chains the r
 BLOCK_BYTES = 48e6                                   # kinematics precomputed per block of frames: about this much memory
 
 PARAM_KEYS = ("sag", "drag", "zeta", "radius", "radius_max", "friction", "wind_drag", "lateral", "lateral_collide",
-              "anchor_free", "inertia", "bend_max")
+              "shear", "anchor_free", "inertia", "bend_max")
 FAMILY_DEFAULTS = {
     # tuned on a seated close-up: calm back hair (jitter ratio 0.38), lively side locks (0.68), stiff bangs and ears
     "ears":       dict(sag=(0.6, 1.2), drag=5.0, zeta=1.0, radius=0.45, radius_max=0.020, friction=10.0),
@@ -197,6 +204,7 @@ def resolve_params(families, params=None):
         p.update(user)
         p.setdefault("lateral", 0.0)
         p.setdefault("lateral_collide", 1.0)
+        p.setdefault("shear", 0.0)
         p.setdefault("inertia", 1.0)
         p.setdefault("bend_max", None)
         if p.get("anchor_free") is None:                # a coupled sheet also collides with the body it hangs from
@@ -209,11 +217,12 @@ def resolve_params(families, params=None):
                 p[key] = float(p[key])
         if min(p["sag"]) < 0 or min(p["drag"], p["zeta"], p["friction"], p["wind_drag"]) < 0 or \
                 min(p["radius"], p["radius_max"]) <= 0 or not 0.0 <= p["lateral"] <= 1.0 or \
-                p["lateral_collide"] not in (0.0, 1.0) or (p["anchor_free"] is not None and p["anchor_free"] < 0) or \
+                p["lateral_collide"] not in (0.0, 1.0) or not 0.0 <= p["shear"] <= 1.0 or \
+                (p["anchor_free"] is not None and p["anchor_free"] < 0) or \
                 not 0.0 <= p["inertia"] <= 1.0 or (p["bend_max"] is not None and not 0.0 < p["bend_max"] < 180.0):
             raise ValueError(f"strands: {fam}: sag, drag, zeta, friction, wind_drag must be >= 0, radius, radius_max "
-                             f"> 0, lateral and inertia within 0..1, lateral_collide 0 or 1 and bend_max between 0 and "
-                             f"180 deg, got {p}")
+                             f"> 0, lateral, shear and inertia within 0..1, lateral_collide 0 or 1 and bend_max between "
+                             f"0 and 180 deg, got {p}")
         out[fam] = p
     return out
 
@@ -514,6 +523,21 @@ def _cone(u, t, cmax):
     return out
 
 
+def _edge_colours(a, b):
+    """Greedy colours of the ties (a[k], b[k]) in their order, no particle twice in a colour: the stable order that
+    sorts the ties by colour and each colour's run [start, stop) in it (Gauss-Seidel moves a whole colour at once)."""
+    colour, used = np.zeros(len(a), int), {}
+    for k in range(len(a)):
+        taken = used.setdefault(int(a[k]), set()) | used.setdefault(int(b[k]), set())
+        colour[k] = next(c for c in range(len(taken) + 1) if c not in taken)
+        used[int(a[k])].add(int(colour[k]))
+        used[int(b[k])].add(int(colour[k]))
+    order = np.argsort(colour, kind="stable")
+    colour = colour[order]
+    return order, ([(int(np.searchsorted(colour, c)), int(np.searchsorted(colour, c, "right")))
+                    for c in range(int(colour.max()) + 1)] if len(a) else [])
+
+
 class _Model:
     def __init__(self, chains, shapes, src_pos, src_quat, rest_R, rest_p, anchor_src, params, frames, rig, fps,
                  substeps, wind, use_masks, anchor_free, gravity=None):
@@ -686,20 +710,12 @@ class _Model:
                 la.append(A[i])
                 lb.append(B[i])
         la, lb = np.array(la, int), np.array(lb, int)
-        colour, used = np.zeros(len(la), int), {}                     # edge colouring: a colour shares no particle
-        for k in range(len(la)):
-            taken = used.setdefault(int(la[k]), set()) | used.setdefault(int(lb[k]), set())
-            colour[k] = next(c for c in range(len(taken) + 1) if c not in taken)
-            used[int(la[k])].add(int(colour[k]))
-            used[int(lb[k])].add(int(colour[k]))
-        order = np.argsort(colour, kind="stable")
-        la, lb, colour = la[order], lb[order], colour[order]
+        order, self.link_runs = _edge_colours(la, lb)
+        la, lb = la[order], lb[order]
         self.link_a, self.link_b = la, lb
         self.nlinks = nl = len(la)
         self.link_k = np.minimum(lat[la], lat[lb])
         self.link_mid = np.minimum(latc[la], latc[lb]) > 0
-        self.link_runs = [(int(np.searchsorted(colour, c)), int(np.searchsorted(colour, c, "right")))
-                          for c in range(int(colour.max()) + 1)] if nl else []
         self.link_d0 = np.linalg.norm(self.end[la] - self.end[lb], axis=1)
         self.link_rr = 0.5 * (self.rad[la] + self.rad[lb])
         self.link_own = np.repeat(np.arange(nl), len(self.samples))
@@ -717,6 +733,33 @@ class _Model:
                 self.link_enable[kind] = E
         self.link_enable_u = np.concatenate([self.link_enable[k] for k in geom.KINDS if k in self.link_enable], axis=1) \
             if self.link_enable else np.zeros((nl, 0), bool)
+        # ---- shear ties of tied sheets: each particle of two linked chains to the particle one row up in the other
+        # chain, the first row to the other chain's root head (its row of the per-root kinematics: its chain index)
+        shr = get("shear")
+        sa, sb, ha, hc = [], [], [], []
+        for ca, cb in pairs:
+            for X, Y, cy in ((self.chain_lists[ca], self.chain_lists[cb], cb),
+                             (self.chain_lists[cb], self.chain_lists[ca], ca)):
+                for i in range(min(len(X), len(Y))):
+                    if min(shr[X[i]], shr[Y[max(i - 1, 0)]]) <= 0.0:
+                        continue
+                    if i:
+                        sa.append(X[i])
+                        sb.append(Y[i - 1])
+                    else:
+                        ha.append(X[0])
+                        hc.append(cy)
+        sa, sb, ha, hc = (np.array(v, int) for v in (sa, sb, ha, hc))
+        order, self.shear_runs = _edge_colours(sa, sb)
+        self.shear_a, self.shear_b = sa[order], sb[order]
+        self.shear_k = np.minimum(shr[self.shear_a], shr[self.shear_b])
+        self.shear_d0 = np.linalg.norm(self.end[self.shear_a] - self.end[self.shear_b], axis=1)
+        order, self.shear_hruns = _edge_colours(ha, -1 - np.arange(len(ha)))      # a colour moves a particle once
+        self.shear_ha, self.shear_hc = ha[order], hc[order]
+        hroot = np.array([self.chain_lists[c][0] for c in self.shear_hc], int)
+        self.shear_hk = np.minimum(shr[self.shear_ha], shr[hroot])
+        self.shear_hd0 = np.linalg.norm(self.end[self.shear_ha] - self.head[hroot], axis=1)
+        self.nshear = len(self.shear_a) + len(self.shear_ha)
 
     def block(self, ks, taus, ts, settle=False):
         """Kinematics at substeps (frame ks[i] + taus[i], clock ts[i] s). settle: pose held, the air taken in the
@@ -899,6 +942,24 @@ class _NumpyEngine:
             p[a] += dv * f
             p[b] -= dv * f
 
+    def shear(self, p, H0):
+        """Shear ties of tied sheets, Gauss-Seidel over the colour classes: each tied particle held at its rest distance
+        from the particle one row up in a neighbouring chain (sharing the move), the first row from the neighbour's root
+        head (which rides the anchor: the particle alone moves)."""
+        M = self.M
+        for s, e in M.shear_runs:
+            a, b = M.shear_a[s:e], M.shear_b[s:e]
+            dv = p[b] - p[a]
+            dist = np.linalg.norm(dv, axis=1)
+            f = (0.5 * M.shear_k[s:e] * (dist - M.shear_d0[s:e]) / np.maximum(dist, 1e-12))[:, None]
+            p[a] += dv * f
+            p[b] -= dv * f
+        for s, e in M.shear_hruns:
+            a = M.shear_ha[s:e]
+            dv = H0[M.shear_hc[s:e]] - p[a]
+            dist = np.linalg.norm(dv, axis=1)
+            p[a] += dv * (M.shear_hk[s:e] * (dist - M.shear_hd0[s:e]) / np.maximum(dist, 1e-12))[:, None]
+
     def link_points(self, p, H0):
         """Sample points of the cloth between linked chains: the segments joining the midpoints of both heads and of
         both particles, sampled like a chain's own segments."""
@@ -933,11 +994,13 @@ class _NumpyEngine:
         self.shape_pass(p, H0, Da, True)
         contact = np.zeros(M.N, bool)
         pushed = np.zeros_like(p)
-        for _ in range(ITERS):                          # lengths, lateral ties, collisions
+        for _ in range(ITERS):                          # lengths, lateral and shear ties, collisions
             for _ in range(M.sweeps):
                 self.relax(p, H0)
             if M.nlinks:
                 self.lateral(p)
+            if M.nshear:
+                self.shear(p, H0)
             push, c = self.collide(p, H0, W)
             contact |= c
             p += push
@@ -1389,6 +1452,19 @@ if HAVE_NUMBA:
             p[b, 2] -= dz * f
 
     @_jit
+    def _nb_shear_heads(ha, hc, hd0, hk, p, H0, r):
+        """Shear ties of first-row particles to a neighbouring chain's root head on substep row r, in tie order (the
+        numpy engine's shear after its particle pairs, which _nb_lateral moves): the particle alone moves."""
+        for k in range(ha.shape[0]):
+            a, c = ha[k], hc[k]
+            dx, dy, dz = H0[r, c, 0] - p[a, 0], H0[r, c, 1] - p[a, 1], H0[r, c, 2] - p[a, 2]
+            dist = np.sqrt(dx * dx + dy * dy + dz * dz)
+            f = hk[k] * (dist - hd0[k]) / max(dist, 1e-12)
+            p[a, 0] += dx * f
+            p[a, 1] += dy * f
+            p[a, 2] += dz * f
+
+    @_jit
     def _nb_mid(r, H0, chain_of, is_root, la, lb, lrr, len_, lmid, p, pushed, cont, bsc, bsr, sc, sb, sm, skind, sk,
                 floor_z, has_floor, samp, cand, Sb, Nb, cut, tpush, lpush, lhit):
         """Cloth midpoints of the links against the shapes; the push goes to both particles of a link."""
@@ -1540,14 +1616,15 @@ if HAVE_NUMBA:
                     skind, sk, floor_z, has_floor,
                     kv, ae, ph, om, use_wind, use_turb,
                     dt, gz, samp, sweeps, ftl, xs, Ds, dep, who,
-                    la, lb, ld0, lk, lrr, len_, lmid, chain_of, is_root,
+                    la, lb, ld0, lk, lrr, len_, lmid, sa, sb2, sd0, sk2, ha, hc, hd0, hk, chain_of, is_root,
                     bend, bcos, carries, carry, H0p, Dap):
         """Advance the chains cids (one coupled group, or independent chains) by nsteps substeps in lockstep (substep i
         uses block row i * rstride), with velocity decay `dec`; every rec_every steps store a frame (first rec_f0), and
         rec_start >= 0 stores the current state first as that frame. State arrays x v tgt_prev Dst tgt are per bone in
-        chain-major order and updated in place. la lb ld0 lk lrr len_ lmid: the lateral links of these chains. bend /
-        bcos: the bend_max cone per bone; carries / carry (per chain): the share of the anchor's move each substep
-        carries a chain along, from H0p / Dap (its root and frame on the substep before the first, updated in place)."""
+        chain-major order and updated in place. la lb ld0 lk lrr len_ lmid: the lateral links of these chains; sa sb2
+        sd0 sk2 their shear ties between particles and ha hc hd0 hk to a root head (chain hc). bend / bcos: the bend_max
+        cone per bone; carries / carry (per chain): the share of the anchor's move each substep carries a chain along,
+        from H0p / Dap (its root and frame on the substep before the first, updated in place)."""
         K = skind.shape[0]
         N = x.shape[0]
         nl = la.shape[0]
@@ -1585,7 +1662,7 @@ if HAVE_NUMBA:
                 _nb_pre(j1 - j0, j0, r, x, v, dec, wgain, wmean, wdisp, wt, kv, ae, ph, om, use_wind, use_turb, dt, gz[r],
                         p[j0:j1], ub[j0:j1], H0[r, c], Da[r, c], Dst[j0:j1], tgt[j0:j1], Lc[j0:j1], d0[j0:j1],
                         alpha[j0:j1], pushed[j0:j1], cont[j0:j1])
-            for it in range(ITERS):                             # lengths, lateral ties, collisions
+            for it in range(ITERS):                             # lengths, lateral and shear ties, collisions
                 for ci in range(cids.shape[0]):
                     c = cids[ci]
                     j0, j1 = cptr[c], cptr[c + 1]
@@ -1593,6 +1670,10 @@ if HAVE_NUMBA:
                         _nb_relax(j1 - j0, H0[r, c], p[j0:j1], Lc[j0:j1])
                 if nl > 0:
                     _nb_lateral(la, lb, ld0, lk, p)
+                if sa.shape[0] > 0:
+                    _nb_lateral(sa, sb2, sd0, sk2, p)
+                if ha.shape[0] > 0:
+                    _nb_shear_heads(ha, hc, hd0, hk, p, H0, r)
                 for ci in range(cids.shape[0]):
                     c = cids[ci]
                     j0, j1 = cptr[c], cptr[c + 1]
@@ -1700,15 +1781,21 @@ class _NumbaEngine:
             t = load.index(min(load))
             bins[t].append(top_c)
             load[t] += sum(len(chains[c]) for c in cs)
+        sa, sb, ha = inv[M.shear_a], inv[M.shear_b], inv[M.shear_ha]       # shear ties: within the groups of their links
         self.groups = []
         for b in bins:
             if b:
                 cids = np.array(sorted(c for top_c in b for c in members[top_c]), np.int64)
                 idx = np.array(sorted(k for top_c in b for k in joined.get(top_c, [])), np.int64)
+                si = np.array([k for k in range(len(sa)) if find(self.chain_of[sa[k]]) in b], np.int64)
+                hi = np.array([k for k in range(len(ha)) if find(self.chain_of[ha[k]]) in b], np.int64)
                 self.groups.append((cids, la[idx], lb[idx], np.ascontiguousarray(M.link_d0[idx]),
                                     np.ascontiguousarray(M.link_k[idx]), np.ascontiguousarray(M.link_rr[idx]),
                                     np.ascontiguousarray(M.link_enable_u[idx]),
-                                    np.ascontiguousarray(M.link_mid[idx]).astype(np.bool_)))
+                                    np.ascontiguousarray(M.link_mid[idx]).astype(np.bool_),
+                                    sa[si], sb[si], np.ascontiguousarray(M.shear_d0[si]),
+                                    np.ascontiguousarray(M.shear_k[si]), ha[hi], M.shear_hc[hi].astype(np.int64),
+                                    np.ascontiguousarray(M.shear_hd0[hi]), np.ascontiguousarray(M.shear_hk[hi])))
         self.pool = ThreadPoolExecutor(len(self.groups)) if len(self.groups) > 1 else None
 
     def _shapes(self, blk):

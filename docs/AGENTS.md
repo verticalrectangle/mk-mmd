@@ -198,8 +198,9 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   watch the moves in motion: a sheet does not show how a hand gets from one place to the next.
 - **Sim** ([Sim](design.md#sim)): hair, ears, tails, skirts and the chains under a garment's sleeves (`sleeve`) are solved outside Blender
   and baked. List the families, give the colliders (the seat, the car, the fingers, the floor), and `wind = { carrier = "car", ... }` in a
-  moving vehicle. A simulated skirt with a hand resting on it (`place = "dainty"`) wants `bend_max = 30`, and one on a dancer who whips
-  round faster than cloth could follow wants `inertia = 0.5` (`[sim.<cast>.params.skirt]`). An mk-built sweater's sleeves want
+  moving vehicle. A simulated skirt with a hand resting on it (`place = "dainty"`) wants `bend_max = 30`, one on a dancer who whips
+  round faster than cloth could follow wants `inertia = 0.5`, and one whose figure sits down in the take (her thighs rising level into
+  it) wants `shear = 0.5`, or it turns round her waist and folds up there (`[sim.<cast>.params.skirt]`). An mk-built sweater's sleeves want
   `[sim.<cast>.params.sleeve] radius = 1`: their chains' capsules are as thick as the bag they carry, and the sweater wears colliders the
   size of its knit, so at that radius a bag lies on the knit when an arm comes to her side instead of hanging in it. `mk build --skip sim`
   is the fast loop for poses and performance.
@@ -260,7 +261,8 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   `side` wing): its `bank`, `pitch` and a landing's dip (`land` ON her landing) are keyed on its root on the theatre's
   `step` grid, so she rides them; keep it level on the scene's first frame (where she is seated), and draw trails from
   `"<prop>:tip_L"` and `"<prop>:tip_R"`, which ride the wing tips. Her sim takes its colliders (her hair lies on the wing
-  behind her); give her skirt `[sim.<cast>.params.skirt] bend_max = 90` so its back folds onto the paper.
+  behind her); give her skirt `[sim.<cast>.params.skirt] bend_max = 90` so its back folds onto the paper, and `shear = 0.5`
+  when she lands on it in the take (her thighs come up into the seat through the skirt).
 - **Gag props** (their rows in [Props](design.md#props)): `library:pillow_cloud` (key `puff` 0 -> 1: the pillow puffs into a cloud; `hug`
   anchor, `hold_L` / `hold_R` palms), `giant_carrot` (key `bite1`..`bite4` CONSTANT at the chomps, in order; `use.grip` `hold`, `use.bite`
   points; the chunks fly and fall on their own), `record_treadmill` (stand the cast at [-0.45, 0, 0.16] with `feet = "<name>:run"`, key

@@ -3,7 +3,9 @@ Marionette, set free; tails). mkmmd.core.marionette_free plans her (perform keys
 `prepare`); this draws what follows from where she ended up on every frame, after `stepped`:
 
 - the threads while she sits on them: from their anchors to where they meet her, gathered by her fist (anchor, the
-  scissors' cut point, her fist, her body), each blended from its own line into the gathered one as her fist sweeps it in;
+  scissors' cut point, her fist, her body), each blended from its own line into the gathered one as her fist sweeps it in
+  (the other hand's once that hand is up with the scissors: until then it runs straight from the control to it); the
+  cut point is over her fist until the open blades come to it (BLADES_AT), then between them;
 - the scissors (`scissors.prop`): lying where they lie, taken into her hand (keyed from her hand's bones on every frame:
   their grip where her fingers are, their blades along her fingers), their blades (`open`, the prop's root property)
   opening as she brings them up and shut ON the snip, let go and falling;
@@ -41,6 +43,8 @@ SKULL = 0.105               # m behind her head's middle a thread runs round the
 BUNDLE_UP = 0.65            # m: the gathered threads run up together this far from the cut before they part (one cord
 #                             up out of the top of a cover 1.3 m from her face)
 PART_GAP = 0.015            # m each side of the cut the parted ends spring apart on the snip
+BLADES_AT = (0.06, 0.15)    # m from the cut point over her fist: the open blades hold the bundle within the first, the
+#                             fist alone beyond the second (on their way up from the table they never pull it aside)
 
 
 def _shown(ctx, m, frames):
@@ -353,7 +357,9 @@ def _scissors(ctx, m, P, frames, ts, idx, D, M):
         if len(low):
             loc[low[0]:ks[-1] + 1] = loc[low[0]] * np.array([1.0, 1.0, 0.0]) + np.array([0.0, 0.0, floor + 0.004])
             rot[low[0]:ks[-1] + 1] = rot[low[0]]
-    loc, rot = loc[idx], rot[idx]                                 # on her steps
+    free = ~held                                                  # in her hand they are where it is drawn on every frame
+    step = np.where(free & free[idx], idx, np.arange(n))          # (her arms move between her steps); let go, on her
+    loc, rot = loc[step], rot[step]                               # steps from the first that begins after it
     cut = loc + np.einsum("nij,j->ni", rot, np.array(c_local))
     Pw = root.parent.matrix_world @ root.matrix_parent_inverse if root.parent else Matrix.Identity(4)
     Pi = np.array(Pw.inverted())
@@ -402,22 +408,25 @@ def _set_free(ctx, name, m, P, prop, card, frames, ts, idx, shown, D, B, world, 
     ph, _t0, since = MF.phases(ts, Pf)
     M = MF.moments(Pf)
     gw = MF._gathered(ts, Pf, M)
+    swept = MF._gathered(ts, Pf, M, wait=False)                  # her fist's sweep: the other wrist's waits for its hand
     side_g = W["gather"]["side"] if W.get("gather") else "L"
     Fw, Falong, Fpalm = _hand_frame(D, side_g, _palm_sign(m, side_g))
     fist = D["hand"][("middle1", side_g)] + FIST_IN * Fpalm
     up = D["axes"][:, :, 2]
     cut_sc, hold, sc_rep = _scissors(ctx, m, Pf, frames, ts, idx, D, M)
     X = fist + MF.CUT_ABOVE * up
-    if cut_sc is not None:                                        # the cut is between the blades once they are there
-        near = hold["held"] & (hold["open"] > 0.25)
-        X = np.where(near[:, None], cut_sc, X)
+    if cut_sc is not None:                                        # the cut is between the blades once they are open and
+        gap = np.linalg.norm(cut_sc - X, axis=1)                  # at the bundle (on their way up it stays in her fist)
+        at = np.clip((BLADES_AT[1] - gap) / (BLADES_AT[1] - BLADES_AT[0]), 0.0, 1.0)
+        at = at * (hold["held"] & (hold["open"] > 0.25))
+        X = X + at[:, None] * (cut_sc - X)
     A = D["A"]
     held = {p: (MR.held(ts, Pf, p) > 0.5) & (ph == MF.SEATED) for p in MR.PARTS}
-    # each thread's own length: its span with the control at home, before her fist gathers it
+    # each thread's own length: its span with the control at home, before her fist comes to it
     lengths = {}
     for j, p in enumerate(MR.PARTS):
         span = np.linalg.norm(A[:, j] - D["B"][:, j], axis=1)
-        home = held[p] & (since > 0.25) & (gw[p] < 1e-6)
+        home = held[p] & (since > 0.25) & (swept[p] < 1e-6)
         lengths[p] = float(span[home].min()) if home.any() else float(span[held[p]].max()) if held[p].any() else 1.0
     main = np.repeat(D["B"][:, :, None, :], npts, 2).copy()
     low = main.copy()
@@ -426,8 +435,9 @@ def _set_free(ctx, name, m, P, prop, card, frames, ts, idx, shown, D, B, world, 
     ax = D["axes"]
     for j, p in enumerate(MR.PARTS):
         sd = ax[:, :, 0] * MAR.SIDE[p]
-        for i in np.flatnonzero(held[p]):
-            line = MR.sag_points(A[i, j], D["B"][i, j], lengths[p], npts, sd[i])
+        for i in np.flatnonzero(held[p]):                         # one her fist has come to while its hand is still on
+            taut = swept[p][i] > 1e-4                             # its way up runs straight from the control to it
+            line = MR.sag_points(A[i, j], D["B"][i, j], 0.0 if taut else lengths[p], npts, sd[i])
             w = gw[p][i]
             if w > 1e-4:
                 line = MT.resample(_gathering(D, i, j, p, A[i], X[i], fist[i], w), npts)

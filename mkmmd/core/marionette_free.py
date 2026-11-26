@@ -50,6 +50,8 @@ TAILS_SHOWN = 1.8           # s a snip's tails are drawn after it (her take is o
 HAND_TO_FIST = 0.07         # m from her wrist to the middle of her fist (the bundle runs through it)
 FIST_REACH = 0.9            # the bundle is held as high as her arm reaches with its elbow still bent: this share of it
 SCISSORS_REACH = 0.135      # m from her wrist to the scissors' cut point as she holds them, along her forearm
+SCISSORS_UP = 0.8           # of `scissors.dur`: her other hand is up beside her head with the scissors (its `raise` key
+#                             at 0.7, a little late); its own thread joins the bundle from then
 CATCH_TURN = 70.0           # degrees off the lens a hovering turn has her when a haul's hand catches her tails
 SHRUG = 14.0                # degrees a shoulder rises as its hand goes up over it (an arm raised high lifts it)
 ROLL = [[0.0, 0.0], [0.5, -3.0], [1.3, -8.0], [2.6, -4.0], [4.0, 0.0]]   # deg her body rolls as she rises (- her left
@@ -416,21 +418,27 @@ def _seated_weight(ts, ph, since, M):
     return w
 
 
-def _gathered(ts, P, M):
+def _gathered(ts, P, M, wait=True):
     """{part: (n,) 0..1}: how far each thread is gathered into her fist: from the gather's start her fist sweeps them in
-    (her own wrist's first, the other hand's last, as it brings the scissors), until the snip cuts them."""
+    (her own wrist's first, the other hand's last), until the snip cuts them. The other hand's thread waits for that hand
+    to come up beside her head with the scissors (SCISSORS_UP of their `dur`): it joins the bundle from the side, never
+    from the table across her face. `wait` False: the sweep alone, each thread taken when her fist comes to it."""
     W = P["world"]
     out = {p: np.zeros(len(ts)) for p in MR.PARTS}
-    g = W.get("gather")
+    g, sc = W.get("gather"), W.get("scissors")
     if not g:
         return out
     other = "R" if g["side"] == "L" else "L"
     order = {f"wrist_{g['side']}": 0, "knee_L": 1, "knee_R": 2, "back": 3, "head": 4, f"wrist_{other}": 5}
     for t in M["gather"]:
+        prev = max([s for s in M["snip"] if s <= t], default=-math.inf)
         nxt = [s for s in M["snip"] if s > t]
         end = nxt[0] if nxt else math.inf
+        up = [s + SCISSORS_UP * sc["dur"] for s in M["scissors"] if prev < s < end] if (sc and wait) else []
         for p, k in order.items():
             a = t + g["dur"] * (0.3 + 0.12 * k)
+            if up and p == f"wrist_{other}":
+                a = max(a, min(up))
             out[p] = np.maximum(out[p], PF.smooth((ts - a) / (0.18 * g["dur"])) * (ts < end))
     return out
 

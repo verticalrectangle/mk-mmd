@@ -1,8 +1,9 @@
 """A marionette set free (mkmmd.core.marionette_free) and tails (mkmmd.core.marionette_tails): across the loop's wrap the
-pre-roll replays the end and the blades shut ON frame 0, the weightless rise reaches its height on its time still
-speeding up while the dropped control falls past her (behind her, never through her), the haul's tugs drop her as they
-land and the fall lands her in her seat ON the knot, a tail streams opposite to her motion at its own length and is
-settled on the first frame it is seen, and the tables the build cannot play are refused."""
+pre-roll replays the end and the blades shut ON frame 0, the scissors hand's thread joins her fist only once that hand
+is up beside her head, the weightless rise reaches its height on its time still speeding up while the dropped control
+falls past her (behind her, never through her), the haul's tugs drop her as they land and the fall lands her in her seat
+ON the knot, a tail streams opposite to her motion at its own length and is settled on the first frame it is seen, and
+the tables the build cannot play are refused."""
 import math
 
 import numpy as np
@@ -47,6 +48,20 @@ def test_across_the_wrap_the_pre_roll_replays_the_end_and_the_blades_shut_on_fra
     assert sci["open"][-1] > 0.95 and sci["open"][i0 - 1] > 0.95 and sci["open"][i0] == 0.0   # shut ON frame 0
     seated = W["hips"][_i(30.6)]
     assert seated[2] == pytest.approx(SEAT["hip"][2] + RIG["pivot"][2] - RIG["hips"]["L"][2], abs=0.002)
+
+
+def test_the_scissors_hands_thread_joins_her_fist_only_once_that_hand_is_up_beside_her_head():
+    P = MR.normalize(dict(SPEC, gather={"t": 30.55, "dur": 0.3}, scissors={"prop": "snips", "t": 30.6, "dur": 0.42}), [])
+    W = MW.world_plan(TS, P, MR.cross_plan(TS, P, MR.STIRRER["leg"] / 2.0), RIG,
+                      {"seat": SEAT, "scissors": {"grip": np.array([-0.4, -0.1, 0.63])}})
+    Ps = MF.snapped(P, TS)
+    swept = MF._gathered(TS, Ps, MF.moments(Ps), wait=False)["wrist_R"]
+    taken = W["free"]["gathered"]["wrist_R"]
+    z = W["hands"]["R"]["body"][:, 2]
+    end = (TS > 30.5) & (TS < LOOP)
+    assert (end & (swept > 0.01) & (z < RIG["shoulders"]["R"][2])).any()   # her fist comes to it while it is at the table
+    assert taken[_i(LOOP - 0.05)] == pytest.approx(1.0)
+    assert z[end & (taken > 0.01)].min() > RIG["crown"][2] - 0.15           # taken in only with that hand up by her head
 
 
 def test_she_rises_weightless_to_its_height_on_time_still_speeding_up_and_the_control_whips_up_away(free):
