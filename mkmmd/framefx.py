@@ -28,9 +28,11 @@ from . import remap as RMF
 from . import rewind as RWF
 from . import shapes as SHF
 from . import sheet as STF
+from . import sky as SYF
 from . import stack as SKF
 from . import table as TBF
 from . import videosticker as VSF
+from . import zap as ZPF
 from .core import breathe as BR
 from .core import framefx as FX
 from .core import lanes as LN
@@ -916,18 +918,25 @@ def clip_of(fx, footage_of):
 
 def check_footage(fxs, footage_of):
     """Every clip the entries show (footage collages and video stickers, their `aspect.<output>` entries' too; a negative
-    sticker shows none) opened and its span checked, before anything is drawn (`mk post` calls it before it encodes): a
-    FootageError says what is wrong."""
+    sticker shows none; a sky's every clip) opened and its span checked, before anything is drawn (`mk post` calls it
+    before it encodes): a FootageError says what is wrong."""
     for fx in fxs:
         for e in [fx, *(fx.get("aspect") or {}).values()]:
             if e["kind"] in FX.CLIPS and e.get("clip") is not None:
                 clip_of(e, footage_of)
+            for i, seg in enumerate(e["clips"] if e["kind"] == "sky" else ()):
+                for layer in seg["layers"] or ():
+                    if layer["clip"] is not None:
+                        try:
+                            footage_of(layer["clip"]).index(0.0, layer["in"], layer["rate"], layer["loop"])
+                        except FT.FootageError as err:
+                            raise FT.FootageError(f"fx {e['index']} (sky) clips[{i}]: {err}") from None
 
 
 # ================================================================================================= over a cut
 class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.ActivityFx, LBF.LabelFx, ERF.EraFx,
               SKF.StackFx, PAF.PaintAppFx, LZF.LaserFx, VSF.StickerFx, PRF.PrintsFx, CKF.KeyFx, SHF.ShapesFx,
-              HZF.HazeFx, MTF.MitosisFx, INF.InsetFx, STF.SheetFx, TBF.TableFx, RWF.RewindFx):
+              HZF.HazeFx, MTF.MitosisFx, INF.InsetFx, STF.SheetFx, TBF.TableFx, RWF.RewindFx, ZPF.ZapFx, SYF.SkyFx):
     """The frame effects of a plan's `fx` over one output's frames.
 
     size        (width, height) of the pictures
@@ -997,6 +1006,8 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         self._sheet_init()
         self._table_init()
         self._rewind_init()
+        self._zap_init()
+        self._sky_init()
 
     def active(self, frame):
         return bool(FX.at(self.fxs, frame))
@@ -1005,8 +1016,9 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         """Whether this object draws `frame` exactly as a pass through every frame before it does, wherever it starts
         (fresh, or after other frames): no effect on `frame` holds a picture that only the frames before would have
         kept (a film's frame over its step, a booth's earlier captures, the frame an eraser holds, the picture a mosh
-        with a flow carries; a mosh without one works its picture out again from the cut's frames, which `rendered`,
-        the frames on disk, must all hold). mk post starts a worker's chunk of frames on such a frame."""
+        with a flow carries, a zap's ghost dragged along the pictures since its zap; a mosh without a flow works its
+        picture out again from the cut's frames, which `rendered`, the frames on disk, must all hold). mk post starts a
+        worker's chunk of frames on such a frame."""
         for fx in FX.at(self.fxs, frame):
             kind = fx["kind"]
             if kind == "film" and PC.film_step(fx, frame)[1] != frame:
@@ -1018,6 +1030,10 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
                 return False
             if kind == "mosh" and (frame != fx["f0"] if fx["flow"] is not None else
                                    any(g not in rendered for g in range(max(fx["f0"] - 1, self.frame0), frame + 1))):
+                return False
+            if kind == "zap" and not ZPF.ZP.safe(fx, frame):
+                return False
+            if kind == "trails" and fx.get("sheet") is not None and not ZPF.EC.safe(fx, frame):
                 return False
         return True
 
@@ -1340,7 +1356,7 @@ class FrameFx(PF.PictureFx, MDF.MandalaFx, RMF.RemapFx, FL.FieldFx, ACF.Activity
         it is at rest); None for a figure left where its frame shows it."""
         M, pivot = self._placing(fx)
         if fx["keys"]:
-            mv = FX.move_at(fx["keys"], self._t(g))
+            mv = FX.move_at(fx["keys"], self._t(g), 0.5 / self.fps)
             if mv != FX.MOVE:
                 K = FX.move_matrix(mv, self._pivot(fx) if pivot is None else pivot, self.size[1])
                 M = K if M is None else FX.compose(K, M)

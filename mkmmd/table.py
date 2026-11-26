@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from . import fields as FL
+from . import pin as PNF
 from .core import framefx as FX
 from .core import sheet as ST
 from .core import table as TB
@@ -30,7 +31,8 @@ PAD_SUPER = 3            # and drawn that many times larger first (its outline a
 PAD_TILES = 48           # pad tiles kept
 PAD_SHADOW = 0.35        # a pad's shadow on the coffee: alpha; its offset and blur are the sheet's shadow's halves
 WORK = 1080              # px: the table's height in the picture its layout is worked out on
-_STRETCH = {}            # (clip path, frame, low, high) -> the luma at those percentiles of that frame
+WARM709 = np.float32([[0.2126, 0.7152, 0.0722], [1.0, 0.0, -1.0]])   # RGB -> a grade by warmth's luma and warmth
+_STRETCH = {}            # (clip path, frame, low, high, by warmth) -> the luma at those percentiles of that frame
 
 
 def _ff():
@@ -49,10 +51,28 @@ def luma8(rgb):
     return cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2GRAY)
 
 
-def stretch_of(rgb, lo, hi):
-    """(luma at the `lo` and `hi` percentiles) of a uint8 RGB frame, 0..255 (at least one code value apart)."""
-    a, b = np.percentile(luma8(rgb), [lo, hi])
+def luma_warmth(rgb):
+    """(h, w, 2) float32 of uint8 RGB: its luma, 0..255 (Rec. 709's: a grade by warmth's, as its ramps were tried on the
+    clips), and its warmth, red less blue (-255..255)."""
+    return cv2.transform(np.ascontiguousarray(rgb).astype(np.float32), WARM709)
+
+
+def stretch_of(rgb, lo, hi, warmth=False):
+    """(luma at the `lo` and `hi` percentiles) of a uint8 RGB frame, 0..255 (at least one code value apart): OpenCV's
+    luma, or with `warmth` a grade by warmth's (luma_warmth)."""
+    a, b = np.percentile(luma_warmth(rgb)[..., 0] if warmth else luma8(rgb), [lo, hi])
     return float(a), float(max(b, a + 1.0))
+
+
+def clip_stretch(clip, grade, at, loop=False):
+    """The luma at a `grade`'s percentiles (stretch_of; a grade by warmth's luma for a grade by warmth) on the frame of
+    `clip` (a mkmmd.footage.Clip) at its second `at`, worked out once a process."""
+    i = clip.index(0.0, at, 0.0, loop)
+    by = grade["cool"] is not None
+    key = (str(clip.path), i, grade["stretch"][0], grade["stretch"][1], by)
+    if key not in _STRETCH:
+        _STRETCH[key] = stretch_of(clip.frame(i), *grade["stretch"], warmth=by)
+    return _STRETCH[key]
 
 
 def spread(stretch, n):
@@ -73,6 +93,35 @@ def graded(L, table):
     """A luma picture `L` (float32, 0..255) through the gradient map `table` (ramp): float32 RGB."""
     k = np.float32((len(table) - 1) / 255.0)
     return table[np.clip(np.rint(L * k), 0, len(table) - 1).astype(np.int32)]
+
+
+def luts(grade, stretch):
+    """A table's `grade` as lookup tables over the luma 0..1 (ramp's): its map's one, or a grade by warmth's (cool, warm),
+    each ramp's places spread over the `stretch` (the luma at its low and high percentiles, 0..255)."""
+    if grade["cool"] is None:
+        return ramp(grade["map"], grade["lumas"] or spread(stretch, len(grade["map"])))
+    a, b = stretch[0] / 255.0, stretch[1] / 255.0
+    return tuple(ramp(r["colors"], [a + u * (b - a) for u in r["at"]]) for r in (grade["cool"], grade["warm"]))
+
+
+def warmed(L, warm, tables, lean, warmth):
+    """A grade by warmth: the luma `L` (float32, 0..255) through the cool and the warm ramp of `tables` (luts'), mixed by
+    each pixel's warmth `warm` (red less blue, -255..255) times `warmth`, plus `lean`, about the middle (0.5: half of
+    each): float32 RGB."""
+    cool, warm_ = tables
+    k = np.float32((len(cool) - 1) / 255.0)
+    i = np.clip(np.rint(L * k), 0, len(cool) - 1).astype(np.int32)
+    u = np.clip(warm * np.float32(warmth / 255.0) + np.float32(0.5 + lean), 0.0, 1.0)[..., None]
+    c = cool[i]
+    return c + (warm_[i] - c) * u
+
+
+def painted(L, grade, tables):
+    """What carried() read (a luma, or with a grade by warmth the luma and the warmth) through a table's `grade` (its
+    luts' `tables`): (float32 RGB, the luma it was read at)."""
+    if grade["cool"] is None:
+        return graded(L, tables), L
+    return warmed(L[..., 0], L[..., 1], tables, grade["lean"], grade["warmth"]), L[..., 0]
 
 
 def ellipse_distance(size, M, centre, radii, box=None):
@@ -107,6 +156,36 @@ def footprint(D, size, table, pad):
     if y1 <= y0:
         y0, y1 = (table[1] - 1, table[1]) if y0 >= table[1] else (0, 1)
     return x0, y0, x1, y1
+
+
+def carried(rgb, D, size, table, soften, warmth=False):
+    """What the grade reads of a clip frame `rgb` (uint8 RGB, a table of `table` (w, h) px) as a frame of `size` shows it
+    through the 2 x 3 map `D` (table px -> frame px): its luma (float32 0..255, OpenCV's; with `warmth` (h, w, 2), the
+    luma and warmth of luma_warmth) carried into the frame, the part the frame shows only, shrunk by area first where
+    the view is far, softened by `soften` (clip px) and where the view is close, past the clip's edges reflected."""
+    z = TB.zoom_of(D)
+    pad = 4.0 / min(z, 1.0) + 3.0 + 3.0 * soften
+    x0, y0, x1, y1 = footprint(D, size, table, pad)
+    crop = rgb[y0:y1, x0:x1]
+    L = luma_warmth(crop) if warmth else luma8(crop).astype(np.float32)
+    M = np.asarray(D, np.float64).copy()
+    M[:, 2] += M[:, :2] @ np.array([x0, y0], float)             # the crop's px -> frame px
+    blur = 0.0
+    if z < SHRINK:
+        f = z / SHRINK
+        sw, sh = max(int(round(L.shape[1] * f)), 1), max(int(round(L.shape[0] * f)), 1)
+        fx_, fy_ = sw / L.shape[1], sh / L.shape[0]
+        L = cv2.resize(L, (sw, sh), interpolation=cv2.INTER_AREA)
+        M = M @ np.array([[1.0 / fx_, 0.0, 0.5 / fx_ - 0.5], [0.0, 1.0 / fy_, 0.5 / fy_ - 0.5], [0.0, 0.0, 1.0]])
+        soften *= fy_
+    elif z > SOFTEN:
+        blur = min(0.25 * z / SOFTEN, 1.2)
+    blur = math.hypot(blur, soften)
+    if blur > 0.25:
+        L = cv2.GaussianBlur(L, (0, 0), blur)
+    W, H = size
+    return cv2.warpAffine(L, M, (int(W), int(H)), flags=cv2.INTER_CUBIC if z > 1.0 else cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REFLECT_101)
 
 
 def pad_outline(notch, seed, n=180):
@@ -233,8 +312,8 @@ class TableFx:
         own = None if cup is None or cup["map"] is None else (cup["map"], cup["lumas"])
         stretch = None
         if g["lumas"] is None or (own is not None and own[1] is None):         # a map spread over the measured stretch
-            stretch = self._stretch(fx, clip)
-        st["lut"] = ramp(g["map"], g["lumas"] or spread(stretch, len(g["map"])))
+            stretch = clip_stretch(clip, g, fx["in"] if g["at"] is None else g["at"], fx["loop"])
+        st["lut"] = luts(g, stretch)
         st["cup_lut"] = None if own is None else ramp(own[0], own[1] or spread(stretch, len(own[0])))
         st["places"] = [TB.touch_place(k, fx["pads"]) for k in fx["touch"]]
         Wt, Ht = st["table"]
@@ -259,15 +338,6 @@ class TableFx:
             st["drops_dd"], st["drops"] = self._drops_of(fx, st)
         return st
 
-    def _stretch(self, fx, clip):
-        """The luma at the grade's percentiles, on the clip's frame at `grade.at` (its `in` by default), once."""
-        g = fx["grade"]
-        i = clip.index(0.0, fx["in"] if g["at"] is None else g["at"], 0.0, fx["loop"])
-        key = (str(clip.path), i, g["stretch"][0], g["stretch"][1])
-        if key not in _STRETCH:
-            _STRETCH[key] = stretch_of(clip.frame(i), *g["stretch"])
-        return _STRETCH[key]
-
     def _figure_table(self, fx, st, g):
         """The 2 x 3 map (the figure's plate px -> table px) on frame `g`: by its `track` (its world point seen through the
         plate there) or by `at` and `height` about its pivot (found on the span's first frame), then moved by its keys."""
@@ -287,10 +357,10 @@ class TableFx:
             to = (fx["at"][0] * Wt - 0.5, fx["at"][1] * Ht - 0.5)
             M = FX.placement(a, to, fx["height"] * Ht / self._tall(fx))
         if fx["keys"]:
-            mv = FX.move_at(fx["keys"], self._t(g))
+            mv = FX.move_at(fx["keys"], self._t(g), 0.5 / self.fps)
             if mv != FX.MOVE:
                 M = FX.compose(FX.move_matrix(mv, to, Ht), M)
-        return M
+        return PNF.carry(self, fx, st, g, M)              # a pinned figure rides its seat (mkmmd.pin)
 
     def _table_plan(self, fx, st, dd, doodles):
         """A doodle group laid out on the table, as a sheet lays its doodles on the frame (SheetFx._doodle_plan): clear of
@@ -410,6 +480,7 @@ class TableFx:
         ground = L = None
         if not (cut and whole):
             ground, L = self._ground(fx, st, t, D)
+            ground = self.table_smear(fx, frame, ground)
         out = ground
         if cup is not None:
             if cut:
@@ -486,37 +557,16 @@ class TableFx:
             coffee += (np.asarray(sh["color"], np.float32) - coffee) * a[..., None]
 
     def _ground(self, fx, st, t, D):
-        """(the clip under the table at clip second `t` as the frame shows it through `D`, its luma there): its luma (the
-        part the frame shows, shrunk by area first where the view is far, softened by the grade's `soften` and where the
-        view is close) carried into the frame, past the clip's edges reflected, then through the grade's map, with a
-        grain finer than a pixel."""
+        """(the clip under the table at clip second `t` as the frame shows it through `D`, its luma there): what the grade
+        reads of it carried into the frame (`carried`), then through the grade (`painted`), with a grain finer than a
+        pixel."""
         clip = st["clip"]
         rgb = clip.frame(clip.index(t - fx["from"], fx["in"], fx["rate"], fx["loop"]))
-        z = TB.zoom_of(D)
-        soft = fx["grade"]["soften"] * st["table"][1]                   # clip px
-        pad = 4.0 / min(z, 1.0) + 3.0 + 3.0 * soft
-        x0, y0, x1, y1 = footprint(D, self.size, st["table"], pad)
-        L = luma8(rgb[y0:y1, x0:x1]).astype(np.float32)
-        M = np.asarray(D, np.float64).copy()
-        M[:, 2] += M[:, :2] @ np.array([x0, y0], float)             # the crop's px -> frame px
-        blur = 0.0
-        if z < SHRINK:
-            f = z / SHRINK
-            sw, sh = max(int(round(L.shape[1] * f)), 1), max(int(round(L.shape[0] * f)), 1)
-            fx_, fy_ = sw / L.shape[1], sh / L.shape[0]
-            L = cv2.resize(L, (sw, sh), interpolation=cv2.INTER_AREA)
-            M = M @ np.array([[1.0 / fx_, 0.0, 0.5 / fx_ - 0.5], [0.0, 1.0 / fy_, 0.5 / fy_ - 0.5], [0.0, 0.0, 1.0]])
-            soft *= fy_
-        elif z > SOFTEN:
-            blur = min(0.25 * z / SOFTEN, 1.2)
-        blur = math.hypot(blur, soft)
-        if blur > 0.25:
-            L = cv2.GaussianBlur(L, (0, 0), blur)
-        W, H = self.size
-        L = cv2.warpAffine(L, M, (W, H), flags=cv2.INTER_CUBIC if z > 1.0 else cv2.INTER_LINEAR,
-                           borderMode=cv2.BORDER_REFLECT_101)
-        out = graded(L, st["lut"])
+        g = fx["grade"]
+        out, L = painted(carried(rgb, D, self.size, st["table"], g["soften"] * st["table"][1], g["cool"] is not None),
+                         g, st["lut"])
         if "grain" not in st:
+            W, H = self.size
             rng = np.random.default_rng([fx["index"], 59])
             st["grain"] = (rng.standard_normal((H, W)).astype(np.float32) * np.float32(GRAIN))[..., None]
         return out + st["grain"], L
@@ -619,12 +669,11 @@ class TableFx:
             return out
         rgb = FF._warp(pic * m[..., None], Mt, self.size)
         e = self._sheet_edge(fx)
-        ring = FF._grow(cov, e[1]) if e is not None and e[1] > 0 else cov
+        ring = _sheet().live_rim(cov, e, fx["edge"]["thin"] * self.px if e is not None else 0.0)
         face = rgb + (np.asarray(e[0], np.float32) * (ring - cov)[..., None] if e is not None else 0.0)
+        ground, out = out, PNF.under(self, fx, st, frame, D, out)    # a pinned figure's contact shadows (mkmmd.pin)
         sh = _sheet().lift_shadow(shadow, TB.lift_at(fx, t))
-        if sh is not None and sh[3] > 0:
-            out = FF._cast(out, ring, sh)
-        return face + out * (1.0 - ring[..., None])
+        return PNF.over(self, fx, st, frame, D, ground, self._lay_live(fx, frame, out, face, ring, sh))   # in front
 
     def _inside(self, fx, hit, k, D, st, img, out, cup):
         """`out` with the picture under the table (`img`, the cut's own frame) in the cup through a punch, dissolving in

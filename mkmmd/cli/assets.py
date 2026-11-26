@@ -238,8 +238,9 @@ def project_credits(proj, reg=None):
 
 def footage_clips(data):
     """The videos a project's frames show (mk.toml `data`), each once: the clips of its [[fx]] entries that show one
-    (footage collages and video stickers, mkmmd.core.framefx.CLIPS; their aspect.<output> tables' too), then those of its
-    [[insert]] splits (`clip`, a video or {src, ...})."""
+    (footage collages and video stickers, mkmmd.core.framefx.CLIPS; their aspect.<output> tables' too; a sky's every
+    clip, mkmmd.core.sky.clips), then those of its [[insert]] splits (`clip`, a video or {src, ...})."""
+    from ..core import sky as SY
     from ..core.framefx import CLIPS
     out = []
 
@@ -249,6 +250,9 @@ def footage_clips(data):
 
     specs = data.get("fx") or []
     for spec in [specs] if isinstance(specs, dict) else specs:
+        if isinstance(spec, dict) and spec.get("kind") in SY.KINDS:
+            for c in SY.clips(spec):
+                add(c)
         if not isinstance(spec, dict) or spec.get("kind") not in CLIPS:
             continue
         for c in [spec.get("clip")] + [o.get("clip") for o in (spec.get("aspect") or {}).values() if isinstance(o, dict)]:

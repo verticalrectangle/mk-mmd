@@ -151,10 +151,30 @@ def test_turbulence_has_the_requested_rms_speed():
 
 
 @pytest.mark.parametrize("spec", [{"gustt": 1.0}, {"exposure": 1.5}, {"direction": [0, 0, 0]}, {"turbulence": -1.0},
-                                  {"gust": 1.0, "gust_period": 0.0}])
+                                  {"gust": 1.0, "gust_period": 0.0}, {"speed": [3.0]}, {"speed": [[0.0, 1.0, 2.0]]},
+                                  {"direction": [[0.0, 0, 0, 1], [1.0, 0, 0.1, -1]]}, {"direction": [[0.0, 0, 0, 0]]}])
 def test_wind_rejects_nonsense(spec):
     with pytest.raises(ValueError):
         strands.Wind(spec)
+
+
+def test_a_keyed_wind_rises_turns_and_holds_and_its_eddies_drift_with_it():
+    w = strands.Wind({"speed": [[1.0, 0.0], [2.0, 6.0]], "direction": [[0.0, 0, 0, -1], [3.0, 0, 1, 0]]}, fps=30.0)
+    assert w.velocity(0.5, [0, 0, 0]) == pytest.approx([0, 0, 0])                 # still before the speed's first key
+    assert w.velocity(1.5, [0, 0, 0]) == pytest.approx([0, 3 * 0.5 ** 0.5, -3 * 0.5 ** 0.5])   # half way round, 3 m/s
+    assert w.velocity(3.0, [0, 0, 0]) == pytest.approx([0, 6, 0])
+    assert w.velocity(9.0, [0, 0, 0]) == pytest.approx([0, 6, 0])                  # held after the last keys
+    t = np.linspace(0.0, 5.0, 50001)
+    u = w.mean_at(t)
+    drift = (0.5 * (u[1:] + u[:-1]) * np.diff(t)[:, None]).sum(0)
+    assert w.displacement_at([5.0])[0] == pytest.approx(drift, abs=2e-3)
+
+
+def test_hair_hangs_still_until_a_keyed_wind_rises_and_is_then_blown_as_far_as_by_a_steady_one():
+    keyed = run(scene(straight_rig(), 91), wind=strands.Wind({"direction": [1, 0, 0], "speed": [[0.9, 0.0], [1.0, 3.0]]}))
+    steady = run(scene(straight_rig(), 91), wind=strands.Wind({"direction": [1, 0, 0], "speed": 3.0}))
+    assert np.abs(keyed.x[:27, 4, 0]).max() < 1e-9                    # still air until 0.9 s (frame 27 of 30 a second)
+    assert steady.x[-1, 4, 0] > 0.05 and keyed.x[-1, 4, 0] == pytest.approx(steady.x[-1, 4, 0], rel=0.1)
 
 
 # ---------------------------------------------------------------- a strand in the air

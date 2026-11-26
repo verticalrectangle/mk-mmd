@@ -8,7 +8,7 @@ BLENDS = {"over": 0, "screen": 1, "add": 2}
 
 def ops(ffx, fx, frame):
     paths = ffx.paths
-    if paths is None or fx.get("mask") is not None or fx.get("still", 0.0) > 0:   # masked or gated: the CPU's
+    if paths is None or fx.get("mask") is not None or fx.get("still", 0.0) > 0 or fx.get("sheet") is not None:
         return None
     s, copies = ffx.trails_at(fx, frame)
     if s <= 0.0:

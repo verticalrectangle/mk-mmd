@@ -12,6 +12,7 @@ import zlib
 import numpy as np
 
 from ....core import paper_theatre as PT
+from ....core import paper_theatre_cafe as PC
 from ....core import shell as S
 from ..props import electric_guitar_geo as GEO
 from ..props import parent_cutout_layout as PCL
@@ -237,7 +238,53 @@ def part_mesh(part, seed):
         meshes += floor_pencil(part.special["pencil_floor"])
     if "pencil_sky" in part.special:
         meshes += sky_pencil(part.special["pencil_sky"], bend, seed_of(seed, "sky pencil"))
+    for role, path, normal, width, lift in part.special.get("strips", ()):       # pencil, chalk, a rip's crack
+        meshes.append(band(path, normal, width, 0.0004, role, lift))
+    for path, r, role in part.special.get("cords", ()):                          # a cord sagging between two pins
+        meshes.append(S.tube(np.asarray(path, float), r, sides=8, mat=MAT[role]))
+    if "lamp" in part.special:
+        meshes += lamp_meshes(part.special["lamp"])
     return S.merge(meshes)
+
+
+def lamp_meshes(role):
+    """A café lamp (paper_theatre_cafe.lamp_profiles) in its piece's frame: the rolled paper shade in `role` and the
+    paper bulb under it."""
+    shade, bulb = PC.lamp_profiles()
+    out = []
+    for prof, mat, seg in ((shade, MAT[role], 40), (bulb, MAT["bulb"], 24)):
+        m = S.lathe(prof, seg=seg, mat=mat)
+        out.append(m if m.volume() > 0 else m.flip())
+    return out
+
+
+def _turn(V, a, k, ang):
+    """The points V turned `ang` radians about the axis through a along the unit k (Rodrigues)."""
+    v = V - a
+    c, s = math.cos(ang), math.sin(ang)
+    return a + v * c + np.cross(k, v) * s + np.outer(v @ k, k) * (1.0 - c)
+
+
+def flaps_mesh(cafe, seed):
+    """The café's hole (paper_theatre_cafe.Cafe): its torn flaps and its white torn rim (a plate round the hole a hair
+    under the border's face) in the set's frame, and how it opens: (the mesh shut, positions(o): every vertex with
+    each flap folded down into the room o times its angle about its hinge, the rim still)."""
+    R, t = (np.asarray(v, float) for v in cafe.frame)
+    meshes = [plate_mesh(f.plate, seed_of(seed, "flap", k)) for k, f in enumerate(cafe.flaps)]
+    rim = plate_mesh(cafe.rim, seed_of(seed, "rim"))
+    turns = []
+    for f, m in zip(cafe.flaps, meshes):
+        a, b = (np.array([p[0], 0.0, p[1]], float) for p in f.hinge)          # the border's plate frame (u, y, v)
+        k = (b - a) / np.linalg.norm(b - a)
+        d = m.V.mean(0) - a
+        sign = -1.0 if np.cross(k, d - k * (d @ k))[1] > 0.0 else 1.0         # its middle goes down (-y): the room
+        turns.append((a, k, sign * math.radians(f.angle)))
+
+    def positions(o):
+        out = [_turn(m.V, a, k, float(o) * ang) for m, (a, k, ang) in zip(meshes, turns)] + [rim.V]
+        return np.concatenate(out) @ R.T + t
+    shut = S.merge(meshes + [rim])
+    return S.Mesh(positions(0.0), shut.Q, shut.T, shut.Qm, shut.Tm), positions
 
 
 def curtain_mesh(c, seed):

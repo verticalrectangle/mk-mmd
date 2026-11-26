@@ -23,11 +23,18 @@ The pond and its machinery (mkmmd.core.paper_theatre_pond: `pond`, `panorama`, `
 `day`) add `wave1`..`wave5`, the wings `wing_R1` .. `wing_L2`, the `lane` (an empty) with `pad<i>`, `leaf<i>`,
 `reeds<i>` and `lily<i>` under it, `tab`, `crank` (under the frame) with `crank_knob`, the day halves `day_L` / `day_R`,
 the spools, `starlight`, `stroke<i>`; what changes shape (a half sliding round the backdrop's bends, a lily opening, a
-stroke drawn) is a flipbook: a shape key `f<k>` per held pose, one at 1 at a time."""
+stroke drawn) is a flipbook: a shape key `f<k>` per held pose, one at 1 at a time.
+
+The café (mkmmd.core.paper_theatre_cafe: `cafe`) has no hills, grass, sun or hanging pieces: `wall`, `skyline`,
+`border` (the sky over the room), `clear`, `bunting`, `plant`, its own `flies`, `sky_rip` (the window sky's old taped
+rip), the lamps `lamp1` / `lamp2` (hung as the pieces are: `<lamp>_hang`, `<lamp>`, `<lamp>_thread`), `patch` (the
+taped rip over the hole), `flaps` (the hole's flaps and rim, a flipbook of how open it is) and `slap` (the strip of
+tape, its origin its middle)."""
 import bpy
 import numpy as np
 
 from ....core import paper_theatre as PT
+from ....core import paper_theatre_cafe as PC
 from ....core import paper_theatre_pond as PP
 from ....core import shell as S
 from ....core import shotstyle as SS
@@ -127,16 +134,22 @@ def _flipbook(o, shapes, index, frames, interp):
 @register("paper_theatre")
 def paper_theatre(name, coll, root, spec, palette):
     """spec: the [[set]] table (mkmmd.core.paper_theatre.DEFAULTS: arrive, stagger, step, step_from, sun_rpm, swing,
-    twist, seed, colors, width, height, depth, and the pond's pond, panorama, rise, night, moon, loose, sun, day); an
-    unknown key is an error that lists the known ones."""
+    twist, seed, colors, width, height, depth, the pond's pond, panorama, rise, night, moon, loose, sun, day, house,
+    and the café's cafe); an unknown key is an error that lists the known ones."""
     opts = PT.options(spec)
     colours = PT.colours(opts, palette)
-    lay, pond = PT.scene(opts)
+    lay, extra = PT.scene(opts)
+    cafe = extra if opts["cafe"] is not None else None
+    pond = None if cafe is not None else extra
     sc = bpy.context.scene
     f0 = float(sc.get("mk_frame0", sc.frame_start))
     fps = sc.render.fps / sc.render.fps_base
     frames, times, interp = PT.key_times(sc.frame_start, sc.frame_end, f0, fps, opts["step"], opts["step_from"])
-    for nm in (PT.objects(name, lay) if pond is None else PP.objects(name, lay, pond)):     # a rebuild in the session
+    if cafe is not None:
+        made = PC.objects(name, lay, cafe)
+    else:
+        made = PT.objects(name, lay) if pond is None else PP.objects(name, lay, pond)
+    for nm in made:                                       # a rebuild in the session
         SH.purge(nm)
     mat_of = _materials(name, colours)
     seed = opts["seed"]
@@ -167,7 +180,10 @@ def paper_theatre(name, coll, root, spec, palette):
         th.scale = (1.0, 1.0, h.length)
         obs.update({f"{h.name}_hang": piv, h.name: piece, f"{h.name}_thread": th})
 
-    if pond is None:
+    if cafe is not None:
+        channels, hidden, flips = PC.motion(opts, lay, cafe, times)
+        shapes = _cafe(name, coll, root, cafe, seed, mat_of, obs, flips)
+    elif pond is None:
         channels, hidden = PT.motion(opts, lay, times)
         flips, shapes = {}, {}
     else:
@@ -186,7 +202,7 @@ def paper_theatre(name, coll, root, spec, palette):
     for nm, (states, index) in flips.items():
         if len(states) > 1:
             _flipbook(obs[nm], [shapes[nm](s) for s in states], index, frames, interp)
-    card = PT.card(name, opts, lay, pond)
+    card = PT.card(name, opts, lay, extra)
     ride = opts["pond"]["ride"] if pond is not None and opts["pond"] is not None else None
     if ride:                                              # the main pad bobs with what she lies on, within the water's
         when = opts["pond"]["ride_when"]                  # give (its top at z = 0 on the lane): the props stage ties it
@@ -211,6 +227,24 @@ def _house(opts, pond, obs, frames, hidden, flips, f0, fps, start):
         i = np.clip(np.searchsorted(frames, keys, side="right") - 1, 0, None)
         g = gone[np.clip(np.searchsorted(ks, keys, side="right") - 1, 0, None)]
         _key_hidden(o, keys, ~g if nm == "cover" else (own[i] | g), viewport=nm not in flips)
+
+
+def _cafe(name, coll, root, cafe, seed, mat_of, obs, flips):
+    """The café's moving objects (mkmmd.core.paper_theatre_cafe) into `obs`: the patch over the hole, the hole's flaps
+    and rim (a flipbook made in the shape its first key shows) and the strip of tape (its origin its middle, lying on
+    the border); returns {flipbook object: shape(state) -> its positions}."""
+    from mathutils import Matrix
+    obs["patch"] = SH.exempt(SH.mesh_object(f"{name}_patch", P.part_mesh(cafe.patch, seed), coll, root, mat_of), FLAT)
+    mesh, positions = P.flaps_mesh(cafe, seed)
+    states, index = flips["flaps"]
+    shut = S.Mesh(positions(states[int(index[0])]), mesh.Q, mesh.T, mesh.Qm, mesh.Tm)
+    obs["flaps"] = SH.exempt(SH.mesh_object(f"{name}_flaps", shut, coll, root, mat_of), FLAT)
+    o = SH.exempt(SH.mesh_object(f"{name}_slap", P.part_mesh(cafe.slap, seed), coll, root, mat_of,
+                                 loc=cafe.slap_rest), "masking tape: flat by nature")
+    o.rotation_mode = "XYZ"
+    o.rotation_euler = Matrix([list(r) for r in cafe.slap_R]).to_euler("XYZ")
+    obs["slap"] = o
+    return {"flaps": positions}
 
 
 def _pond(name, coll, root, carrier, pond, seed, mat_of, obs, flips):

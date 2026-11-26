@@ -1,7 +1,9 @@
 """Cut effects composited over the cut's frames, before the grade (docs/design.md: Shots: Transitions and inserts,
 Glitches): the post layer (numpy, OpenCV, Pillow). `mk post` and `mk look` hand each frame of the cut to `CutFx.frame`;
 frames outside every window come back untouched. The layers an effect needs were rendered next to the cut's frames
-(`mk render`, mkmmd.blender.transition); the plan (mkmmd.core.transition) says which.
+(`mk render`, mkmmd.blender.transition); the plan (mkmmd.core.transition) says which. The frame effects marked `under`
+belong to a picture and are drawn on it before the effect composes (`CutFx.under` says which): the cut's own frame, or
+in a transition's window the incoming shot's picture, which `CutFx.frame` hands to its caller's `incoming`.
 
     expand / collapse   the figure of a silhouette shot (`matte/`, its coverage as a distance field, mkmmd.matte) is turned
                         and scaled about its centre; inside it plays the other shot, outside is the silhouette shot's frame
@@ -58,6 +60,7 @@ DOT_FIT = (0.085, 0.13, 0.18)            # and at most these shares of the trail
 DOT_AT = (0.12, 0.40, 0.75)              # where they sit along it, as shares measured from the head edge
 SMEAR_STEP = 1.5                         # px between the turned copies a spin's smear averages, at the frame's far corner
 MAX_TAPS = 2048                          # and at most this many copies
+INCOMING = "incoming"                    # [[fx]] under = "incoming": the effect belongs to the incoming shot's picture
 
 
 def read_point(frames_dir, key, frame, size):
@@ -125,6 +128,23 @@ class CutFx:
     def active(self, frame):
         return frame in self.at
 
+    def under(self, frame, entries):
+        """The frame effects marked `under` among `entries` (those on `frame`, in table order) by the picture they are
+        drawn on before `frame`'s cut effect composes: (the cut's own frame's, the incoming shot's picture's, for
+        `frame`'s `incoming`). An entry `under = "incoming"` comes in with the transition whose window its span starts
+        in (on or after the window's first frame): there, before the cut, it is the incoming shot's (and nowhere before
+        a spin's cut, which shows the outgoing shot alone). Every other entry is the cut's own frame's, and so is that
+        one on any other frame: in another transition's window (it was on the outgoing picture before it), an insert's
+        or a glitch's, a spin's from its cut on."""
+        early = [e for e in entries if e.get("under")]
+        hit = self.at.get(frame)
+        if hit is None or hit[0] != "transition" or frame >= hit[1]["cut"]:
+            return early, []
+        tr = hit[1]
+        new = [e["under"] == INCOMING and e["f0"] >= tr["first"] for e in early]    # came in with this window
+        own = [e for e, n in zip(early, new) if not n]
+        return own, [] if tr["kind"] == "spin" else [e for e, n in zip(early, new) if n]
+
     def missing(self, frames):
         """The layer files the given frames' effects need that are not on disk, are empty, or (a point) predate its scale."""
         out = []
@@ -158,8 +178,10 @@ class CutFx:
                 self._sprite_files(ins)
                 self._eye_hits(ins)
 
-    def frame(self, frame, main):
-        """The cut's frame `main` (float RGB) with the effect of `frame`'s window composited on it."""
+    def frame(self, frame, main, incoming=None):
+        """The cut's frame `main` (float RGB) with the effect of `frame`'s window composited on it. In a transition's
+        window `incoming` (callable picture -> picture, or None) lays the incoming shot's own frame effects (`under`)
+        on its picture before the transition composes it: on its plate, or a collapse's on its frame round the figure."""
         hit = self.at.get(frame)
         if hit is None:
             return main
@@ -173,24 +195,26 @@ class CutFx:
             return GL.frame(main, self._rgb(TR.bare_rel(f"g{spec['index']}", frame)), frame - spec["f0"],
                             spec["f1"] - spec["f0"], seed=spec["seed"], shift=spec["shift"], split=spec["split"] * self.px,
                             colors=spec["colors"])
-        if spec["kind"] == "slash":
-            return self._slash(spec, frame, main)
-        if spec["kind"] == "whip":
-            return self._whip(spec, frame, main)
-        if spec["kind"] == "slice":
-            return self._slice(spec, frame, main)
         if spec["kind"] == "spin":
             return self._spin(spec, frame, main)
+        plate = self._plate(spec["plate"], frame, main)
+        if incoming is not None and spec["plate"] == spec["in"]:            # the incoming shot's picture: its effects on it
+            plate = incoming(plate)
+        if spec["kind"] == "slash":
+            return self._slash(spec, frame, main, plate)
+        if spec["kind"] == "whip":
+            return self._whip(spec, frame, main, plate)
+        if spec["kind"] == "slice":
+            return self._slice(spec, frame, main, plate)
         if spec["kind"] == "page":
-            return self._page(spec, frame, main)
+            return PAGE.frame(spec, frame, main, plate)
         if spec["kind"] == "peel":
-            return PEEL.frame(spec, frame, main, self._plate(spec["plate"], frame, main))
+            return PEEL.frame(spec, frame, main, plate)
         if spec["kind"] == "shatter":
-            return SHATTER.frame(spec, frame, main, self._plate(spec["plate"], frame, main), self._impact(spec),
-                                 self.plan["fps"])
+            return SHATTER.frame(spec, frame, main, plate, self._impact(spec), self.plan["fps"])
         if spec["kind"] == "tear":
-            return TEAR.frame(spec, frame, main, self._plate(spec["plate"], frame, main), self.plan["fps"])
-        return self._matte(spec, frame, main)
+            return TEAR.frame(spec, frame, main, plate, self.plan["fps"])
+        return self._matte(spec, frame, plate, incoming)
 
     def _impact(self, tr):
         """A shatter's impact (px): its `center` in the frame, or its scene point on the window's first frame."""
@@ -258,11 +282,12 @@ class CutFx:
                                "raised": spec_hi is not None and top > spec_hi, "needed": round(need, 3)})
         return self._top[tr["index"]]
 
-    def _matte(self, tr, frame, main):
+    def _matte(self, tr, frame, plate, incoming=None):
         k = frame - tr["first"]
         field, c = self._figure(tr, frame)
         back = self._rgb(TR.back_rel(tr["matte"], frame))
-        plate = self._plate(tr["plate"], frame, main)
+        if incoming is not None and tr["matte"] == tr["in"]:                 # a collapse's: the incoming shot round its
+            back = incoming(back)                                            # figure, its own effects on it
         if c is None:                                                        # no figure in this frame: nothing to show it in
             return back
         scale, turn = TR.pose(tr, k, self._top_scale(tr))
@@ -273,9 +298,8 @@ class CutFx:
         return M.paint(out, plate, M.coverage(d))
 
     # ---------------------------------------------------------------- slash
-    def _slash(self, tr, frame, main):
+    def _slash(self, tr, frame, main, plate):
         w, h = self.size
-        incoming = self._plate(tr["plate"], frame, main)
         diag = float(np.hypot(w, h))
         a = np.radians(tr["angle"])
         nx, ny = float(np.cos(a)), float(np.sin(a))                          # across the band: the way it sweeps
@@ -287,7 +311,7 @@ class CutFx:
         extra = (sec["width"] + abs(sec["offset"])) * diag if sec else 0.0   # the thin band must clear the frame too
         reach = (abs(nx) * w + abs(ny) * h) / 2.0 + tr["width"] * diag / 2.0 + extra
         pos = TW.lerp(-reach, reach, TR.slash_progress(tr, frame - tr["first"]))
-        out = M.paint(main, incoming, M.coverage(s - pos))                   # behind the band: the incoming shot
+        out = M.paint(main, plate, M.coverage(s - pos))                      # behind the band: the incoming shot
         if sec:
             half = (tr["width"] + sec["width"]) * diag / 2.0 + abs(sec["offset"]) * diag
             mid = pos + (-half if sec["offset"] < 0 else half)               # the thin band's centre, a gap clear of the main one
@@ -295,17 +319,16 @@ class CutFx:
         return M.paint(out, tr["color"], M.coverage(np.abs(s - pos) - tr["width"] * diag / 2.0))
 
     # ---------------------------------------------------------------- whip
-    def _whip(self, tr, frame, main):
-        """The outgoing frame and the incoming shot side by side, flung along the whip's way by its eased progress and
-        smeared over the way each frame's shutter (`blur` frames) covers."""
+    def _whip(self, tr, frame, main, plate):
+        """The outgoing frame and the incoming shot (`plate`) side by side, flung along the whip's way by its eased
+        progress and smeared over the way each frame's shutter (`blur` frames) covers."""
         w, h = self.size
-        incoming = self._plate(tr["plate"], frame, main)
         k = frame - tr["first"]
         across = tr["dir"] in ("left", "right")
         span = w if across else h
         u = TR.whip_progress(tr, k)
         speed = (TR.whip_progress(tr, k + 0.5) - TR.whip_progress(tr, k - 0.5)) * span      # px per frame
-        first, second = (main, incoming) if tr["dir"] in ("left", "up") else (incoming, main)
+        first, second = (main, plate) if tr["dir"] in ("left", "up") else (plate, main)
         strip = np.concatenate([first, second], axis=1 if across else 0)                   # in the order they pass
         blur = int(round(abs(speed) * tr["blur"]))
         if blur > 1:
@@ -331,18 +354,18 @@ class CutFx:
             self._centre[tr["index"]] = ((x + 0.5) / k - 0.5, (y + 0.5) / k - 0.5)
         return self._centre[tr["index"]]
 
-    def _slice(self, tr, frame, main):
+    def _slice(self, tr, frame, main, plate):
         """The outgoing frame cut in two along a line through the centre, the halves sliding apart across it (each its own
-        way, off the frame by the cut), the incoming shot in the widening gap, an `edge` along each half's cut side."""
+        way, off the frame by the cut), the incoming shot (`plate`) in the widening gap, an `edge` along each half's cut
+        side."""
         w, h = self.size
-        incoming = self._plate(tr["plate"], frame, main)
         c = self._slice_centre(tr)
         nx, ny = TR.slice_normal(tr["angle"])
         xs, ys = M.grid(h, w)
         s = (xs - c[0]) * nx + (ys - c[1]) * ny                              # px across the cut, + on the normal's side
         p = TR.slice_progress(tr, frame - tr["first"])
         ew = tr["edge"]["width"] * self.px if tr["edge"] else 0.0
-        out = incoming
+        out = plate
         for sign, reach in zip((1.0, -1.0), TR.slice_reach(self.size, c, (nx, ny))):
             dx, dy = sign * p * reach * nx, sign * p * reach * ny
             half = cv2.warpAffine(main, np.float32([[1, 0, dx], [0, 1, dy]]), (w, h), flags=cv2.INTER_LINEAR,
@@ -390,11 +413,6 @@ class CutFx:
             turn /= 2.0
             taps //= 2
         return np.ascontiguousarray(acc[pt:pt + h, pl:pl + w])
-
-    # ---------------------------------------------------------------- page
-    def _page(self, tr, frame, main):
-        """The outgoing frame turned over as a page (mkmmd.pageturn) onto the incoming shot's plate."""
-        return PAGE.frame(tr, frame, main, self._plate(tr["plate"], frame, main))
 
     # ---------------------------------------------------------------- insert
     def _dots(self, start, centre, a, b):

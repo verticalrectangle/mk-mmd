@@ -1,6 +1,7 @@
 """The frames of one output as `mk post` encodes them (docs/design.md: Post): the cut's frame and the layers mk render drew
-beside it, the cut effects (mkmmd.cutfx; inside their windows over the frame effects marked `under`, drawn on the cut's
-own frame first), the craft type laid under the frame effects, the frame effects (mkmmd.framefx),
+beside it, the cut effects (mkmmd.cutfx; inside their windows over the frame effects marked `under`, drawn first on the
+picture they belong to: the cut's own frame, or a transition's incoming plate), the craft type laid under the frame
+effects, the frame effects (mkmmd.framefx),
 the lens streaks, the screen type (with the craft type over the effects: mkmmd.crafttype), the loop's
 wrap and the grade (mkmmd.post), finished in frame order by this process or by worker processes over chunks of
 consecutive frames, and handed on in order; following a running render (mkmmd.core.progress), each frame once the
@@ -165,6 +166,8 @@ class Output:
             except FX.FxError as e:
                 raise SetupError(str(e)) from None
         self.under = frozenset(e["index"] for e in self.ffx.fxs if e.get("under")) if self.ffx else frozenset()
+        self.incoming = frozenset(e["index"] for e in self.ffx.fxs if e.get("under") == CF.INCOMING) \
+            if self.ffx else frozenset()
         names = {}                                         # [[fx]] name -> its place in the chain (`under = "<name>"`)
         for e in (plan or {}).get("fx") or []:
             if e.get("name") is not None:
@@ -257,15 +260,25 @@ class Output:
                 for got in groups.values():
                     mask = mask * (1.0 - CRF.as_layer(None, got, self.size)[..., 3])
         entries = ffx.entries(f) if ffx and ffx.active(f) else []
-        early = [e for e in entries if e.get("under")] if cut else []
-        if early:                                                 # `under` effects: the cut's own picture's, so drawn
-            entries = [e for e in entries if not e.get("under")]  # on it before the cut effects compose, with the
-            mine = {s: groups.pop(s) for s in list(groups) if s == -1 or s in self.under}   # type laid under them
+        early, nxt = fx.under(f, entries) if cut else ([], [])  # `under` effects: a picture's, so drawn on it before the
+        if cut:                                                   # cut effects compose, with the type laid under them
+            entries = [e for e in entries if not e.get("under")]
+        theirs = {s: groups.pop(s) for s in list(groups) if s in self.incoming} if nxt else {}
+
+        def incoming(pic):                                        # the incoming shot's (`under = "incoming"`): on its
+            nonlocal bare                                         # plate, with the type laid under them
+            pic, missed = self._chain(f, pic, nxt, dict(theirs))
+            bare += missed
+            return pic
+        if early:                                                 # the cut's own picture's: on its frame
+            mine = {s: groups.pop(s) for s in list(groups) if s == -1 or s in self.under}
             img, missed = self._chain(f, img, early, mine)
             bare += missed
         if cut:
             try:
-                img = fx.frame(f, img)
+                img = fx.frame(f, img, incoming if nxt else None)
+            except (FT.FootageError, FX.FxError):                 # an effect on the incoming picture failed: an error
+                raise
             except FileNotFoundError:                             # layers missing (allowed): the plain cut shows
                 bare += 1
         img, missed = self._chain(f, img, entries, groups)

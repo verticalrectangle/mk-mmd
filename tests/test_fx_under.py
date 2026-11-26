@@ -1,10 +1,13 @@
 """`[[fx]] under = true` (docs/design.md: Frame effects): an effect that belongs to the cut's own picture, drawn on it
 before the cut effects compose, so a transition carries it off with the outgoing shot; outside every window the frame is
-the one the plain table order gives. Two flat shots peeled one off the other, tiny frames."""
+the one the plain table order gives. `under = "incoming"`: one that belongs to the incoming shot's picture, drawn on its
+plate in a transition's window, so the transition uncovers it. Two flat shots peeled one off the other, tiny frames."""
 import numpy as np
 import pytest
 from PIL import Image
 
+from mkmmd import peel as PEEL
+from mkmmd import post as P
 from mkmmd import postframes as PF
 from mkmmd.cli import common as CM
 from mkmmd.core import framefx as FX
@@ -18,6 +21,10 @@ FLAT = np.array([0x20, 0x40, 0x60])                 # what the tint makes of any
 TINT = ('[[fx]]\nkind = "tint"\nfrom = 0.0\nto = 1.6\ncolor = "#204060"\ndark = "#204060"\nlight = "#204060"\n'
         '{under}')
 MOSH = '[[fx]]\nkind = "mosh"\nfrom = 0.2\nto = 1.6\nblock = 8\n{under}'
+TWO = ('[[fx]]\nkind = "tint"\nfrom = 0.0\nto = 0.8\ncolor = "#204060"\ndark = "#204060"\nlight = "#204060"\n'
+       'strength = 0.5\n{out}'
+       '[[fx]]\nkind = "tint"\nfrom = 0.4\nto = 1.6\ncolor = "#e0a020"\ndark = "#e0a020"\nlight = "#e0a020"\n'
+       'strength = 0.5\n{inc}')        # half tints: the outgoing shot's to the cut, the incoming one's from the window on
 
 
 def _output(root, fx, under, moving=False):
@@ -94,3 +101,32 @@ def test_a_mosh_under_the_cut_keeps_its_frames_outside_the_window(tmp_path):
 def test_under_is_true_or_false():
     with pytest.raises(FX.FxError, match="under"):
         FX.normalize({"kind": "tint", "from": 0, "to": 1, "under": "yes"}, PAL.get("rose-pine-dawn"))
+
+
+def test_an_incoming_effect_is_on_the_incoming_plate_in_the_window_and_an_outgoing_one_is_not(tmp_path):
+    out, tr = _output(tmp_path / "u", TWO.format(out="under = true\n", inc='under = "incoming"\n'), False)
+    plain, _ = _output(tmp_path / "o", TWO.format(out="", inc=""), False)
+    e_out, e_in = out.ffx.fxs
+    mid = (tr["first"] + tr["last"]) // 2 + 1                 # half peeled: both pictures show
+    sheet = out.ffx._apply(e_out, mid, out._inputs(mid)[0])    # the outgoing picture with its own tint
+    plate = out.ffx._apply(e_in, mid, P.read(out.src / TR.plate_rel("b", mid), (W, H)))   # the incoming one with its own
+    assert np.allclose(out._before_grade(mid)[0], PEEL.frame(tr, mid, sheet, plate), atol=1e-6)
+
+    def tinted(e, rgb):
+        return np.round(255 * out.ffx._apply(e, mid, np.full((1, 1, 3), np.asarray(rgb) / 255.0, np.float32))[0, 0])
+    got, flat = _frames(out), _frames(plain)
+    pic = got[mid]
+    assert _near(pic, tinted(e_in, B)).mean() > 0.1          # where the sheet has gone: the next picture, its tint on it
+    assert _near(pic, tinted(e_out, A)).mean() > 0.1         # the sheet still on: the outgoing picture, its tint on it
+    assert not _near(pic, B).any() and not _near(pic, tinted(e_out, B)).any()   # never the bare plate, nor the plate
+    for f in got:                                             # with the outgoing tint; outside the window the plain
+        if not tr["first"] <= f <= tr["last"]:                # table order's frames
+            assert np.array_equal(got[f], flat[f]), f
+
+
+def test_an_incoming_effect_on_before_the_window_goes_off_with_the_outgoing_shot(tmp_path):
+    keyed, _ = _output(tmp_path / "i", TWO.format(out='under = "incoming"\n', inc='under = "incoming"\n'), False)
+    true, _ = _output(tmp_path / "t", TWO.format(out="under = true\n", inc='under = "incoming"\n'), False)
+    got, want = _frames(keyed), _frames(true)                 # the outgoing tint started before the window: the span
+    for f in got:                                             # says it comes in with no transition here, so it is
+        assert np.array_equal(got[f], want[f]), f             # drawn as `under = true` is

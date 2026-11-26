@@ -54,6 +54,7 @@ import json
 import math
 from pathlib import Path
 
+from . import echoes as EC
 from . import framefx as FX
 from . import iris as IR
 from . import pageturn as PG
@@ -621,6 +622,8 @@ def plan(data, fps, frame0, palette):
         out["fx"] = FX.plan(data, fps, frame0, palette, last)
         FX.VS.ride(out["fx"], out["transitions"], fps)            # cutouts riding a peel's corner or a tear's grips
         TH.link(out["fx"], fps, frame0)                           # threads tied to a world point: their sheet's camera
+        FX.ZP.link(out["fx"], fps, frame0)                        # zaps: the sheets she leaves and arrives in
+        EC.link(out["fx"])                                        # trails that follow a sheet's live sticker
         FX.RW.check_windows(out["fx"], windows)                   # a rewind shows rendered frames, no cut effect's
     except FX.FxError as e:
         raise TransitionError(str(e)) from None
@@ -820,6 +823,13 @@ def fx_frames(pl, frames, hits=None, before=None):
                     bucket = out.setdefault(g, [])
                     if s is not None and item not in bucket:
                         bucket.append(item)
+            for z in fx["zaps"] if fx["kind"] in FX.ZP.KINDS else ():
+                if FX.ZP.ghost_age(z, f) is not None:    # a zap's ghost: the sticker its sheet laid the frame before
+                    g, sheet = z["frame"] - 1, fxs[z["before"]]
+                    bucket = out.setdefault(g, [])
+                    items = _figure_reads(pl, sheet, g) + ([] if sheet.get("shot") else
+                                                           [{"kind": "plate", "shot": cut_shot(pl["cuts"], g)}])
+                    bucket += [it for it in items if it not in bucket]
             for g in FX.sources(fx, f, pl["frame0"], hits):
                 shot = cut_shot(pl["cuts"], g)
                 if g == f or (shot is None and not fx.get("shot")):

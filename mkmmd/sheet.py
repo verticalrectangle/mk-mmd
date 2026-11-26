@@ -245,6 +245,23 @@ def dashes(cov, inset, dash, gap, width):
     return out.astype(np.float32) / 255.0
 
 
+def live_rim(cov, edge, thin=0.0):
+    """A live figure's coverage `cov` (h, w) with its die-cut rim (`edge`: (colour, width px) or None) grown round it;
+    with `thin` (px) its parts narrower than that (a thread, a wire) lie bare, the rim grown round the rest alone: the
+    figure where it is over half, opened by a disc `thin` across (what lies more than half of it inside, grown back by
+    as much). `thin` 0 is the rim round all of it."""
+    FF = _ff()
+    if edge is None or edge[1] <= 0:
+        return cov
+    r = 0.5 * float(thin)
+    if r < 1.0:
+        return FF._grow(cov, edge[1])
+    inside = (cov >= 0.5).astype(np.uint8)
+    core = (cv2.distanceTransform(inside, cv2.DIST_L2, cv2.DIST_MASK_PRECISE) > r).astype(np.uint8)
+    near = cv2.distanceTransform(1 - core, cv2.DIST_L2, cv2.DIST_MASK_PRECISE) <= r + 0.5
+    return np.maximum(FF._grow((near & (inside > 0)).astype(np.float32), edge[1]), cov)
+
+
 def hollow_layer(cov, edge, shadow, sheen, dash, px, ink, light):
     """The outline a sticker of coverage `cov` (frame px, cropped) leaves when it is peeled off: its die-cut rim (`edge`
     (colour, width px)) with nothing inside but the paper, the rim's soft shadow on the paper round it and inside it, a
@@ -364,7 +381,8 @@ def scribble(out, lines, at, size, angle, ink, width, jitter):
 # ================================================================================================= over a cut
 class SheetFx:
     """The sheets' and flings' part of mkmmd.framefx.FrameFx (a mixin: it uses FrameFx's size, px, fps, frame0, _t, _at,
-    _figure, _shot_frame, _pose_map, _placing, _pivot, _hit_times and _hits). `_sheet_init` is called once."""
+    _figure, _shot_frame, _pose_map, _placing, _pivot, _hit_times and _hits, and lays the live sticker through ZapFx's
+    _lay_live, mkmmd.zap). `_sheet_init` is called once."""
 
     def _sheet_init(self):
         self._sheets = {}            # a sheet's index -> what it keeps from frame to frame on this output
@@ -667,13 +685,10 @@ class SheetFx:
                 cov = np.clip(FF._warp(m, Mt, self.size), 0.0, 1.0)
                 rgb = FF._warp(pic * m[..., None], Mt, self.size)
                 e = self._sheet_edge(fx)
-                ring = FF._grow(cov, e[1]) if e is not None and e[1] > 0 else cov
+                ring = live_rim(cov, e, fx["edge"]["thin"] * self.px if e is not None else 0.0)
                 face = rgb + (np.asarray(e[0], np.float32) * (ring - cov)[..., None] if e is not None else 0.0)
-                if u is None:
-                    sh = lift_shadow(shadow, sl["lift"])
-                    if sh is not None and sh[3] > 0:
-                        out = FF._cast(out, ring, sh)
-                    out = face + out * (1.0 - ring[..., None])
+                if u is None:                                    # laid as it is, or torn by a zap (mkmmd.zap)
+                    out = self._lay_live(fx, frame, out, face, ring, lift_shadow(shadow, sl["lift"]))
                 else:
                     p = fx["peel"]
                     out = self._peeled(out, face, ring, u, shadow, p["corner"], p["radius"] * min(self.size), p["back"])

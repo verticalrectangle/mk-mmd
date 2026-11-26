@@ -203,3 +203,17 @@ def test_tumbles_turn_about_their_axis_add_up_and_hold():
         PF.tumble_plan(TS, [{"from": 1.0, "to": 2.0, "deg": 90}, {"from": 1.5, "to": 2.5, "deg": 90}])
     with pytest.raises(ValueError, match="axis"):
         PF.tumble_plan(TS, [{"from": 1.0, "to": 2.0, "deg": 90, "axis": "barrel"}])
+
+
+def test_a_twist_rolls_her_over_about_her_own_long_axis_after_a_flip_onto_her_back():
+    """Flipped onto her back she lies face up; a twist of 180 turns her over about her long axis (face down, her head
+    where it was), and a cartwheel then turns her flat about the vertical whatever the twist did."""
+    t = PF.tumble_plan(TS, [{"from": 0.5, "to": 1.0, "deg": -90}, {"from": 1.5, "to": 2.0, "deg": 180, "axis": "twist"},
+                            {"from": 2.5, "to": 3.0, "deg": 90, "axis": "cartwheel"}])
+    R = PF.tumble_rotations(t)
+    front, head = np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 1.0])
+    at = {s: R[int(s * 120)] for s in (1.2, 2.2, 3.2)}
+    assert at[1.2] @ front == pytest.approx([0, 0, 1], abs=1e-9) and at[1.2] @ head == pytest.approx([0, 1, 0], abs=1e-9)
+    assert at[2.2] @ front == pytest.approx([0, 0, -1], abs=1e-9) and at[2.2] @ head == pytest.approx([0, 1, 0], abs=1e-9)
+    assert at[3.2] @ front == pytest.approx([0, 0, -1], abs=1e-9) and at[3.2] @ head == pytest.approx([1, 0, 0], abs=1e-9)
+    assert np.allclose(R @ np.transpose(R, (0, 2, 1)), np.eye(3))

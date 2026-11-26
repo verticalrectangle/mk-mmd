@@ -36,13 +36,19 @@ import math
 
 import numpy as np
 
+from . import pin as PIN
 from . import tween as TW
 
 KEYS = ("clip", "in", "rate", "loop", "grade", "view", "cup", "inside", "touch", "pads", "rings", "drops", "track",
-        "punch", "lift")
+        "punch", "lift", "smear")
+KEYS += PIN.KEYS      # a figure pinned to a seat its clip's camera moves (mkmmd.core.pin)
 NOT_ON_TABLE = ("paper", "hollows", "peel", "tapes", "scribbles", "slap")   # a paper sheet's own: a table has none
 GRADE = {"map": ["text", "iris", "rose", "overlay", "surface"], "stretch": [1.0, 99.0], "at": None, "lumas": None,
-         "soften": 0.0}
+         "soften": 0.0, "cool": None, "warm": None, "lean": None, "warmth": None}
+BY_WARMTH = ("cool", "warm", "lean", "warmth")      # a grade's keys by warmth: any of them makes it a grade of two ramps
+RAMPS = {"cool": [[0.0, "text"], [0.28, "pine"], [0.55, "foam"], [0.8, "foam:surface:0.6"], [1.0, "surface"]],
+         "warm": [[0.0, "text"], [0.25, "love"], [0.5, "rose"], [0.75, "gold:surface:0.45"], [1.0, "surface"]]}
+WARMTH = 2.2           # how hard a pixel's warmth (its red less its blue, 0..1) picks between a grade's two ramps
 SOFTEN_MAX = 0.05      # table heights: the most a table's luma is softened before its map
 VIEW_EASES = ("inout", "in", "out", "linear", "step")
 VIEW = {"at": [0.5, 0.5], "height": 1.0, "width": None, "turn": 0.0, "ease": "inout"}
@@ -117,6 +123,7 @@ def normalize(FX, spec, out, palette, what):
     if (out["rings"] is not None or out["pads"]) and out["cup"] is None:
         raise FX.FxError(f"{what}: rings and pads float on the coffee: give the `cup`")
     out["track"] = _track(FX, spec.get("track"), spec, what)
+    out["pin"] = PIN.normalize(FX, spec.get("pin"), spec, palette, what)
     out["punch"] = sorted((_punch(FX, p, what) for p in _list(spec.get("punch"))), key=lambda p: p["t"])
     if out["punch"] and out["cup"] is None:
         raise FX.FxError(f"{what}: a punch goes through the cup: give the `cup`")
@@ -124,6 +131,10 @@ def normalize(FX, spec, out, palette, what):
         if window(a)[1] > window(b)[0] + 1e-9:
             raise FX.FxError(f"{what}: the punches at {a['t']:g} and {b['t']:g} s overlap")
     out["lift"] = None if spec.get("lift") is None else FX._keys(spec["lift"], f"{what} lift")
+    from . import sky as SY                # mkmmd.core.sky imports this module
+    out["smear"] = None if spec.get("smear") is None else SY.smear(FX, spec["smear"], f"{what} smear", table=True)
+    if out["smear"] is not None and out["from"] + out["smear"]["dur"] > out["to"] + 1e-9:
+        raise FX.FxError(f"{what}: smear: {out['smear']['dur']:g} s is longer than the table is on")
 
 
 def drops(FX, v, palette, spec, what, doodles):
@@ -185,16 +196,52 @@ def _ramp(FX, m, lumas, palette, what, name):
     return cols, at
 
 
+def _ramp_by(FX, m, palette, what, name):
+    """A ramp of a grade by warmth: {colors, at}, 2 to 8 colours dark to light each at its place (0..1 of the stretched
+    luma, rising): given as `[colour, ...]` (spread evenly) or `[[u, colour], ...]` (each at its u)."""
+    if isinstance(m, str) or not isinstance(m, (list, tuple)) or not 2 <= len(m) <= 8:
+        raise FX.FxError(f"{what}: grade {name} = {m!r}: 2 to 8 colours, dark to light, or [[u, colour], ...]")
+    pairs = [isinstance(c, (list, tuple)) for c in m]
+    if all(pairs):
+        if any(len(c) != 2 for c in m):
+            raise FX.FxError(f"{what}: grade {name} = {m!r}: each [u, colour] (u 0..1 of the stretched luma)")
+        at = [FX._num(c[0], f"{what} grade {name} u", 0.0, 1.0) for c in m]
+        if any(b <= a for a, b in zip(at, at[1:])):
+            raise FX.FxError(f"{what}: grade {name} = {m!r}: its u rising, as its colours go dark to light")
+        cols = [FX._colour(c[1], palette, f"{what} grade {name}") for c in m]
+    elif not any(pairs):
+        at = np.linspace(0.0, 1.0, len(m)).tolist()
+        cols = [FX._colour(c, palette, f"{what} grade {name}") for c in m]
+    else:
+        raise FX.FxError(f"{what}: grade {name} = {m!r}: all colours (spread evenly) or all [u, colour]")
+    return {"colors": cols, "at": at}
+
+
 def _grade(FX, v, palette, what):
-    g = _table(FX, {} if v is None else v, GRADE, what, "grade")
-    cols, lumas = _ramp(FX, g["map"], g["lumas"], palette, what, "grade")
+    """A table's `grade`: one gradient `map` over the luma (its `lumas`, or spread over a measured `stretch`), or, given
+    any of BY_WARMTH, a grade by warmth: the stretched luma through a `cool` and a `warm` ramp (RAMPS' by default), the
+    two mixed by each pixel's warmth (its red less its blue) times `warmth`, plus `lean` (-1 .. 1: the whole clip toward
+    the warm ramp, or below 0 the cool one)."""
+    given = {} if v is None else v
+    g = _table(FX, given, GRADE, what, "grade")
     lo, hi = FX._pair(g["stretch"], f"{what} grade stretch")
     if not 0.0 <= lo < hi <= 100.0:
         raise FX.FxError(f"{what}: grade stretch = {g['stretch']!r}: [low, high] percentiles of the luma, 0 <= low < high "
                          f"<= 100")
-    return {"map": cols, "lumas": lumas, "stretch": [lo, hi],
-            "at": None if g["at"] is None else FX._num(g["at"], f"{what} grade at", lo=0.0),
-            "soften": FX._num(g["soften"], f"{what} grade soften", 0.0, SOFTEN_MAX)}
+    out = {"stretch": [lo, hi], "at": None if g["at"] is None else FX._num(g["at"], f"{what} grade at", lo=0.0),
+           "soften": FX._num(g["soften"], f"{what} grade soften", 0.0, SOFTEN_MAX)}
+    if not any(given.get(k) is not None for k in BY_WARMTH):
+        cols, lumas = _ramp(FX, g["map"], g["lumas"], palette, what, "grade")
+        return {"map": cols, "lumas": lumas, **out, "cool": None, "warm": None, "lean": None, "warmth": None}
+    one = sorted(k for k in ("map", "lumas") if given.get(k) is not None)
+    if one:
+        raise FX.FxError(f"{what}: grade: {', '.join(one)} make a grade of one map, `cool`, `warm`, `lean` and `warmth` "
+                         f"a grade by warmth: give one or the other")
+    return {"map": None, "lumas": None, **out,
+            "cool": _ramp_by(FX, RAMPS["cool"] if g["cool"] is None else g["cool"], palette, what, "cool"),
+            "warm": _ramp_by(FX, RAMPS["warm"] if g["warm"] is None else g["warm"], palette, what, "warm"),
+            "lean": FX._num(0.0 if g["lean"] is None else g["lean"], f"{what} grade lean", -1.0, 1.0),
+            "warmth": FX._num(WARMTH if g["warmth"] is None else g["warmth"], f"{what} grade warmth", 0.0, 20.0)}
 
 
 def _view(FX, v, what):

@@ -34,7 +34,8 @@ from . import thread as TH
 KINDS = ("sheet", "fling") + TH.KINDS          # a thread is tied to a sheet's live sticker (mkmmd.core.thread)
 DOODLE_SHAPES = ("star", "heart", "pick", "note", "sparkle", "cloud", "strawberry", "moon", "rabbit", "carrot")
 POPS = ("love", "gold", "rose", "pine", "foam", "iris")          # the palette's pops, a doodle's colour in turn
-EDGE = {"color": "#ffffff", "width": 16.0}                      # a sticker's die-cut rim, px at 1080 on the short side
+EDGE = {"color": "#ffffff", "width": 16.0, "thin": 0.0}          # a sticker's die-cut rim, px at 1080 on the short side;
+#                                                                  `thin`: the live figure's parts narrower lie bare
 SHADOW = {"color": "text", "offset": [0.004, 0.007], "blur": 6.0, "alpha": 0.3}
 PAPER = {"color": "base", "shade": "overlay", "light": "surface", "mottle": 1.0, "fibres": 1.0, "tooth": 1.0,
          "grid": None, "spacing": 0.04, "ink": "text", "scale": 1.0, "lamp": 0.025}
@@ -129,8 +130,11 @@ def _edge(FX, v, palette, what, default=EDGE):
     e = _table(FX, v, default, what, "edge")
     if e is None:
         return None
-    return {"color": FX._colour(e["color"], palette, f"{what} edge"),
-            "width": FX._num(e["width"], f"{what} edge width", lo=0.0)}
+    out = {"color": FX._colour(e["color"], palette, f"{what} edge"),
+           "width": FX._num(e["width"], f"{what} edge width", lo=0.0)}
+    if "thin" in default:                                 # a sheet's and a table's live figure (a fling has none)
+        out["thin"] = FX._num(e["thin"], f"{what} edge thin", lo=0.0)
+    return out
 
 
 def _shadow(FX, v, palette, what):

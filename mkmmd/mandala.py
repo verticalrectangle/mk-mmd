@@ -621,7 +621,11 @@ class MandalaFx:
     def _trails(self, fx, frame, img):
         """The copies laid oldest first, each in its ramp colour (mixed with its own picture by 1 - `tint`) at its
         opacity times the strength (with `still`, times how far the figure has moved since: a hover leaves none), then
-        the figure of this frame back over them as it is, and with a `mask` the figure kept clear of them."""
+        the figure of this frame back over them as it is, and with a `mask` the figure kept clear of them. A trail that
+        follows a sheet's live sticker is mkmmd.echoes'."""
+        if fx.get("sheet") is not None:
+            from . import echoes as ECF
+            return ECF.draw(self, fx, frame, img)
         s, copies = self.trails_at(fx, frame)
         if s <= 0.0:
             return img

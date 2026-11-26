@@ -464,21 +464,29 @@ def run(args):
         if has_fx or has_ffx or layer is not None:
             im = _rgb(s["path"])
         entries = ffx.entries(f) if has_ffx else []
-        early = [e for e in entries if e.get("under")] if has_fx else []    # the cut's own picture's: before the cut
-        try:                                                                  # effects compose (mkmmd.postframes)
-            for e in early:
+        early, nxt = fx.under(f, entries) if has_fx else ([], [])   # a picture's: drawn on the cut's own frame, or on
+        try:                                                          # the incoming plate, before the cut effects compose
+            for e in early:                                           # (mkmmd.postframes)
                 im = ffx._apply(e, f, im)
         except (FileNotFoundError, FX.FxError) as e:
             raise UsageError(str(e)) from None
+
+        def incoming(pic):
+            try:
+                for e in nxt:
+                    pic = ffx._apply(e, f, pic)
+            except (FileNotFoundError, FX.FxError) as e:
+                raise UsageError(str(e)) from None
+            return pic
         if has_fx:
             try:
                 fx.check([f])
-                im = fx.frame(f, im)
+                im = fx.frame(f, im, incoming if nxt else None)
             except (TR.TransitionError, FileNotFoundError) as e:
                 raise UsageError(str(e)) from None
         try:
             for e in entries:
-                if not (early and e.get("under")):
+                if not (has_fx and e.get("under")):
                     im = ffx._apply(e, f, im)
         except (FileNotFoundError, FX.FxError) as e:
             raise UsageError(str(e)) from None

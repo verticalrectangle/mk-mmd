@@ -47,11 +47,24 @@ LAND_KEYS = ("t", "at", "give", "radius", "clatter", "speed", "approach")
 YANK_KEYS = ("t", "v", "at")
 KNOT_KEYS = ("t", "swing", "loop")
 WORLD_KEYS = ("lie", "float", "kicks", "arms", "reach", "swim", "release", "land", "yank", "knot")
+# the keys of a marionette set free (mkmmd.core.marionette_free): seated on her threads, the bundle gathered in her fist
+# and snipped with her own scissors, the weightless rise, hauled down by her tails, the fall back into her seat
+SEAT_KEYS = ("at", "knees")
+GATHER_KEYS = ("t", "dur", "side", "at")
+SCISSORS_KEYS = ("prop", "t", "dur", "side")
+SNIP_KEYS = ("t", "let", "away", "drop")
+ASCEND_KEYS = ("t", "height", "by", "stop", "turn")
+HAUL_KEYS = ("t", "to", "tugs", "at", "drop", "speed", "face", "jolt")
+FREE_KEYS = ("seat", "gather", "scissors", "snip", "ascend", "haul", "crossed")
+# free threads tied to her (mkmmd.core.marionette_tails): the pieces a snip leaves on her, or six of her own
+TAILS_KEYS = ("length", "wind", "gravity", "drag", "settle", "seed")
 KEYS = {"prop": None, "from": None, "drop": None, "height": None, "lift": None, "hang": None, "lag": None,
         "timeline": None, "rock": SWING_KEYS, "tilt": SWING_KEYS, "turn": SWING_KEYS, "sway": SWING_KEYS, "raise": None,
         "hops": HOP_KEYS, "knees": KNEE_KEYS, "cuts": CUT_KEYS, "throw": ("t", "v", "spin"), "guitar": None,
         "over": None, "width": None, "lie": None, "float": FLOAT_KEYS, "kicks": KICKS_KEYS, "arms": None, "reach": REACH_KEYS,
-        "swim": SWIM_KEYS, "release": RELEASE_KEYS, "land": LAND_KEYS, "yank": YANK_KEYS, "knot": KNOT_KEYS}
+        "swim": SWIM_KEYS, "release": RELEASE_KEYS, "land": LAND_KEYS, "yank": YANK_KEYS, "knot": KNOT_KEYS,
+        "loop": None, "seat": SEAT_KEYS, "gather": GATHER_KEYS, "scissors": SCISSORS_KEYS, "snip": SNIP_KEYS,
+        "ascend": ASCEND_KEYS, "haul": HAUL_KEYS, "crossed": None, "tails": TAILS_KEYS}
 DEFAULTS = {"drop": 0.35, "height": 0.9, "lift": 0.03, "hang": 0.012, "lag": 1.0, "over": 0.4}
 ARMS = ("shoulders", "chest")     # where the threads hold her wrists while she lies on her back
 
@@ -240,15 +253,21 @@ def knee_events(v, beats):
 
 def normalize(spec, beats):
     """The plan's numbers from a `[perform.<cast>] marionette` table (KEYS) and the beats (clip seconds): the defaults
-    filled, beat tables made keys, the cuts checked (each thread cut once, after `from`). Raises MarionetteError."""
+    filled, beat tables made keys, the cuts checked (each thread cut once, after `from`). A table of `prop` and `tails`
+    alone (no `from`) is a member with no control at all, wearing six tails (`control` false). Raises MarionetteError."""
     if not isinstance(spec, dict):
         raise MarionetteError("marionette: expected a table {prop, from, ...}")
     unknown = sorted(set(spec) - set(KEYS))
     if unknown:
         raise MarionetteError(f"marionette: unknown keys {unknown} (known: {sorted(KEYS)})")
-    if "prop" not in spec or "from" not in spec:
+    if "prop" not in spec or ("from" not in spec and "tails" not in spec):
         raise MarionetteError("marionette: needs `prop` (a library:marionette prop) and `from` (the clip second the threads "
-                              "land on her and pull taut)")
+                              "land on her and pull taut), or `prop` and `tails` alone (six tails, no control)")
+    if "from" not in spec:
+        extra = sorted(set(spec) - {"prop", "tails", "width", "lag"})
+        if extra:
+            raise MarionetteError(f"marionette: {', '.join(extra)} move(s) the control or her on its threads, and with "
+                                  f"no `from` she has none (six tails alone: `prop`, `tails`, `width`)")
     P = {k: _num(spec.get(k, d), k, 0.0) for k, d in DEFAULTS.items() if k != "over"}
     over = spec.get("over", DEFAULTS["over"])
     try:
@@ -258,7 +277,9 @@ def normalize(spec, beats):
     P["lag"] = max(P["lag"], 0.2)
     P["prop"] = str(spec["prop"])
     P["guitar"] = str(spec["guitar"]) if spec.get("guitar") else None
-    P["from"] = _num(spec["from"], "from")
+    P["control"] = "from" in spec
+    P["from"] = _num(spec["from"], "from") if P["control"] else math.inf
+    P["tails"] = _tails(spec.get("tails"))
     if P["drop"] < ATTACH + 0.05:
         raise MarionetteError(f"marionette.drop = {P['drop']}: at least {ATTACH + 0.05} s for the cross to fall in")
     for k, unit in (("rock", "deg"), ("tilt", "deg"), ("turn", "deg"), ("sway", "m")):
@@ -317,7 +338,39 @@ def normalize(spec, beats):
     if P["throw"] and P["world"]["release"]:
         raise MarionetteError("marionette: `throw` throws the cross aside and `release` lets it fall after her on her "
                               "head thread: give one of them")
+    sn = P["world"].get("snip")
+    if sn:                                                       # her own snip: every thread, at once, at the bundle
+        if P["cuts"]:
+            raise MarionetteError("marionette.snip cuts every thread at once at the bundle in her fist: give it no "
+                                  "`cuts` of its own")
+        P["cuts"] = [{"t": sn["t"], "threads": list(PARTS), "at": 0.5, "give": 0.0, "catch": 0.0, "hang": list(HANG),
+                      "snip": True}]
     return P
+
+
+def _tails(v):
+    """The `tails` table, checked, defaults filled: None without one (and with a control: the pieces a cut leaves on her
+    then fall limp over her as they always did). `wind` and `gravity` None: the member's own `[sim.<cast>]` ones."""
+    if v is None:
+        return None
+    if v is True:
+        v = {}
+    t = _table(v, "tails", TAILS_KEYS)
+    wind = t.get("wind")
+    if wind is not None and not isinstance(wind, dict) and (not isinstance(wind, (list, tuple)) or len(wind) != 3):
+        raise MarionetteError("marionette.tails.wind: [x, y, z] m/s (the air's velocity, world) or a wind table as "
+                              "[sim.<cast>] wind's (direction, speed, gust, keys on clip seconds)")
+    g = t.get("gravity")
+    if g is not None and not isinstance(g, (int, float)):
+        try:
+            g = [[float(a), float(b)] for a, b in g]
+        except (TypeError, ValueError):
+            raise MarionetteError("marionette.tails.gravity: a scale (1 the world's, 0 none) or keys [[t, scale], ...]"
+                                  ) from None
+    return {"length": _num(t["length"], "tails.length", 0.05, 5.0) if "length" in t else None,
+            "wind": [float(x) for x in wind] if isinstance(wind, (list, tuple)) else wind,
+            "gravity": g, "drag": _num(t.get("drag", 14.0), "tails.drag", 0.5, 200.0),
+            "settle": _num(t.get("settle", 1.5), "tails.settle", 0.0, 10.0), "seed": int(_num(t.get("seed", 0), "tails.seed"))}
 
 
 def _hops(v):
@@ -455,7 +508,110 @@ def _world(spec, P):
                                   f"fall and the yank (after {last})")
         loop = _num(k["loop"], "knot.loop", t) if k.get("loop") is not None else None
         W["knot"] = {"t": t, "swing": _num(k.get("swing", 8.0), "knot.swing", 0.0, 45.0), "loop": loop}
+    _free(spec, P, W)
     return W
+
+
+def _ahead(a, b, loop):
+    """Seconds from `a` on to `b` (around the loop when the clip loops)."""
+    return (b - a) % loop if loop else b - a
+
+
+def _free(spec, P, W):
+    """The keys of a marionette set free (FREE_KEYS; mkmmd.core.marionette_free plays them) and the clip's `loop`,
+    checked, defaults filled, into W (`free` whether any is given; then `on` too: her root is keyed)."""
+    W["free"] = any(spec.get(k) is not None for k in FREE_KEYS)
+    loop = spec.get("loop")
+    W["loop"] = _num(loop, "loop", 0.5) if loop is not None else None
+    for k in ("seat", "gather", "scissors", "snip", "ascend", "haul"):
+        W[k] = None
+    W["crossed"] = []
+    if not W["free"]:
+        return
+    lying = [k for k in ("lie", "float", "kicks", "reach", "swim", "release", "land", "yank") if spec.get(k) is not None]
+    if lying:
+        raise MarionetteError(f"marionette: {', '.join(lying)} lay her down or fly her by the control, and "
+                              f"{', '.join(k for k in FREE_KEYS if spec.get(k) is not None)} seat her and set her free: "
+                              f"give one or the other")
+    W["on"] = True
+    L = W["loop"]
+    seat = spec.get("seat")
+    if seat is None:
+        raise MarionetteError("marionette: a marionette set free has her place on a seat: give `seat = \"<prop>:<seat>\"`")
+    seat = {"at": seat} if isinstance(seat, str) else _table(seat, "seat", SEAT_KEYS, ("at",))
+    W["seat"] = {"at": str(seat["at"]), "knees": _num(seat.get("knees", 0.0), "seat.knees", -40.0, 40.0)}
+    if spec.get("snip") is not None:
+        s = _table(spec["snip"], "snip", SNIP_KEYS, ("t",))
+        away = s.get("away", (0.0, 0.25, 9.0))
+        if not isinstance(away, (list, tuple)) or len(away) != 3:
+            raise MarionetteError("marionette.snip.away: [x, y, z] m/s the control is dropped with (her frame)")
+        let = _num(s.get("let", 0.12), "snip.let", 0.0, 2.0)
+        W["snip"] = {"t": _num(s["t"], "snip.t"), "let": let, "away": [float(x) for x in away],
+                     "drop": _num(s.get("drop", let), "snip.drop", 0.0, 2.0)}
+    for key, keys in (("gather", GATHER_KEYS), ("scissors", SCISSORS_KEYS)):
+        if spec.get(key) is None:
+            continue
+        g = _table(spec[key], key, keys, ("t", "prop") if key == "scissors" else ("t",))
+        if not W["snip"]:
+            raise MarionetteError(f"marionette.{key}: there is no `snip` to {'gather the threads' if key == 'gather' else 'bring the scissors'} for")
+        side = _side(g.get("side", "L" if key == "gather" else "R"), f"{key}.side")
+        e = {"t": _num(g["t"], f"{key}.t"), "dur": _num(g.get("dur", 0.4), f"{key}.dur", 0.15, 3.0), "side": side}
+        if _ahead(e["t"] + e["dur"], W["snip"]["t"], L) < 0.0 or _ahead(e["t"], W["snip"]["t"], L) < e["dur"]:
+            raise MarionetteError(f"marionette.{key}: from {e['t']} it takes {e['dur']} s and is done before the snip "
+                                  f"({W['snip']['t']})")
+        if key == "gather":
+            at = g.get("at", (0.14, -0.04, 0.14))
+            if not isinstance(at, (list, tuple)) or len(at) != 3:
+                raise MarionetteError("marionette.gather.at: [x, y, z] m from her crown, her frame (her left, behind, up)")
+            e["at"] = [float(x) for x in at]
+        else:
+            e["prop"] = str(g["prop"])
+        W[key] = e
+    if W["gather"] and W["scissors"] and W["gather"]["side"] == W["scissors"]["side"]:
+        raise MarionetteError("marionette: the scissors are in the hand that does not hold the bundle (`side`)")
+    if spec.get("ascend") is not None:
+        a = _table(spec["ascend"], "ascend", ASCEND_KEYS)
+        if not W["snip"]:
+            raise MarionetteError("marionette.ascend: she floats up once her threads are cut: give a `snip`")
+        t = _num(a.get("t", W["snip"]["t"]), "ascend.t")
+        if _ahead(W["snip"]["t"], t, L) > 1.0 or (not L and t < W["snip"]["t"]):
+            raise MarionetteError(f"marionette.ascend.t = {t}: at the snip ({W['snip']['t']}) or within a second after")
+        by = _num(a.get("by", t + 1.0), "ascend.by", t + 0.2)
+        W["ascend"] = {"t": t, "height": _num(a.get("height", 1.2), "ascend.height", 0.05, 20.0), "by": by,
+                       "stop": _num(a["stop"], "ascend.stop", 0.1, 100.0) if "stop" in a else None,
+                       "turn": _num(a.get("turn", 25.0), "ascend.turn", -360.0, 360.0)}
+    if spec.get("haul") is not None:
+        h = _table(spec["haul"], "haul", HAUL_KEYS, ("t", "to"))
+        t, to = _num(h["t"], "haul.t"), _num(h["to"], "haul.to")
+        if to <= t + 0.3:
+            raise MarionetteError(f"marionette.haul: to = {to} after t = {t}")
+        if not W["snip"]:
+            raise MarionetteError("marionette.haul: a hand hauls her in by the tails a `snip` left on her: give one")
+        tugs = sorted(_num(x, "haul.tugs") for x in (h.get("tugs") or []))
+        if any(not t < x < to for x in tugs):
+            raise MarionetteError(f"marionette.haul.tugs: each between t ({t}) and to ({to})")
+        at = h.get("at", (0.0, -0.3, -1.6))
+        if not isinstance(at, (list, tuple)) or len(at) != 3 or float(at[2]) > -0.5:
+            raise MarionetteError("marionette.haul.at: [x, y, z] m from her hips where the hand holds the ends (her "
+                                  "frame, below her: z under -0.5)")
+        if not W["knot"]:
+            raise MarionetteError("marionette.haul: let go at `to`, she falls into her seat and lands ON the `knot` "
+                                  "(every thread on her again): give one")
+        fall = _ahead(to, W["knot"]["t"], L)
+        if not 0.25 <= fall <= 3.0:
+            raise MarionetteError(f"marionette.haul.to = {to}: she falls from there into her seat, landing ON the knot "
+                                  f"({W['knot']['t']}): 0.25 .. 3 s before it")
+        W["haul"] = {"t": t, "to": to, "tugs": tugs, "at": [float(x) for x in at], "fall": fall,
+                     "drop": _num(h.get("drop", 0.35), "haul.drop", 0.0, 3.0),
+                     "speed": _num(h.get("speed", 1.0), "haul.speed", 0.0, 10.0),
+                     "face": _num(h.get("face", 0.0), "haul.face", -180.0, 180.0),
+                     "jolt": _num(h.get("jolt", 0.3), "haul.jolt", 0.0, 2.0)}
+    try:
+        W["crossed"] = [(float(a), float(b)) for a, b in (spec.get("crossed") or [])]
+    except (TypeError, ValueError):
+        raise MarionetteError("marionette.crossed: windows [[from, to], ...] (clip seconds) her arms are crossed") from None
+    if any(b <= a for a, b in W["crossed"]):
+        raise MarionetteError("marionette.crossed: each window's `to` after its `from`")
 
 
 def knot_time(P):
@@ -596,6 +752,8 @@ def body_plan(ts, P, cross, legs, stand=None):
     # the cuts
     cut_dip = np.zeros(n)
     for c in P["cuts"]:
+        if c.get("snip"):                                          # her own snip: she lets go of herself, nothing drops
+            continue
         tc = c["t"]
         fade = np.ones(n)
         if "own" in c:                                             # she takes it back herself, slowly

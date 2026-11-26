@@ -64,8 +64,10 @@ pushed too far: a video, a colour or the frame before burning through in colour 
 mkmmd.core.colorkey's, and `shapes` (the picture as flat circles, squares, triangles and diamonds, a cell each,
 refining on the hits) is mkmmd.core.shapes'. The haze (`mist`: a bloom and a diffusion filter, `fog`: haze drifting
 across the picture, `bokeh`: out-of-focus lights drifting through it) is mkmmd.core.haze's, `mitosis` (a figure
-dividing as a cell does, on the hits) mkmmd.core.mitosis's, and `rewind` (a finger scrubbing the video back along a paper
-scrub bar, the picture the cut's own at other seconds) mkmmd.core.rewind's.
+dividing as a cell does, on the hits) mkmmd.core.mitosis's, `rewind` (a finger scrubbing the video back along a paper
+scrub bar, the picture the cut's own at other seconds) mkmmd.core.rewind's, `zap` (a sheet's live sticker torn and
+somewhere else on a time, a ghost left where it was) mkmmd.core.zap's, and `sky` (real footage clip after clip through
+cameras of its own and a grade by warmth, each smeared into the next on its time, melting) mkmmd.core.sky's.
 
 Any entry may give `aspect.<output>` tables: its own keys for one output (the span, the figure and the frames it reads
 stay the entry's).
@@ -93,15 +95,18 @@ from . import remap as RM
 from . import rewind as RW
 from . import shapes as SH
 from . import sheet as ST
+from . import sky as SY
 from . import shotstyle as SS
 from . import stack as SK
 from . import tween as TW
 from . import videosticker as VS
+from . import zap as ZP
 
 FIGURES = ("grid", "orbit", "mirror", "panels", "stack", "footage")    # the collages: a figure cut out onto colour
 KINDS = ("lens", "echo", "slitscan", "push", "scope", "zoom", "shock", "slab", "tint", "halftone", "split",
          "mosh") + FIGURES + PF.KINDS + FL.KINDS + MD.KINDS + RM.KINDS + AC.KINDS + LB.KINDS + ER.KINDS + PA.KINDS + \
-    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS + IN.KINDS + ST.KINDS + RW.KINDS
+    LZ.KINDS + VS.KINDS + PR.KINDS + CK.KINDS + SH.KINDS + HZ.KINDS + MT.KINDS + IN.KINDS + ST.KINDS + RW.KINDS + \
+    ZP.KINDS + SY.KINDS
 CLIPS = ("footage",) + VS.KINDS + CK.KINDS + IN.KINDS + ("sheet",)   # the kinds that show a video `clip` (mkmmd.footage
 #                                                                       reads it; a sheet's when it is a table)
 PICTURE = "picture"                                     # a collage's fill: the figure as the frame shows it
@@ -216,12 +221,16 @@ KEYS.update({k: _COMMON | own for k, own in ST.KEYS.items()})
 DEFAULTS.update(ST.DEFAULTS)
 KEYS.update({k: (_COMMON - {"strength"}) | own for k, own in RW.KEYS.items()})      # a rewind has no strength
 DEFAULTS.update(RW.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in ZP.KEYS.items()})
+DEFAULTS.update(ZP.DEFAULTS)
+KEYS.update({k: _COMMON | own for k, own in SY.KEYS.items()})
+DEFAULTS.update(SY.DEFAULTS)
 SLAB_DIRS = ("right", "left", "up", "down")            # the way a slab travels: in from the other side, out this way
 AXES = ("x", "y", "xy")                                 # a mirror's fold: about a vertical line, a horizontal one, both
 FITS = ("cover", "contain")                             # how footage meets the frame: filled and cropped, or whole
 FIXED = ("kind", "from", "to", "objects", "shot", "aspect")   # what an aspect.<output> table may not set
 MOVE = {"turn": 0.0, "dx": 0.0, "dy": 0.0, "scale": 1.0}             # a figure's move at rest: degrees, heights, times
-MOVE_EASES = ("inout", "in", "out", "linear", "back")
+MOVE_EASES = ("inout", "in", "out", "linear", "back", "step")
 BACK = 0.1                                              # how far a `back` ease overshoots its key: 10 % of the way
 PIVOTS = ("base", "center")
 SHADOW = {"color": "#000000", "offset": [0.008, 0.012], "blur": 10.0, "alpha": 0.4}
@@ -327,9 +336,11 @@ def normalize(spec, palette, what="fx"):
         raise FxError(f"{what}: unknown keys {extra} (known: {sorted(KEYS[kind] | own)})")
     if "name" in spec and (not isinstance(spec["name"], str) or not spec["name"].strip()):
         raise FxError(f"{what}: name = {spec['name']!r}: a non-empty string")
-    if not isinstance(spec.get("under", False), bool):
+    if not (isinstance(spec.get("under", False), bool) or spec["under"] == "incoming"):
         raise FxError(f"{what}: under = {spec['under']!r}: true (the effect belongs to the cut's own picture: drawn "
-                      f"before the transitions, inserts and glitches) or false")
+                      f"before the transitions, inserts and glitches), \"incoming\" (the next shot's picture: in the "
+                      f"window of the transition its span starts in, drawn on the incoming plate before it composes) or "
+                      f"false")
     for k in ("from", "to"):
         if k not in spec:
             raise FxError(f"{what}: `{k}` (clip seconds) is required")
@@ -468,6 +479,10 @@ def normalize(spec, palette, what="fx"):
         ST.normalize(spec, out, palette, what)
     elif kind in RW.KINDS:
         RW.normalize(spec, out, palette, what)
+    elif kind in ZP.KINDS:
+        ZP.normalize(spec, out, palette, what)
+    elif kind in SY.KINDS:
+        SY.normalize(spec, out, palette, what)
     out["aspect"] = _aspects(spec, palette, label, what)
     return out
 
@@ -816,6 +831,8 @@ def plan(data, fps, frame0, palette, last_frame=None):
                 raise FxError(f"fx {i} (push): the frames inside ({fx['inside_frame']}..{last_inside}) run past the clip")
         if fx["kind"] == "sheet" and last_frame is not None and any(g > last_frame for g in ST.frozen(fx, fps, frame0)):
             raise FxError(f"fx {i} (sheet): a hollow's or the peel's `t` lies past the clip's end")
+        if fx["kind"] in ZP.KINDS:
+            ZP.timed(fx, fps, frame0)
         for name, e in fx["aspect"].items():
             _same_reads(fx, e, name, frame0)
         out.append(fx)
@@ -886,9 +903,10 @@ def uses_figure(fx):
 def holds(fx):
     """Whether an effect shows frames of the cut from before as they reached it (a film's held frame, a booth's
     captures, the frame a mosh holds, the frame a paint app's eraser rubs out, the frame inside a push, the seconds a
-    rewind scrubs back to): the effects before it in the table are applied to such a frame again when it was not kept."""
+    rewind scrubs back to, the pictures a zap's ghost is dragged along): the effects before it in the table are applied
+    to such a frame again when it was not kept."""
     return fx["kind"] in PF.HOLDS or fx["kind"] in ("push", "mosh") or (fx["kind"] in PA.KINDS and PA.holds(fx)) or \
-        fx["kind"] in RW.KINDS
+        fx["kind"] in RW.KINDS + ZP.KINDS
 
 
 def held(fx, frame):
@@ -903,7 +921,7 @@ def points_before(fx):
     holder works on the frame it holds (a paint app paints that frame's fills on it; a push and a rewind only show the
     frames they read, their own places are of the frame they are drawn on), and a key whose `spread` opens from a point
     keys each frame of its `burn` trail about that point there."""
-    return (holds(fx) and fx["kind"] not in ("push",) + RW.KINDS) or \
+    return (holds(fx) and fx["kind"] not in ("push",) + RW.KINDS + ZP.KINDS) or \
         (fx["kind"] in CK.KINDS and fx["spread"] > 0 and fx["burn"] > 0)
 
 
@@ -932,8 +950,9 @@ def sources(fx, frame, frame0, hits=None):
     the first frame of a collage or a mandala whose `keys` turn its figure, or whose `at` or `height` set it into the
     frame, or a stack whose copies `peel` off, about a pivot found on it (`base`, `center`), a film's held frame (the
     first of the film frame it shows), a booth's captures so far (those of a lane only with `hits`, the [audio] hits
-    file), the frame before a paint app's eraser, while it rubs that out, and the first frame of a mitosis (the figure's
-    box there sizes its cells). A collage with its own `shot` reads those frames of that shot (its plates)."""
+    file), the frame before a paint app's eraser, while it rubs that out, the first frame of a mitosis (the figure's
+    box there sizes its cells) and, while a zap's ghost shows, the frame before its zap and every frame since (the
+    pictures that drag it). A collage with its own `shot` reads those frames of that shot (its plates)."""
     k = fx["kind"]
     if k == "echo":
         out = [frame - j * fx["every"] for j in range(1, fx["count"] + 1)]
@@ -964,6 +983,8 @@ def sources(fx, frame, frame0, hits=None):
         out = ST.sources(fx, frame, frame0)
     elif k in RW.KINDS:
         out = RW.sources(fx, frame, frame0)
+    elif k in ZP.KINDS:
+        out = ZP.sources(fx, frame)
     else:
         out = []
     if k in FIGURES and _found_pivot(fx) and frame != fx["f0"] and fx["f0"] not in out:
@@ -1097,18 +1118,23 @@ def _ease(u, kind):
         return TW.clamp01(u)
     if kind == "back":
         return TW.pop(u, BACK)
+    if kind == "step":
+        return 1.0 if u >= 1.0 else 0.0
     return TW.ease(u, kind)
 
 
-def move_at(keys, t):
+def move_at(keys, t, half=0.0):
     """A collage figure's move at clip second `t`, {turn, dx, dy, scale}: from key to key by the ease of the key it
-    arrives at (`back` overshoots it a little and settles), held before the first key and after the last; at rest
-    without keys."""
+    arrives at (`back` overshoots it a little and settles; `step` holds the key before until its second, then is there
+    from the frame of it on: `half`, half a frame's seconds, the rounding of a second to its frame), held before the
+    first key and after the last; at rest without keys."""
     if not keys:
         return dict(MOVE)
     if t <= keys[0]["t"]:
         return {c: keys[0][c] for c in MOVE}
     for a, b in zip(keys, keys[1:]):
+        if b["ease"] == "step" and b["t"] - half <= t < b["t"]:          # the frame of a step's second shows it
+            return {c: b[c] for c in MOVE}
         if t < b["t"]:
             e = _ease((t - a["t"]) / (b["t"] - a["t"]), b["ease"])
             return {c: a[c] + (b[c] - a[c]) * e for c in MOVE}

@@ -20,8 +20,9 @@ left on her after a cut) as bevelled poly curves, `<name>_snip_<part>` (empties 
 effects to follow), `<name>_rest` (a flat box, never rendered: the surface she lies on in the world, keyed under her
 while she is at her place, for the sim's hair, ears and skirt to lie on: `[sim.<cast>] colliders = [{type = "box",
 object = "<name>_rest"}]`) and `<name>_grab` (an empty: where a yank takes her head thread, for a hand to follow).
-Parts: head, back, wrist_L, wrist_R, knee_L, knee_R. Slots: `control` ("aeroplane", "stirrers"), colour roles wood,
-eye (the screw eyes), thread (the threads, and the knots and lashing of the stirrers); `radius` the threads' (m,
+Parts: head, back, wrist_L, wrist_R, knee_L, knee_R. Slots: `control` ("aeroplane", "stirrers"), `threads` (the parts that
+have a thread: default all six; ["head", "back", "wrist_L", "wrist_R"] leaves the knees and the leg bar out), colour roles
+wood, eye (the screw eyes), thread (the threads, and the knots and lashing of the stirrers); `radius` the threads' (m,
 0.0015: 3 mm thick, readable at 1080 in a medium shot)."""
 import bpy
 
@@ -73,6 +74,9 @@ def marionette(name, coll, root, slots=None):
     control = slots.pop("control", "aeroplane")
     if control not in MR.CONTROLS:
         raise ValueError(f"marionette: control is one of {list(MR.CONTROLS)} (got {control!r})")
+    threads = list(slots.pop("threads", MR.PARTS))
+    if not threads or any(p not in MR.PARTS for p in threads):
+        raise ValueError(f"marionette: threads is a list of {list(MR.PARTS)} (got {threads!r})")
     defaults = dict(MR.ROLES, wood=MR.STIRRER_WOOD) if control == "stirrers" else MR.ROLES
     roles = SK.roles(slots, defaults, "marionette")
     radius = SK.number(slots, "radius", MR.THREAD["radius"], "marionette", 0.0003, 0.01)
@@ -106,4 +110,6 @@ def marionette(name, coll, root, slots=None):
     SH.as_collider(rest)
     SH.exempt(rest, "a collider: the surface she lies on, never rendered")
     _empty(f"{name}_grab", coll, root, (0.0, 0.0, -1.0), 0.03)
-    return MR.card(name, roles, control)
+    card = MR.card(name, roles, control)
+    card["marionette"]["threads"] = [p for p in MR.PARTS if p in threads]
+    return card

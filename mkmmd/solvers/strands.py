@@ -261,18 +261,37 @@ def ring_neighbours(root, tip, group=None, gap_factor=RING_GAP):
 
 
 # ---------------------------------------------------------------- wind
+def _air_keys(value, width, what):
+    """Keys of a wind value over time, (K, 1 + width) floats sorted by time, from [[t, v...], ...]; None for a value
+    that holds (a number for `speed`, a vector for `direction`). Raises ValueError for anything else."""
+    if not isinstance(value, (list, tuple)) or (value and not isinstance(value[0], (list, tuple)) and width > 1):
+        return None
+    try:
+        k = np.asarray(value, float)
+    except (TypeError, ValueError):
+        k = np.zeros((0, 0))
+    if k.ndim != 2 or len(k) == 0 or k.shape[1] != 1 + width or not np.isfinite(k).all():
+        raise ValueError(f"wind: {what} is a number{'' if width == 1 else ' triple'} or keys "
+                         f"[[t, {'v' if width == 1 else 'x, y, z'}], ...] of finite numbers, not {value!r}")
+    return k[np.argsort(k[:, 0], kind="stable")]
+
+
 class Wind:
     """Velocity of the air (world m/s) at a point and time. spec keys (all optional):
-      direction [x,y,z]   where the air blows to (any length; default: against the carrier's motion, else +X)
-      speed               constant wind speed along it (m/s)
+      direction [x,y,z]   where the air blows to (any length; default: against the carrier's motion, else +X), or keys
+                          [[t, x, y, z], ...]: the way it blows turning over time, linear between them (each normalised;
+                          two neighbours more than 168 degrees apart are refused: there is no way round), held outside
+      speed               wind speed along it (m/s), or keys [[t, v], ...] linear between them and held outside them: a
+                          wind that rises and falls (the air past a body that speeds up, slows down and turns)
       exposure            0..1, the share of the carrier's motion the air does not follow (default 0: it rides along)
       gust, gust_period   amplitude (m/s) and period (s, default 4) of a slow irregular swell of the speed along it
       turbulence, scale   rms speed (m/s) of a smooth divergence-free fluctuation and its eddy size (m, default 0.5)
       seed                random seed of gusts and turbulence (default 0)
     carrier_vel (F,3): world velocity of the vehicle the characters ride in, one row per frame at `fps`, linear in
-    between, held after the last (None: standing still; a single (3,) vector is constant). Time t is seconds from the
-    first simulated frame. Air velocity = constant + carrier_vel * (1 - exposure) + gust + turbulence; the turbulence
-    pattern drifts with the mean air flow (Taylor's frozen-eddy picture), so hair on a moving carrier meets new eddies.
+    between, held after the last (None: standing still; a single (3,) vector is constant). Time t (and a key's t) is
+    seconds from the first simulated frame. Air velocity = the wind's own (direction x speed) + carrier_vel * (1 -
+    exposure) + gust + turbulence; the turbulence pattern drifts with the mean air flow (Taylor's frozen-eddy picture),
+    so hair on a moving carrier meets new eddies.
     """
     KEYS = ("direction", "speed", "exposure", "gust", "gust_period", "turbulence", "scale", "seed")
     MODES = 16
@@ -295,7 +314,8 @@ class Wind:
                 raise ValueError("wind: carrier_vel must be finite world velocities of shape (F, 3)")
             self.carrier = c
         self.exposure = float(spec.get("exposure", 0.0))
-        self.speed = float(spec.get("speed", 0.0))
+        self._speed = _air_keys(spec.get("speed", 0.0), 1, "speed")            # (K, 2) keys, or None: constant
+        self.speed = float(self._speed[0, 1]) if self._speed is not None else float(spec.get("speed", 0.0))
         self.gust = float(spec.get("gust", 0.0))
         self.gust_period = float(spec.get("gust_period", 4.0))
         self.turbulence = float(spec.get("turbulence", 0.0))
@@ -306,6 +326,16 @@ class Wind:
         if self.gust < 0 or self.turbulence < 0 or not self.gust_period > 0 or not self.scale > 0:
             raise ValueError("wind: gust, turbulence must be >= 0 and gust_period, scale > 0")
         d = spec.get("direction")
+        self._dirs = _air_keys(d, 3, "direction") if d is not None else None    # (K, 4) keys, or None: one way
+        if self._dirs is not None:
+            norm = np.linalg.norm(self._dirs[:, 1:], axis=1)
+            if not norm.min() > 1e-9:
+                raise ValueError("wind: a direction key needs three finite numbers, not all zero")
+            self._dirs[:, 1:] /= norm[:, None]
+            if (np.einsum("kj,kj->k", self._dirs[1:, 1:], self._dirs[:-1, 1:]) < -0.978).any():
+                raise ValueError("wind: two direction keys more than 168 degrees apart have no way round: key a "
+                                 "direction between them")
+            d = self._dirs[0, 1:]
         if d is None:
             mean_c = self.carrier.mean(0) if self.carrier is not None else np.zeros(3)
             d = -mean_c if np.linalg.norm(mean_c) > 1e-6 else (1.0, 0.0, 0.0)
@@ -314,6 +344,7 @@ class Wind:
             raise ValueError("wind: direction needs three finite numbers, not all zero")
         self.direction = d / np.linalg.norm(d)
         self.constant = self.direction * self.speed
+        self.keyed = self._speed is not None or self._dirs is not None
         rng = np.random.default_rng(self.seed)       # the same draws whatever the amplitudes: they only scale
         self._g_phase = 2.0 * np.pi * rng.random(3)
         m = self.MODES
@@ -329,11 +360,33 @@ class Wind:
         om = np.where(rng.random(m) < 0.5, -1.0, 1.0) * 2.0 * np.pi * self.turbulence / lam * (0.5 + rng.random(m))
         self.modes = (kv, ae, ph, om)
         self._disp = None
-        if self.carrier is not None:                  # drift of the eddy pattern: integral of the mean air velocity
-            mv = self.constant + self.carrier * (1.0 - self.exposure)
+        if self.carrier is not None or self.keyed:    # drift of the eddy pattern: integral of the mean air velocity
+            n = len(self.carrier) if self.carrier is not None else 1
+            if self.keyed:                            # on frames until the last key, linear after it
+                last = max(float(k[-1, 0]) for k in (self._speed, self._dirs) if k is not None)
+                n = max(n, int(np.ceil(max(last, 0.0) * self.fps)) + 2)
+            tg = np.arange(n) / self.fps
+            mv = self.steady_at(tg) + self.carrier_at(tg) * (1.0 - self.exposure)
             self._disp = np.zeros_like(mv)
             self._disp[1:] = np.cumsum(0.5 * (mv[1:] + mv[:-1]), axis=0) / self.fps
             self._mv = mv
+
+    def direction_at(self, ts):
+        """(T,3) the unit way the wind blows at times ts (s): `direction`, or its keys."""
+        ts = np.atleast_1d(np.asarray(ts, float))
+        if self._dirs is None:
+            return np.tile(self.direction, (len(ts), 1))
+        d = np.stack([np.interp(ts, self._dirs[:, 0], self._dirs[:, c]) for c in (1, 2, 3)], 1)
+        return d / np.linalg.norm(d, axis=1, keepdims=True)
+
+    def steady_at(self, ts):
+        """(T,3) the wind's own velocity at times ts (s), without the carrier, gusts and turbulence: its direction times
+        its speed, each constant or keyed."""
+        ts = np.atleast_1d(np.asarray(ts, float))
+        if not self.keyed:
+            return np.tile(self.constant, (len(ts), 1))
+        speed = np.full(len(ts), self.speed) if self._speed is None else np.interp(ts, *self._speed.T)
+        return self.direction_at(ts) * speed[:, None]
 
     def carrier_at(self, ts):
         """(T,3) carrier velocity at times ts (s)."""
@@ -348,16 +401,17 @@ class Wind:
         return self.carrier[i0] * (1.0 - a) + self.carrier[i1] * a
 
     def mean_at(self, ts):
-        """(T,3) air velocity at times ts without turbulence: constant + carrier * (1 - exposure) + gust."""
+        """(T,3) air velocity at times ts without turbulence: the wind's own + carrier * (1 - exposure) + gust (along
+        the way the wind blows then)."""
         ts = np.atleast_1d(np.asarray(ts, float))
-        out = self.constant[None] + self.carrier_at(ts) * (1.0 - self.exposure)
+        out = self.steady_at(ts) + self.carrier_at(ts) * (1.0 - self.exposure)
         if self.gust:
             ph = 2.0 * np.pi * ts[:, None] / (self.gust_period * self._GUST_PERIOD)[None] + self._g_phase
-            out = out + (self.gust * (np.cos(ph) @ self._GUST_AMP))[:, None] * self.direction[None]
+            out = out + (self.gust * (np.cos(ph) @ self._GUST_AMP))[:, None] * self.direction_at(ts)
         return out
 
     def displacement_at(self, ts):
-        """(T,3) how far the mean air flow (constant + carrier part, no gust) has carried the turbulence by ts."""
+        """(T,3) how far the mean air flow (the wind's own + carrier part, no gust) has carried the turbulence by ts."""
         ts = np.atleast_1d(np.asarray(ts, float))
         if self._disp is None:
             return self.constant[None] * ts[:, None]

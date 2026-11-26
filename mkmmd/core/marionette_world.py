@@ -328,6 +328,9 @@ def world_plan(ts, P, cross, rig, aims=None):
     n = len(ts)
     lag = P["lag"]
     W = P["world"]
+    if W.get("free"):                                           # seated, gathered, snipped, set free (marionette_free)
+        from . import marionette_free
+        return marionette_free.free_plan(ts, P, cross, rig, aims or {})
     aims = aims or {}
     pivot = np.asarray(rig["pivot"], float)
     crown = np.asarray(rig["crown"], float)

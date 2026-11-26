@@ -9,7 +9,9 @@
   fingers = true              finger and palm capsules of every cast member
   floor = true                ground height in metres: true = the ground at z 0 (default), a number = that height, false = no floor
   wind = {direction, speed, exposure, gust, gust_period, turbulence, scale, seed, carrier = "car"}: with a carrier,
-         the vehicle's velocity enters the air (exposure: the share of its motion the air does not follow)
+         the vehicle's velocity enters the air (exposure: the share of its motion the air does not follow); `speed`
+         [[t, v], ...] and `direction` [[t, x, y, z], ...] may be keys on clip seconds (the air past a body that flies:
+         rising, slowing, turning; linear between, held outside)
   use_masks = false, anchor_free = 0.25, substeps = 10, settle_s = 1.5, engine = "auto"
   gravity = [[t, scale], ...] the world's gravity over time (1 as it is, 0 none: the hair floats; linear between keys,
                               held outside them; the first frame settles under the first key's)
@@ -165,6 +167,14 @@ def solve_pass(ctx, m, spec, rig_pass, fams, items, tag):
         if veh is None:
             raise BuildError(f"sim.{m.name}: wind carrier {carrier!r} is not a vehicle")
         arrays["carrier_vel"] = np.gradient(np.asarray(veh["pos"], float), axis=0) * ctx.fps
+    t0 = ctx.time(frames[0])                                     # the solver's clock: seconds from the first frame
+    for key in ("speed", "direction"):
+        keys = wind.get(key)
+        if isinstance(keys, list) and keys and isinstance(keys[0], list):
+            try:
+                wind[key] = [[float(k[0]) - t0] + [float(v) for v in k[1:]] for k in keys]
+            except (TypeError, ValueError, IndexError):
+                raise BuildError(f"sim.{m.name}.wind.{key}: keys are [[t, ...], ...] on clip seconds") from None
     if spec.get("gravity") is not None:
         arrays["gravity"] = gravity_scale(spec["gravity"], [ctx.time(f) for f in frames], f"sim.{m.name}")
     solver_spec = {"rig": rig_pass, "families": fams, "armature": arm.name,

@@ -108,7 +108,11 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
    marionette's rest box under `pond.ride`), scenery that rolls past a hopping puppet, ground that sinks away into the stage's
    cellar as she is flown, a cranked day-to-night backdrop with constellations drawn on the notes, a croissant moon and a sun
    that pops up, and `house` takes everything but the water away for a camera straight above her; key them on the words and
-   notes they land on, and give the hands `obj('<set>_tab').loc` and `obj('<set>_crank_knob').loc`.
+   notes they land on, and give the hands `obj('<set>_tab').loc` and `obj('<set>_crank_knob').loc`. With `cafe` instead it is a
+   little café of paper round her chair (`library:paper_cafe_chair`, her `sit = "<chair>:seat"`, and `library:paper_cafe_table`
+   beside her with a cup that `rattle`s and a `scissors` anchor): a tall window right behind her head onto a blue paper sky
+   and a low skyline, pendant lamps, bunting, a shelf of cups, a chalkboard, and a border of sky over the room whose old
+   taped rip over her bursts open on `cafe.hole` and is taped across on `cafe.slap` (a hand rides `obj('<set>_slap').loc`).
 5. **Model what is missing** with the loop under [Modelling props](#modelling-props), and measure it with `form`.
 6. **Measure real people (optional, for performances).** `mk ref search "woman singing in car"`, `mk ref add ID...`, `mk ref track`, `mk ref measure`
    give blink, gaze, nod, sway and mouth numbers shaped like `[perform.<cast>]`, each with a confidence; `mk ref sheet` shows what was
@@ -157,7 +161,11 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   does not turn: under 40 %; a statue with busy hands scores 60 to 80), and `mk q` on the head for the frames where its speed
   jumps.
   A zero-g moment is `[sim.<cast>] gravity` eased out over a beat or two (`[[t, 1], [t + 0.4,
-  0]]`), not cut to 0 on one frame: a sudden cut flings the hair.
+  0]]`), not cut to 0 on one frame: a sudden cut flings the hair. A character who flies in a plate stays where she is and the
+  air moves past her ([Sim](design.md#sim)): `gravity` 0 while she flies free, the wind's `speed` and `direction` keyed against
+  her flight (shooting up: the air down past her, slowing as she does; a dive: from below and ahead), `tumble` turning her heels
+  over head, sideways or over onto her front (`axis = "twist"`), and a take that starts on a jump is a cast member of its own
+  (`shows`) keyed from well before it, so her hair is already flying on its first frame.
   Group and material morphs (vowels with a tongue bone, a blush) are keyed like any other: the cast stage binds the model's morph sliders
   (`bound_morphs` in its report).
   Take the numbers from `mk ref measure` or a timeline, not from taste.
@@ -230,7 +238,13 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   her last tip back (`knot.loop` replays the knot's swing), so her hair comes to frame 0 as it is on the last frame;
   `over` keys hold the control out of a plate camera's short lens, `width` keys the threads thin for a close plate.
   Watch the touch, the jerk, a hop, each cut and the landing frame by frame in the shot's camera, and the portrait from
-  above: her face clear of the bars and the threads.
+  above: her face clear of the bars and the threads. Set free (design.md: Marionette, set free): `seat` sits her in a
+  chair on her threads, `gather` takes them into one fist over her head, `scissors` brings a `library:paper_scissors`
+  from the table to the bundle and `snip` shuts the blades ON its time (the control dropped past her, the pieces on her
+  her tails), `ascend` floats her up out of the chair, `haul` has a hand catch her tails and haul her down in tugs ON
+  their times and lets her fall into the chair ON the `knot`, `crossed` crosses her arms; `loop` replays the end in
+  the pre-roll. `tails` alone (no `from`) gives a member who is never on the control six free threads streaming in
+  her sim's wind (a flight's, a seat's take). Step through the gather, the snip and the landing at full size.
 - **Flights** ([Flights](design.md#flights)): `[[flight]]` flies a prop relative to a target, a bone of hers or a point,
   as a hand flies a rod puppet: `in`, `dart` and `glide` land ON their time (put darts on the words and the notes),
   `circle` goes round her head, `perch` lands on it, and between moves it hovers with small darts. `library:dragonfly`
@@ -238,7 +252,15 @@ ideas were theirs. Put the plan in comments of `mk.toml` or a local file, never 
   and `step_from` so it changes pose with the theatre, and a `gaze` at `"<prop>:head"` makes her follow it. Watch a
   dart and a circle frame by frame: the wire bends round her head and must never cross her face. `library:paper_planet`
   is a paper ball on a skewer with a toothpick flag: `up` brings it into place on its time, `land` makes it sink, bob and
-  settle (key what lands on it to `mkmmd.core.paper_planet.top`).
+  settle (key what lands on it to `mkmmd.core.paper_planet.top`). `library:paper_scissors` is a child's card scissors on
+  a brass split pin: `attach` it to her hand (it then steps with her `[[stepped]]` window), key its `open` (0 shut .. 1 a
+  V of 60 degrees) so the blades shut ON the snip, run the thread through `"<prop>:cut"` (the blades close over it below
+  open 0.27), and step through the snip frame by frame in the shot's camera.
+  `library:paper_plane` is a big folded paper dart she rides side-saddle (`sit = "<prop>:seat"`, her legs over its
+  `side` wing): its `bank`, `pitch` and a landing's dip (`land` ON her landing) are keyed on its root on the theatre's
+  `step` grid, so she rides them; keep it level on the scene's first frame (where she is seated), and draw trails from
+  `"<prop>:tip_L"` and `"<prop>:tip_R"`, which ride the wing tips. Her sim takes its colliders (her hair lies on the wing
+  behind her); give her skirt `[sim.<cast>.params.skirt] bend_max = 90` so its back folds onto the paper.
 - **Gag props** (their rows in [Props](design.md#props)): `library:pillow_cloud` (key `puff` 0 -> 1: the pillow puffs into a cloud; `hug`
   anchor, `hold_L` / `hold_R` palms), `giant_carrot` (key `bite1`..`bite4` CONSTANT at the chomps, in order; `use.grip` `hold`, `use.bite`
   points; the chunks fly and fall on their own), `record_treadmill` (stand the cast at [-0.45, 0, 0.16] with `feet = "<name>:run"`, key
@@ -293,7 +315,9 @@ fingertip bone's `.tail` and the prop.
   "paper" | "glass"`) and throws the shards at the lens, `"tear"` rips it down a jagged line and swings the halves off (`tear.grips` for two
   hands). Their first window frame is the impact, the pinch or the rip: put `at` a `dur` after the beat. Preview a frame inside one with `mk look`.
   A transition carries off only the cut's picture: mark the `[[fx]]` that make the picture (a sheet, the smears on it) `under = true` and
-  they are drawn before it and go with the outgoing shot, while the rest (a hand riding the corner) stays on top.
+  they are drawn before it and go with the outgoing shot, while the rest (a hand riding the corner) stays on top. Mark what makes the next
+  picture (the sky the paper tears open onto) `under = "incoming"`, from the window's first frame: it is laid on the incoming shot's plate,
+  so the transition uncovers it as the frames after the cut show it.
 - **Glitches** ([Glitches](design.md#glitches)): `[[glitch]] {from, to, objects}` makes a character (its meshes, `"Rin_*"`, and what it holds) break up in
   jumping slices and colour ghosts and vanish by `to`; the build keeps it hidden after that. Start it on a hit; `seed` gives another take.
 - **Frame effects** ([Frame effects](design.md#frame-effects)): `[[fx]]` bends, smears and draws over the finished pictures: `lens` (a black hole's
@@ -334,6 +358,15 @@ fingertip bone's `.tail` and the prop.
   the seconds of its time `map` (a few `{t, from, to}` moments on the words, each slow enough to read, hard jumps and a
   tape's tear between; no type on them, as type is laid after the frame effects): step through every jump at full size
   (design.md: Rewinds).
+  A `zap` makes a sheet's live sticker somewhere else ON a time instead of travelling: it tears into slices with its
+  colours apart over the frames before, lies at the new place on the time (a `step` key of its sheet, or the next sheet:
+  another plate, pose or size), streaks along the line, and leaves a ghost that is dragged along the footage and breaks
+  up in blocks, bursting where a finger goes through it (`touch`); `fail = true` tears and comes back, twice. Put the
+  zap's time on the beat, name every sheet she is on round it, and step through four frames before to twelve after at
+  full size (design.md: Zaps). A `trails` with `sheet = "<name>"` (before the sheet in the table) leaves after-images
+  of that sticker as its 2D keys fling it about: `train = {}` drops a copy each sixth of her height she travels (a long
+  train when she is fast, none when she is still), `spiral` winds a nautilus of her round her middle; look at every
+  second frame of a fast and a slow crossing, and at a spiral's whole window in motion.
   They overlap freely and stack in table order; key `strength` on the hits, and fire `zoom` and `shock` on a `lane` of `[audio] hits`
   (`mk timeline hits`). `mk look` previews them, rendering the frames an echo or a slitscan reads beside the ones asked for. A `whip`
   transition is a whip pan between two shots. The space kit's `floor` (mirror, chessboard, Tron grid), `starfield` and `disc` (round
@@ -344,7 +377,8 @@ fingertip bone's `.tail` and the prop.
   ([Mandalas and trails](design.md#mandalas-and-trails)) rings her with sticker copies of herself, of registry sprites (`{tag =
   "butterfly"}`) or of drawn clovers, flowers, hearts, stars and butterflies, and of kits drawn with a pen's line (a moon, a rabbit,
   a carrot, dango; a daisy, a cassette, a pedal, cherries; a pond's lily, lily pad, bud, reed, dragonfly, drop; a café's croissant,
-  cup, sugar cube, orange slice, coffee bean: `pen = true` draws the flat ones as they are), the rings turning both ways, blooming on the hits and
+  cup, sugar cube, orange slice, coffee bean; a sky's paper plane, bird on a wire, bird flying (`bird_up`), cumulus, sun, kite,
+  balloon, shooting star, feather: `pen = true` draws the flat ones as they are), the rings turning both ways, blooming on the hits and
   popping in one by one (`grow`); any sprite source takes `eyes = true` (googly eyes whose pupils jiggle on the hits and when
   the sprite moves, `{size, wobble, look, seed}`) and `mouth = true` (a doodled smile; design.md: Googly eyes), and the
   registry's cut-out vegetables are `{tag = "veggie"}`, one colour family with `{tag = ["veggie", "veg_green"]}` (`veg_red`,
@@ -378,9 +412,19 @@ fingertip bone's `.tail` and the prop.
   from a `touch`, or holding the cut's own frame (`inside`: a shot straight down on a scene, its lens and shift keyed with the
   view, one picture with the full frame), her sticker from a plate whose camera zooms with the table's own camera (`view`, keyed
   close and wide, stepped jumps with `ease = "step"`; `track` keeps her where she lies), and a `punch` into the cup onto the shot
-  cut in under the table; a hand cutout rides it with `at = {table = [x, y]}` and leaves the frame as the view closes in. A `kaleido` or
+  cut in under the table; a hand cutout rides it with `at = {table = [x, y]}` and leaves the frame as the view closes in. A
+  table's figure sits on a seat its clip's camera moves with `pin` ([Pinned
+  stickers](design.md#pinned-stickers-a-figure-sitting-on-a-seat-the-clips-camera-moves)): the seat's track from `python -m
+  mkmmd.pintrack` (look at its `--sheet`), contact `shadow`s cut to the seat's outline, `front` pieces of the clip laid over
+  her (a luma `key` for a wire); step through her contact frame by frame at full size. A `kaleido` or
   `tunnel` after a table remaps all of it, without a mask: to keep her clean, lay her after it as a sheet of her own (`paper = false`,
-  her plate `shot`, moved by `keys`). The toy paint app
+  her plate `shot`, moved by `keys`). A background of real footage behind her is a `sky` ([Skies](design.md#skies-clip-after-clip-smeared-melting)):
+  `[[fx.clips]]` segments on their times, each a clip through its own `view` and a grade by warmth (`grade = {lean}`: a
+  city warm, another cool; a table takes it too), the clear sky's `paper`, `layers` (a city hanging upside down over
+  another, birds that `keep = "dark"`) or a seat table's window (`table`); each `smear`s in from the one before ON its
+  time (the old picture dragged in blocks along the new clip's motion, the new one breaking through; a table smears in
+  `from` a sky by name), and `melt`s streak towers up into the sky or the whole sky past the lens. Step through every
+  change at full size from the frame before it. The toy paint app
   ([Toy paint app](design.md#toy-paint-app)): `paintapp` lays a kids' paint program's chrome over the frames (its toolbar on the left,
   at the bottom of a 9:16 frame) and a cursor that picks its tools: `stamps` pop googly-eyed sprites on the hits, `bucket` floods a
   colour region round a point (pin it with `{point}` on the set when the camera moves), `undo` takes the last one back, and an `eraser`

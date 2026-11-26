@@ -1004,7 +1004,8 @@ WALK = {"stride": 0.55, "first": "L", "lift": 0.07, "dip": 0.015, "slide": 0.0, 
 WALK_KEYS = ("steps", "hops") + tuple(WALK)
 HOP_KEYS = ("from", "to", "move", "height")
 TUMBLE_KEYS = ("from", "to", "deg", "axis")
-TUMBLE_AXES = ("flip", "cartwheel")       # about the character's left axis (heels over head) or its forward axis
+TUMBLE_AXES = ("flip", "cartwheel", "twist")   # about the character's left axis (heels over head), its forward axis and
+#                                                its long axis (turning over), each as the turns before it left her
 GRAVITY = 9.81
 FIRST_SWING = 0.35                        # s: the swing of a step from a stand (the first, or one after a pause)
 WALK_PAUSE = 1.2                          # s: a step longer than this after the last (or a landing) is from a stand
@@ -1295,9 +1296,10 @@ def swing_arm(ts, shoulder, wrist, pole, swing, upper, fore, fwd, left, inner, w
 
 def tumble_plan(ts, tumbles):
     """Turns of the whole body in the air about its hips: each {from, to, deg, axis} turns it `deg` degrees (360: heels
-    over head and round) over from..to, eased in and out, about its left axis (`flip`; positive: head forward) or its
-    forward axis (`cartwheel`; positive: toward its left), the turns adding up and holding after. Returns {axis: (F,) rad}.
-    Raises ValueError for a bad or overlapping tumble."""
+    over head and round) over from..to, eased in and out, about its left axis (`flip`; positive: head forward), its
+    forward axis (`cartwheel`; positive: toward its left) or its long axis (`twist`; positive: its front toward its left),
+    the turns adding up and holding after. Returns {axis: (F,) rad}; `tumble_rotations` composes them. Raises ValueError
+    for a bad or overlapping tumble."""
     ts = np.asarray(ts, float)
     out = {a: np.zeros(len(ts)) for a in TUMBLE_AXES}
     end = {a: -math.inf for a in TUMBLE_AXES}
@@ -1306,7 +1308,7 @@ def tumble_plan(ts, tumbles):
             raise ValueError(f"tumble {i}: expected {{{', '.join(TUMBLE_KEYS)}}} with from, to and deg")
         axis = tb.get("axis", "flip")
         if axis not in TUMBLE_AXES:
-            raise ValueError(f"tumble {i}: axis is \"flip\" or \"cartwheel\", not {axis!r}")
+            raise ValueError(f"tumble {i}: axis is \"flip\", \"cartwheel\" or \"twist\", not {axis!r}")
         t0, t1 = float(tb["from"]), float(tb["to"])
         if t1 <= t0:
             raise ValueError(f"tumble {i}: from before to")
@@ -1314,4 +1316,21 @@ def tumble_plan(ts, tumbles):
             raise ValueError(f"tumble {i} at {t0:g} s starts before the {axis} before it ends ({end[axis]:g} s)")
         end[axis] = t1
         out[axis] += math.radians(float(tb["deg"])) * smooth((ts - t0) / (t1 - t0))
+    return out
+
+
+def tumble_rotations(turns):
+    """The body's turn (F, 3, 3) in its own rest frame (x its left, y behind it, z up) from tumble_plan's angles: the
+    flip about its left axis, then the cartwheel about its forward axis as the flip left it, then the twist about its
+    long axis as both left it (Rx(flip) Ry(cartwheel) Rz(twist)). Flipped onto her back (flip -90), a cartwheel turns her
+    flat about the vertical and a twist of 180 rolls her over onto her front."""
+    f, c, w = (np.asarray(turns.get(a, 0.0), float) for a in TUMBLE_AXES)
+    f, c, w = np.broadcast_arrays(f, c, w)
+    n = f.shape[0] if f.ndim else 1
+    f, c, w = (np.reshape(a, n) for a in (f, c, w))
+    out = np.tile(np.eye(3), (n, 1, 1))
+    for a, i, j in ((f, 1, 2), (c, 2, 0), (w, 0, 1)):     # about x (y -> z), y (z -> x), z (x -> y): right-handed
+        R = np.tile(np.eye(3), (n, 1, 1))
+        R[:, i, i], R[:, j, j], R[:, i, j], R[:, j, i] = np.cos(a), np.cos(a), -np.sin(a), np.sin(a)
+        out = out @ R
     return out

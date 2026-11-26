@@ -65,7 +65,9 @@ beat bob, startles, blinks and lids, expressions, lip sync, twitches.
                                      past the other, the root travels with the body, the hips dip; over a hop both feet
                                      leave the ground, the root flies a parabola and the legs tuck (mkmmd.core.perform.
                                      walk_plan); slide 1 is a treadmill (a running man)
-  tumble = [{from, to, deg, axis = "flip" | "cartwheel"}]   the body turns about its hips in the air
+  tumble = [{from, to, deg, axis = "flip" | "cartwheel" | "twist"}]   the body turns about its hips in the air: heels over
+                                     head, sideways, or about its long axis (turning over), each as the turns before it
+                                     left her (mkmmd.core.perform.tumble_rotations)
   blink = {per_min = 15, seed = 0, dur = 0.157, extra = [[t, dur], ...]}; lids = 0.0 (base lowering 0..1) or keys
                                      [[t, value], ...]
   sing = {timeline = "audio/timeline.json" (the default), lines = [a, b], mouth = 0.8, lead = -0.03, voice = "en-gb"}
@@ -665,10 +667,8 @@ def _walk(ctx, name, m, spec, ts, frames, turned=None):
             raise BuildError(f"{where}.tumble: {e}") from None
         pivot = arm.data.bones[smap["center"]].head_local - centre    # the hips, relative to the root
         pivot = Vector((pivot.x, pivot.y, pivot.z))
-        rot = []
-        for i in range(n):
-            R = (Matrix.Rotation(float(turns["flip"][i]), 3, "X") @ Matrix.Rotation(float(turns["cartwheel"][i]), 3, "Y"))
-            rot.append(R)
+        rot = [Matrix(R.tolist()) for R in PF.tumble_rotations(turns)]
+        for i, R in enumerate(rot):
             off[i] += np.array(pivot - R @ pivot)                       # turned about the hips, not the feet
         info["tumble"] = {a: round(float(np.degrees(v[-1])), 1) for a, v in turns.items() if v.any()}
     P = root.parent.matrix_world.to_3x3().normalized().inverted() if root.parent else Matrix.Identity(3)

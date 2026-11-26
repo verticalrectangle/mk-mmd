@@ -38,7 +38,8 @@ PLACE = ("name", "kind", "at", "yaw")
 DEFAULTS = {"arrive": None, "stagger": 0.08, "step": 0.0, "step_from": 0.0, "sun_rpm": 1.0, "swing": 3.0, "twist": 8.0,
             "seed": 1, "colors": None, "width": 2.2, "height": 3.2, "depth": 2.35,
             "pond": None, "panorama": None, "rise": None, "night": None, "moon": None, "loose": None, "sun": None,
-            "day": None, "house": None}   # the pond and its machinery: mkmmd/core/paper_theatre_pond.py
+            "day": None, "house": None,   # the pond and its machinery: mkmmd/core/paper_theatre_pond.py
+            "cafe": None}                 # the café: mkmmd/core/paper_theatre_cafe.py
 RANGES = {"stagger": (0.0, 1.0), "step": (0.0, 240.0), "sun_rpm": (-30.0, 30.0), "swing": (0.0, 12.0),
           "twist": (0.0, 40.0), "width": (1.8, 3.2), "height": (2.8, 3.8), "depth": (2.0, 4.0)}
 
@@ -105,7 +106,40 @@ POND_ROLES = {
     "ripple3": ("pine:text:0.3", "their dark wedges"),
     "ripple4": ("pine:foam:0.45", "their dark middle wedges"),
 }
-MATS = tuple(ROLES) + tuple(POND_ROLES)     # material index -> role
+# the café's roles (paper_theatre_cafe), used only by a theatre with `cafe`; in a café the paper sky (the backdrop, the
+# border over the room) is pale teal paper unless `colors.sky` says otherwise
+CAFE_SKY = "foam:surface:0.5"
+CAFE_ROLES = {
+    "wall": ("gold:surface:0.72", "the café wall's paper"),
+    "wall_low": ("rose:surface:0.4", "the dado under the window"),
+    "window": ("pine:surface:0.3", "the window's frame and sill, the dado's rail"),
+    "crack": ("subtle:surface:0.3", "the gap of an old rip in the sky"),
+    "torn": ("surface", "torn paper: the white fibres along an old rip and round the hole"),
+    "clear": ("surface:foam:0.18", "the pale clear sky on the card above the hole"),
+    "clear_glow": ("surface:foam:0.12", "its light"),
+    "skyline": ("iris:surface:0.5", "the skyline's blocks"),
+    "skyline2": ("rose:surface:0.55", "its other blocks"),
+    "tower": ("love:surface:0.35", "the lattice tower"),
+    "spire": ("iris:surface:0.3", "the stepped spire"),
+    "shade": ("love:surface:0.12", "the first lamp's paper shade"),
+    "shade2": ("pine:surface:0.15", "the second lamp's"),
+    "bulb": ("gold:surface:0.45", "the lamps' bulbs"),
+    "bunting": ("love", "bunting flags"),
+    "bunting2": ("gold", "bunting flags"),
+    "bunting3": ("foam", "bunting flags"),
+    "bunting4": ("iris", "bunting flags"),
+    "pot": ("gold:love:0.55", "the plant's pot"),
+    "leaf": ("pine", "the plant's leaves"),
+    "leaf2": ("foam", "its lighter leaves"),
+    "board": ("pine:text:0.4", "the chalkboard"),
+    "board_chalk": ("surface:iris:0.1", "the doodle chalked on it"),
+    "cup": ("love:surface:0.2", "cups on the shelf"),
+    "cup2": ("gold:surface:0.25", "cups on the shelf"),
+    "cup3": ("foam:surface:0.2", "cups on the shelf"),
+    "flap": (CAFE_SKY, "the flaps of the burst hole: the sky's paper, a piece of its own in a cut-out (give it with "
+                       "`colors.sky`)"),
+}
+MATS = tuple(ROLES) + tuple(POND_ROLES) + tuple(CAFE_ROLES)     # material index -> role
 
 # --- the frame (fixed parts of the layout; the opening's size, the depth and the seed are options)
 YP = -0.95                              # the proscenium's face
@@ -171,6 +205,7 @@ def options(spec):
     unknown = sorted(set(spec) - set(DEFAULTS) - set(PLACE))
     if unknown:
         raise TheatreError(f"paper_theatre {name!r}: unknown keys {unknown} (known: {sorted(DEFAULTS)})")
+    from . import paper_theatre_cafe as PC
     from . import paper_theatre_pond as PP
     o = {}
     for k, d in DEFAULTS.items():
@@ -185,7 +220,7 @@ def options(spec):
             v = {} if v is None else v
             if not isinstance(v, dict):
                 raise TheatreError(f"paper_theatre: colors = {v!r}: a table of role = colour")
-            bad = sorted(set(v) - set(ROLES) - set(POND_ROLES))
+            bad = sorted(set(v) - set(ROLES) - set(POND_ROLES) - set(CAFE_ROLES))
             if bad:
                 raise TheatreError(f"paper_theatre: colors: unknown roles {bad} (roles: {', '.join(MATS)})")
             o[k] = dict(v)
@@ -193,14 +228,22 @@ def options(spec):
             o[k] = _number(v, k)
         elif k in PP.KEYS:
             o[k] = PP.check(k, v)
+        elif k == "cafe":
+            o[k] = PC.check(v)
         else:
             o[k] = _number(v, k, *RANGES[k])
+    if o["cafe"] is not None and PP.on(o):
+        raise TheatreError(f"paper_theatre {name!r}: the café is a dressing of its own: give `cafe` or the pond's keys "
+                           f"({', '.join(PP.KEYS)}), not both")
     return o
 
 
 def roles(opts):
-    """The colour roles a theatre uses: ROLES, and POND_ROLES with any of the pond's keys."""
+    """The colour roles a theatre uses: ROLES, and POND_ROLES with any of the pond's keys, or CAFE_ROLES with `cafe`
+    (where the sky's default is CAFE_SKY)."""
     from . import paper_theatre_pond as PP
+    if opts.get("cafe") is not None:
+        return dict(ROLES, sky=(CAFE_SKY, "the paper sky: the backdrop and the border over the café"), **CAFE_ROLES)
     return dict(ROLES, **POND_ROLES) if PP.on(opts) else ROLES
 
 
@@ -224,9 +267,12 @@ def colours(opts, palette):
 
 
 def scene(opts):
-    """(Layout, Pond or None): `layout` for these options; with any of the pond's keys paper_theatre_pond's scene (the
-    layout as they change it, and the Pond)."""
+    """(Layout, Pond, Cafe or None): `layout` for these options; with any of the pond's keys paper_theatre_pond's scene
+    (the layout as they change it, and the Pond), with `cafe` paper_theatre_cafe's (the layout and the Cafe)."""
     from . import paper_theatre_pond as PP
+    if opts.get("cafe") is not None:
+        from . import paper_theatre_cafe as PC
+        return PC.scene(opts)
     if PP.on(opts):
         return PP.scene(opts)
     return layout(opts["width"], opts["height"], opts["depth"], opts["seed"]), None
@@ -1107,8 +1153,10 @@ def amplitudes(opts, h):
     front of the keep-out goes half to the swing, the rest to the twist (its sides come forward as it turns)."""
     kx, ky = KEEP_OUT
     ax, ay, _az = h.anchor
-    pts = np.concatenate([p.outline for p in h.part.plates])
-    rx = float(np.abs(pts[:, 0]).max())                  # how far its edge is from its thread
+    if h.part.plates:                                      # how far its edge is from its thread
+        rx = float(np.abs(np.concatenate([p.outline for p in h.part.plates])[:, 0]).max())
+    else:                                                  # a piece that is no flat plate (a café's lamp)
+        rx = 0.5 * h.size[0]
     reach = h.length + h.size[1]                           # the batten to its lowest point
     side = math.radians(opts["swing"]) * h.swing
     fb, twist = side / 3.0, math.radians(opts["twist"])
@@ -1157,9 +1205,11 @@ def objects(name, lay):
 def card(name, opts, lay, pond=None):
     """The set's card (docs/design.md: Sets): use.look `stage` (her spot, at mid height), `sun`, `moon`, `cloud<i>`,
     `star<i>` (where they hang at rest; `object` the piece), a floor collider, no lights, and `theatre`: the drop's and
-    each piece's times, lengths and periods; with the `pond` (paper_theatre_pond) what it adds."""
-    look = [{"name": "stage", "point": [0.0, 0.0, 0.85]},
-            {"name": "sun", "point": [round(v, 4) for v in lay.sun]}]
+    each piece's times, lengths and periods; with the `pond` (paper_theatre_pond) or the café (paper_theatre_cafe,
+    `pond` its Cafe) what they add."""
+    look = [{"name": "stage", "point": [0.0, 0.0, 0.85]}]
+    if lay.sun is not None:
+        look.append({"name": "sun", "point": [round(v, 4) for v in lay.sun]})
     pieces = []
     for h in lay.hangs:
         x, y, za = h.anchor
@@ -1176,7 +1226,13 @@ def card(name, opts, lay, pond=None):
             "step": opts["step"], "pieces": pieces, "roles": list(roles(opts))}
     use = {"look": look, "surface": []}
     objs = objects(name, lay)
-    if pond is not None:
+    if opts.get("cafe") is not None:
+        from . import paper_theatre_cafe as PC
+        more, extra = PC.card_extra(name, opts, lay, pond)
+        look += more
+        info.update(extra)
+        objs = PC.objects(name, lay, pond)
+    elif pond is not None:
         from . import paper_theatre_pond as PP
         more, rest, extra = PP.card_extra(name, opts, lay, pond)
         look += more

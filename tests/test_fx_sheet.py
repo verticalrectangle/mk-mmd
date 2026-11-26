@@ -207,6 +207,27 @@ def test_live_sticker_and_hollow_outline_on_the_paper():
     assert np.abs(out[:, 120:] - np.asarray(MAGENTA, np.float32)).sum(2).min() > 0.5   # no figure in it
 
 
+def test_a_thread_streaming_from_the_live_figure_lies_bare_of_its_rim_with_thin():
+    def threaded(key, g):                      # the figure (50..109 at 2 s) and a thread 2 px wide out of its right side
+        m = figure(g)
+        m[100:102, 110:200] = 1.0
+        return m
+    of = dict(fps=FPS, frame0=F0, frame_of=lambda g: None, point_of=lambda key, g: ((W / 2, H / 2), None),
+              figure_of=threaded)
+    img, g = np.full((H, W, 3), MAGENTA, np.float32), FX.frame_of(2.0, FPS, F0)
+    rod = FF.FrameFx(plan([sheet(paper=FLAT, shadow=False)])["fx"], (W, H), **of).frame(g, img)
+    bare = FF.FrameFx(plan([sheet(paper=FLAT, shadow=False, edge={"thin": 20})])["fx"], (W, H), **of).frame(g, img)
+    paper = np.asarray(FX._colour("base", DAWN, "paper"), np.float32)
+    assert np.allclose(rod[97, 150], 1.0, atol=0.02)                        # without it: a white rod round the thread
+    assert np.allclose(bare[97, 150], paper, atol=0.02)                     # 20 px at 1080 (4 here): nothing round it
+    assert np.allclose(bare[100, 150], MAGENTA, atol=1e-3)                  # the thread itself as its frame shows it
+    assert np.allclose(bare[110, 50 - 2], 1.0, atol=0.02)                   # the figure keeps its rim
+    assert np.allclose(bare[:, :46], rod[:, :46], atol=1e-6)                # and is the same picture away from the thread
+    with pytest.raises(FX.FxError, match="thin"):                         # a thrown sticker has no live figure
+        FX.normalize({"kind": "fling", "from": 0.0, "to": 1.0, "center": [0.5, 0.5], "times": [0.5],
+                      "edge": {"thin": 4}}, DAWN)
+
+
 def test_a_hollow_s_blank_sticker_lies_in_it_fades_and_is_peeled_off():
     blank = {"t": 2.0, "dur": 0.6, "color": "iris", "fade": [1.0, 2.0]}
     ffx, pl = frames([sheet(paper=FLAT, shadow=False, hollows=[{"t": 0.5, "at": [0.75, 0.6], "sheen": 0.0,

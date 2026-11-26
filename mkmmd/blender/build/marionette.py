@@ -77,7 +77,8 @@ def _key_hidden(ob, frames, hidden):
 
 def prepare(ctx, name, m, ts, frames):
     """Key the cross and the leg bar over her, tie the threads to her and return her channels (mkmmd.core.marionette.
-    body_plan, her frame = the armature's axes) with what `hands` needs; None without a `marionette` table."""
+    body_plan, her frame = the armature's axes) with what `hands` needs; None without a `marionette` table, and for a
+    member with no control (`tails` alone: the threads are tied to her, nothing of her is keyed)."""
     got = plan(ctx, name)
     if got is None:
         return None
@@ -88,20 +89,17 @@ def prepare(ctx, name, m, ts, frames):
     sc.frame_set(int(ctx.start + ctx.settle))
     arm = m.arm
     smap = S.semantic_map(arm)
-    need = [b for b, _ in ENDS.values()] + ["arm.L", "arm.R", "leg.L", "leg.R", "ankle.L", "ankle.R"]
-    missing = [b for b in need if b not in smap]
-    if missing:
-        raise BuildError(f"{where}: the model has no {', '.join(missing)} bone (the threads are tied there)")
     F, Frot = _frame(m)
     Fi = F.inverted()
+    ends = _ends(m, smap, Fi, where)
+    if not P["control"]:                                        # six tails, no control: tied on, drawn after stepped
+        _tie(prop, arm, ends, F)
+        sc.frame_set(keep)
+        return None
 
     def her(b):
         return Fi @ (arm.matrix_world @ arm.pose.bones[smap[b]].head)
 
-    ends = {}
-    for part, (bone, off) in ENDS.items():
-        p = (her("arm.L") + her("arm.R")) / 2 + Vector(BACK) if off is None else her(bone) + Vector(off)
-        ends[part] = (smap[bone], p)
     a_head = Vector(card["anchors"]["head"]["point"])
     top = ends["head"][1]
     home = Vector((top.x - a_head.x, top.y - a_head.y, top.z + P["height"] - a_head.z))
@@ -146,6 +144,24 @@ def prepare(ctx, name, m, ts, frames):
     body["report"]["home"] = [round(v, 3) for v in home]
     return {"P": P, "prop": prop, "card": card, "body": body, "cross": cross, "F": F, "Frot": Frot,
             "shoulders": {s: her(f"arm.{s}") for s in ("L", "R")}}
+
+
+def _ends(m, smap, Fi, where):
+    """{part: (bone, point in her frame)}: where each thread meets her at the current (settled) pose."""
+    arm = m.arm
+    need = [b for b, _ in ENDS.values()] + ["arm.L", "arm.R", "leg.L", "leg.R", "ankle.L", "ankle.R"]
+    missing = [b for b in need if b not in smap]
+    if missing:
+        raise BuildError(f"{where}: the model has no {', '.join(missing)} bone (the threads are tied there)")
+
+    def her(b):
+        return Fi @ (arm.matrix_world @ arm.pose.bones[smap[b]].head)
+
+    ends = {}
+    for part, (bone, off) in ENDS.items():
+        p = (her("arm.L") + her("arm.R")) / 2 + Vector(BACK) if off is None else her(bone) + Vector(off)
+        ends[part] = (smap[bone], p)
+    return ends
 
 
 def _tie(prop, arm, ends, F):
@@ -229,12 +245,16 @@ def _rides(m, ref_objs):
 
 
 def _aims(ctx, m, P, frames, Fi):
-    """{"reach": [(n, 3) or {"on", "rel"}], "land": (n, 3)}: the targets of `reach` and `land` in her rest frame on every
-    frame (a world point once). A target flown on her (a `[[flight]]` hung on her head) goes where she goes, so it is
-    given as where it hangs on her (`on`, her rest frame) and its offset from there (`rel`)."""
+    """{"reach": [(n, 3) or {"on", "rel"}], "land": (n, 3), "seat", "scissors"}: the targets of `reach` and `land` in her
+    rest frame on every frame (a world point once). A target flown on her (a `[[flight]]` hung on her head) goes where
+    she goes, so it is given as where it hangs on her (`on`, her rest frame) and its offset from there (`rel`). A
+    marionette set free: her seat (`_seat_aim`) and where the scissors' grip lies (`_scissors_aim`)."""
     W = P["world"]
     refs = [("reach", r["at"]) for r in W["reach"]] + ([("land", W["land"]["at"])] if W["land"] else [])
     out = {"reach": []}
+    if W.get("free"):
+        out["seat"] = _seat_aim(ctx, W["seat"]["at"], Fi)
+        out["scissors"] = _scissors_aim(ctx, W["scissors"]["prop"], Fi) if W.get("scissors") else None
     sc = bpy.context.scene
     keep = sc.frame_current
     for kind, ref in refs:
@@ -258,6 +278,32 @@ def _aims(ctx, m, P, frames, Fi):
             out["land"] = pts
     sc.frame_set(keep)
     return out
+
+
+def _seat_aim(ctx, ref, Fi):
+    """{hip, facing, floor} of a seat `"<prop>:<use>"` (a `use.sit` point: its hip point, the way it faces, its floor) in
+    her rest frame."""
+    pname, _, use = str(ref).partition(":")
+    p = ctx.props.get(pname)
+    if p is None:
+        raise BuildError(f"marionette.seat = {ref!r}: no prop {pname!r} (props: {sorted(ctx.props)})")
+    e = p.use("sit", use or None)
+    hip = p.world(e["hip"])
+    facing = p.world_dir(e.get("facing", (0.0, -1.0, 0.0)))
+    floor = p.world((0.0, 0.0, float(e.get("floor_z", 0.0)))).z
+    return {"hip": np.asarray(Fi @ hip), "facing": np.asarray(Fi.to_3x3() @ facing),
+            "floor": float((Fi @ Vector((hip.x, hip.y, floor))).z)}
+
+
+def _scissors_aim(ctx, pname, Fi):
+    """{grip}: where the hand takes the scissors as they lie (their `use.grip` point, else their root), her rest frame."""
+    p = ctx.props.get(pname)
+    if p is None:
+        raise BuildError(f"marionette.scissors.prop = {pname!r}: no such prop (props: {sorted(ctx.props)})")
+    grips = p.card.get("use", {}).get("grip", [])
+    g = next((u for u in grips if u.get("name") == "hold"), grips[0] if grips else None)
+    at = p.world(g["point"]) if g and "point" in g else p.root.matrix_world.translation
+    return {"grip": np.asarray(Fi @ at)}
 
 
 def _prepare_world(ctx, name, m, P, prop, card, ts, frames, cross, legs, ends, F, Frot, smap, where):
@@ -289,7 +335,8 @@ def _prepare_world(ctx, name, m, P, prop, card, ts, frames, cross, legs, ends, F
     def rest(b):
         return np.asarray(Fi.to_3x3() @ (arm.matrix_world.to_3x3() @ arm.data.bones[smap[b]].head_local))
 
-    for b in ("center", "elbow.L", "elbow.R", "wrist.L", "wrist.R", "index1.L", "little1.L", "middle1.L"):
+    need = ("center", "elbow.L", "elbow.R", "wrist.L", "wrist.R", "index1.L", "little1.L", "middle1.L")
+    for b in need + (("shoulder.L", "shoulder.R") if P["world"].get("free") else ()):
         if b not in smap:
             raise BuildError(f"{where}: the model has no {b} bone (her body and her hands move on it)")
     rig = {"pivot": her("center"), "crown": np.asarray(ends["head"][1]), "hang": np.asarray(ends["back"][1]),
@@ -300,6 +347,8 @@ def _prepare_world(ctx, name, m, P, prop, card, ts, frames, cross, legs, ends, F
                         "fore": float(np.linalg.norm(rest(f"wrist.{s}") - rest(f"elbow.{s}")))} for s in ("L", "R")},
            "legs": legs, "anchors": {p: card["anchors"][p]["point"] for p in MR.PARTS},
            "leg_home": card["leg_bar"]["home"]}
+    if P["world"].get("free"):                                    # a raised hand lifts its shoulder (marionette_free)
+        rig["clavicles"] = {s: her(f"shoulder.{s}") for s in ("L", "R")}
     palm = np.cross(rest("index1.L") - rest("wrist.L"), rest("little1.L") - rest("wrist.L"))
     palm = AT.palm_down(palm, np.array([0.0, 0.0, 1.0]))           # MMD rests the palms down (her own frame)
     rig["rest"] = {"upper": rest("elbow.L") - rest("arm.L"), "fore": rest("wrist.L") - rest("elbow.L"),
@@ -535,16 +584,24 @@ def _world_hands(ctx, name, m, mp, frames):
         K.key_vec(goal, "location", frames, locs, interp="LINEAR")
         K.key_vec(goal, "rotation_quaternion", frames, K.continuous(rots), interp="LINEAR")
         K.key_vec(pole, "location", frames, poles, interp="LINEAR")
+        if "shrug" in H:                                          # set free: a raised hand lifts its shoulder
+            Rra = m.root.matrix_world.to_3x3().normalized().inverted() @ arm.matrix_world.to_3x3().normalized()
+            u = (Rra.inverted() @ Vector((0.0, 1.0, 0.0))).normalized()     # her front-to-back axis, armature axes
+            sg = 1.0 if side == "L" else -1.0
+            K.key_bone_arm(arm, smap[f"shoulder.{side}"], frames, [Quaternion(u, -sg * float(a)) for a in H["shrug"]],
+                           interp="LINEAR")
         rest = mp["world"]["rig"]["rest"]
         R = mp["world"]["root"]["rot"]
         d, p = np.einsum("nji,nj->ni", R, H["dir"]), np.einsum("nji,nj->ni", R, H["palm"])
-        S0 = np.asarray(mp["world"]["rig"]["shoulders"][side])
+        S0 = H["shoulder"] if "shoulder" in H else np.tile(mp["world"]["rig"]["shoulders"][side], (len(frames), 1))
         reach = np.linalg.norm(H["body"] - S0, axis=1)
-        tw = np.array([AT.twists(rest, side, S0, H["elbow"][i], H["body"][i], d[i], p[i])
+        tw = np.array([AT.twists(rest, side, S0[i], H["elbow"][i], H["body"][i], d[i], p[i])
                        for i in range(0, len(frames), 3)])
         out[f"hand_{side}"] = {"reach_mm": [round(float(reach.min()) * 1000, 1), round(float(reach.max()) * 1000, 1)],
                                "forearm_twist": [round(float(tw[:, 0].min()), 1), round(float(tw[:, 0].max()), 1)],
                                "arm_twist": [round(float(tw[:, 1].min()), 1), round(float(tw[:, 1].max()), 1)]}
+        if "shrug" in H:
+            out[f"hand_{side}"]["shrug_deg"] = round(math.degrees(float(np.max(H["shrug"]))), 1)
     return out
 
 
@@ -725,6 +782,11 @@ def run(ctx):
                     if len(fc.keyframe_points):
                         STEPPED.hold(fc, w)
                         held += 1
+        if not P["control"] or P["world"].get("free"):            # set free, or tails alone (build/marionette_free.py)
+            from . import marionette_free as MFREE
+            out[name] = MFREE.run(ctx, name, m, P, prop, card, held)
+            ctx.log("marionette", name, json.dumps(out[name]))
+            continue
         f0 = max(ctx.start, int(math.floor(ctx.frame(P["from"] - P["drop"]))) - 1)
         f1 = _last(ctx, m)
         frames = np.arange(f0, f1 + 1)
